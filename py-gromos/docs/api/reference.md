@@ -447,8 +447,8 @@ from gromos import rmsd
 import numpy as np
 
 r = rmsd(
-    positions.astype(np.float32),   # (N, 3) float32
-    reference.astype(np.float32),   # (N, 3) float32
+    positions,   # (N, 3) float64
+    reference,   # (N, 3) float64
 )
 ```
 
@@ -460,9 +460,9 @@ Radial distribution function between two atom index groups.
 from gromos import rdf
 
 r_vals, g_vals = rdf(
-    positions.astype(np.float32),  # (N, 3) float32
-    group_a=[0, 3, 6],             # list[int] — indices in group A
-    group_b=[1, 4, 7],             # list[int] — indices in group B
+    positions,                     # (N, 3) float64
+    group1=[0, 3, 6],              # list[int] — indices in group 1
+    group2=[1, 4, 7],              # list[int] — indices in group 2
     n_bins=100,
     r_max=1.5,                     # nm
 )
