@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.50] (2026-10-06)
+
+**A first MD run for newcomers: two argon atoms in 30 minutes.** The mdBook tutorial
+`docs/src/tutorials/first-md.md` is written, and `py-gromos/notebooks/03_two_argon_atoms.ipynb`
+is its runnable version. Each experiment asks for a prediction first, and the notebook asserts
+its own numbers, so CI fails if the engine stops reproducing them.
+
+### Added
+
+- **`03_two_argon_atoms.ipynb`** on the `pair_lj` reference system, in four sections: the system
+  and the recipe (the step-0 energy against `C12/r¹² − C6/r⁶`); the plan (three edits that
+  `Plan.validate()` refuses, with their messages asserted); the time step (the total-energy range
+  over 8 ps for dt from 0.0005 to 0.128 ps, log–log slope asserted in [1.9, 2.1], measured 2.01);
+  the well depth (the lowest potential energy of the run within 0.1% of `−C6²/(4·C12)`).
+  It states its time budget, what it does not teach, and the three most likely errors with
+  their fixes. Executed headlessly, it takes about 4 s on a desktop machine.
+
+### Fixed
+
+- **`Simulation.run()` stamped every energy frame one time step late.** A frame's energies are
+  evaluated at the positions its step started from, but the time came from the step counter
+  after it had advanced, so frame 0 read `t = dt`. It now reads the time gromosXX's `.tre`
+  gives the same step; `test_run_frames_carry_the_time_gromosxx_gives_their_energies` holds the
+  time column and the total energy to `pair_lj`'s expected `.tre`.
+- **`01_load_and_inspect.ipynb` no longer ran.** It cast positions to float32 for `rdf()`, which
+  has taken float64 since 0.0.31, and section 7 expected `System.from_files()` to refuse an
+  unsolvated topology with a solvated configuration, which it has accepted since 0.0.30 (the
+  solvent count comes from the configuration, as in GROMOS). Both cells now show what happens.
+- `gromos.pyi` typed `rmsd`, `rdf` and `Frame.positions_array` as float32; the extension takes
+  and returns float64. The API reference's `rdf` example also used keyword names that do not
+  exist (`group_a`/`group_b` for `group1`/`group2`).
+- Learner-facing files no longer cite the retired plan file or its item labels (notebook 01,
+  the design mockup, `learning-guide.md`, `pairlist.md`, the FEP tutorial stub).
+  `docs/book.toml` pointed at a misspelt GitHub account. `CONTRIBUTING.md` was titled for
+  gromosXX, asked for Python 3.9+ (the package needs 3.12+), and linked a style guide that does
+  not exist; it now links the architecture and porting guides.
+
+### Changed
+
+- The superseded API design mockup moved from `py-gromos/notebooks/` to
+  `py-gromos/docs/development/api-design-mockup.ipynb`. It cannot run (it is a sketch against
+  files that do not exist), and the notebook job executes everything in `notebooks/`.
+
 ## [0.0.49] (2026-09-14)
 
 **The 33 gromos-tools programs are library functions, and Python can call them.** `gromos.tools`

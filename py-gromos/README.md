@@ -67,7 +67,8 @@ Optional: `uv sync --group ml` + `uv run maturin develop --release --features ml
   [the recipe model](docs/user-guide/recipe.md), [learning guide](docs/user-guide/learning-guide.md)
 - [API reference](docs/api/reference.md)
 - [Development](docs/development/): building, contributing, a PyO3 bindings tutorial
-- Notebooks: `notebooks/01_load_and_inspect.ipynb`, `notebooks/02_short_md.ipynb`
+- Notebooks: `notebooks/03_two_argon_atoms.ipynb` (start here: a first MD run, about 30 minutes),
+  `notebooks/01_load_and_inspect.ipynb`, `notebooks/02_short_md.ipynb`
 
 `uv run mkdocs serve` in this directory renders the site at http://localhost:8000.
 

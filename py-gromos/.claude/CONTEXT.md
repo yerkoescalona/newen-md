@@ -95,7 +95,9 @@ stubtest_allowlist_no_ml.txt     — the ml-only names, for stubtest on a defaul
 tests/test_gromosXX_references.py, test_front_end_parity.py, test_recipe.py, test_xtb_term.py,
                                  test_tools.py (gromos.tools: text ↔ object, the prep chain)
 docs/                            — mkdocs (user-guide/recipe.md is the concept page)
-notebooks/                       — 01 load & inspect, 02 short MD (on Recipe); 00 is a superseded mockup
+notebooks/                       — 03 two argon atoms (the first-run tutorial; asserts its own numbers),
+                                   01 load & inspect, 02 short MD (on Recipe). The superseded API
+                                   mockup is docs/development/api-design-mockup.ipynb (not executed)
 pyproject.toml                   — package metadata (maturin)
 ```
 
