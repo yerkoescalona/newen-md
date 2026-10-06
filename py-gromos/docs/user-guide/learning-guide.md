@@ -56,23 +56,23 @@ The Rust side lives in `crates/pyo3-gromos/src/`:
 ## Running the test suite
 
 ```bash
-make test-python           # build + full suite (89 pass, 11 skip, 0 fail)
+make test-python           # build + full suite
 
 # Just the reference energy/force/position tests
 .venv/bin/pytest py-gromos/tests/test_gromosXX_references.py -v
 
-# Just the P3.2 workflow tests
+# Just the workflow tests
 .venv/bin/pytest py-gromos/tests/test_gromosXX_references.py \
     -k "system_constructor or factory_workflow or factory_nvt" -v
 ```
 
 The reference suite validates against double-precision gromosXX output for
-21 systems: vacuum pairs, single molecules, small solvated boxes, bulk water
+every system in its `REFERENCE_SYSTEMS` list: vacuum pairs, single molecules, small solvated boxes, bulk water
 (NVE/NVT/NPT), and solvated alanine dipeptide.
 
 ## Roadmap
 
-### P3.3 — Energy reporters ✓ done
+### Energy reporters ✓ done
 
 `sim.run(steps, ene_freq)` streams energies into a NumPy array without writing
 a `.tre` file; `EnergyTimeseries` (`gromos.timeseries`) wraps it with
@@ -82,16 +82,16 @@ wired end to end — including a fix in the underlying Rust bonded-force
 combiner (`gromos-forces/src/bonded/mod.rs`), which lumped all four bonded
 terms into `bond_total` even outside the Python bindings.
 
-### P3.4 — Working notebooks ✓ done
+### Working notebooks ✓ done
 
 `notebooks/01_load_and_inspect.ipynb` and `02_short_md.ipynb` use the real
 `from_files → nvt → run` path against reference systems, including the
 `Topology.solvate()` + `System(topo, conf)` path for systems `from_files()`
 can't load directly (unsolvated topology vs. solvated configuration).
 
-### P3.5 — Constraints and energy minimization ✓ done
+### Constraints and energy minimization ✓ done
 
-Two gaps found while writing the P3.4 notebooks, both closed:
+Two gaps found while writing those notebooks, both closed:
 
 - **Constraints on the factories.** `InputParameters.nve/nvt/npt` take
   `constraints="none"|"hbonds"|"allbonds"` (default `"none"`, matching GROMOS's
@@ -115,7 +115,7 @@ system = molecule("ALA", ff) * 10 + solvent("SPC", n=2000)
 system.neutralize(ion="CL")
 ```
 
-Open decisions (tracked on the board and in `system_builder.py` comments) include:
+Open decisions (recorded in `system_builder.py` comments) include:
 native topology building vs. subprocess `make_top`, the `.solvate()` / `.pack()`
 coordinate pipeline, and the `+` / `*` assembly algebra.
 
@@ -124,7 +124,6 @@ coordinate pipeline, and the `+` / `*` assembly algebra.
 The Rust core stores atoms as `Vec<Vec3>` (array-of-structs). A migration to
 structure-of-arrays (`struct Soa { x: Vec<f64>, y: Vec<f64>, z: Vec<f64> }`)
 would allow true zero-copy NumPy sharing and cleaner SIMD in the nonbonded loop.
-Board card V1.
 
 ## References
 

@@ -65,7 +65,7 @@ distance (typically 0.1 nm). Any pair that enters the true cutoff before the nex
 already in the list.
 
 The skin introduces a trade-off: larger skin → safer (fewer missed pairs) but larger pairlist →
-more force evaluations. The displacement-triggered rebuild criterion (board card `9c`) resolves this
+more force evaluations. The displacement-triggered rebuild criterion resolves this
 more precisely: rebuild when `2 · max_displacement > skin`.
 
 The factor of **2** is load-bearing. Two atoms can each move `max_displacement` toward each

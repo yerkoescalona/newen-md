@@ -1,6 +1,6 @@
-# Contributing to gromosXX
+# Contributing to gromos-rs
 
-Thank you for your interest in contributing to gromosXX! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to gromos-rs! This document provides guidelines and instructions for contributing.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Thank you for your interest in contributing to gromosXX! This document provides 
 ### Prerequisites
 
 - Rust 1.91+ via [rustup](https://rustup.rs/) — the pinned distro `rustc`/`cargo` is too old
-- Python 3.9+ and [uv](https://docs.astral.sh/uv/) (py-gromos is managed by `uv`, not raw pip)
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/) (py-gromos is managed by `uv`, not raw pip)
 - Git
 - (Optional) C/C++ toolchain + GSL/FFTW to build the gromosXX/gromos++ reference sources
 - (Optional) `xtb`/`mopac` for real QM/MM tests, libtorch 2.11.0 for the real ML potential
@@ -109,14 +109,14 @@ Then create a Pull Request on GitHub.
 ## Code Standards
 
 **Read these first:**
-- [Coding Style Guide](gromos-rs/docs/development/coding-style.md) - Complete coding conventions
-- [Naming Conventions](gromos-rs/docs/development/naming-conventions.md) - Scientific naming rules
+- [Architecture](.claude/architecture.md) - how new and refactored code is shaped
+- [Porting](.claude/porting.md) - how gromosXX is translated without inheriting its defects
 
 ### Rust Code
 
 - **Format:** Use `rustfmt` (run `cargo fmt`)
 - **Lint:** Fix all `clippy` warnings (run `cargo clippy`)
-- **Style:** Follow conventions in [Coding Style Guide](gromos-rs/docs/development/coding-style.md)
+- **Style:**
   - `snake_case` for functions and regular variables
   - `PascalCase` for types and structs
   - `SCREAMING_SNAKE_CASE` for constants
@@ -148,8 +148,8 @@ impl SystemState {
 
 - **Format:** Use `black` with line length 100
 - **Lint:** Fix all `ruff` warnings
-- **Type hints:** Add type hints for public APIs (see examples in [Coding Style Guide](gromos-rs/docs/development/coding-style.md))
-- **Docstrings:** Use NumPy-style docstrings (see template in guide)
+- **Type hints:** Add type hints for public APIs
+- **Docstrings:** Use NumPy-style docstrings, with `.. math::` for formulas
 - **Naming:** Standard Python conventions with scientific exceptions
   - Regular variables: `snake_case`
   - Scientific variables: `kT`, `pH`, `deltaG` allowed

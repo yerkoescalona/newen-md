@@ -1,5 +1,5 @@
 # PROTOTYPE — design sketch only. Nothing here is implemented or stable.
-# Open decisions tracked in py-gromos/notebooks/00_api_design_mockup.ipynb
+# Open decisions tracked in py-gromos/docs/development/api-design-mockup.ipynb
 # and ("Compositional topology construction in py-gromos").
 # Do not use in production code; do not import in tests.
 
