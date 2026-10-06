@@ -24,6 +24,7 @@ from gromos import (
     AlgorithmSequence,
     Configuration,
     EnergyTimeseries,
+    EnergyTrajectory,
     InputParameters,
     Recipe,
     Simulation,
@@ -740,7 +741,7 @@ def test_run_matches_step_loop():
     def row(sim):
         e = sim.energies
         return [
-            sim.time,
+            sim.time - sim.dt,  # the energies are those of the step just taken
             e.kinetic,
             e.potential,
             e.total,
@@ -775,6 +776,7 @@ def test_energy_timeseries():
     assert len(ts) == frames.shape[0]
     assert np.array_equal(ts.total, frames[:, 3])
     assert np.array_equal(ts.time, frames[:, 0])
+    assert ts.time[0] == 0.0
 
     mean, error = ts.block_average("total", block_size=2)
     assert np.isfinite(mean)
@@ -809,3 +811,22 @@ def test_energy_timeseries():
 
     with pytest.raises(ValueError):
         EnergyTimeseries(np.zeros((3, 5)))
+
+
+def test_run_frames_carry_the_time_gromosxx_gives_their_energies():
+    """Frame k of run() is step k: its energies and its time match row k of gromosXX's .tre.
+
+    The energies of a step are evaluated at the positions the step starts from, after which the
+    step counter advances; the time column used to be read after that advance, one dt late."""
+    system_dir = REF_DIR / "pair_lj"
+    sim = Simulation(
+        str(system_dir / "pair_lj.topo"),
+        str(system_dir / "pair_lj.conf"),
+        str(system_dir / "pair_lj.in"),
+    )
+    ts = EnergyTimeseries(sim.run(9, ene_freq=1))
+    tre = EnergyTrajectory(str(system_dir / "expected" / "energies.tre"), properties=["totene"])
+
+    assert ts.time[0] == 0.0
+    np.testing.assert_allclose(ts.time, tre.times, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(ts.total, tre["totene"], rtol=ENERGY_REL_TOL)

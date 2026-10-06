@@ -741,13 +741,17 @@ impl PySimulation {
     /// build the energy timeseries. Temperature is left at 0.0: unlike volume
     /// and pressure it needs the degrees-of-freedom count, which this row does
     /// not carry (use the `temperature` getter).
+    ///
+    /// The energies are those of the step just taken, evaluated at the positions that step
+    /// started from, so the row is stamped with that step's time: `sim_state` has already
+    /// advanced past it. gromosXX's `.tre` stamps step 0 with t = 0 the same way.
     fn energy_row(&self) -> Vec<f64> {
         let state = self.configuration.old();
         let volume = state.box_config.volume();
         let pressure = state.pressure();
         let frame = gromos_io::energy::EnergyFrame::from_energy(
             &state.energies,
-            self.sim_state.time,
+            (self.sim_state.step - 1) as f64 * self.dt,
             0.0,
             volume,
             pressure,
