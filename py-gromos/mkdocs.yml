@@ -129,6 +129,8 @@ nav:
       - Installation: user-guide/installation.md
       - Quick Start: user-guide/quick-start.md
       - The Recipe Model: user-guide/recipe.md
+      - Watching a Run: user-guide/education-view.md
+      - Experiments with a Check: user-guide/education-experiments.md
       - Learning Guide: user-guide/learning-guide.md
   - API:
       - API Reference: api/reference.md

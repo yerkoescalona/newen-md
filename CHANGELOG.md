@@ -23,6 +23,43 @@ printed.
   rectangular box lengths `(Lx, Ly, Lz)` (what `System.box` returns) as a required argument.
   Notebook 01 now also asserts that g(r) tends to 1, and takes the RDF on `water_216_box`'s
   `expected/final.conf`: the starting `.conf` is a simple-cubic lattice.
+- **`Configuration.from_string` dropped the VELOCITY block**, and `str(configuration)` never
+  wrote one. `from_string` read the text with the labelled-position parser alone, so a
+  configuration passed through text lost its velocities while `Configuration(path)` kept them; it
+  went unnoticed because the only round-trip test compared positions. Both constructors now read
+  through one parser (`gromos_io::coordinate::parse_coordinates`, the reader under
+  `read_coordinates`), and the text form gains a VELOCITY block in gromosXX's nine-decimal layout.
+  `py-gromos/tests/test_configuration.py` checks, on every reference `.conf` with velocities,
+  that the two constructors agree exactly and that velocities survive the text round trip.
+- **A `System` of a solute-only topology and a solvated configuration reported two atom
+  counts.** `System.from_files("aladip.topo", "aladip.conf")` accepted the 12-atom topology with
+  the 72-atom configuration, but `n_atoms` said 12 while `positions` had 72 rows; only the
+  `Simulation` built from it solvated. It went unnoticed because the tests checked the
+  `Simulation`, never the `System`. The `System` now solvates at construction through
+  `Topology::solvate` (the call `prepare_system` makes), so `n_atoms`, `topology.n_atoms`,
+  `topology.n_solvent_atoms` and `len(positions)` agree; a genuine mismatch is still refused.
+  `System.check()` now checks the topology as its file describes it (solute only), as `check_top`
+  does. Pinned in `test_configuration.py`; notebook 01 §7 asserts the 72.
+- **`AtomSelection` resolved names and roles wrongly when the solute has several molecules.**
+  On `water_216_box.topo` (216 waters, all solute) `a:OW` selected 1 atom and every atom past
+  the first molecule had no name. `Topology::moltype_atom` and `role_of_atom` looked the instance
+  up by molecule number, but the solute is one instance spanning all its molecules, so the two
+  numbers agree only for a one-molecule solute; the `s:`/`m:` prefixes made the same mix-up.
+  Instances are now found by atom offset (`Topology::instance_of_atom`), and `s:` on a topology
+  without solvent is a `SelectionError::NoSolvent` that says so. `a:` also took the solvent:
+  on a solvated system `a:OW` selected the water oxygens, where gromos++ (`AtomSpecifier`: `a`
+  is molecules 1 to `numMolecules`) selects none. `a:` now selects every solute molecule and no
+  solvent, as gromos++ does; `s:` is the solvent. It went unnoticed because every
+  selection test used a one-molecule solute and no solvent. Pinned by unit tests in
+  `gromos-core` and `gromos-analysis/tests/selection_on_topology_files.rs`: the real
+  `water_216_box` file, and gromos++ `atominfo` output for `a:OW`, `a:N`, `a:a` and `1:a` on
+  `aladip.topo` (`tests/data/atominfo`), compared row by row with ours and on aladip solvated to
+  72 atoms. The `diffus` usage text, which suggested `a:OW` for water, now says `s:OW`.
+- **`make notebooks-test` uninstalled the `maturin` it then called.** `make sync` runs
+  `uv sync --all-groups`, which removes what the lock does not list, and `maturin` was not in
+  it. It went unnoticed because a venv with a hand-installed maturin works until its next sync.
+  `maturin>=1.0,<2.0` is now in the `dev` group; `uv sync --all-groups --dry-run` lists no
+  `- maturin`.
 
 ### Added
 
@@ -36,6 +73,51 @@ printed.
   liquid has no gromos++ reference: gromos++ refuses its topology, whose waters are solute.
   `py-gromos/tests/test_analysis_rdf.py` checks every bin of `gromos.rdf()` against a numpy
   minimum-image histogram.
+- **`Topology.atom_names`, `Topology.iac` and `Topology.lj_parameters(iac_i, iac_j)`**: the atom
+  names in engine order (solvent included once solvated), the integer atom-type code of
+  every atom (0-based, the engine's convention: file value k is stored as k − 1) and the
+  `(c6, c12, cs6, cs12)` row of LJPARAMETERS for a type pair, so a notebook reads C6/C12 from the
+  topology instead of typing them. `py-gromos/tests/test_topology.py` checks the `pair_lj` file
+  values exactly.
+- **`gromos.education`, the teaching layer, and the `education` extra** (`anywidget`,
+  `matplotlib`; `anywidget` also joins the `notebooks` group). The package holds toy systems
+  (`systems`), textbook formulas (`theory`), seven experiments with checks (`experiments`) and
+  the live viewer (`viewer`); `view`, `record`, `Recording` and `SphereView` are imported from
+  `gromos.education` and load on first use, so the package imports without `anywidget`.
+  The viewer draws with three.js by default (glossy spheres with soft shadows; a 2D system on a
+  table, a 3D box by its edges) and with 3Dmol.js on `renderer="3dmol"` (ambient occlusion and
+  outlines). Both libraries are vendored in the wheel with their licences (three.js r170, MIT;
+  3Dmol.js, BSD-3-Clause) and reach the browser through the widget, so nothing is fetched from
+  the network. `colors="speed"` colours atoms by speed with a legend; `flat` is inferred for 2D
+  systems.
+- **`gromos.education` toy systems**, built in memory through `Topology.from_string` and
+  `Configuration.from_string`: `lj_gas` (argon in reduced units on a lattice in a periodic box;
+  `dim=2` keeps every atom in one plane and counts 2n − 2 degrees of freedom through
+  `boundary.ndfmin`; `speeds="equal"` starts every atom at one speed with zero net momentum),
+  `argon_pair` and `diatomic` (an O–H harmonic bond whose force constant `μω²` gives the
+  requested period, 9.8 fs by default). Each returns a `System` and a `Recipe`.
+- **`gromos.education.theory`**: the Lennard-Jones energy and minimum, the Maxwell–Boltzmann
+  speed density and mean speed in any dimension, the canonical kinetic-energy density (a gamma
+  distribution) and its relative width √(2/N_df), the leap-frog step limit T/π of a harmonic
+  oscillator and the temperature from the kinetic energy, each unit-tested against hand values.
+- **`gromos.education.experiments`**: seven experiments, each a short run whose measurement is
+  drawn over the theory and returned as `Check` objects a notebook or CI asserts:
+  `energy_flow`, `time_step_scan`, `energy_landscape`, `thermostat_fingerprint`, `block_error`,
+  `maxwell_boltzmann` and `liquid_structure`, plus `water_structure` on GROMOS files. Every
+  number comes from the engine (`Simulation`, `EnergyTimeseries.block_average`, `gromos.rdf`);
+  a test fails if the module gains a histogram or minimum-image arithmetic of its own.
+  `py-gromos/tests/test_education.py` runs all of them in about 5 s;
+  `notebooks/05_experiments.ipynb` shows and asserts them, and
+  `docs/user-guide/education-experiments.md` describes them.
+- **`gromos.education.experiments.heat_bath` and `gromos.education.with_bath`**: a ninth
+  experiment, a hot 2D gas (240 K) quenched to a 120 K bath by Berendsen at two τ and by a
+  Nosé–Hoover chain. It checks that the bath temperature is reached, that the gas's total-energy
+  drop equals the heat the Berendsen bath takes, (N_df k_B / 2τ) ∫ (T − T₀) dt, within 5%, and
+  that the fitted relaxation time lies in [0.9, 2.0] τ (measured 1.16–1.38 τ over three seeds:
+  the potential energy cools too, which stretches it by 2C_V/(N_df k_B)). `with_bath(recipe,
+  temperature_K, tau, algorithm)` couples any recipe to one Berendsen or Nosé–Hoover-chain bath
+  (the experiments use it), and `systems.system_from_frame` builds a `System` from a running
+  simulation's positions and velocities. Notebook 04 shows the gas cooling, coloured by speed.
 
 ### Removed
 
