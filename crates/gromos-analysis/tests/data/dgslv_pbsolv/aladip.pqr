@@ -1,0 +1,14 @@
+REMARK aladip solute, positions from aladip.conf (x10, Angstrom), GROMOS charges, radii in Angstrom
+ATOM      1  CB  GLY     1      25.316   6.179  15.716  0.0000 2.4700
+ATOM      2  C   GLY     1      26.302   7.285  15.375  0.3800 2.2600
+ATOM      3  O   GLY     1      27.331   7.122  14.724 -0.3800 1.9800
+ATOM      4  N   ALA A   2      25.874   8.480  15.790 -0.2800 2.2800
+ATOM      5  H   ALA A   2      25.063   8.588  16.358  0.2800 0.0000
+ATOM      6  CA  ALA A   2      26.610   9.643  15.273  0.0000 3.0700
+ATOM      7  CB  ALA A   2      25.605  10.737  15.065  0.0000 2.4700
+ATOM      8  C   ALA A   2      27.611  10.119  16.368  0.3800 2.2600
+ATOM      9  O   ALA A   2      27.230  10.753  17.248 -0.3800 1.9800
+HETATM   10  N   GLY     3      28.872   9.766  16.028 -0.2800 2.2800
+HETATM   11  H   GLY     3      29.101   9.495  15.097  0.2800 0.0000
+HETATM   12  CB  GLY     3      30.015   9.967  16.935  0.0000 2.4700
+END

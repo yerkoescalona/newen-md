@@ -11,6 +11,7 @@ are stripped from the stored outputs.
 | dg_ener | `dg_ener @temp 300 @stateA eA.dat @stateB eB.dat` and `… @col 3 3` (synthetic series, `eA`/`eB` from a seeded generator) |
 | dfmult | `dfmult @temp 300 @stateR eR.dat @endstates eX1.dat eX2.dat` |
 | matrix_overlap | `matrix_overlap @m1 m1.dat @m2 m2.dat @dim 3` |
+| dgslv_pbsolv | four cases (`c1`, `sigma`, `order`, `pqr`) from a patched build of the program; commands, build recipe and what each case pins in `dgslv_pbsolv/README.md` |
 
 `tests/gromospp_references.rs` runs ours with the same arguments and compares every number
 (1e-6 relative; `-nan` matched literally) and every label.

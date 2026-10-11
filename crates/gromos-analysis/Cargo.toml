@@ -200,6 +200,10 @@ name = "dg_ener"
 path = "src/bin/free_energy/dg_ener.rs"
 
 [[bin]]
+name = "dGslv_pbsolv"
+path = "src/bin/free_energy/dGslv_pbsolv.rs"
+
+[[bin]]
 name = "dfmult"
 path = "src/bin/free_energy/dfmult.rs"
 

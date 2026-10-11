@@ -23,6 +23,7 @@ pub mod fit;
 pub mod gyration;
 pub mod hbond;
 pub mod lnexp;
+pub mod pb;
 pub mod property;
 pub mod rdf;
 pub mod rmsd;

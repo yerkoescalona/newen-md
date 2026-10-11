@@ -881,3 +881,162 @@ fn ene_ana_matches_gromospp() {
     ene_ana_case("direct_refs", &["@prop", "ENER[1]", "ENER[11]"]);
     ene_ana_case("two_files", &["@en_files", "%TRE%", "@prop", "totene"]);
 }
+
+/// One `dGslv_pbsolv` case (`tests/data/dgslv_pbsolv/README.md`): stdout and the `@verbose` log
+/// byte-identical to gromos++'s. The finite-difference solver stops on an L1 residual test, so a
+/// change in floating-point order shows up as a different iteration count and different digits.
+fn dgslv_pbsolv_case(case: &str, args: &[&str]) {
+    let dir = tmp_dir(&format!("dgslv_pbsolv_{case}"));
+    let log_name = format!("{case}.log");
+    let mut argv: Vec<String> = args
+        .iter()
+        .map(|a| {
+            a.replace("%SHARED%", &shared().join("shared").to_string_lossy())
+                .replace("%DATA%", &data("dgslv_pbsolv").to_string_lossy())
+        })
+        .collect();
+    argv.extend(["@verbose".to_string(), log_name.clone()]);
+    let out = run(env!("CARGO_BIN_EXE_dGslv_pbsolv"), &argv, Some(&dir));
+    let reference = data("dgslv_pbsolv");
+    assert_eq!(
+        out,
+        read(&reference.join(format!("{case}.stdout"))),
+        "{case}: stdout"
+    );
+
+    let ours = read(&dir.join(&log_name));
+    let theirs = read(&reference.join(&log_name));
+    // The lines that carry results first, so a failure names what moved.
+    let results = |log: &str| -> Vec<String> {
+        log.lines()
+            .filter(|l| {
+                [
+                    "# CONVERGED AFTER",
+                    "# NO CONVERGENCE AFTER",
+                    "# DG RETURNED",
+                    "# DGRESULT",
+                    "# gridstart",
+                ]
+                .iter()
+                .any(|p| l.starts_with(p))
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(results(&ours), results(&theirs), "{case}: log results");
+    for (n, (a, b)) in ours.lines().zip(theirs.lines()).enumerate() {
+        assert_eq!(a, b, "{case}: log line {}", n + 1);
+    }
+    assert_eq!(ours, theirs, "{case}: log");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dgslv_pbsolv_matches_gromospp() {
+    let coord = [
+        "@topo",
+        "%SHARED%/aladip.topo",
+        "@coord",
+        "%SHARED%/aladip.conf",
+    ];
+    let with = |extra: &[&'static str]| -> Vec<&'static str> {
+        coord.iter().copied().chain(extra.iter().copied()).collect()
+    };
+    dgslv_pbsolv_case(
+        "c1",
+        &with(&[
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:a",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "sigma",
+        &with(&[
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:4,5",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@increasegrid",
+            "2",
+            "2",
+            "2",
+            "@rminORsigma",
+            "1",
+            "@radscal",
+            "1.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "order",
+        &with(&[
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:5,3,1",
+            "1:7",
+            "@atomsTOcharge",
+            "1:9,2",
+            "@schemeELEC",
+            "ls",
+            "@epsSOLV",
+            "66.6",
+            "@epsNPBC",
+            "66.6",
+            "@gridspacing",
+            "0.13",
+            "@probeIAC",
+            "5",
+            "@probeRAD",
+            "0.12",
+            "@maxiter",
+            "40",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "pqr",
+        &[
+            "@pqr",
+            "%DATA%/aladip.pqr",
+            "@coordinates",
+            "3.767055681",
+            "3.767055681",
+            "3.767055681",
+            "@nogridpoints",
+            "24",
+            "@gridspacing",
+            "0.15",
+            "@atoms",
+            "1-12",
+            "@atomsTOcharge",
+            "2,3,5",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@radscal",
+            "1.1",
+        ],
+    );
+}

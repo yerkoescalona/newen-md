@@ -271,6 +271,31 @@ fn cases() -> Vec<Case> {
             env!("CARGO_BIN_EXE_matrix_overlap"),
             vec!["@m1", &m1, "@m2", &m2, "@dim", "3"],
         ),
+        // A coarse grid keeps the four Poisson–Boltzmann solves fast; no @verbose, no file.
+        (
+            "dGslv_pbsolv",
+            env!("CARGO_BIN_EXE_dGslv_pbsolv"),
+            vec![
+                "@topo",
+                &topo,
+                "@coord",
+                &conf,
+                "@pbc",
+                "r",
+                "@atoms",
+                "1:a",
+                "@atomsTOcharge",
+                "1:a",
+                "@schemeELEC",
+                "LS",
+                "@epsSOLV",
+                "66.6",
+                "@gridspacing",
+                "0.3",
+                "@probeIAC",
+                "4",
+            ],
+        ),
     ];
 
     // These write their results into the working directory. A missing required argument makes

@@ -51,9 +51,14 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   for identical tie-breaking; `cnf` output, real atoms only); `make_sasa_top` lives in
   gromos-tools.
 - Not ported, with reasons (CHANGELOG 0.0.41): `cos_dipole`, `cos_epsilon` (COS special
-  trajectories), `dGslv_pbsolv` (PB solver), `prep_bb` (interactive), `prep_xray_le` (X-ray).
+  trajectories), `prep_bb` (interactive), `prep_xray_le` (X-ray).
+- `dGslv_pbsolv` (1.8): the finite-difference side (`@schemeELEC LS`, coordinate and PQR input)
+  over `src/pb/` (gromos++ `PB_Parameters`, `FDPoissonBoltzmann`, the two ICCG solvers, the
+  atomic radii); stdout and the `@verbose` log byte-identical to a patched gromos++ build on four
+  cases (`tests/data/dgslv_pbsolv/README.md`). `@schemeELEC RF` (the FFT solver) is refused until
+  it is ported. `pb::dgslv_fd` / `pb::solve_fd` are the library API (potentials and ΔG as numbers).
 
-## Shape — 25 of the 82 programs are library functions
+## Shape — 26 of the 83 programs are library functions
 The programs converted so far follow gromos-tools: the body is
 `src/programs/<category>/<name>.rs` (`pub const PROGRAM` + `pub fn run(argv, out)`), the binary is
 a one-line `gromos_io::run_main(&PROGRAM)`, and the two trees carry the same categories as the
@@ -65,7 +70,9 @@ Converted (3.10 step 6): the 18 that already parsed with `Arguments` — `bilaye
 `bilayer_oparam`, `dfgrid`, `dfmult`, `dg_ener`, `edyn`, `eds_update_1`, `eds_update_2`, `ene_ana`,
 `gca`, `jepot`, `jval`, `matrix_overlap`, `mdf`, `pocket`, `rmsd`, `rmsf`, `tser` — and the 7 that
 read `gromos_args()` and walked the vector by hand, whose parsers became `Arguments` here:
-`atominfo`, `bar`, `ener`, `ext_ti_ana`, `ext_ti_merge`, `frameout`, `nhoparam`.
+`atominfo`, `bar`, `ener`, `ext_ti_ana`, `ext_ti_merge`, `frameout`, `nhoparam`. Written as a
+library function from the start: `dGslv_pbsolv` (module `dgslv_pbsolv`, the file keeps the
+gromos++ name because the registry checks `programs/<category>/<bin name>.rs`).
 
 **The other 57 still have their compute in `main()`** (3.10 step 8, by directory, in batches). They
 are ordinary binaries with hand-rolled `env::args()` parsers; nothing here applies to them until
@@ -74,13 +81,15 @@ they are converted.
 ## Key files
 ```
 src/fit.rs                          — Kabsch fit, superimpose(), rmsd()
+src/pb/                             — gromos++ pb library: PB_Parameters, FD Poisson–Boltzmann,
+                                      ICCG solvers, PB radii (dGslv_pbsolv)
 src/programs/mod.rs                 — the categories, the flat re-exports, PROGRAMS, io_err
 src/programs/<cat>/<name>.rs        — one module per converted program: PROGRAM, run(argv, out)
 src/bin/<cat>/<name>.rs             — a converted program's one-line run_main shim; the other 57
                                       binaries still hold their own compute
 src/bin/dynamics/, clustering/, xray/ — no program converted yet
 tests/library_parity.rs             — library run == binary stdout, for every registered program
-tests/gromospp_references.rs        — the 18 against gromos++ output (tests/data/README.md)
+tests/gromospp_references.rs        — the 19 against gromos++ output (tests/data/README.md)
 tests/test_frameout.rs              — 8 frameout integration tests
 ```
 
