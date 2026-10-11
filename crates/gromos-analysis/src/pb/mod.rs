@@ -5,19 +5,29 @@
 //! charged on the grid and carve out the low-dielectric cavity (`@atoms`) and the atoms whose
 //! potentials and energy are read out (`@atomsTOcharge`). [`solve_fd`] is one finite-difference
 //! solve (gromos++ `FDPoissonBoltzmann` with the ICCG solvers); [`dgslv_fd`] is the sequence of
-//! four solves `dGslv_pbsolv` runs for every scheme.
+//! four solves `dGslv_pbsolv` runs for every scheme. [`solve_fft`] is one periodic FFT solve of
+//! the reaction potential (gromos++ `FFTPoisson`), [`dgslv_fft`] the LS and RF pair
+//! `@schemeELEC RF` adds.
 //!
 //! Every routine reproduces gromos++'s floating-point expression order: the iteration count of the
-//! L1-converged ICCG solver, and with it the printed potentials, depend on it (item 1.8).
+//! L1-converged ICCG solver, and with it the printed potentials, depend on it (item 1.8). The FFT
+//! solves differ from gromos++'s FFTW in the last bits.
 //!
-//! The log (`@verbose`) is gromos++'s, line for line, in C++ default stream format.
+//! The log (`@verbose`) is gromos++'s, line for line, in C++ stream format.
 
 pub mod fd;
+pub mod fft;
+pub mod fft_fields;
+pub mod fft_poisson;
 pub mod iccg;
 pub mod params;
 pub mod radii;
 
 pub use fd::{solve_fd, FdBoundary, FdSolution};
+pub use fft::FftGrid;
+pub use fft_poisson::{
+    dgslv_fft, solve_fft, DgslvFft, FftScheme, FftSetup, FftSolution, LogFormat, StreamLog,
+};
 pub use params::{PbParameters, GROMOSPP_FOUR_PI_EPS_I};
 pub use radii::{atomic_radii_vdw, pb_radius, RadiusDefinition};
 
@@ -49,20 +59,25 @@ impl PbSystem {
     /// The lowest and highest coordinate over all solute atoms, per axis, starting from ±1e8 as
     /// gromos++ does (`PositionUtils.cc:252-290`).
     pub fn extent(&self) -> (Vec3, Vec3) {
-        let mut lo = [100000000.0f64; 3];
-        let mut hi = [-100000000.0f64; 3];
-        for p in &self.positions {
-            for d in 0..3 {
-                if p[d] < lo[d] {
-                    lo[d] = p[d];
-                }
-                if p[d] > hi[d] {
-                    hi[d] = p[d];
-                }
+        extent(&self.positions)
+    }
+}
+
+/// The lowest and highest coordinate per axis, starting from ±1e8 (`PositionUtils.cc:252-290`).
+pub fn extent(positions: &[Vec3]) -> (Vec3, Vec3) {
+    let mut lo = [100000000.0f64; 3];
+    let mut hi = [-100000000.0f64; 3];
+    for p in positions {
+        for d in 0..3 {
+            if p[d] < lo[d] {
+                lo[d] = p[d];
+            }
+            if p[d] > hi[d] {
+                hi[d] = p[d];
             }
         }
-        (Vec3::from_array(lo), Vec3::from_array(hi))
     }
+    (Vec3::from_array(lo), Vec3::from_array(hi))
 }
 
 /// The four finite-difference solves of `dGslv_pbsolv` and the two free energies formed from them

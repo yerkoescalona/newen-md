@@ -882,9 +882,33 @@ fn ene_ana_matches_gromospp() {
     ene_ana_case("two_files", &["@en_files", "%TRE%", "@prop", "totene"]);
 }
 
-/// One `dGslv_pbsolv` case (`tests/data/dgslv_pbsolv/README.md`): stdout and the `@verbose` log
-/// byte-identical to gromos++'s. The finite-difference solver stops on an L1 residual test, so a
-/// change in floating-point order shows up as a different iteration count and different digits.
+/// A token of a `dGslv_pbsolv` FFT log line or table row equals gromos++'s: text that is not a
+/// decimal number exactly, a decimal number within one unit of its last printed digit (`tol`
+/// when given). The FFT solves use rustfft instead of FFTW, so their numbers may differ from
+/// gromos++'s in the last bits, which can move a rounding.
+fn fft_token_matches(ours: &str, theirs: &str, tol: Option<f64>) -> bool {
+    if ours == theirs {
+        return true;
+    }
+    let decimals = match theirs.split_once('.') {
+        Some((_, d)) if d.chars().all(|c| c.is_ascii_digit()) => d.len(),
+        _ => return false,
+    };
+    match (ours.parse::<f64>(), theirs.parse::<f64>()) {
+        (Ok(a), Ok(b)) => {
+            let tol = tol.unwrap_or(10f64.powi(-(decimals as i32)));
+            (a - b).abs() <= tol * (1.0 + 1e-9)
+        },
+        _ => false,
+    }
+}
+
+/// One `dGslv_pbsolv` case (`tests/data/dgslv_pbsolv/README.md`). Everything the
+/// finite-difference solves produce is byte-identical to gromos++: their solver stops on an L1
+/// residual test, so a change in floating-point order shows up as a different iteration count and
+/// different digits. The FFT columns of the table agree within 1e-7 and the FFT part of the log
+/// (after `# DGRESULT PBC`) line for line, with the same iteration counts and its numbers within
+/// one unit of the last printed digit.
 fn dgslv_pbsolv_case(case: &str, args: &[&str]) {
     let dir = tmp_dir(&format!("dgslv_pbsolv_{case}"));
     let log_name = format!("{case}.log");
@@ -898,14 +922,77 @@ fn dgslv_pbsolv_case(case: &str, args: &[&str]) {
     argv.extend(["@verbose".to_string(), log_name.clone()]);
     let out = run(env!("CARGO_BIN_EXE_dGslv_pbsolv"), &argv, Some(&dir));
     let reference = data("dgslv_pbsolv");
+    let expected = read(&reference.join(format!("{case}.stdout")));
     assert_eq!(
-        out,
-        read(&reference.join(format!("{case}.stdout"))),
+        out.lines().count(),
+        expected.lines().count(),
         "{case}: stdout"
     );
+    for (a, b) in out.lines().zip(expected.lines()) {
+        // `# atom nres name charge` and four FD columns exact, the two FFT columns within 1e-7.
+        let (at, bt): (Vec<&str>, Vec<&str>) = (
+            a.split_whitespace().collect(),
+            b.split_whitespace().collect(),
+        );
+        let fd_columns = 8;
+        if at.len() <= fd_columns || b.starts_with("# atom") {
+            assert_eq!(a, b, "{case}: stdout");
+            continue;
+        }
+        assert_eq!(at.len(), bt.len(), "{case}: stdout row\n{a}\n{b}");
+        assert_eq!(
+            at[..fd_columns],
+            bt[..fd_columns],
+            "{case}: stdout FD columns"
+        );
+        for (x, y) in at[fd_columns..].iter().zip(&bt[fd_columns..]) {
+            assert!(
+                fft_token_matches(x, y, Some(1e-7)),
+                "{case}: stdout FFT column {x} vs {y}"
+            );
+        }
+    }
 
     let ours = read(&dir.join(&log_name));
     let theirs = read(&reference.join(&log_name));
+    // The FFT solves (@schemeELEC RF) follow the last FD result.
+    let split = |log: &str| -> (String, String) {
+        match log.find("# DGRESULT PBC ") {
+            Some(at) => {
+                let end = at + log[at..].find('\n').map_or(log.len() - at, |n| n + 1);
+                (log[..end].to_string(), log[end..].to_string())
+            },
+            None => (log.to_string(), String::new()),
+        }
+    };
+    let (ours, ours_fft) = split(&ours);
+    let (theirs, theirs_fft) = split(&theirs);
+    let ol: Vec<&str> = ours_fft.lines().collect();
+    let tl: Vec<&str> = theirs_fft.lines().collect();
+    let steps = |lines: &[&str]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.starts_with("# Convergence after") || l.starts_with("# Terminated after"))
+            .map(|l| l.split_whitespace().take(4).collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(steps(&ol), steps(&tl), "{case}: FFT iteration counts");
+    assert_eq!(ol.len(), tl.len(), "{case}: FFT log line count");
+    for (n, (a, b)) in ol.iter().zip(&tl).enumerate() {
+        let (at, bt): (Vec<&str>, Vec<&str>) = (
+            a.split_whitespace().collect(),
+            b.split_whitespace().collect(),
+        );
+        assert!(
+            at.len() == bt.len()
+                && at
+                    .iter()
+                    .zip(&bt)
+                    .all(|(x, y)| fft_token_matches(x, y, None)),
+            "{case}: FFT log line {}\nours:     {a}\ngromos++: {b}",
+            n + 1
+        );
+    }
     // The lines that carry results first, so a failure names what moved.
     let results = |log: &str| -> Vec<String> {
         log.lines()
@@ -1038,5 +1125,63 @@ fn dgslv_pbsolv_matches_gromospp() {
             "@radscal",
             "1.1",
         ],
+    );
+    // @schemeELEC RF: the FD solves of `sigma`, then the LS and RF FFT solves.
+    dgslv_pbsolv_case(
+        "c2",
+        &with(&[
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:4,5",
+            "@schemeELEC",
+            "RF",
+            "@epsSOLV",
+            "66.6",
+            "@epsRF",
+            "66.6",
+            "@rcut",
+            "1.4",
+            "@cubesFFT",
+            "4",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@increasegrid",
+            "2",
+            "2",
+            "2",
+            "@rminORsigma",
+            "1",
+            "@radscal",
+            "1.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "c3b",
+        &with(&[
+            "@pbc",
+            "r",
+            "cog",
+            "@atoms",
+            "1:1-4",
+            "@atomsTOcharge",
+            "1:2-4",
+            "@schemeELEC",
+            "RF",
+            "@epsSOLV",
+            "78.4",
+            "@epsRF",
+            "0",
+            "@rcut",
+            "0.9",
+            "@gridspacing",
+            "0.12",
+            "@probeIAC",
+            "4",
+        ]),
     );
 }

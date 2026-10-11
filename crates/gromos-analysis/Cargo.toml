@@ -23,6 +23,9 @@ nalgebra = { workspace = true }
 # Parallelism
 rayon = { workspace = true }
 
+# The periodic Poisson solver of dGslv_pbsolv
+rustfft = { workspace = true }
+
 # Progress bars (used by analysis bins)
 indicatif = { workspace = true }
 

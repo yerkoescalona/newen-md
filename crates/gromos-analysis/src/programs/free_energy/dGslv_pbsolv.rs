@@ -1,13 +1,20 @@
-//! dGslv_pbsolv — the finite-difference Poisson–Boltzmann correction to the electrostatic
-//! solvation free energy (gromos++ `dGslv_pbsolv`, `programs/dGslv_pbsolv.cc`).
+//! dGslv_pbsolv — the Poisson–Boltzmann correction to the electrostatic solvation free energy
+//! (gromos++ `dGslv_pbsolv`, `programs/dGslv_pbsolv.cc`).
 //!
-//! Four solves on the solute: non-periodic in vacuum and in `@epsNPBC`, periodic in vacuum and in
-//! `@epsSOLV`. Their differences are the CB/NPBC and LS/PBC solvation free energies; the
-//! LS correction is CB/NPBC − LS/PBC. Both are written to the `@verbose` log
-//! (`# DGRESULT NPBC|PBC`); stdout carries the per-atom potentials of the four solves.
-//! `@schemeELEC RF` adds two FFT solves and is not available yet.
+//! Four finite-difference solves on the solute: non-periodic in vacuum and in `@epsNPBC`, periodic
+//! in vacuum and in `@epsSOLV`. Their differences are the CB/NPBC and LS/PBC solvation free
+//! energies, written to the `@verbose` log (`# DGRESULT NPBC|PBC`). `@schemeELEC RF` adds two
+//! periodic FFT solves of the reaction potential, lattice-sum and reaction-field, whose free
+//! energies end their log sections (`# Convergence after N steps with dG`). stdout carries the
+//! per-atom potentials of every solve. gromos++ documents the correction (LS: CB/NPBC[FD] −
+//! LS/PBC[FD]; RF: that + LS/PBC[FFT] − RF/PBC[FFT]) without computing it;
+//! [`DgslvPbsolv::documented_correction`] does.
 //!
-//! Deliberate departures from gromos++: `@gridspacing` must be positive in coordinate mode and
+//! Deliberate departures from gromos++: `@epsRF 1` is refused (gromos++ solves it without keeping
+//! the potentials, then aborts on the empty column, `dGslv_pbsolv.cc:299`), an FFT read-out atom
+//! whose interpolation corners leave the grid is an error (gromos++ reads outside it,
+//! `FFTPoissonIterator.cc:728-737`), FFT grids need more than 100 points (gromos++ logs
+//! element 100), `@gridspacing` must be positive in coordinate mode and
 //! `@nogridpoints` in PQR mode (gromos++ divides by zero), `@increasegrid` takes exactly three
 //! values (gromos++ reads the neighbouring arguments when given fewer), numbers must parse
 //! completely (gromos++ uses `atof`/`atoi`), solvent atoms are refused in `@atoms` and
@@ -16,8 +23,8 @@
 
 use crate::args::Arguments;
 use crate::pb::{
-    atomic_radii_vdw, dgslv_fd, g, pb_radius, DgslvFd, FdSetup, PbParameters, PbSystem,
-    RadiusDefinition, SolveOrder, GROMOSPP_FOUR_PI_EPS_I,
+    atomic_radii_vdw, dgslv_fd, dgslv_fft, g, pb_radius, DgslvFd, DgslvFft, FdSetup, FftSetup,
+    PbParameters, PbSystem, RadiusDefinition, SolveOrder, GROMOSPP_FOUR_PI_EPS_I,
 };
 use crate::pbc::Pbc;
 use crate::programs::io_err;
@@ -66,9 +73,9 @@ pub const USAGE: &str = "# dGslv_pbsolv
 
 # -----------------------------------------------------------------------------------------
 # general input:
-\t@schemeELEC      <electrostatics scheme: LS (RF needs the FFT solver, not available yet)>
+\t@schemeELEC      <electrostatics scheme: LS or RF>
 \t if RF: @rcut    <cutoff distance in nm>
-\t if RF: @epsRF   <dielectric permittivity of the reaction field>
+\t if RF: @epsRF   <dielectric permittivity of the reaction field (0: conducting; 1 is not supported)>
 \t@epsSOLV         <relative dielectric permittivity of the employed solvent model>
 \t@gridspacing     <grid spacing in nm; should not be much higher than 0.02 but
 \t                  lower numbers are computationally much more expensive in
@@ -122,7 +129,7 @@ pub const PROGRAM: Program = Program {
     name: "dGslv_pbsolv",
     known: KNOWN,
     usage: USAGE,
-    status: Status::Ported,
+    status: Status::Verified,
     run,
 };
 
@@ -161,6 +168,10 @@ enum Scheme {
 
 /// The arguments gromos++ reads before it looks at the system (`dGslv_pbsolv.cc:420-528`).
 struct Settings {
+    scheme: Scheme,
+    rcut: f64,
+    eps_rf: f64,
+    fftcub: usize,
     probe_rad: f64,
     hydrogen_rad: f64,
     radscal: f64,
@@ -188,8 +199,9 @@ fn read_settings(args: &Arguments, log: &mut String) -> Result<Settings, String>
     };
     log.push_str(&format!("# READ: schemeELEC {scheme_text}\n"));
 
+    let mut rcut = 0.0;
     if scheme == Scheme::Rf {
-        let rcut = number(args, "rcut")?.unwrap_or(-1.0);
+        rcut = number(args, "rcut")?.unwrap_or(-1.0);
         if rcut < 0.0 {
             return Err(fail("No or negative RF cutoff given. Exiting ..."));
         }
@@ -237,8 +249,9 @@ fn read_settings(args: &Arguments, log: &mut String) -> Result<Settings, String>
     }
     log.push_str(&format!("# READ: epssolvent {}\n", g(epssolvent)));
 
+    let mut eps_rf = -1.0;
     if scheme == Scheme::Rf {
-        let eps_rf = number(args, "epsRF")?.unwrap_or(-1.0);
+        eps_rf = number(args, "epsRF")?.unwrap_or(-1.0);
         if eps_rf < 1.0 && eps_rf != 0.0 {
             return Err(fail("Reaction field permittivity (epsRF) not given or given value not allowed. Exiting ..."));
         }
@@ -280,13 +293,20 @@ fn read_settings(args: &Arguments, log: &mut String) -> Result<Settings, String>
     }
     log.push_str(&format!("# READ: fftcub {fftcub}\n"));
 
-    if scheme == Scheme::Rf {
+    // gromos++ takes epsRF within tiny_real of 1 as "no reaction-field correction" (SC), solves it
+    // without keeping the potentials and aborts on the empty table column (dGslv_pbsolv.cc:280-299).
+    if scheme == Scheme::Rf && (eps_rf - 1.0).abs() <= 0.0000000001 {
         return Err(fail(
-            "@schemeELEC RF needs the FFT Poisson solver, which is not ported yet; use LS",
+            "@epsRF 1 (no reaction-field correction) is not supported: gromos++ does not keep the \
+             potentials of that solve and aborts. Use @epsRF 0 (conducting) or a value above 1",
         ));
     }
 
     Ok(Settings {
+        scheme,
+        rcut,
+        eps_rf,
+        fftcub: fftcub as usize,
         probe_rad,
         hydrogen_rad,
         radscal,
@@ -444,37 +464,83 @@ fn read_grids(
     })
 }
 
-/// One row of the stdout table.
-struct Row {
-    resnum: usize,
-    name: String,
-    charge: f64,
+/// One read-out atom (`@atomsTOcharge`), a row of the stdout table.
+#[derive(Debug, Clone)]
+pub struct ReadoutAtom {
+    /// Index among the solute atoms (0-based).
+    pub atom: usize,
+    /// Residue number within its molecule, from 0 (printed + 1).
+    pub resnum: usize,
+    pub name: String,
+    pub charge: f64,
+}
+
+/// Everything one `dGslv_pbsolv` run computes.
+#[derive(Debug, Clone)]
+pub struct DgslvPbsolv {
+    /// The read-out atoms, in the order of the potentials.
+    pub atoms: Vec<ReadoutAtom>,
+    /// The four finite-difference solves and their two free energies.
+    pub fd: DgslvFd,
+    /// The LS and RF FFT solves (`@schemeELEC RF` only).
+    pub fft: Option<DgslvFft>,
+}
+
+impl DgslvPbsolv {
+    /// The correction gromos++ documents but does not compute (`dGslv_pbsolv.cc:54-60`), kJ/mol:
+    /// CB/NPBC[FD] − LS/PBC[FD], plus LS/PBC[FFT] − RF/PBC[FFT] with `@schemeELEC RF`.
+    pub fn documented_correction(&self) -> f64 {
+        let fd = self.fd.dg_npbc - self.fd.dg_pbc;
+        match &self.fft {
+            None => fd,
+            Some(fft) => fd + fft.ls.dg - fft.rf.dg,
+        }
+    }
 }
 
 /// `writeout` (`dGslv_pbsolv.cc:306-331`).
-fn writeout(out: &mut dyn Write, rows: &[Row], fd: &DgslvFd) -> Result<(), String> {
+fn writeout(out: &mut dyn Write, r: &DgslvPbsolv) -> Result<(), String> {
+    let fd = &r.fd;
     let mut text = format!(
-        "{:>6}{:>7}{:>7}{:>10}{:>16}{:>16}{:>16}{:>16}\n",
+        "{:>6}{:>7}{:>7}{:>10}{:>16}{:>16}{:>16}{:>16}",
         "# atom", "nres", "name", "charge", "NPBC_SLV", "NPBC_VAC", "PBC_SLV", "PBC_VAC"
     );
-    for (i, r) in rows.iter().enumerate() {
+    if r.fft.is_some() {
+        text.push_str(&format!("{:>16}{:>16}", "FFT_LS_PBC", "FFT_RF_PBC"));
+    }
+    text.push('\n');
+    for (i, a) in r.atoms.iter().enumerate() {
         text.push_str(&format!(
-            "{:>6}{:>7}{:>7}{:>10.4}{:>16.7}{:>16.7}{:>16.7}{:>16.7}\n",
+            "{:>6}{:>7}{:>7}{:>10.4}{:>16.7}{:>16.7}{:>16.7}{:>16.7}",
             i + 1,
-            r.resnum + 1,
-            r.name,
-            r.charge,
+            a.resnum + 1,
+            a.name,
+            a.charge,
             fd.npbc_slv.potentials[i],
             fd.npbc_vac.potentials[i],
             fd.pbc_slv.potentials[i],
             fd.pbc_vac.potentials[i],
         ));
+        if let Some(fft) = &r.fft {
+            text.push_str(&format!(
+                "{:>16.7}{:>16.7}",
+                fft.ls.potentials[i], fft.rf.potentials[i]
+            ));
+        }
+        text.push('\n');
     }
     text.push('\n');
     out.write_all(text.as_bytes()).map_err(io_err)
 }
 
 pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
+    evaluate(argv, out).map(|_| ())
+}
+
+/// The program as a library function: runs `argv` (program name first, `@key` form), writes the
+/// table (and any gather warning) to `out` and the `@verbose` log file, and returns the results
+/// with the log text.
+pub fn evaluate(argv: &[String], out: &mut dyn Write) -> Result<(DgslvPbsolv, String), String> {
     if argv.len() < 2 {
         return Err(USAGE.to_string());
     }
@@ -492,10 +558,14 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
     if let Some(path) = log_path {
         std::fs::write(&path, &log).map_err(|e| fail(&format!("@verbose {path}: {e}")))?;
     }
-    result
+    result.map(|r| (r, log))
 }
 
-fn run_logged(args: &Arguments, out: &mut dyn Write, log: &mut String) -> Result<(), String> {
+fn run_logged(
+    args: &Arguments,
+    out: &mut dyn Write,
+    log: &mut String,
+) -> Result<DgslvPbsolv, String> {
     let settings = read_settings(args, log)?;
     if args.count("coord") > 0 {
         coordinate_mode(args, &settings, out, log)
@@ -522,7 +592,7 @@ fn coordinate_mode(
     settings: &Settings,
     out: &mut dyn Write,
     log: &mut String,
-) -> Result<(), String> {
+) -> Result<DgslvPbsolv, String> {
     let topo_path = args
         .value("topo")
         .map_err(|_| fail("@topo is required with @coord"))?;
@@ -617,23 +687,57 @@ fn coordinate_mode(
         readout,
         fpepsi,
     };
-    let fd = dgslv_fd(
-        &sys,
-        &fd_setup(settings, &grids),
-        SolveOrder::VacuumFirst,
-        log,
-    )?;
-
-    let rows: Vec<Row> = sys
+    let atoms: Vec<ReadoutAtom> = sys
         .readout
         .iter()
-        .map(|&a| Row {
+        .map(|&a| ReadoutAtom {
+            atom: a,
             resnum: residue_in_molecule(&topo, a),
             name: topo.atom_name(a).unwrap_or("").to_string(),
             charge: sys.charges[a],
         })
         .collect();
-    writeout(out, &rows, &fd)
+    solve_and_write(
+        &sys,
+        settings,
+        &grids,
+        SolveOrder::VacuumFirst,
+        atoms,
+        out,
+        log,
+    )
+}
+
+/// The FD solves, the FFT pair with `@schemeELEC RF`, and the table.
+fn solve_and_write(
+    sys: &PbSystem,
+    settings: &Settings,
+    grids: &Grids,
+    order: SolveOrder,
+    atoms: Vec<ReadoutAtom>,
+    out: &mut dyn Write,
+    log: &mut String,
+) -> Result<DgslvPbsolv, String> {
+    let fd = dgslv_fd(sys, &fd_setup(settings, grids), order, log)?;
+    let fft = match settings.scheme {
+        Scheme::Ls => None,
+        Scheme::Rf => Some(dgslv_fft(
+            sys,
+            &FftSetup {
+                grid: grids.pbc,
+                h: grids.h,
+                eps_solv: settings.epssolvent,
+                eps_rf: settings.eps_rf,
+                rcut: settings.rcut,
+                ncubes: settings.fftcub,
+                maxiter: settings.maxiter,
+            },
+            log,
+        )?),
+    };
+    let result = DgslvPbsolv { atoms, fd, fft };
+    writeout(out, &result)?;
+    Ok(result)
 }
 
 fn fd_setup(settings: &Settings, grids: &Grids) -> FdSetup {
@@ -706,7 +810,7 @@ fn pqr_mode(
     settings: &Settings,
     out: &mut dyn Write,
     log: &mut String,
-) -> Result<(), String> {
+) -> Result<DgslvPbsolv, String> {
     let pqr = read_pqr(args.value("pqr")?)?;
 
     // One molecule of the PQR atoms (gromos++ makes them argon, IAC 31; the type is never read).
@@ -797,24 +901,26 @@ fn pqr_mode(
         readout,
         fpepsi: GROMOSPP_FOUR_PI_EPS_I,
     };
-    let fd = dgslv_fd(
-        &sys,
-        &fd_setup(settings, &grids),
-        SolveOrder::SolventFirst,
-        log,
-    )?;
-
     // gromos++ prints residue 1 for every PQR atom (its residue map is empty).
-    let rows: Vec<Row> = sys
+    let atoms: Vec<ReadoutAtom> = sys
         .readout
         .iter()
-        .map(|&a| Row {
+        .map(|&a| ReadoutAtom {
+            atom: a,
             resnum: 0,
             name: pqr[a].name.clone(),
             charge: pqr[a].charge,
         })
         .collect();
-    writeout(out, &rows, &fd)
+    solve_and_write(
+        &sys,
+        settings,
+        &grids,
+        SolveOrder::SolventFirst,
+        atoms,
+        out,
+        log,
+    )
 }
 
 #[cfg(test)]
@@ -864,7 +970,7 @@ mod tests {
             "@epsRF",
             "1"
         ])
-        .contains("not ported"));
+        .contains("@epsRF 1"));
         assert!(err(&["@verbose"]).contains("no file name"));
         // @HRAD is accepted and ignored.
         assert!(
@@ -876,6 +982,10 @@ mod tests {
     #[test]
     fn grid_sizes_follow_gromospp() {
         let settings = Settings {
+            scheme: Scheme::Ls,
+            rcut: 0.0,
+            eps_rf: -1.0,
+            fftcub: 4,
             probe_rad: 0.14,
             hydrogen_rad: 0.05,
             radscal: 1.0,

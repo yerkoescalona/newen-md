@@ -766,6 +766,11 @@ def _make_top(
     *, build: list[str], param: str, seq: list[str], solv: str | None = None
 ) -> Topology: ...
 def _check_top(topology: Topology) -> tuple[list[str], list[str], str]: ...
+def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:
+    """`dGslv_pbsolv` in process: potentials and free energies of every solve, the table and
+    the log; `gromos.analysis.dgslv_pbsolv` builds `argv` from keywords."""
+    ...
+
 def rmsd(
     positions: npt.NDArray[np.float64],
     reference: npt.NDArray[np.float64],

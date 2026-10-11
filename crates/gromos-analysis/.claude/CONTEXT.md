@@ -52,11 +52,15 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   gromos-tools.
 - Not ported, with reasons (CHANGELOG 0.0.41): `cos_dipole`, `cos_epsilon` (COS special
   trajectories), `prep_bb` (interactive), `prep_xray_le` (X-ray).
-- `dGslv_pbsolv` (1.8): the finite-difference side (`@schemeELEC LS`, coordinate and PQR input)
-  over `src/pb/` (gromos++ `PB_Parameters`, `FDPoissonBoltzmann`, the two ICCG solvers, the
-  atomic radii); stdout and the `@verbose` log byte-identical to a patched gromos++ build on four
-  cases (`tests/data/dgslv_pbsolv/README.md`). `@schemeELEC RF` (the FFT solver) is refused until
-  it is ported. `pb::dgslv_fd` / `pb::solve_fd` are the library API (potentials and ΔG as numbers).
+- `dGslv_pbsolv` (1.8) ✓ verified: over `src/pb/` (gromos++ `PB_Parameters`,
+  `FDPoissonBoltzmann`, the two ICCG solvers, the atomic radii; for `@schemeELEC RF` the FFT
+  Poisson solver `FFTPoisson`/`FFTPoissonIterator` with its grid, occupancy, hat charges, LS and
+  RF vacuum fields and tensors, on rustfft). Against a patched gromos++ build on six cases
+  (`tests/data/dgslv_pbsolv/README.md`): everything from the FD solves byte-identical, the FFT
+  numbers within the last printed digit (byte-identical where they were made). `@epsRF 1` (SC) is
+  refused: gromos++ aborts there. Library API: `pb::dgslv_fd` / `pb::solve_fd`, `pb::dgslv_fft` /
+  `pb::solve_fft`, and the whole program as `programs::dgslv_pbsolv::evaluate` (bound in Python
+  as `gromos.analysis.dgslv_pbsolv`).
 
 ## Shape — 26 of the 83 programs are library functions
 The programs converted so far follow gromos-tools: the body is

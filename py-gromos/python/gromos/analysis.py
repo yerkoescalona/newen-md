@@ -20,11 +20,16 @@ Categories
 - Trajectory Tools: frameout, tstrip, filter, gathtraj, etc.
 """
 
+import os
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+
+from .gromos import _dgslv_pbsolv
 
 
 def _find_gromos_bin() -> Path:
@@ -812,6 +817,111 @@ def bar(
     return {"delta_g": 0.0, "error": 0.0, "convergence": True, "output": result.stdout}
 
 
+def dgslv_pbsolv(
+    *,
+    atoms: str | Sequence[str],
+    atoms_to_charge: str | Sequence[str],
+    scheme: str,
+    eps_solv: float,
+    topo: str | os.PathLike[str] | None = None,
+    coord: str | os.PathLike[str] | None = None,
+    pbc: str | Sequence[str] | None = None,
+    probe_iac: int | None = None,
+    rmin_or_sigma: int | None = None,
+    pqr: str | os.PathLike[str] | None = None,
+    coordinates: Sequence[float] | None = None,
+    eps_rf: float | None = None,
+    rcut: float | None = None,
+    gridspacing: float | None = None,
+    nogridpoints: int | None = None,
+    npbc_size: float | None = None,
+    eps_npbc: float | None = None,
+    maxiter: int | None = None,
+    cubes_fft: int | None = None,
+    probe_rad: float | None = None,
+    radscal: float | None = None,
+    increasegrid: Sequence[int] | None = None,
+    verbose: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Poisson–Boltzmann correction to the electrostatic solvation free energy (gromos++
+    ``dGslv_pbsolv``), run in process.
+
+    The keywords are the program's ``@`` arguments (``atoms_to_charge`` is ``@atomsTOcharge``,
+    ``scheme`` ``@schemeELEC``, ``eps_solv`` ``@epsSOLV``, ``eps_rf`` ``@epsRF``,
+    ``npbc_size`` ``@NPBCsize``, ``eps_npbc`` ``@epsNPBC``, ``cubes_fft`` ``@cubesFFT``,
+    ``probe_iac``/``probe_rad`` ``@probeIAC``/``@probeRAD``, ``rmin_or_sigma`` ``@rminORsigma``);
+    give ``topo`` + ``coord`` or ``pqr`` + ``coordinates``. The numbers are the program's own:
+    the table it prints is ``result["stdout"]``.
+
+    Returns
+    -------
+    dict
+        ``atom``, ``residue``, ``name``, ``charge``: the read-out atoms (1-based numbers).
+        ``npbc_slv``, ``npbc_vac``, ``pbc_slv``, ``pbc_vac``: per-atom potentials of the four
+        finite-difference solves (kJ mol⁻¹ e⁻¹), ``dg_<solve>`` their free energies (kJ/mol).
+        ``dg_npbc``, ``dg_pbc``: the CB/NPBC and LS/PBC solvation free energies (slv − vac).
+        ``fft_ls_pbc``, ``fft_rf_pbc`` and ``dg_fft_ls_pbc``, ``dg_fft_rf_pbc``: the reaction-field
+        potentials and free energies of the two FFT solves (``scheme="RF"``; ``None`` otherwise).
+        ``documented_correction``: the combination the gromos++ documentation gives but the
+        program never computes, CB/NPBC[FD] − LS/PBC[FD] (+ LS/PBC[FFT] − RF/PBC[FFT] for RF).
+        ``iterations``: solver iterations per solve. ``stdout``, ``log``: the table and the
+        ``@verbose`` log as text.
+
+    Examples
+    --------
+    >>> r = gromos.analysis.dgslv_pbsolv(
+    ...     topo="aladip.topo",
+    ...     coord="aladip.conf",
+    ...     pbc="r",
+    ...     atoms="1:a",
+    ...     atoms_to_charge="1:a",
+    ...     scheme="LS",
+    ...     eps_solv=66.6,
+    ...     gridspacing=0.1,
+    ...     probe_iac=4,
+    ... )
+    >>> r["dg_npbc"] - r["dg_pbc"]
+    """
+    keys: list[tuple[str, Any]] = [
+        ("topo", topo),
+        ("coord", coord),
+        ("pbc", pbc),
+        ("probeIAC", probe_iac),
+        ("rminORsigma", rmin_or_sigma),
+        ("pqr", pqr),
+        ("coordinates", coordinates),
+        ("atoms", atoms),
+        ("atomsTOcharge", atoms_to_charge),
+        ("schemeELEC", scheme),
+        ("rcut", rcut),
+        ("epsRF", eps_rf),
+        ("epsSOLV", eps_solv),
+        ("gridspacing", gridspacing),
+        ("nogridpoints", nogridpoints),
+        ("NPBCsize", npbc_size),
+        ("epsNPBC", eps_npbc),
+        ("maxiter", maxiter),
+        ("cubesFFT", cubes_fft),
+        ("probeRAD", probe_rad),
+        ("radscal", radscal),
+        ("increasegrid", increasegrid),
+        ("verbose", verbose),
+    ]
+    argv: list[str] = []
+    for key, value in keys:
+        if value is None:
+            continue
+        argv.append(f"@{key}")
+        if isinstance(value, str | os.PathLike):
+            argv.append(os.fspath(value))
+        elif isinstance(value, Sequence):
+            argv.extend(str(v) for v in value)
+        else:
+            argv.append(str(value))
+    return _dgslv_pbsolv(argv)
+
+
 def ext_ti_ana(ti_files: list[str], output: str | None = None) -> dict:
     """
     Analyze extended thermodynamic integration (TI) results.
@@ -1163,6 +1273,7 @@ __all__ = [
     "int_ener",
     # Free Energy
     "bar",
+    "dgslv_pbsolv",
     "ext_ti_ana",
     "m_widom",
     "reweight",

@@ -249,7 +249,83 @@ fn _check_top(topology: &PyTopology) -> (Vec<String>, Vec<String>, String) {
     (report.errors, report.warnings, report.text)
 }
 
+// ── Analysis programs whose results are numbers ─────────────────────────────────────────────
+
+/// `dGslv_pbsolv` in process (`gromos_analysis::programs::dgslv_pbsolv::evaluate`, the code the
+/// binary runs): the per-atom potentials and free energies of every solve as numbers, with the
+/// table and the `@verbose` log as text. `argv` is in `@key` form, without the program name.
+#[pyfunction]
+#[pyo3(signature = (argv))]
+fn _dgslv_pbsolv(py: Python<'_>, argv: Vec<String>) -> PyResult<Bound<'_, PyDict>> {
+    use gromos_analysis::programs::dgslv_pbsolv;
+    use numpy::PyArray1;
+
+    let mut full = vec![dgslv_pbsolv::PROGRAM.name.to_string()];
+    full.extend(argv);
+    let full = gromos_io::normalize(full).map_err(|e| program_error(py, e, String::new()))?;
+    let (result, buf) = py.allow_threads(|| {
+        let mut buf: Vec<u8> = Vec::new();
+        let result = dgslv_pbsolv::evaluate(&full, &mut buf);
+        (result, buf)
+    });
+    let stdout = String::from_utf8_lossy(&buf).into_owned();
+    let (r, log) = result.map_err(|e| program_error(py, e, stdout.clone()))?;
+
+    let d = PyDict::new_bound(py);
+    let array = |v: &[f64]| PyArray1::from_vec_bound(py, v.to_vec());
+    d.set_item(
+        "atom",
+        r.atoms.iter().map(|a| a.atom + 1).collect::<Vec<_>>(),
+    )?;
+    d.set_item(
+        "residue",
+        r.atoms.iter().map(|a| a.resnum + 1).collect::<Vec<_>>(),
+    )?;
+    d.set_item(
+        "name",
+        r.atoms.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+    )?;
+    d.set_item(
+        "charge",
+        array(&r.atoms.iter().map(|a| a.charge).collect::<Vec<_>>()),
+    )?;
+    let iterations = PyDict::new_bound(py);
+    for (key, s) in [
+        ("npbc_slv", &r.fd.npbc_slv),
+        ("npbc_vac", &r.fd.npbc_vac),
+        ("pbc_slv", &r.fd.pbc_slv),
+        ("pbc_vac", &r.fd.pbc_vac),
+    ] {
+        d.set_item(key, array(&s.potentials))?;
+        d.set_item(format!("dg_{key}"), s.dg)?;
+        iterations.set_item(key, s.iterations)?;
+    }
+    d.set_item("dg_npbc", r.fd.dg_npbc)?;
+    d.set_item("dg_pbc", r.fd.dg_pbc)?;
+    match &r.fft {
+        Some(fft) => {
+            for (key, s) in [("fft_ls_pbc", &fft.ls), ("fft_rf_pbc", &fft.rf)] {
+                d.set_item(key, array(&s.potentials))?;
+                d.set_item(format!("dg_{key}"), s.dg)?;
+                iterations.set_item(key, s.steps)?;
+            }
+        },
+        None => {
+            for key in ["fft_ls_pbc", "fft_rf_pbc"] {
+                d.set_item(key, py.None())?;
+                d.set_item(format!("dg_{key}"), py.None())?;
+            }
+        },
+    }
+    d.set_item("iterations", iterations)?;
+    d.set_item("documented_correction", r.documented_correction())?;
+    d.set_item("stdout", stdout)?;
+    d.set_item("log", log)?;
+    Ok(d)
+}
+
 pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;
     m.add_function(wrap_pyfunction!(_sim_box, m)?)?;

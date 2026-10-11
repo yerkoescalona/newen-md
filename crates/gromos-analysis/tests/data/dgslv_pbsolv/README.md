@@ -20,6 +20,8 @@ program's stdout, `<case>.log` the `@verbose` log.
 | sigma | `dGslv_pbsolv @topo shared/aladip.topo @coord shared/aladip.conf @atoms 1:a @atomsTOcharge 1:4,5 @schemeELEC LS @epsSOLV 66.6 @gridspacing 0.1 @NPBCsize 5.0 @increasegrid 2 2 2 @rminORsigma 1 @radscal 1.1 @probeIAC 4 @verbose sigma.log` |
 | order | `dGslv_pbsolv @topo shared/aladip.topo @coord shared/aladip.conf @pbc r @atoms 1:5,3,1 1:7 @atomsTOcharge 1:9,2 @schemeELEC ls @epsSOLV 66.6 @epsNPBC 66.6 @gridspacing 0.13 @probeIAC 5 @probeRAD 0.12 @maxiter 40 @verbose order.log` |
 | pqr | `dGslv_pbsolv @pqr aladip.pqr @coordinates 3.767055681 3.767055681 3.767055681 @nogridpoints 24 @gridspacing 0.15 @atoms 1-12 @atomsTOcharge 2,3,5 @schemeELEC LS @epsSOLV 66.6 @radscal 1.1 @verbose pqr.log` |
+| c2 | `dGslv_pbsolv @topo shared/aladip.topo @coord shared/aladip.conf @atoms 1:a @atomsTOcharge 1:4,5 @schemeELEC RF @epsSOLV 66.6 @epsRF 66.6 @rcut 1.4 @cubesFFT 4 @gridspacing 0.1 @NPBCsize 5.0 @increasegrid 2 2 2 @rminORsigma 1 @radscal 1.1 @probeIAC 4 @verbose c2.log` |
+| c3b | `dGslv_pbsolv @topo shared/aladip.topo @coord shared/aladip.conf @pbc r cog @atoms 1:1-4 @atomsTOcharge 1:2-4 @schemeELEC RF @epsSOLV 78.4 @epsRF 0 @rcut 0.9 @gridspacing 0.12 @probeIAC 4 @verbose c3b.log` (gromos++ wrote it as `c3.log`) |
 
 What each case pins:
 
@@ -38,5 +40,19 @@ What each case pins:
   gromos++ exits 1 after printing the table and writes a `four_pi_eps_i` warning to stderr (not
   stored); ours exits 0 with the same warning.
 
-`tests/gromospp_references.rs` runs ours with the same arguments and requires stdout and the log
-to be byte-identical.
+- **c2**: `@schemeELEC RF` on the `sigma` settings: after the four FD solves, the FFT solve with
+  the lattice-sum boundary (`@atoms` centred on the 40³ grid, hat charges in both alias lists:
+  six heavy charged atoms with α1, the two hydrogens with α2) and the one with the reaction-field
+  boundary (εRF = 66.6 in the vacuum field, εs in the tensors, `@rcut 1.4`, `@cubesFFT 4`), the
+  six-column table and the log's switch to `fixed`/3 decimals at the first `# GRIDCHECK` line.
+  63 and 55 iterations.
+- **c3b**: a net-charged subset (`@atoms 1:1-4`, read out `1:2-4`) whose grid centre still comes
+  from all twelve solute atoms (so the centred atoms do not sit at the grid centre), a COG
+  gather, a conducting reaction field (`@epsRF 0`, srf = 1), no small-ion list, a 32³ grid at
+  0.12 nm. 43 and 25 iterations.
+
+`tests/gromospp_references.rs` runs ours with the same arguments. stdout and the log of the
+finite-difference solves are byte-identical. The FFT solves use rustfft where gromos++ uses
+FFTW, so the test lets their table columns differ by 1e-7 and the numbers of their log section
+(after `# DGRESULT PBC`) by one unit in the last printed digit, with the same iteration counts;
+on the machine they were made on, both FFT cases came out byte-identical too.
