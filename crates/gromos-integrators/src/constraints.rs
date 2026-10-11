@@ -12,7 +12,7 @@
 //! - COM Motion Removal: Remove center-of-mass translation and rotation
 
 use gromos_core::configuration::Configuration;
-use gromos_core::lambdas::InteractionLambda;
+use gromos_core::lambdas::{InteractionLambda, PrecalcLambdas};
 use gromos_core::math::{Periodicity, Vec3};
 use gromos_core::topology::Topology;
 
@@ -341,19 +341,24 @@ pub fn shake(
     params: &ShakeParameters,
 ) -> ConstraintResult {
     let mut buffers = ShakeBuffers::new(topo, params.ntc, true);
-    shake_buffered(topo, conf, dt, params, &mut buffers)
+    shake_buffered(topo, conf, dt, params, &mut buffers, None)
 }
 
 /// Apply SHAKE using precomputed buffers (zero per-step allocations).
 ///
 /// This is the performance-critical version called every MD step.
 /// All constraint lists are precomputed in `ShakeBuffers`, and skip arrays are reused.
+///
+/// `precalc`: the PRECALCLAM grid when this step is one it is evaluated on — every perturbed
+/// constraint correction then adds to the `AB_bond` derivatives at each λ_k
+/// (`perturbed_shake.cc:229-259`; energies get nothing, gromosXX's own caveat).
 pub fn shake_buffered(
     topo: &Topology,
     conf: &mut Configuration,
     dt: f64,
     params: &ShakeParameters,
     buffers: &mut ShakeBuffers,
+    precalc: Option<PrecalcLambdas>,
 ) -> ConstraintResult {
     let pbc = box_periodicity(conf);
     if buffers.is_empty() {
@@ -398,7 +403,7 @@ pub fn shake_buffered(
                 topo.individual_lambdas
                     .get(InteractionLambda::Bond, c.group, c.group);
             let r0 = (1.0 - lam) * c.r0_a + lam * c.r0_b;
-            if let Some(lambda) = shake_one_constraint_full(
+            if let Some((lambda, sp, dist2)) = shake_one_constraint_full(
                 conf,
                 topo,
                 &pbc,
@@ -419,6 +424,17 @@ pub fn shake_buffered(
                 }
                 d.constraint_total += de;
                 d.special_total += de;
+                if let Some(grid) = &precalc {
+                    let r0_diff = c.r0_b - c.r0_a;
+                    let sp_2_m_dt2 = sp * 2.0 * (1.0 / topo.mass[i] + 1.0 / topo.mass[j]) * dt2;
+                    let ab_bond = &mut d.precalc.ab_bond;
+                    for (k, slot) in ab_bond.iter_mut().enumerate().take(grid.nr_lambdas) {
+                        let lam = grid.lambda(k);
+                        let r0lam = (1.0 - lam) * c.r0_a + lam * c.r0_b;
+                        let difflam = r0lam * r0lam - dist2;
+                        *slot += (difflam / sp_2_m_dt2) * r0lam * r0_diff;
+                    }
+                }
             }
         }
 
@@ -542,7 +558,7 @@ fn shake_one_constraint_full(
     tolerance: f64,
     dt2: f64,
     skip_next: &mut [bool],
-) -> Option<f64> {
+) -> Option<(f64, f64, f64)> {
     let constr_length2 = constraint_length * constraint_length;
 
     // GROMOS convention: r = pos(i) - pos(j), under the minimum-image convention
@@ -601,7 +617,8 @@ fn shake_one_constraint_full(
     skip_next[i] = false;
     skip_next[j] = false;
 
-    Some(lambda) // not yet converged
+    // not yet converged: the multiplier, and `sp`, `dist2` for the PRECALCLAM derivative
+    Some((lambda, sp, dist2))
 }
 
 /// Shake initial positions to satisfy constraints (GROMOS: sim.param().start.shake_pos).

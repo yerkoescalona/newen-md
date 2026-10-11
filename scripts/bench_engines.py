@@ -65,11 +65,13 @@ AUX_INPUTS = (
 # ── input patching ──────────────────────────────────────────────────────────
 
 
-def patch_imd(text: str, nstlim: int) -> str:
+def patch_imd(text: str, nstlim: int, energy_every: int = 0) -> str:
     """Set NSTLIM and zero every WRITETRAJ / PRINTOUT frequency.
 
     Trajectory writing is I/O bound and would dominate a short run
-    (BENCHMARKING.md assumption A4), so the benchmark input writes nothing.
+    (BENCHMARKING.md assumption A4), so the benchmark input writes nothing —
+    except NTWE = NTWG = `energy_every` when it is set (a PRECALCLAM run needs
+    them, and the energies at the extra λ points are computed on those steps).
     """
     out: list[str] = []
     block = None
@@ -95,7 +97,8 @@ def patch_imd(text: str, nstlim: int) -> str:
                     out.append(f"      {nstlim}       {parts[1]}     {parts[2]}")
                     continue
             elif block == "WRITETRAJ" and data_seen == 1:
-                out.append("         0         0         0         0         0         0         0")
+                e = energy_every
+                out.append(f"         0         0         0         0         {e}         {e}         0")
                 continue
             elif block == "PRINTOUT" and data_seen == 1:
                 out.append(f"     {nstlim}         0")
@@ -176,7 +179,7 @@ class Run:
 
 
 def prepare(engine: str, kind: str, binary: Path, system: str, steps: int, threads: int,
-            ref_dir: Path = REF_DIR) -> Prepared:
+            ref_dir: Path = REF_DIR, energy_every: int = 0) -> Prepared:
     sys_dir = ref_dir / system
     toml = (sys_dir / "input.toml").read_text()
     topo = (sys_dir / toml_get(toml, "topology")).resolve()
@@ -188,7 +191,7 @@ def prepare(engine: str, kind: str, binary: Path, system: str, steps: int, threa
     work.mkdir(parents=True)
 
     imd = work / "bench.imd"
-    imd.write_text(patch_imd(params.read_text(), steps))
+    imd.write_text(patch_imd(params.read_text(), steps, energy_every))
 
     env = dict(os.environ)
     env["RAYON_NUM_THREADS"] = str(threads)
@@ -207,6 +210,8 @@ def prepare(engine: str, kind: str, binary: Path, system: str, steps: int, threa
         aux = toml_get(toml, key)
         if aux:
             cmd += [flag, str((sys_dir / aux).resolve())]
+    if energy_every:
+        cmd += ["@tre", str(work / "bench.tre"), "@trg", str(work / "bench.trg")]
     if kind == "rust":
         cmd += ["@verb", "1"]
 
@@ -304,6 +309,9 @@ def main() -> None:
     ap.add_argument("--ref-dir", type=Path, default=REF_DIR,
                     help="directory of system subdirectories with input.toml "
                          "(default: the gromosXX reference suite; use bench/systems for generated boxes)")
+    ap.add_argument("--energy-every", type=int, default=0,
+                    help="keep NTWE = NTWG = N and write the .tre/.trg (both engines); "
+                         "default 0 writes nothing")
     ap.add_argument("--list", action="store_true", help="list available systems")
     ap.add_argument("--json", type=Path, help="write raw results to this JSON file")
     args = ap.parse_args()
@@ -341,7 +349,8 @@ def main() -> None:
     runs: list[Run] = []
     for system in systems:
         for t in threads:
-            preps = [prepare(name, kind, path, system, args.steps, t, args.ref_dir)
+            preps = [prepare(name, kind, path, system, args.steps, t, args.ref_dir,
+                             args.energy_every)
                      for name, (kind, path) in binaries.items()]
             runs.extend(run_interleaved(preps, system, args.steps, t, args.repeats))
 

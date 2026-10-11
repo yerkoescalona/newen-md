@@ -2,7 +2,7 @@
 
 use super::innerloops::with_groups;
 use super::lj_crf_interaction;
-use super::{CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix};
+use super::{CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix, PrecalcNonbonded};
 use gromos_core::lambdas::{IndividualLambdas, InteractionLambda};
 use gromos_core::math::{BoundaryCondition, Vec3};
 use gromos_core::topology::PerturbedAtomPair;
@@ -310,6 +310,196 @@ pub fn perturbed_lj_crf_interaction(
     (force, e_lj, e_crf, de_lj, de_crf)
 }
 
+// ─── Extended TI (PRECALCLAM) ──────────────────────────────────────────────────
+
+/// gromosXX `lj_crf_soft_interaction_ext` (`perturbed_nonbonded_term.cc:614-716`): the A- and
+/// B-state LJ and RF energies of a perturbed pair at λ = `lam`, unweighted, with softness
+/// `λ_soft = lam` (no NLAM, no individual λ) and their soft-core derivatives in gromosXX's sign
+/// convention `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ` (item 1.8). `r2` is the squared distance; the
+/// Coulomb scaling is 1, as at every gromosXX call site (the 1-4 one included).
+///
+/// Returns `([A_e_lj, B_e_lj, A_e_crf, B_e_crf], [A_de_lj, B_de_lj, A_de_crf, B_de_crf])`.
+#[inline]
+pub fn lj_crf_soft_interaction_ext(
+    r2: f64,
+    a_c6: f64,
+    a_c12: f64,
+    b_c6: f64,
+    b_c12: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    lam: f64,
+) -> ([f64; 4], [f64; 4]) {
+    let a_ljs_lambda2 = (1.0 - lam) * (1.0 - lam);
+    let b_ljs_lambda2 = lam * lam;
+    let (a_crfs_lambda2, b_crfs_lambda2) = (a_ljs_lambda2, b_ljs_lambda2);
+    let a_c126 = if a_c6 != 0.0 { a_c12 / a_c6 } else { 0.0 };
+    let b_c126 = if b_c6 != 0.0 { b_c12 / b_c6 } else { 0.0 };
+
+    let a_dist2soft = r2 + alpha_crf * b_crfs_lambda2;
+    let b_dist2soft = r2 + alpha_crf * a_crfs_lambda2;
+    let a_distisoft = 1.0 / a_dist2soft.sqrt();
+    let b_distisoft = 1.0 / b_dist2soft.sqrt();
+    let a_dist3isoft = a_distisoft / a_dist2soft;
+    let b_dist3isoft = b_distisoft / b_dist2soft;
+
+    let dist6 = r2 * r2 * r2;
+    let a_dist6isoft = 1.0 / (dist6 + alpha_lj * b_ljs_lambda2 * a_c126);
+    let b_dist6isoft = 1.0 / (dist6 + alpha_lj * a_ljs_lambda2 * b_c126);
+
+    let cut2 = crf.cutoff_sq;
+    let a_cut2soft = cut2 + alpha_crf * b_crfs_lambda2;
+    let b_cut2soft = cut2 + alpha_crf * a_crfs_lambda2;
+    // crf/2 / sqrt(cut2soft³), with crf/2 = crf_2cut3i·cut³ as in `perturbed_lj_crf_interaction`
+    let cut3 = cut2 * cut2.sqrt();
+    let a_crf_2cut3i = crf.crf_2cut3i * cut3 / (a_cut2soft * a_cut2soft * a_cut2soft).sqrt();
+    let b_crf_2cut3i = crf.crf_2cut3i * cut3 / (b_cut2soft * b_cut2soft * b_cut2soft).sqrt();
+    let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
+    let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
+
+    let e = [
+        (a_c12 * a_dist6isoft - a_c6) * a_dist6isoft,
+        (b_c12 * b_dist6isoft - b_c6) * b_dist6isoft,
+        a_q * (a_distisoft - a_crf_2cut3i * r2 - crf.crf_cut) * four_pi_eps_i,
+        b_q * (b_distisoft - b_crf_2cut3i * r2 - crf.crf_cut) * four_pi_eps_i,
+    ];
+    let de = [
+        -2.0 * alpha_lj
+            * lam
+            * a_c126
+            * a_dist6isoft
+            * a_dist6isoft
+            * (2.0 * a_c12 * a_dist6isoft - a_c6),
+        -2.0 * alpha_lj
+            * (1.0 - lam)
+            * b_c126
+            * b_dist6isoft
+            * b_dist6isoft
+            * (2.0 * b_c12 * b_dist6isoft - b_c6),
+        -a_q * lam * (a_dist3isoft - a_crf_pert * r2) * four_pi_eps_i * alpha_crf,
+        -b_q * (1.0 - lam) * (b_dist3isoft - b_crf_pert * r2) * four_pi_eps_i * alpha_crf,
+    ];
+    (e, de)
+}
+
+/// gromosXX `rf_soft_interaction_ext` (`perturbed_nonbonded_term.cc:853-881`): the reaction-field
+/// term of an excluded pair (or, at `r2 = 0`, the self term) in states A and B at λ = `lam`.
+/// Unlike `rf_soft_interaction` there is no self-term correction.
+///
+/// Returns `([A_e_rf, B_e_rf], [A_de_rf, B_de_rf])`, the derivatives in the sign convention of
+/// [`lj_crf_soft_interaction_ext`].
+#[inline]
+pub fn rf_soft_interaction_ext(
+    r2: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_crf: f64,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    lam: f64,
+) -> ([f64; 2], [f64; 2]) {
+    let cut2 = crf.cutoff_sq;
+    let a_cut2soft = cut2 + alpha_crf * lam * lam;
+    let b_cut2soft = cut2 + alpha_crf * (1.0 - lam) * (1.0 - lam);
+    let cut3 = cut2 * cut2.sqrt();
+    let a_crf_2cut3i = crf.crf_2cut3i * cut3 / (a_cut2soft * a_cut2soft * a_cut2soft).sqrt();
+    let b_crf_2cut3i = crf.crf_2cut3i * cut3 / (b_cut2soft * b_cut2soft * b_cut2soft).sqrt();
+    let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
+    let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
+    (
+        [
+            a_q * (-a_crf_2cut3i * r2 - crf.crf_cut) * four_pi_eps_i,
+            b_q * (-b_crf_2cut3i * r2 - crf.crf_cut) * four_pi_eps_i,
+        ],
+        [
+            a_q * lam * a_crf_pert * r2 * four_pi_eps_i * alpha_crf,
+            b_q * (1.0 - lam) * b_crf_pert * r2 * four_pi_eps_i * alpha_crf,
+        ],
+    )
+}
+
+impl PrecalcNonbonded {
+    /// Book [`lj_crf_soft_interaction_ext`] of one pair at every λ_k into `cell`.
+    #[inline]
+    pub fn add_lj_crf_ext(
+        &mut self,
+        cell: usize,
+        r2: f64,
+        lj: (f64, f64, f64, f64),
+        a_q: f64,
+        b_q: f64,
+        alpha_lj: f64,
+        alpha_crf: f64,
+        crf: &CRFParameters,
+        four_pi_eps_i: f64,
+    ) {
+        let (a_c6, a_c12, b_c6, b_c12) = lj;
+        for k in 0..self.lambdas.len() {
+            let (e, de) = lj_crf_soft_interaction_ext(
+                r2,
+                a_c6,
+                a_c12,
+                b_c6,
+                b_c12,
+                a_q,
+                b_q,
+                alpha_lj,
+                alpha_crf,
+                crf,
+                four_pi_eps_i,
+                self.lambdas[k],
+            );
+            self.book(k, cell, e, de);
+        }
+    }
+
+    /// Book `factor` × [`rf_soft_interaction_ext`] of one pair (or self term) at every λ_k into
+    /// the CRF columns of `cell`.
+    #[inline]
+    pub fn add_rf_ext(
+        &mut self,
+        cell: usize,
+        r2: f64,
+        a_q: f64,
+        b_q: f64,
+        alpha_crf: f64,
+        factor: f64,
+        crf: &CRFParameters,
+        four_pi_eps_i: f64,
+    ) {
+        for k in 0..self.lambdas.len() {
+            let ([a_e, b_e], [a_de, b_de]) = rf_soft_interaction_ext(
+                r2,
+                a_q,
+                b_q,
+                alpha_crf,
+                crf,
+                four_pi_eps_i,
+                self.lambdas[k],
+            );
+            self.book(
+                k,
+                cell,
+                [0.0, 0.0, factor * a_e, factor * b_e],
+                [0.0, 0.0, factor * a_de, factor * b_de],
+            );
+        }
+    }
+
+    /// Book λ-independent energies (an unperturbed pair of a `PERTATOMPAIR`) into every λ_k,
+    /// without a derivative (gromosXX `perturbed_nonbonded_pair.cc:410-420, 600-612`).
+    #[inline]
+    pub fn add_constant(&mut self, cell: usize, e: [f64; 4]) {
+        for k in 0..self.lambdas.len() {
+            self.book(k, cell, e, [0.0; 4]);
+        }
+    }
+}
+
 // ─── Step 3: perturbed nonbonded correction functions ─────────────────────────
 
 /// Per-atom perturbation data for fast lookup during nonbonded force calculation.
@@ -362,6 +552,8 @@ impl PertNBCorrection {
 ///
 /// With more than one energy group the energy change and the dH/dλ of each pair also go to
 /// cell `[eg(i)][eg(j)]` of `sink` (gromosXX `perturbed_nonbonded_innerloop.cc:391-403`).
+/// With `precalc` (PRECALCLAM on and this step one it is evaluated on) each pair's A/B energies
+/// at every λ_k go there too (`:315-370`, `:547-600`).
 pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
     pos: &[Vec3],
     pairlist: &[(u32, u32)],
@@ -375,24 +567,43 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
     four_pi_eps_i: f64,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: Option<&mut PrecalcNonbonded>,
 ) -> PertNBCorrection {
-    with_groups!(egroups, G => pairlist_correction_impl::<BC, G>(
-        pos,
-        pairlist,
-        pert,
-        charges,
-        iac,
-        lj,
-        crf,
-        lps,
-        bc,
-        four_pi_eps_i,
-        &egroups,
-        sink,
-    ))
+    match precalc {
+        Some(pc) => with_groups!(egroups, G => pairlist_correction_impl::<BC, G, true>(
+            pos,
+            pairlist,
+            pert,
+            charges,
+            iac,
+            lj,
+            crf,
+            lps,
+            bc,
+            four_pi_eps_i,
+            &egroups,
+            sink,
+            pc,
+        )),
+        None => with_groups!(egroups, G => pairlist_correction_impl::<BC, G, false>(
+            pos,
+            pairlist,
+            pert,
+            charges,
+            iac,
+            lj,
+            crf,
+            lps,
+            bc,
+            four_pi_eps_i,
+            &egroups,
+            sink,
+            &mut PrecalcNonbonded::default(),
+        )),
+    }
 }
 
-fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool, const PRECALC: bool>(
     pos: &[Vec3],
     pairlist: &[(u32, u32)],
     pert: &[Option<PertAtomInfo>],
@@ -405,6 +616,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     four_pi_eps_i: f64,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: &mut PrecalcNonbonded,
 ) -> PertNBCorrection {
     let n = pos.len();
     let mut out = PertNBCorrection::new(n);
@@ -477,6 +689,19 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
         if GROUPS {
             sink.book(k, e_lj_p - e_lj_a, e_crf_p - e_crf_a, de_lj, de_crf);
         }
+        if PRECALC {
+            precalc.add_lj_crf_ext(
+                k,
+                r.length_squared(),
+                (lj_a.c6, lj_a.c12, lj_b.c6, lj_b.c12),
+                a_q,
+                b_q,
+                alpha_lj,
+                alpha_crf,
+                crf,
+                four_pi_eps_i,
+            );
+        }
     }
     out
 }
@@ -490,7 +715,8 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 ///   Δ(dH/dλ)  = 0.5*n*[(1-λ)^(n-1)*q_A² − λ^(n-1)*q_B²]*FPEPSI*crf_cut
 ///
 /// With more than one energy group each atom's terms also go to cell `[eg(i)][eg(i)]` of `sink`
-/// (gromosXX `perturbed_nonbonded_innerloop.cc:3452-3453`).
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:3452-3453`); with `precalc`, half its
+/// `rf_soft_interaction_ext` at r = 0 at every λ_k (`:3390-3418`).
 pub fn perturbed_self_energy_correction(
     pert: &[Option<PertAtomInfo>],
     crf: &CRFParameters,
@@ -498,7 +724,10 @@ pub fn perturbed_self_energy_correction(
     four_pi_eps_i: f64,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: Option<&mut PrecalcNonbonded>,
 ) -> (f64, f64) {
+    let mut none = PrecalcNonbonded::default();
+    let pc = precalc.unwrap_or(&mut none);
     with_groups!(egroups, G => self_energy_correction_impl::<G>(
         pert,
         crf,
@@ -506,6 +735,7 @@ pub fn perturbed_self_energy_correction(
         four_pi_eps_i,
         &egroups,
         sink,
+        pc,
     ))
 }
 
@@ -516,6 +746,7 @@ fn self_energy_correction_impl<const GROUPS: bool>(
     four_pi_eps_i: f64,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: &mut PrecalcNonbonded,
 ) -> (f64, f64) {
     let mut delta_e = 0.0;
     let mut dhdl = 0.0;
@@ -548,6 +779,9 @@ fn self_energy_correction_impl<const GROUPS: bool>(
         if GROUPS {
             sink.book(k, 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
         }
+        if precalc.is_active() {
+            precalc.add_rf_ext(k, 0.0, qa2, qb2, pi.alpha_crf, 0.5, crf, four_pi_eps_i);
+        }
     }
     (delta_e, dhdl)
 }
@@ -558,7 +792,8 @@ fn self_energy_correction_impl<const GROUPS: bool>(
 /// the delta (perturbed_RF − stateA_RF) for each affected pair.
 ///
 /// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
-/// (gromosXX `perturbed_nonbonded_innerloop.cc:3652-3653`).
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:3652-3653`); with `precalc`, its
+/// `rf_soft_interaction_ext` at every λ_k (`:3659-3687`, `:3781-3805`).
 pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
     exclusions: &[Vec<usize>],
     pos: &[Vec3],
@@ -572,7 +807,10 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
     out: &mut PertNBCorrection,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: Option<&mut PrecalcNonbonded>,
 ) {
+    let mut none = PrecalcNonbonded::default();
+    let pc = precalc.unwrap_or(&mut none);
     with_groups!(egroups, G => excluded_correction_impl::<BC, G>(
         exclusions,
         pos,
@@ -586,6 +824,7 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
         out,
         &egroups,
         sink,
+        pc,
     ))
 }
 
@@ -602,6 +841,7 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     out: &mut PertNBCorrection,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: &mut PrecalcNonbonded,
 ) {
     for i in 0..n_solute {
         let pi = pert[i].as_ref();
@@ -674,6 +914,9 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             if GROUPS {
                 sink.book(k, 0.0, e_crf_p - e_crf_a, 0.0, de_crf);
             }
+            if precalc.is_active() {
+                precalc.add_rf_ext(k, r2, a_q, b_q, alpha_crf, 1.0, crf, four_pi_eps_i);
+            }
         }
     }
 }
@@ -684,7 +927,9 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 /// delta = (1-λ)^n*stateA + λ^n*stateB − stateA for each perturbed pair.
 ///
 /// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
-/// (gromosXX `perturbed_nonbonded_innerloop.cc:2257-2271`).
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:2257-2271`); with `precalc`, its
+/// `lj_crf_soft_interaction_ext` with cs6/cs12 at every λ_k (`:2183-2236`, `:2407-2460`; the
+/// ext call takes no Coulomb scaling).
 pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
     one_four_pairs: &[Vec<usize>],
     pos: &[Vec3],
@@ -699,7 +944,10 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
     out: &mut PertNBCorrection,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: Option<&mut PrecalcNonbonded>,
 ) {
+    let mut none = PrecalcNonbonded::default();
+    let pc = precalc.unwrap_or(&mut none);
     with_groups!(egroups, G => one_four_correction_impl::<BC, G>(
         one_four_pairs,
         pos,
@@ -714,6 +962,7 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
         out,
         &egroups,
         sink,
+        pc,
     ))
 }
 
@@ -731,6 +980,7 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     out: &mut PertNBCorrection,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: &mut PrecalcNonbonded,
 ) {
     for i in 0..one_four_pairs.len() {
         let pi = pert[i].as_ref();
@@ -810,6 +1060,19 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             if GROUPS {
                 sink.book(k, e_lj_p - e_lj_a, e_crf_p - e_crf_a, de_lj, de_crf);
             }
+            if precalc.is_active() {
+                precalc.add_lj_crf_ext(
+                    k,
+                    r2,
+                    (lj_a.cs6, lj_a.cs12, lj_b.cs6, lj_b.cs12),
+                    a_q,
+                    b_q,
+                    alpha_lj,
+                    alpha_crf,
+                    crf,
+                    four_pi_eps_i,
+                );
+            }
         }
     }
 }
@@ -833,7 +1096,10 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 ///           = −λ^n * crf_reg  (same charges both states, only λ-weighting changes)
 ///
 /// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
-/// (gromosXX `perturbed_nonbonded_pair.cc:1583-1611`).
+/// (gromosXX `perturbed_nonbonded_pair.cc:1583-1611`). With `precalc`, the unscaled energy of
+/// each state goes to every λ_k (the pair's atoms are unperturbed: `:410-420, 600-612, 803-815`
+/// and their B mirrors) — the A state's LJ and RF, the B state's LJ and RF, or for an excluded B
+/// state its RF term.
 pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     atom_pairs: &[PerturbedAtomPair],
     one_four_pairs: &[Vec<usize>],
@@ -849,7 +1115,10 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     out: &mut PertNBCorrection,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: Option<&mut PrecalcNonbonded>,
 ) {
+    let mut none = PrecalcNonbonded::default();
+    let pc = precalc.unwrap_or(&mut none);
     with_groups!(egroups, G => atom_pair_correction_impl::<BC, G>(
         atom_pairs,
         one_four_pairs,
@@ -865,6 +1134,7 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
         out,
         &egroups,
         sink,
+        pc,
     ))
 }
 
@@ -883,6 +1153,7 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     out: &mut PertNBCorrection,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
+    precalc: &mut PrecalcNonbonded,
 ) {
     for ap in atom_pairs {
         let (i, j) = (ap.i, ap.j);
@@ -950,6 +1221,9 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
         };
         let e_crf_b = ap.b_type.map_or(e_crf_excl, |_| e_crf_reg);
         let f_crf_b = ap.b_type.map_or(f_crf_excl, |_| f_crf_reg);
+        if precalc.is_active() {
+            precalc.add_constant(k, [e_lj_a, e_lj_b, e_crf_a, e_crf_b]);
+        }
 
         let e_lj_pert = lp.a_lj_lambda_n * e_lj_a + lp.b_lj_lambda_n * e_lj_b;
         let e_crf_pert = lp.a_crf_lambda_n * e_crf_a + lp.b_crf_lambda_n * e_crf_b;
@@ -1091,6 +1365,58 @@ mod tests {
             "λ=0: E_lj={:.6}, E_crf={:.6}, dE_lj/dλ={:.6}, dE_crf/dλ={:.6}",
             e_lj, e_crf, de_lj, de_crf
         );
+    }
+
+    /// The ext kernels' sign convention (`A_de = +∂A/∂λ`, `B_de = −∂B/∂λ`) and their relation
+    /// to the λ-weighted kernel at λ_k = λ, NLAM = 1, `L = λ`:
+    /// `E = (1−λ)·A + λ·B`, `dE/dλ = (1−λ)·A_de − λ·B_de + B − A`.
+    #[test]
+    fn ext_kernels_are_the_unweighted_end_states_of_the_soft_core_kernel() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let fpe = gromos_core::units::four_pi_eps_i;
+        let (r2, a_q, b_q, alj, acrf) = (0.09, -0.3, 0.2, 0.5, 0.6);
+        let (a_c6, a_c12, b_c6, b_c12) = (2.6e-3, 2.7e-6, 1.1e-3, 0.9e-6);
+        let ext = |lam: f64| {
+            lj_crf_soft_interaction_ext(
+                r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alj, acrf, &crf, fpe, lam,
+            )
+        };
+        let lam = 0.3;
+        let (e, de) = ext(lam);
+        let eps = 1e-6;
+        let (ep, _) = ext(lam + eps);
+        let (em, _) = ext(lam - eps);
+        for (c, sign) in [(0, 1.0), (1, -1.0), (2, 1.0), (3, -1.0)] {
+            let fd = (ep[c] - em[c]) / (2.0 * eps);
+            assert!(
+                (sign * fd - de[c]).abs() <= 1e-6 * fd.abs().max(1e-3),
+                "column {c}: fd {fd} vs {}",
+                de[c]
+            );
+        }
+        let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, 1);
+        let r = Vec3::new(r2.sqrt(), 0.0, 0.0);
+        let (_, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction(
+            r, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alj, acrf, &lp, &crf, fpe,
+        );
+        let close = |x: f64, y: f64| (x - y).abs() <= 1e-12 * x.abs().max(1.0);
+        assert!(close(e_lj, (1.0 - lam) * e[0] + lam * e[1]));
+        assert!(close(e_crf, (1.0 - lam) * e[2] + lam * e[3]));
+        assert!(close(
+            de_lj,
+            (1.0 - lam) * de[0] - lam * de[1] + e[1] - e[0]
+        ));
+        assert!(close(
+            de_crf,
+            (1.0 - lam) * de[2] - lam * de[3] + e[3] - e[2]
+        ));
+
+        // the excluded-pair RF term, likewise
+        let rf = |lam: f64| rf_soft_interaction_ext(r2, a_q, b_q, acrf, &crf, fpe, lam);
+        let (_, d) = rf(lam);
+        let ((p, _), (m, _)) = (rf(lam + eps), rf(lam - eps));
+        assert!(((p[0] - m[0]) / (2.0 * eps) - d[0]).abs() <= 1e-6);
+        assert!((-(p[1] - m[1]) / (2.0 * eps) - d[1]).abs() <= 1e-6);
     }
 
     #[test]

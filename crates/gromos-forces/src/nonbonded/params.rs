@@ -68,19 +68,36 @@ pub struct CRFParameters {
 }
 
 impl CRFParameters {
-    /// Calculate CRF parameters from physical constants.
+    /// Calculate CRF parameters from physical constants, as gromosXX's
+    /// `Nonbonded_Term::init` and `Eds_Nonbonded_Term::init` do (`nonbonded_term.cc:51-121`,
+    /// `perturbed_nonbonded_term.cc:51-111`).
     ///
     /// # Arguments
-    /// * `cutoff` - Nonbonded cutoff distance in nm
+    /// * `cutoff` - Reaction-field radius RCRF in nm (gromosXX `nonbonded.rf_cutoff`; not RCUTL)
     /// * `epsilon` - Dielectric permittivity inside the cutoff
-    /// * `rf_epsilon` - Dielectric permittivity outside the cutoff (reaction field)
+    /// * `rf_epsilon` - Dielectric permittivity outside the cutoff (reaction field); 0 means a
+    ///   conducting boundary, `C_RF = −1`
     /// * `rf_kappa` - Debye-Hückel screening parameter in nm⁻¹
+    ///
+    /// RCRF = 0 switches the reaction field off: every constant is zero (plain Coulomb).
     pub fn new(cutoff: f64, epsilon: f64, rf_epsilon: f64, rf_kappa: f64) -> Self {
+        if cutoff <= 0.0 {
+            return Self {
+                crf_cut: 0.0,
+                crf_2cut3i: 0.0,
+                crf_cut3i: 0.0,
+                cutoff_sq: 0.0,
+            };
+        }
         let kappa_cut = rf_kappa * cutoff;
         let kappa_cut2 = kappa_cut * kappa_cut;
 
-        let crf = (2.0 * (epsilon - rf_epsilon) * (1.0 + kappa_cut) - rf_epsilon * kappa_cut2)
-            / ((epsilon + 2.0 * rf_epsilon) * (1.0 + kappa_cut) + rf_epsilon * kappa_cut2);
+        let crf = if rf_epsilon == 0.0 {
+            -1.0
+        } else {
+            (2.0 * (epsilon - rf_epsilon) * (1.0 + kappa_cut) - rf_epsilon * kappa_cut2)
+                / ((epsilon + 2.0 * rf_epsilon) * (1.0 + kappa_cut) + rf_epsilon * kappa_cut2)
+        };
 
         let cut3i = 1.0 / (cutoff * cutoff * cutoff);
         let crf_cut3i = crf * cut3i;
@@ -208,6 +225,85 @@ impl GroupEnergies {
     }
 }
 
+/// Extended-TI (PRECALCLAM, item 1.8) energies of the perturbed nonbonded terms at every λ_k
+/// of the grid: A- and B-state Lennard-Jones and reaction field, energies and derivatives, flat
+/// `[k][cell]` with `cell` the row-major energy-group pair (gromosXX `A_lj_energy[k][g1][g2]` and
+/// its three siblings, on `energies` and `perturbed_energy_derivatives`). Empty — and never
+/// touched by a kernel — when PRECALCLAM is off.
+#[derive(Debug, Clone, Default)]
+pub struct PrecalcNonbonded {
+    /// λ_k of the grid.
+    pub lambdas: Vec<f64>,
+    n_cells: usize,
+    /// `A_lj`, `B_lj`, `A_crf`, `B_crf` energies.
+    pub energy: [Vec<f64>; 4],
+    /// The same four on the derivative record (`A_de`, `B_de`).
+    pub deriv: [Vec<f64>; 4],
+}
+
+impl PrecalcNonbonded {
+    /// Zeroed arrays for the grid `grid` and `n_groups` energy groups.
+    pub fn new(grid: &gromos_core::lambdas::PrecalcLambdas, n_groups: usize) -> Self {
+        let n_cells = n_groups.max(1) * n_groups.max(1);
+        let len = grid.nr_lambdas * n_cells;
+        Self {
+            lambdas: (0..grid.nr_lambdas).map(|k| grid.lambda(k)).collect(),
+            n_cells,
+            energy: std::array::from_fn(|_| vec![0.0; len]),
+            deriv: std::array::from_fn(|_| vec![0.0; len]),
+        }
+    }
+
+    /// Whether the arrays are sized (PRECALCLAM on).
+    #[inline(always)]
+    pub fn is_active(&self) -> bool {
+        !self.lambdas.is_empty()
+    }
+
+    /// Number of energy-group pairs per λ_k.
+    pub fn n_cells(&self) -> usize {
+        self.n_cells
+    }
+
+    pub fn clear(&mut self) {
+        for v in self.energy.iter_mut().chain(self.deriv.iter_mut()) {
+            v.fill(0.0);
+        }
+    }
+
+    /// Element-wise sum of `other` into `self`; a no-op when `other` is empty.
+    pub fn merge(&mut self, other: &PrecalcNonbonded) {
+        if !other.is_active() {
+            return;
+        }
+        assert_eq!(
+            self.energy[0].len(),
+            other.energy[0].len(),
+            "PRECALCLAM grid mismatch"
+        );
+        for (dst, src) in self
+            .energy
+            .iter_mut()
+            .chain(self.deriv.iter_mut())
+            .zip(other.energy.iter().chain(other.deriv.iter()))
+        {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d += *s;
+            }
+        }
+    }
+
+    /// Add one λ_k's `[A_lj, B_lj, A_crf, B_crf]` energies and derivatives to `cell`.
+    #[inline(always)]
+    pub fn book(&mut self, k: usize, cell: usize, e: [f64; 4], de: [f64; 4]) {
+        let idx = k * self.n_cells + cell;
+        for c in 0..4 {
+            self.energy[c][idx] += e[c];
+            self.deriv[c][idx] += de[c];
+        }
+    }
+}
+
 /// Storage for forces and energies
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -223,6 +319,8 @@ pub struct ForceStorage {
     /// The same energies and derivatives per energy-group pair (empty with one group); the
     /// scalars above stay the totals.
     pub groups: GroupEnergies,
+    /// PRECALCLAM energies of these pairs (empty when off).
+    pub precalc: PrecalcNonbonded,
 }
 
 impl ForceStorage {
@@ -240,6 +338,7 @@ impl ForceStorage {
             dhdl_lj: 0.0,
             dhdl_crf: 0.0,
             groups: GroupEnergies::new(n_groups),
+            precalc: PrecalcNonbonded::default(),
         }
     }
 
@@ -251,6 +350,7 @@ impl ForceStorage {
         self.dhdl_lj = 0.0;
         self.dhdl_crf = 0.0;
         self.groups.clear();
+        self.precalc.clear();
     }
 
     /// Accumulate another ForceStorage into this one (thread-local reduction).
@@ -268,6 +368,7 @@ impl ForceStorage {
         self.dhdl_lj += other.dhdl_lj;
         self.dhdl_crf += other.dhdl_crf;
         self.groups.merge(&other.groups);
+        self.precalc.merge(&other.precalc);
     }
 
     /// Panic unless this storage books the group pairs `groups` describes (checked once per
@@ -313,6 +414,17 @@ mod tests {
         assert_eq!(crf.crf_cut3i, 0.0);
         assert!((crf.crf_cut - 1.0 / 1.4).abs() < 1e-15);
         assert!((crf.cutoff_sq - 1.96).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_conducting_boundary_has_crf_minus_one() {
+        // gromosXX nonbonded_term.cc:58-71: EPSRF = 0 → crf = −1, not the ε formula's 2
+        let crf = CRFParameters::new(1.2, 1.0, 0.0, 0.0);
+        let cut3i = 1.0 / (1.2 * 1.2 * 1.2);
+        assert_eq!(crf.crf_cut3i, -cut3i);
+        assert_eq!(crf.crf_2cut3i, -cut3i / 2.0);
+        assert_eq!(crf.crf_cut, 1.5 / 1.2);
+        assert_eq!(crf.cutoff_sq, 1.2 * 1.2);
     }
 
     #[test]

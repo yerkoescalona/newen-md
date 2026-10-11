@@ -16,7 +16,7 @@ pub use improper::*;
 pub use perturbed::{
     calculate_perturbed_angle_forces, calculate_perturbed_bond_forces,
     calculate_perturbed_bonded_forces, calculate_perturbed_dihedral_forces,
-    calculate_perturbed_improper_dihedral_forces, TermLambda,
+    calculate_perturbed_improper_dihedral_forces, BondedPrecalc, TermLambda,
 };
 
 use gromos_core::configuration::Configuration;

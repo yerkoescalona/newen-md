@@ -86,7 +86,8 @@ impl Algorithm for ShakeAlgorithm {
         sim: &SimulationState,
     ) -> Result<(), String> {
         let result = if let Some(ref mut buffers) = self.buffers {
-            shake_buffered(topo, conf, sim.dt, &self.params, buffers)
+            let precalc = topo.precalc_lambdas.filter(|p| p.active(sim.step));
+            shake_buffered(topo, conf, sim.dt, &self.params, buffers, precalc)
         } else {
             // Fallback if init() wasn't called (shouldn't happen in normal flow)
             shake(topo, conf, sim.dt, &self.params)

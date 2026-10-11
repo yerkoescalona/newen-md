@@ -71,6 +71,15 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_fep_distres | 12 | perturbed distance restraints (NTDIR = 2, `../shared/check/aladip.distrest`): energy and dH/dλ per group (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_distres_lambdas | 12 | the same with `distanceres` individual λ on (1,1) and (2,2) (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_distres_tavg | 12 | NTDIR = −2, TAUDIR 0.1: the r⁻³ running average in energy, force and dH/dλ of perturbed and unperturbed restraints, and the DISRESEXPAVE block of the final configuration (1.8) | **PASS** |
+| 4   | ch4_water_fep_precalc | 2998 | `PRECALCLAM 11 0 1` (extended TI): the A/B LJ energies and derivatives at eleven λ points in the `# precalclam` rows of the `.tre` and `.trg`, AB_kinetic of the perturbed atom (1.8) | **PASS** |
+| 4   | meoh_water_fep_precalc | 2862 | the same for charged perturbed atoms: the CRF pair, RF self and RF exclusion ext terms (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_precalc | 12 | AB_bond/AB_angle/AB_improper (regular and soft-core), AB_kinetic, the ABdih row and the PERTATOMPAIR's constant A/B energies at every λ point (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_lambdas_precalc | 12 | `LAMBDAS` on and `PRECALCLAM 6 0.2 0.7`: the grid ignores the individual-λ polynomials, except the current mass λ in AB_kinetic (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_shake_precalc | 12 | perturbed SHAKE (NTC = 3) with PRECALCLAM: its contribution to the AB_bond derivatives only (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_distres_precalc | 12 | perturbed distance restraints with PRECALCLAM: AB_disres energies and derivatives (1.8) | **PASS** |
+| 4   | ch4_water_fep_precalc_twinrange | 2998 | twin range, pairlist every 5 steps, NTWE = NTWG = 2: the long-range perturbed pairs (main energies and ext rows) are computed on pairlist steps and reused, the ext rows only when that step is also an output step (gromosXX quirk) (1.8) | **PASS** |
+| 4   | aladip_solvated_epsrf0 | 72 | EPSRF = 0: a conducting boundary, C_RF = −1 (1.8) | **PASS** |
+| 4   | aladip_solvated_rcrf | 72 | RCRF = 1.2 with RCUTL = 1.4: the reaction-field constants come from RCRF (1.8) | **PASS** |
 | 4   | aladip_solvated_em_posres_groups | 72 | SD EM + position restraints with three energy groups (1-4, 5-12, water): restraint energy booked per group of the restrained atom (1.8) | **PASS** |
 | 4   | aladip_harmonic_covalent_groups | 72 | `COVALENTFORM` harmonic bonds/angles with three energy groups (1-4, 5-12, water): bonded energies booked by first atom across solute groups (1.8) | **PASS** |
 | 4   | aladip_multibath_swapped | 72 | `DOFSET 12 2 2  72 1 1`, baths at 300 K and 250 K: atoms map to baths by DOFSET range, not by bath number (gromosXX `in_bath`), dynamics included (1.8) | **PASS** |

@@ -65,6 +65,22 @@ faithful compatibility mode and a corrected mode. Design so the two can coexist 
 than forcing an irreversible choice. Until then, **faithful is the default** and any deviation is
 named and documented.
 
+### The list
+
+Each entry: what gromosXX does, which bucket, what gromos-rs does.
+
+- **PRECALCLAM NRLAM = 1** (A). gromosXX accepts it and divides by `NRLAM − 1`: every λ_k is
+  NaN. gromos-rs refuses it at build time (`check_precalclam`, `gromos-run/src/plan.rs`).
+- **PRECALCLAM long-range ext energies** (B). gromosXX computes the long-range perturbed pairs
+  only on pairlist steps and keeps them in `m_longrange_storage` until the next one; their ext
+  (λ_k) energies are filled only when that pairlist step is also an NTWG step, and are zero on
+  the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96, 280-300`).
+  Reproduced (`Forcefield::longrange_perturbed`), pinned by `ch4_water_fep_precalc_twinrange`.
+- **PRECALCLAM current-λ leaks** (B). The grid uses the raw λ_k everywhere, except: the kinetic
+  term's `slam` (the current mass λ), the improper's ζ wrapped around the current-λ q0 and not
+  re-wrapped, perturbed SHAKE adding to the `AB_bond` derivatives only, the 1-4 ext call taking
+  no Coulomb scaling, and the RF self ext term carrying no self-term correction. All reproduced.
+
 ## In one line
 
 Tests before wiring; derivation before transcription; grep before porting; document every deliberate

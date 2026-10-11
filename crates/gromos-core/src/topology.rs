@@ -31,7 +31,7 @@
 //! flat `iac`/`mass`/`charge` arrays into rebuildable caches; remove `Solute`
 //! and `Vec<Solvent>`; add `promote(instance)` with CG/exclusion renumbering.
 
-use crate::lambdas::{IndividualLambdas, InteractionLambda};
+use crate::lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 use crate::math::Vec3;
 
 // ─── instancing model ───────────────────────────────────────────────────────
@@ -766,6 +766,8 @@ pub struct Topology {
     /// The individual λ of every interaction kind and energy-group pair, evaluated at
     /// [`Self::lambda`] by [`Self::update_for_lambda`].
     pub individual_lambdas: IndividualLambdas,
+    /// PRECALCLAM: the extended-TI λ grid and the steps it is evaluated on; `None` = off.
+    pub precalc_lambdas: Option<PrecalcLambdas>,
 }
 
 impl Topology {
@@ -822,6 +824,7 @@ impl Topology {
             lambda: 0.0,
             lambda_exp: 1,
             individual_lambdas: IndividualLambdas::identity(1),
+            precalc_lambdas: None,
         }
     }
 

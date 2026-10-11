@@ -78,6 +78,9 @@ pub struct ForcefieldPlan {
     pub pairlist_algorithm: i32,
     /// PAIRLIST TYPE code (0 chargegroup, 1 atomic)
     pub pairlist_type: i32,
+    /// RCRF: the reaction-field radius the RF constants are built from (gromosXX
+    /// `nonbonded.rf_cutoff`), which need not be the long-range cutoff.
+    pub rf_cutoff: f64,
     pub epsilon_rf: f64,
     pub kappa: f64,
     /// NSLFEXCL: reaction-field contribution of the excluded pairs and the self term
@@ -291,6 +294,7 @@ impl AlgorithmSpec {
                 grid_size: 0.0,
                 pairlist_algorithm: 0,
                 pairlist_type: 0,
+                rf_cutoff: 1.4,
                 epsilon_rf: 61.0,
                 kappa: 0.0,
                 rf_excluded: true,
@@ -691,6 +695,9 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
             return refuse("accelerated EDS (EDS with SEARCH = 1)");
         }
     }
+    if let Some(pc) = p.precalclam.filter(|pc| pc.nr_lambdas > 0) {
+        check_precalclam(recipe, &pc)?;
+    }
     if p.enabled == 0 {
         return Ok(());
     }
@@ -721,6 +728,50 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+/// PRECALCLAM with NRLAM > 0: gromosXX's requirements (`check_parameter.cc:261-266`) and the
+/// features it locks together with `precalculate_lambdas` (`:4194-4280`) that a recipe can
+/// express. NRLAM = 1 is refused: gromosXX divides by NRLAM − 1 and computes NaN.
+fn check_precalclam(recipe: &RunRecipe, pc: &crate::recipe::PrecalcLam) -> Result<(), RunError> {
+    let err = |m: String| Err(RunError::Recipe(m));
+    if recipe.perturbation.enabled == 0 {
+        return err("PRECALCLAM cannot be on without perturbation (NTG = 0)".to_string());
+    }
+    let (ntwe, ntwg) = (recipe.outputs.energy_every, recipe.outputs.ntwg);
+    if ntwe == 0 || ntwg == 0 || ntwe != ntwg {
+        return err(format!(
+            "PRECALCLAM requires NTWE = NTWG > 0 (WRITETRAJ has NTWE = {ntwe}, NTWG = {ntwg})"
+        ));
+    }
+    if pc.nr_lambdas == 1 {
+        return err(
+            "PRECALCLAM NRLAM = 1: the λ step is (MAXLAM − MINLAM)/(NRLAM − 1), a division by \
+             zero (gromosXX computes NaN); use NRLAM = 0 (off) or NRLAM >= 2"
+                .to_string(),
+        );
+    }
+    let refuse = |what: &str| {
+        err(format!(
+            "PRECALCLAM together with {what}: gromosXX refuses this combination"
+        ))
+    };
+    if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3) {
+        return refuse("lattice-sum electrostatics (NLRELE 2/3)");
+    }
+    if recipe.minimisation.method >= 2 {
+        return refuse("the conjugate-gradient minimiser (NTEM >= 2)");
+    }
+    if !recipe.forcefield.terms.is_empty() {
+        return refuse("QM/ML terms");
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return refuse("Gaussian accelerated MD (GAMD)");
+    }
+    if recipe.passthrough.contains_key("EDS") {
+        return refuse("EDS");
     }
     Ok(())
 }
@@ -842,6 +893,7 @@ pub fn build_plan(
         grid_size: ff.pairlist.grid_size,
         pairlist_algorithm: recipe.to_imd().algorithm,
         pairlist_type: recipe.to_imd().type_,
+        rf_cutoff: ff.electrostatics.rf_cutoff,
         epsilon_rf: ff.electrostatics.epsilon_rf,
         kappa: ff.electrostatics.kappa,
         rf_excluded: ff.electrostatics.self_exclusion != 0,
@@ -1280,6 +1332,39 @@ mod tests {
 
     fn refusal(r: &RunRecipe) -> String {
         check_perturbation(r).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn precalclam_needs_perturbation_equal_output_steps_and_two_points() {
+        use crate::recipe::PrecalcLam;
+        let mut r = perturbed_recipe(false);
+        r.outputs.energy_every = 2;
+        r.outputs.ntwg = 2;
+        r.perturbation.precalclam = Some(PrecalcLam {
+            nr_lambdas: 11,
+            min_lambda: 0.0,
+            max_lambda: 1.0,
+        });
+        assert!(check_perturbation(&r).is_ok());
+        r.outputs.ntwg = 1;
+        assert!(refusal(&r).contains("NTWE = NTWG > 0"), "{}", refusal(&r));
+        r.outputs.ntwg = 2;
+        r.perturbation.precalclam.as_mut().unwrap().nr_lambdas = 1;
+        assert!(refusal(&r).contains("NRLAM = 1"), "{}", refusal(&r));
+        r.perturbation.precalclam.as_mut().unwrap().nr_lambdas = 0;
+        r.outputs.ntwg = 0;
+        assert!(check_perturbation(&r).is_ok(), "NRLAM = 0 is off");
+        r.perturbation.precalclam.as_mut().unwrap().nr_lambdas = 3;
+        r.outputs.ntwg = 2;
+        r.passthrough.insert("EDS".to_string(), vec![]);
+        assert!(refusal(&r).contains("EDS"), "{}", refusal(&r));
+        r.passthrough.clear();
+        r.perturbation.enabled = 0;
+        assert!(
+            refusal(&r).contains("without perturbation"),
+            "{}",
+            refusal(&r)
+        );
     }
 
     #[test]

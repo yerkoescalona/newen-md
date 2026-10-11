@@ -252,6 +252,38 @@ impl IndividualLambdas {
     }
 }
 
+/// gromosXX `PRECALCLAM` (extended TI, item 1.8): the energies of every perturbed interaction
+/// and their λ derivatives on the grid `λ_k = k·(max − min)/(n − 1) + min`, `k = 0 … n − 1`,
+/// evaluated on the steps that write the free-energy trajectory (`step % every == 0`, NTWG).
+/// The grid is the raw λ_k: no NLAM exponent, no individual-λ polynomial.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrecalcLambdas {
+    /// NRLAM (≥ 2).
+    pub nr_lambdas: usize,
+    /// MINLAM
+    pub min_lambda: f64,
+    /// MAXLAM
+    pub max_lambda: f64,
+    /// NTWG: the energies are computed on the steps this divides.
+    pub every: usize,
+}
+
+impl PrecalcLambdas {
+    /// λ_k, as gromosXX computes it at every site (`(lam_index * lambda_step) + min_lam`).
+    #[inline(always)]
+    pub fn lambda(&self, k: usize) -> f64 {
+        let step = (self.max_lambda - self.min_lambda) / (self.nr_lambdas - 1) as f64;
+        (k as f64 * step) + self.min_lambda
+    }
+
+    /// Whether `step` is one the energies are computed on
+    /// (`sim.steps() % sim.param().write.free_energy == 0`).
+    #[inline(always)]
+    pub fn active(&self, step: usize) -> bool {
+        self.every > 0 && step.is_multiple_of(self.every)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

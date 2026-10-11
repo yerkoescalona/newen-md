@@ -49,6 +49,7 @@ pub const MODELLED_BLOCKS: &[&str] = &[
     "DISTANCERES",
     "PERTURBATION",
     "LAMBDAS",
+    "PRECALCLAM",
     "ENERGYMIN",
 ];
 
@@ -316,6 +317,13 @@ pub fn write_imd(params: &ImdParameters, n_atoms: Option<usize>) -> String {
                 let [a, b, c, d, e] = r.coefficients;
                 row(o, vals![r.kind.gromos_name(), r.g1, r.g2, a, b, c, d, e]);
             }
+        });
+    }
+
+    if let Some(b) = &p.precalclam {
+        block(&mut out, "PRECALCLAM", |o| {
+            o.push_str("#    NRLAM   MINLAM   MAXLAM\n");
+            row(o, vals![b.nr_lambdas, b.min_lambda, b.max_lambda]);
         });
     }
 

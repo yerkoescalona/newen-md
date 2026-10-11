@@ -854,6 +854,11 @@ ref_test!(aladip_vacuum, "aladip_vacuum");
 ref_test!(aladip_solvated, "aladip_solvated");
 ref_test!(aladip_trunc_oct, "aladip_trunc_oct");
 
+// The reaction-field constant (1.8): EPSRF = 0 is a conducting boundary, C_RF = −1; and the RF
+// constants come from RCRF (1.2), not from RCUTL (1.4).
+ref_test!(aladip_solvated_epsrf0, "aladip_solvated_epsrf0");
+ref_test!(aladip_solvated_rcrf, "aladip_solvated_rcrf");
+
 // ── Restraints ───────────────────────────────────────────────────────────────
 ref_test!(nacl_1water_distres, "nacl_1water_distres");
 
@@ -917,6 +922,35 @@ ref_test!(
 ref_test!(
     aladip_vacuum_fep_distres_tavg,
     "aladip_vacuum_fep_distres_tavg"
+);
+
+// Extended TI (PRECALCLAM, 1.8): A/B energies and derivatives at NRLAM extra λ points in the
+// `# precalclam` / `# ABdih` sections of the .tre and .trg. CH4: nonbonded LJ only (11 points);
+// methanol: the CRF pair, RF self and RF exclusion ext terms; aladip: bonded AB_*, AB_kinetic and
+// ABdih; with LAMBDAS (6 points on [0.2, 0.7]): the grid ignores the polynomials except the mass λ
+// in AB_kinetic; with perturbed SHAKE: the AB_bond derivatives; with perturbed distance restraints:
+// AB_disres.
+ref_test!(ch4_water_fep_precalc, "ch4_water_fep_precalc");
+ref_test!(meoh_water_fep_precalc, "meoh_water_fep_precalc");
+ref_test!(aladip_vacuum_fep_precalc, "aladip_vacuum_fep_precalc");
+ref_test!(
+    aladip_vacuum_fep_lambdas_precalc,
+    "aladip_vacuum_fep_lambdas_precalc"
+);
+ref_test!(
+    aladip_vacuum_fep_shake_precalc,
+    "aladip_vacuum_fep_shake_precalc"
+);
+ref_test!(
+    aladip_vacuum_fep_distres_precalc,
+    "aladip_vacuum_fep_distres_precalc"
+);
+// Twin range with the pairlist every 5 steps and output every 2: gromosXX computes the long-range
+// perturbed pairs (and their ext energies) only on pairlist steps, the ext part only when that
+// step is also an output step, and reuses both until the next update.
+ref_test!(
+    ch4_water_fep_precalc_twinrange,
+    "ch4_water_fep_precalc_twinrange"
 );
 
 // ── Energy minimization ──────────────────────────────────────────────────────

@@ -60,10 +60,12 @@ pub use vector::{Vec3d, Vec3f, Vector3, VEC3D_ZERO, VEC3F_ZERO};
 pub use math::{BoundaryCondition, Mat3, Periodicity, Rectangular, Triclinic, Vacuum, Vec3};
 
 // Re-export configuration types
-pub use configuration::{Box, BoxType, Configuration, Energy, State, StochasticVariables};
+pub use configuration::{
+    Box, BoxType, Configuration, Energy, PrecalcEnergies, State, StochasticVariables,
+};
 
 // Re-export the individual-λ table
-pub use lambdas::{IndividualLambdas, InteractionLambda};
+pub use lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 
 // Re-export topology types
 pub use topology::{

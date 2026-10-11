@@ -416,13 +416,18 @@ pub fn write_energyred_body<W: Write>(
     for _ in 0..n_accel_groups {
         row(w, &[0.0; 5])?;
     }
-    writeln!(w, "# precalclam\n# nr_lambdas\n0")?;
+    let pc = &e.precalc;
+    let n_lambdas = pc.nr_lambdas();
+    writeln!(w, "# precalclam\n# nr_lambdas\n{n_lambdas}")?;
     writeln!(
         w,
         "          # A_e_lj            B_e_lj           A_e_crf           B_e_crf        AB_kinetic           AB_bond          AB_angle       AB_improper         AB_disres         AB_angres         AB_dihres        AB_disfld"
     )?;
+    for k in 0..n_lambdas {
+        row(w, &pc.row(k))?;
+    }
     writeln!(w, "# ABdih\n      # A_dihedral       B_dihedral")?;
-    row(w, &[0.0, 0.0])
+    row(w, &[pc.a_dihedral, pc.b_dihedral])
 }
 
 /// Writer for gromosXX-layout energy trajectories (`.tre`).
@@ -1008,5 +1013,67 @@ mod tests {
             (7.5, 2.5, 0.25)
         );
         std::fs::remove_file(&path).ok();
+    }
+
+    /// The PRECALCLAM rows and the ABdih row of a `.tre` and a `.trg` written by gromos-rs read
+    /// back through the library-bound reader (`ext_ti_ana`'s input) with the values written.
+    #[test]
+    fn precalclam_rows_read_back_through_the_library() {
+        use crate::energy_traj::{read_preamble, EnergyTraj, OFFICIAL_LIBRARY};
+        use crate::free_energy::FreeEnergyWriter;
+        let mut e = EnergyFrame::new(0.0, 1.0, 2.0, 300.0).to_energy(1, 2);
+        e.precalc.resize(3, 2);
+        for k in 0..3 {
+            let pc = &mut e.precalc;
+            pc.a_lj_total[k] = 10.0 + k as f64;
+            pc.b_lj_total[k] = 20.0 + k as f64;
+            pc.a_crf_total[k] = 30.0 + k as f64;
+            pc.b_crf_total[k] = 40.0 + k as f64;
+            pc.ab_kinetic[k] = 50.0 + k as f64;
+            pc.ab_bond[k] = 60.0 + k as f64;
+            pc.ab_angle[k] = 70.0 + k as f64;
+            pc.ab_improper[k] = 80.0 + k as f64;
+            pc.ab_disres[k] = 90.0 + k as f64;
+        }
+        e.precalc.a_dihedral = 1.5;
+        e.precalc.b_dihedral = -2.5;
+        let expect = |rows: &[Vec<f64>]| {
+            assert_eq!(rows.len(), 3);
+            for (k, row) in rows.iter().enumerate() {
+                assert_eq!(row, &e.precalc.row(k).to_vec(), "row {k}");
+            }
+        };
+        let dir = std::env::temp_dir();
+        let (tre, trg) = (
+            dir.join(format!("gromos_precalc_{}.tre", std::process::id())),
+            dir.join(format!("gromos_precalc_{}.trg", std::process::id())),
+        );
+        let mut w = EnergyWriter::new(&tre, "precalc")
+            .unwrap()
+            .with_layout(1, 2);
+        w.write_energy(0, 0.0, &e, &VolumePressure::default())
+            .unwrap();
+        w.finalize().unwrap();
+        let mut fw = FreeEnergyWriter::new(&trg, "precalc")
+            .unwrap()
+            .with_layout(1, 2);
+        fw.write_derivatives(0, 0.0, 0.25, &e).unwrap();
+        fw.flush().unwrap();
+        drop(fw);
+
+        for (path, ft, block, abdih) in [
+            (&tre, "ENERTRJ", "PRECALCLAM", "ABDIH"),
+            (&trg, "FRENERTRJ", "FREEPRECALCLAM", "FREEABDIH"),
+        ] {
+            let mut reader = crate::gz::TextReader::open(path).unwrap();
+            let pre = read_preamble(&mut reader).unwrap();
+            let mut lib = EnergyTraj::from_library(OFFICIAL_LIBRARY).unwrap();
+            lib.bind(ft, &pre, "official", "precalc").unwrap();
+            assert!(lib.read_frame(&mut reader, ft).unwrap(), "{ft}");
+            assert_eq!(lib.size("NUM_LAMBDAS"), Some(3), "{ft}");
+            expect(lib.table(block).unwrap());
+            assert_eq!(lib.table(abdih).unwrap(), &[vec![1.5, -2.5]], "{ft}");
+            std::fs::remove_file(path).ok();
+        }
     }
 }

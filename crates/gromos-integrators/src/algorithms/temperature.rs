@@ -49,14 +49,16 @@ pub struct TemperatureCalculation {
     ranges: Vec<BathRange>,
     /// Temperature groups as (first, last) atoms, built from the topology on first use.
     groups: Vec<(usize, usize)>,
-    /// Perturbed solute atoms and their `m_B − m_A`, in atom order.
-    perturbed_mass: Vec<(usize, f64)>,
+    /// Perturbed solute atoms and their `(m_A, m_B)`, in atom order.
+    perturbed_mass: Vec<(usize, f64, f64)>,
     /// Number of atoms `groups` and `perturbed_mass` were built for.
     prepared_for: Option<usize>,
     com: Vec<f64>,
     ir: Vec<f64>,
     new_bath: Vec<f64>,
     de_kin: Vec<f64>,
+    /// `(|v_old|² + |v_new|²)/2` of each perturbed atom, this step.
+    avg_v2: Vec<f64>,
 }
 
 impl TemperatureCalculation {
@@ -81,14 +83,14 @@ impl TemperatureCalculation {
         }
         self.groups = temperature_group_ranges(topo, n_atoms);
         let n_solute = topo.num_solute_atoms().min(n_atoms);
-        let mut pert: Vec<(usize, f64)> = topo
+        let mut pert: Vec<(usize, f64, f64)> = topo
             .perturbed_solute
             .atoms
             .iter()
             .filter(|a| a.seq < n_solute)
-            .map(|a| (a.seq, a.b_mass - a.a_mass))
+            .map(|a| (a.seq, a.a_mass, a.b_mass))
             .collect();
-        pert.sort_by_key(|&(i, _)| i);
+        pert.sort_by_key(|&(i, _, _)| i);
         self.perturbed_mass = pert;
         self.prepared_for = Some(n_atoms);
     }
@@ -145,7 +147,7 @@ impl Algorithm for TemperatureCalculation {
         &mut self,
         topo: &Topology,
         conf: &mut Configuration,
-        _sim: &SimulationState,
+        sim: &SimulationState,
     ) -> Result<(), String> {
         // GROMOS convention: E_kin = 0.5 * sum_i( m_i * (|v_new|^2 + |v_old|^2) / 2 )
         // After Leap_Frog_Velocity's exchange_state():
@@ -215,14 +217,42 @@ impl Algorithm for TemperatureCalculation {
             self.de_kin.resize(n_baths, 0.0);
             let vel = &conf.current().vel;
             let old_vel = &conf.old().vel;
-            for &(i, dm) in &self.perturbed_mass {
+            // PRECALCLAM: the kinetic energy of the perturbed atoms with their masses at each
+            // λ_k, over the current mass λ (temperature_calculation.cc:200-224); zeroed every
+            // step (gromosXX `zero(false, true)` and the force field's zeroing)
+            let precalc_on = topo.precalc_lambdas.is_some_and(|p| p.active(sim.step));
+            self.avg_v2.clear();
+            for &(i, _, _) in &self.perturbed_mass {
+                self.avg_v2
+                    .push((old_vel[i].length_squared() + vel[i].length_squared()) * 0.5);
+            }
+            let old = conf.old_mut();
+            old.energies.precalc.zero_kinetic();
+            old.perturbed_energy_derivatives.precalc.zero_kinetic();
+            let n_lambdas = old.energies.precalc.nr_lambdas();
+            for (&(i, ma, mb), &avg_v2) in self.perturbed_mass.iter().zip(&self.avg_v2) {
                 let g = topo.atom_to_energy_group.get(i).copied().unwrap_or(0);
                 let l_deriv = topo
                     .individual_lambdas
                     .derivative(InteractionLambda::Mass, g, g);
-                let avg_v2 = (old_vel[i].length_squared() + vel[i].length_squared()) * 0.5;
                 let (bath, _) = in_bath(&self.ranges, i);
-                self.de_kin[bath] -= l_deriv * dm * avg_v2;
+                self.de_kin[bath] -= l_deriv * (mb - ma) * avg_v2;
+                if precalc_on {
+                    let grid = topo.precalc_lambdas.expect("precalc_on");
+                    let slam = topo
+                        .individual_lambdas
+                        .lambda(InteractionLambda::Mass, g, g);
+                    let mass_s = (1.0 - slam) * ma + slam * mb;
+                    let mass_s2 = mass_s * mass_s;
+                    for k in 0..n_lambdas {
+                        let lam = grid.lambda(k);
+                        let mass_p = (1.0 - lam) * ma + lam * mb;
+                        let mass_p2 = mass_p * mass_p;
+                        old.energies.precalc.ab_kinetic[k] += 0.5 * (mass_s2 / mass_p) * avg_v2;
+                        old.perturbed_energy_derivatives.precalc.ab_kinetic[k] +=
+                            -0.5 * (mb - ma) * (mass_s2 / mass_p2) * avg_v2;
+                    }
+                }
             }
             for e in self.de_kin.iter_mut() {
                 *e *= 0.5;

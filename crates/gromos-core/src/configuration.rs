@@ -210,6 +210,177 @@ pub struct Energy {
 
     /// Scalar virial (trace of the virial tensor), used for pressure coupling.
     pub virial_total: f64,
+
+    /// PRECALCLAM (extended TI): the end-state energies on the λ grid; empty when off.
+    pub precalc: PrecalcEnergies,
+}
+
+/// The extended-TI part of an [`Energy`] record (gromosXX `A_lj_energy` … `AB_disfld`,
+/// `A_dihedral`, `B_dihedral`, `configuration/energy.h`, item 1.8). On the energies it holds the
+/// A- and B-state energies at each λ_k of the PRECALCLAM grid; on the derivatives what
+/// gromosXX books there (`A_de = +∂A/∂λ`, `B_de = −∂B/∂λ` for the nonbonded soft-core parts,
+/// the full ∂E/∂λ at λ_k for the `AB_*` columns). The four group-pair matrices are flat
+/// `[k][g1][g2]`; [`Self::calculate_totals`] folds them as gromosXX does.
+#[derive(Debug, Clone, Default)]
+pub struct PrecalcEnergies {
+    n_groups: usize,
+    /// A-state Lennard-Jones energy, `[k][g1][g2]`.
+    pub a_lj: Vec<f64>,
+    /// B-state Lennard-Jones energy, `[k][g1][g2]`.
+    pub b_lj: Vec<f64>,
+    /// A-state reaction-field energy, `[k][g1][g2]`.
+    pub a_crf: Vec<f64>,
+    /// B-state reaction-field energy, `[k][g1][g2]`.
+    pub b_crf: Vec<f64>,
+    /// Total of `a_lj` per λ_k (`calculate_totals`).
+    pub a_lj_total: Vec<f64>,
+    /// Total of `b_lj` per λ_k.
+    pub b_lj_total: Vec<f64>,
+    /// Total of `a_crf` per λ_k.
+    pub a_crf_total: Vec<f64>,
+    /// Total of `b_crf` per λ_k.
+    pub b_crf_total: Vec<f64>,
+    /// Kinetic energy of the perturbed atoms with their masses at λ_k.
+    pub ab_kinetic: Vec<f64>,
+    /// Perturbed bonds at λ_k.
+    pub ab_bond: Vec<f64>,
+    /// Perturbed angles at λ_k.
+    pub ab_angle: Vec<f64>,
+    /// Perturbed impropers at λ_k.
+    pub ab_improper: Vec<f64>,
+    /// Perturbed distance restraints at λ_k.
+    pub ab_disres: Vec<f64>,
+    /// Perturbed angle restraints (not modelled: zero).
+    pub ab_angres: Vec<f64>,
+    /// Perturbed dihedral restraints (not modelled: zero).
+    pub ab_dihres: Vec<f64>,
+    /// Perturbed distance-field restraints (not modelled: zero).
+    pub ab_disfld: Vec<f64>,
+    /// State-A energy of the perturbed proper dihedrals (no λ grid).
+    pub a_dihedral: f64,
+    /// State-B energy of the perturbed proper dihedrals.
+    pub b_dihedral: f64,
+}
+
+impl PrecalcEnergies {
+    /// Size for `n_lambdas` grid points and `n_groups` energy groups (gromosXX
+    /// `Energy::resize`, `energy.cc:309-345`), zeroed.
+    pub fn resize(&mut self, n_lambdas: usize, n_groups: usize) {
+        let n_groups = n_groups.max(1);
+        self.n_groups = n_groups;
+        let cells = n_lambdas * n_groups * n_groups;
+        for m in [
+            &mut self.a_lj,
+            &mut self.b_lj,
+            &mut self.a_crf,
+            &mut self.b_crf,
+        ] {
+            m.clear();
+            m.resize(cells, 0.0);
+        }
+        for v in self.per_lambda_mut() {
+            v.clear();
+            v.resize(n_lambdas, 0.0);
+        }
+        self.a_dihedral = 0.0;
+        self.b_dihedral = 0.0;
+    }
+
+    /// Number of λ grid points (0 = off).
+    pub fn nr_lambdas(&self) -> usize {
+        self.ab_kinetic.len()
+    }
+
+    /// Energy groups the matrices are sized for.
+    pub fn n_groups(&self) -> usize {
+        self.n_groups
+    }
+
+    fn per_lambda_mut(&mut self) -> [&mut Vec<f64>; 12] {
+        [
+            &mut self.a_lj_total,
+            &mut self.b_lj_total,
+            &mut self.a_crf_total,
+            &mut self.b_crf_total,
+            &mut self.ab_kinetic,
+            &mut self.ab_bond,
+            &mut self.ab_angle,
+            &mut self.ab_improper,
+            &mut self.ab_disres,
+            &mut self.ab_angres,
+            &mut self.ab_dihres,
+            &mut self.ab_disfld,
+        ]
+    }
+
+    /// gromosXX `zero(potential = true, kinetic = false)`: everything but `ab_kinetic`.
+    pub fn zero_potential(&mut self) {
+        for m in [
+            &mut self.a_lj,
+            &mut self.b_lj,
+            &mut self.a_crf,
+            &mut self.b_crf,
+        ] {
+            m.fill(0.0);
+        }
+        let [a, b, c, d, _kinetic, e, f, g, h, i, j, k] = self.per_lambda_mut();
+        for v in [a, b, c, d, e, f, g, h, i, j, k] {
+            v.fill(0.0);
+        }
+        self.a_dihedral = 0.0;
+        self.b_dihedral = 0.0;
+    }
+
+    /// gromosXX `zero(potential = false, kinetic = true)`: `ab_kinetic` only.
+    pub fn zero_kinetic(&mut self) {
+        self.ab_kinetic.fill(0.0);
+    }
+
+    /// gromosXX `Energy::calculate_totals` (`energy.cc:397-423`): fold every matrix onto its
+    /// lower triangle (`[k][j][i] += [k][i][j]`, `[k][i][j] = 0` for `j < i`) and sum the
+    /// triangle in gromosXX's loop order.
+    pub fn calculate_totals(&mut self) {
+        let n = self.n_groups;
+        let cells = n * n;
+        for k in 0..self.nr_lambdas() {
+            let base = k * cells;
+            for (m, total) in [
+                (&mut self.a_lj, &mut self.a_lj_total),
+                (&mut self.b_lj, &mut self.b_lj_total),
+                (&mut self.a_crf, &mut self.a_crf_total),
+                (&mut self.b_crf, &mut self.b_crf_total),
+            ] {
+                total[k] = 0.0;
+                for j in 0..n {
+                    for i in j..n {
+                        if i != j {
+                            m[base + i * n + j] += m[base + j * n + i];
+                            m[base + j * n + i] = 0.0;
+                        }
+                        total[k] += m[base + i * n + j];
+                    }
+                }
+            }
+        }
+    }
+
+    /// The twelve columns of `# precalclam` row `k` (gromosXX `out_configuration.cc:3237-3252`).
+    pub fn row(&self, k: usize) -> [f64; 12] {
+        [
+            self.a_lj_total[k],
+            self.b_lj_total[k],
+            self.a_crf_total[k],
+            self.b_crf_total[k],
+            self.ab_kinetic[k],
+            self.ab_bond[k],
+            self.ab_angle[k],
+            self.ab_improper[k],
+            self.ab_disres[k],
+            self.ab_angres[k],
+            self.ab_dihres[k],
+            self.ab_disfld[k],
+        ]
+    }
 }
 
 impl Energy {
@@ -260,6 +431,7 @@ impl Energy {
             shift_extra_orig: Vec::new(),
             shift_extra_phys: Vec::new(),
             virial_total: 0.0,
+            precalc: PrecalcEnergies::default(),
         };
         e.resize(num_energy_groups, num_temperature_groups);
         e
@@ -284,6 +456,8 @@ impl Energy {
             v.clear();
             v.resize(n_baths, 0.0);
         }
+        let n_lambdas = self.precalc.nr_lambdas();
+        self.precalc.resize(n_lambdas, n_groups);
     }
 
     /// Number of energy groups the per-group arrays are sized for.
@@ -396,6 +570,8 @@ impl Energy {
                 row.fill(0.0);
             }
         }
+        self.precalc.zero_potential();
+        self.precalc.zero_kinetic();
     }
 }
 
@@ -612,6 +788,35 @@ impl StochasticVariables {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn precalc_totals_fold_the_group_matrix_as_gromosxx_does() {
+        // two λ points, two groups: [k][g1][g2], the upper triangle moves onto the lower one
+        let mut p = PrecalcEnergies::default();
+        p.resize(2, 2);
+        for k in 0..2 {
+            for (c, v) in [1.0, 2.0, 4.0, 8.0].iter().enumerate() {
+                p.a_lj[k * 4 + c] = v * (k + 1) as f64;
+                p.b_crf[k * 4 + c] = -v;
+            }
+        }
+        p.ab_kinetic.fill(3.0);
+        p.calculate_totals();
+        assert_eq!(p.a_lj_total, vec![15.0, 30.0]);
+        assert_eq!(p.b_crf_total, vec![-15.0, -15.0]);
+        // [0][1] folded into [1][0]
+        assert_eq!(&p.a_lj[0..4], &[1.0, 0.0, 6.0, 8.0]);
+        p.zero_potential();
+        assert!(p.a_lj.iter().chain(&p.a_lj_total).all(|&v| v == 0.0));
+        assert_eq!(
+            p.ab_kinetic,
+            vec![3.0, 3.0],
+            "the kinetic column has its own flag"
+        );
+        p.zero_kinetic();
+        assert_eq!(p.ab_kinetic, vec![0.0, 0.0]);
+        assert_eq!(p.row(1), [0.0; 12]);
+    }
 
     #[test]
     fn test_box_rectangular() {

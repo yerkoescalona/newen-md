@@ -452,6 +452,7 @@ fn lambdas_bonded_terms_of_the_on_run_match_the_check_suite() {
         &vacuum(),
         &mut gromos_forces::bonded::BondedGroupEnergies::default(),
         &mut gromos_forces::bonded::BondedGroupEnergies::default(),
+        None,
     );
     let table = |actual: f64, expected: f64, what: &str| {
         close(

@@ -219,8 +219,9 @@ fn instantiate_forcefield(
     periodicity: &Periodicity,
 ) -> Result<ForcefieldBuilt, RunError> {
     let n_atoms = topo.num_atoms();
-    // CRF interior dielectric is always 1 in GROMOS.
-    let crf_params = CRFParameters::new(ff.cutoff_long, 1.0, ff.epsilon_rf, ff.kappa);
+    // CRF interior dielectric is always 1 in GROMOS; the constants come from RCRF, not RCUTL
+    // (gromosXX `nonbonded_term.cc:51-63` reads `nonbonded.rf_cutoff`).
+    let crf_params = CRFParameters::new(ff.rf_cutoff, 1.0, ff.epsilon_rf, ff.kappa);
     let lj_params = Forcefield::convert_lj_parameters(topo);
 
     let mut pairlist = PairlistContainer::new(ff.cutoff_short, ff.cutoff_long, 0.0);
@@ -851,6 +852,11 @@ mod tests {
             // Likewise COVALENTFORM: the legacy builder always used the quartic/cosine-harmonic
             // forms, so an input asking for the harmonic ones has no counterpart to compare with.
             if loaded.imd.ntbbh != 0 || loaded.imd.ntbah != 0 || loaded.imd.ntbdn != 0 {
+                continue;
+            }
+            // And it built the reaction field from RCUTL, so an RCRF that differs from it has no
+            // legacy counterpart (item 1.8).
+            if loaded.imd.rcrf != loaded.imd.rcutl {
                 continue;
             }
             // Nor did it model individual λ (LAMBDAS) or extended TI (PRECALCLAM): an input

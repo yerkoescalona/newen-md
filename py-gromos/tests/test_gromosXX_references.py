@@ -287,6 +287,16 @@ REFERENCE_SYSTEMS = [
     # Energy groups across the solute, DOFSET ranges not in bath order (1.8)
     "aladip_harmonic_covalent_groups",
     "aladip_multibath_swapped",
+    # Extended TI (PRECALCLAM) and the reaction-field constant from RCRF / EPSRF = 0 (1.8)
+    "ch4_water_fep_precalc",
+    "meoh_water_fep_precalc",
+    "aladip_vacuum_fep_precalc",
+    "aladip_vacuum_fep_lambdas_precalc",
+    "aladip_vacuum_fep_shake_precalc",
+    "aladip_vacuum_fep_distres_precalc",
+    "ch4_water_fep_precalc_twinrange",
+    "aladip_solvated_epsrf0",
+    "aladip_solvated_rcrf",
 ]
 
 # Systems with a known, pre-existing position-output mismatch that is not a

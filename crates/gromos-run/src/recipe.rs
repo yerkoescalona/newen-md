@@ -20,7 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use gromos_core::lambdas::InteractionLambda;
 use gromos_io::imd::{
-    ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PressureParameters, TempBathParameters,
+    ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PrecalcLamBlock, PressureParameters,
+    TempBathParameters,
 };
 use gromos_io::imd_write::{write_imd, MODELLED_BLOCKS};
 use serde::{Deserialize, Serialize};
@@ -546,6 +547,23 @@ pub struct Perturbation {
     /// LAMBDAS block: individual λ per interaction kind and energy-group pair; `None` = absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lambdas: Option<Lambdas>,
+    /// PRECALCLAM block: energies at `nr_lambdas` extra λ points (extended TI); `None` = absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precalclam: Option<PrecalcLam>,
+}
+
+/// The `PRECALCLAM` block: the energies of every perturbed interaction (and their λ
+/// derivatives) at `nr_lambdas` points from `min_lambda` to `max_lambda`, written to the energy
+/// and free-energy trajectories on every NTWG step (gromosXX extended TI).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrecalcLam {
+    /// NRLAM: 0 = off
+    pub nr_lambdas: usize,
+    /// MINLAM
+    pub min_lambda: f64,
+    /// MAXLAM
+    pub max_lambda: f64,
 }
 
 /// The `LAMBDAS` block. Its rows act only when `enabled` and the run is perturbed.
@@ -1057,6 +1075,11 @@ impl RunRecipe {
                 nlam: imd.nlam,
                 nscale: imd.nscale,
                 lambdas: imd.lambdas.as_ref().map(Lambdas::from_block),
+                precalclam: imd.precalclam.map(|b| PrecalcLam {
+                    nr_lambdas: b.nr_lambdas,
+                    min_lambda: b.min_lambda,
+                    max_lambda: b.max_lambda,
+                }),
             },
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
@@ -1210,6 +1233,11 @@ impl RunRecipe {
             nlam: r.perturbation.nlam,
             nscale: r.perturbation.nscale,
             lambdas: r.perturbation.lambdas.as_ref().map(Lambdas::to_block),
+            precalclam: r.perturbation.precalclam.map(|p| PrecalcLamBlock {
+                nr_lambdas: p.nr_lambdas,
+                min_lambda: p.min_lambda,
+                max_lambda: p.max_lambda,
+            }),
             ntem: r.minimisation.method,
             nmin: r.minimisation.min_steps,
             dele: r.minimisation.tolerance,

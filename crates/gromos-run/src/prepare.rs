@@ -21,7 +21,7 @@ use gromos_core::{
     validation::{
         validate_configuration, validate_coordinates, validate_topology, ValidationReport,
     },
-    IndividualLambdas, Topology,
+    IndividualLambdas, PrecalcLambdas, Topology,
 };
 use gromos_io::{coordinate::CoordinateData, imd::ImdParameters, ptp::read_pttopo};
 
@@ -83,6 +83,13 @@ pub enum PrepareNote {
     AtomPairLambdasDiffer {
         /// the pair's atoms, 1-based
         atoms: (usize, usize),
+    },
+    /// Perturbed SHAKE together with PRECALCLAM: the constraints add to the `AB_bond`
+    /// derivatives at every λ_k but not to the energies, so BAR or reweighting in extended TI
+    /// is inappropriate (gromosXX warns, `in_perturbation.cc:327-334`).
+    PerturbedShakePrecalc {
+        /// number of perturbed distance constraints
+        constraints: usize,
     },
     /// Non-fatal validation findings (errors or warnings) for `stage`.
     Validation {
@@ -267,6 +274,24 @@ pub fn prepare_system(
         }
     }
 
+    // 3c'. PRECALCLAM (extended TI) on a perturbed run: the λ grid and the NTWG steps it is
+    //      evaluated on travel with the topology, as λ and NLAM do.
+    topology.precalc_lambdas = imd
+        .precalclam
+        .filter(|b| imd.ntg != 0 && b.nr_lambdas > 0)
+        .map(|b| PrecalcLambdas {
+            nr_lambdas: b.nr_lambdas,
+            min_lambda: b.min_lambda,
+            max_lambda: b.max_lambda,
+            every: imd.ntwg,
+        });
+    let n_constraints = topology.perturbed_solute.distance_constraints.len();
+    if topology.precalc_lambdas.is_some() && n_constraints > 0 {
+        notes.push(PrepareNote::PerturbedShakePrecalc {
+            constraints: n_constraints,
+        });
+    }
+
     // 3d. Make every charge group whole around its first atom, as gromosXX does on reading a
     //     configuration. A `.cnf` written with the molecules put back into the box has charge
     //     groups split across the boundary; the pairlist works on their centres of geometry.
@@ -299,7 +324,18 @@ pub fn prepare_system(
 
     // 7. Configuration (double-buffered state). Velocities: generated (NTIVEL=1), read, or zero.
     let n_baths = imd.num_temp_baths.max(1);
-    let mut conf = Configuration::new(n_atoms, n_baths, topology.energy_groups.len().max(1));
+    let n_groups = topology.energy_groups.len().max(1);
+    let mut conf = Configuration::new(n_atoms, n_baths, n_groups);
+    if let Some(pc) = &topology.precalc_lambdas {
+        // gromosXX `Configuration::init` sizes both records for NRLAM (`configuration.cc:371-379`);
+        // `copy_current_to_old` below sizes the old state alike
+        let state = conf.current_mut();
+        state.energies.precalc.resize(pc.nr_lambdas, n_groups);
+        state
+            .perturbed_energy_derivatives
+            .precalc
+            .resize(pc.nr_lambdas, n_groups);
+    }
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)

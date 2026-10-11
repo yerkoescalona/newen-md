@@ -190,6 +190,8 @@ pub struct ImdParameters {
     pub nscale: i32,
     /// LAMBDAS block (individual λ per interaction kind and energy-group pair); `None` = absent.
     pub lambdas: Option<LambdasBlock>,
+    /// PRECALCLAM block (extended TI: energies at extra λ points); `None` = absent.
+    pub precalclam: Option<PrecalcLamBlock>,
 
     // ENERGYMIN block
     /// Energy minimization method (0=off, 1=steepest descent, 2=Fletcher-Reeves CG)
@@ -402,6 +404,7 @@ impl Default for ImdParameters {
             ntcs0: 1e-4,
             nonbonded_extra: NonbondedExtra::default(),
             lambdas: None,
+            precalclam: None,
             raw_blocks: HashMap::new(),
         }
     }
@@ -499,6 +502,51 @@ pub fn parse_imd<R: BufRead>(reader: R) -> Result<ImdParameters, IoError> {
     }
 
     Ok(params)
+}
+
+/// The `PRECALCLAM` block (gromosXX `read_PRECALCLAM`, `in_parameter.cc:4478-4513`): the
+/// energies of the perturbed interactions at NRLAM extra λ points from MINLAM to MAXLAM.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrecalcLamBlock {
+    /// NRLAM: 0 = off.
+    pub nr_lambdas: usize,
+    /// MINLAM
+    pub min_lambda: f64,
+    /// MAXLAM
+    pub max_lambda: f64,
+}
+
+/// Parse the data lines of a `PRECALCLAM` block, with gromosXX's range checks.
+pub fn parse_precalclam(lines: &[String]) -> Result<PrecalcLamBlock, IoError> {
+    let mut t = Tokens::new("PRECALCLAM", lines);
+    // gromosXX defaults (`parameter.h:2978`): 0, 0.0, 1.0
+    let mut b = PrecalcLamBlock {
+        nr_lambdas: 0,
+        min_lambda: 0.0,
+        max_lambda: 1.0,
+    };
+    if let Some(v) = t.next_i32("NRLAM")? {
+        if v < 0 {
+            return Err(IoError::ParseError(format!("NRLAM = {v}: must be >= 0")));
+        }
+        b.nr_lambdas = v as usize;
+    }
+    for (name, slot) in [("MINLAM", &mut b.min_lambda), ("MAXLAM", &mut b.max_lambda)] {
+        if let Some(v) = t.next_f64(name)? {
+            if !(0.0..=1.0).contains(&v) {
+                return Err(IoError::ParseError(format!(
+                    "{name} = {v}: must be >= 0 and <= 1"
+                )));
+            }
+            *slot = v;
+        }
+    }
+    if b.min_lambda >= b.max_lambda {
+        return Err(IoError::ParseError(
+            "MINLAM should be smaller than MAXLAM".to_string(),
+        ));
+    }
+    Ok(b)
 }
 
 /// One `LAMBDAS` row: `L = a·λ⁴ + b·λ³ + c·λ² + d·λ + e` for `kind` between energy groups
@@ -1162,6 +1210,9 @@ fn parse_block(
                 }
             }
         },
+        "PRECALCLAM" => {
+            params.precalclam = Some(parse_precalclam(data_lines)?);
+        },
         "PERTURBATION" => {
             let mut t = Tokens::new("PERTURBATION", data_lines);
             if let Some(v) = t.next_i32("NTG")? {
@@ -1818,6 +1869,36 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
         let path = write_tmp(content, "nre_order");
         let err = read_imd_file(&path).unwrap_err().to_string();
         assert!(err.contains("strictly increasing"), "{err}");
+    }
+
+    // ── PRECALCLAM (gromosXX read_PRECALCLAM, in_parameter.cc:4478-4513) ───────────────────
+
+    #[test]
+    fn precalclam_parses_checks_its_ranges_and_round_trips() {
+        let p = parse_imd_str("PRECALCLAM\n# NRLAM MINLAM MAXLAM\n 11 0.2 0.7\nEND\n").unwrap();
+        let b = PrecalcLamBlock {
+            nr_lambdas: 11,
+            min_lambda: 0.2,
+            max_lambda: 0.7,
+        };
+        assert_eq!(p.precalclam, Some(b));
+        let again = parse_imd_str(&crate::imd_write::write_imd(&p, None)).unwrap();
+        assert_eq!(again.precalclam, Some(b));
+        assert_eq!(parse_imd_str("TITLE\nx\nEND\n").unwrap().precalclam, None);
+        for (body, what) in [
+            (" -1 0.0 1.0", "NRLAM"),
+            (" 11 0.0 1.5", "MAXLAM"),
+            (" 11 -0.1 1.0", "MINLAM"),
+            (" 11 0.5 0.5", "MINLAM should be smaller than MAXLAM"),
+        ] {
+            let err = parse_imd_str(&format!("PRECALCLAM\n{body}\nEND\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(what) && err.contains("PRECALCLAM"),
+                "{body}: {err}"
+            );
+        }
     }
 
     // ── LAMBDAS (gromosXX read_LAMBDAS, in_parameter.cc:4326-4472) ──────────────────────────

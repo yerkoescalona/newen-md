@@ -459,6 +459,14 @@ fn main() {
                     atoms.1
                 );
             },
+            PrepareNote::PerturbedShakePrecalc { constraints } => {
+                log::warn!(
+                    "{constraints} perturbed distance constraints with PRECALCLAM: perturbed \
+                     SHAKE in combination with precalculated lambdas only contributes to \
+                     derivatives, not energies (BAR or reweighting in extended TI will be \
+                     inappropriate)"
+                );
+            },
             PrepareNote::Validation { stage, report } => {
                 report.print();
                 if report.has_errors() {
@@ -1683,6 +1691,10 @@ mod mpi_support {
                 for m in [&g.lj, &g.crf, &g.dhdl_lj, &g.dhdl_crf] {
                     send.extend_from_slice(m);
                 }
+                // and the PRECALCLAM arrays of the pairs (empty when off)
+                for m in s.precalc.energy.iter().chain(s.precalc.deriv.iter()) {
+                    send.extend_from_slice(m);
+                }
                 let mut recv = vec![0.0f64; send.len()];
                 if world.rank() == 0 {
                     root.reduce_into_root(&send[..], &mut recv[..], SystemOperation::sum());
@@ -1712,6 +1724,12 @@ mod mpi_support {
                 for m in [&mut g.lj, &mut g.crf, &mut g.dhdl_lj, &mut g.dhdl_crf] {
                     m.copy_from_slice(&recv[k..k + cells]);
                     k += cells;
+                }
+                let pc = &mut s.precalc;
+                for m in pc.energy.iter_mut().chain(pc.deriv.iter_mut()) {
+                    let len = m.len();
+                    m.copy_from_slice(&recv[k..k + len]);
+                    k += len;
                 }
             }));
         }

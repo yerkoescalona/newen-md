@@ -462,12 +462,17 @@ impl PerturbedDistanceRestraint {
     /// own exponents (not NLAM); dH/dλ = `l_deriv·(dprefactor/dl·en + prefactor·den/dl)`.
     /// Time-averaged (NTDIR < 0, :149-155): the distance is `⟨r⁻³⟩^(−1/3)` everywhere, the force
     /// direction `v/dist` included.
+    ///
+    /// With `precalc` the restraint also adds its energy and derivative at every λ_k
+    /// (`:291-392`): r0, w0 and the prefactor at λ_k, the same (possibly time-averaged)
+    /// distance.
     pub fn calculate(
         &mut self,
         conf: &mut Configuration,
         periodicity: &Periodicity,
         l: f64,
         l_deriv: f64,
+        precalc: Option<&mut DisresPrecalc>,
     ) -> (f64, f64) {
         let (n, m) = (self.n as f64, self.m as f64);
         // gromosXX: v = v1 − v2
@@ -562,7 +567,104 @@ impl PerturbedDistanceRestraint {
         };
         let dprefdl = 2.0_f64.powf(m + n) * (dprefndl - dprefmdl) * en_term;
         let dpotdl = prefactor * dlam_term;
+        if let Some(pc) = precalc {
+            self.add_precalc(pc, dist, rah_f);
+        }
         (energy, l_deriv * (dprefdl + dpotdl))
+    }
+
+    /// gromosXX's ext-TI loop (`perturbed_distance_restraint_interaction.cc:291-392`) at the
+    /// restraint's distance `dist` and half-harmonic form `rah`.
+    fn add_precalc(&self, pc: &mut DisresPrecalc, dist: f64, rah: f64) {
+        let (n, m) = (self.n as f64, self.m as f64);
+        let (k, r_l) = (self.k, self.r_linear);
+        let d_r0 = self.b_r0 - self.a_r0;
+        let d_w0 = self.b_w0 - self.a_w0;
+        for (i, &lam) in pc.lambdas.iter().enumerate() {
+            let prefactor = 2.0_f64.powf(n + m) * lam.powf(n) * (1.0 - lam).powf(m);
+            let w0 = (1.0 - lam) * self.a_w0 + lam * self.b_w0;
+            let r0 = (1.0 - lam) * self.a_r0 + lam * self.b_r0;
+            let diff = dist - r0;
+            let diff2 = diff * diff;
+            let fulfilled = rah * dist < rah * r0;
+            let harmonic = (r0 - dist).abs() < r_l;
+            let mut en_term = if fulfilled {
+                0.0
+            } else if harmonic {
+                0.5 * k * diff2
+            } else if dist < r0 {
+                -k * (dist + 0.5 * r_l - r0) * r_l
+            } else {
+                k * (dist - 0.5 * r_l - r0) * r_l
+            };
+            match self.mode {
+                1 => {},
+                2 => en_term *= w0,
+                _ => en_term = 0.0,
+            }
+            let dlam_term = if fulfilled {
+                0.0
+            } else if self.mode == 1 {
+                if harmonic {
+                    -k * diff * d_r0
+                } else if dist < r0 {
+                    k * d_r0 * r_l
+                } else {
+                    -k * d_r0 * r_l
+                }
+            } else if self.mode == 2 {
+                if harmonic {
+                    0.5 * k * d_w0 * diff2 - k * w0 * diff * d_r0
+                } else if dist < r0 {
+                    -k * d_w0 * (dist + 0.5 * r_l - r0) * r_l + k * w0 * d_r0 * r_l
+                } else {
+                    k * d_w0 * (dist - 0.5 * r_l - r0) * r_l - k * w0 * d_r0 * r_l
+                }
+            } else {
+                0.0
+            };
+            let dprefndl = if self.n == 0 {
+                0.0
+            } else {
+                n * lam.powf(n - 1.0) * (1.0 - lam).powf(m)
+            };
+            let dprefmdl = if self.m == 0 {
+                0.0
+            } else {
+                m * lam.powf(n) * (1.0 - lam).powf(m - 1.0)
+            };
+            let dprefdl = 2.0_f64.powf(m + n) * (dprefndl - dprefmdl) * en_term;
+            pc.energy[i] += prefactor * en_term;
+            pc.deriv[i] += dprefdl + prefactor * dlam_term;
+        }
+    }
+}
+
+/// PRECALCLAM (extended TI, item 1.8) energies of the perturbed distance restraints:
+/// `AB_disres` at every λ_k and its λ derivative.
+#[derive(Debug, Clone, Default)]
+pub struct DisresPrecalc {
+    /// λ_k of the grid.
+    pub lambdas: Vec<f64>,
+    /// `AB_disres` energy per λ_k.
+    pub energy: Vec<f64>,
+    /// Its λ derivative per λ_k.
+    pub deriv: Vec<f64>,
+}
+
+impl DisresPrecalc {
+    /// Zeroed arrays for the λ grid `lambdas`.
+    pub fn new(lambdas: &[f64]) -> Self {
+        Self {
+            lambdas: lambdas.to_vec(),
+            energy: vec![0.0; lambdas.len()],
+            deriv: vec![0.0; lambdas.len()],
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.energy.fill(0.0);
+        self.deriv.fill(0.0);
     }
 }
 
@@ -597,12 +699,13 @@ impl PerturbedDistanceRestraints {
         conf: &mut Configuration,
         periodicity: &Periodicity,
         lam: TermLambda<'_>,
+        mut precalc: Option<&mut DisresPrecalc>,
     ) -> (f64, f64) {
         let mut e = 0.0;
         let mut d = 0.0;
         for r in &mut self.restraints {
             let (l, dl) = lam.at(r.atom1);
-            let (ei, di) = r.calculate(conf, periodicity, l, dl);
+            let (ei, di) = r.calculate(conf, periodicity, l, dl, precalc.as_deref_mut());
             e += ei;
             d += di;
         }
@@ -620,12 +723,13 @@ impl PerturbedDistanceRestraints {
         atom_group: &[usize],
         energy_groups: &mut [f64],
         dhdl_groups: &mut [f64],
+        mut precalc: Option<&mut DisresPrecalc>,
     ) -> (f64, f64) {
         let mut e = 0.0;
         let mut d = 0.0;
         for r in &mut self.restraints {
             let (l, dl) = lam.at(r.atom1);
-            let (ei, di) = r.calculate(conf, periodicity, l, dl);
+            let (ei, di) = r.calculate(conf, periodicity, l, dl, precalc.as_deref_mut());
             energy_groups[atom_group[r.atom1]] += ei;
             dhdl_groups[atom_group[r.atom1]] += di;
             e += ei;
@@ -1117,12 +1221,41 @@ mod tests {
             let mut r = PerturbedDistanceRestraint::new(
                 a1, a2, n, m, a_r0, b_r0, a_w0, b_w0, rah, k, r_linear, mode,
             );
-            ptotal += r.calculate(&mut conf, &periodicity, lambda, 1.0).0;
+            ptotal += r.calculate(&mut conf, &periodicity, lambda, 1.0, None).0;
         }
         assert!(
             (ptotal - 195.899012).abs() < 1e-3,
             "PerturbedDistanceRestraint total: expected 195.899012, got {ptotal:.6}"
         );
+    }
+
+    /// PRECALCLAM: at λ_k = λ (and L = λ) `AB_disres` is the restraint's energy and its
+    /// derivative is dH/dλ; across the grid the derivative is the finite difference of the
+    /// energies.
+    #[test]
+    fn precalc_disres_matches_the_energy_at_lambda_and_its_derivative() {
+        let pbc = Periodicity::Vacuum(gromos_core::math::Vacuum);
+        for (dist, mode, rah) in [(0.25, 1, 0), (0.25, 2, 0), (0.9, 2, 0), (0.02, 1, 0)] {
+            let mut conf = Configuration::new(2, 1, 1);
+            conf.current_mut().pos[1] = Vec3::new(dist, 0.0, 0.0);
+            let r = PerturbedDistanceRestraint::new(
+                0, 1, 1, 2, 0.2, 0.3, 1.0, 2.0, rah, 1000.0, 0.1, mode,
+            );
+            let eps = 1e-6;
+            let grid = [0.4 - eps, 0.4, 0.4 + eps];
+            let mut pc = DisresPrecalc::new(&grid);
+            let (e, de) = r
+                .clone()
+                .calculate(&mut conf.clone(), &pbc, 0.4, 1.0, Some(&mut pc));
+            assert!((pc.energy[1] - e).abs() <= 1e-12 * e.abs().max(1.0));
+            assert!((pc.deriv[1] - de).abs() <= 1e-12 * de.abs().max(1.0));
+            let fd = (pc.energy[2] - pc.energy[0]) / (2.0 * eps);
+            assert!(
+                (fd - pc.deriv[1]).abs() <= 1e-5 * fd.abs().max(1.0),
+                "dist {dist} mode {mode}: fd {fd} vs {}",
+                pc.deriv[1]
+            );
+        }
     }
 
     /// dH/dλ of a perturbed distance restraint is the λ derivative of its energy, in every
@@ -1145,14 +1278,16 @@ mod tests {
             // L(λ) = λ² (so L′ = 2λ)
             let energy = |lam: f64| {
                 let mut c = conf.clone();
-                r.clone().calculate(&mut c, &pbc, lam * lam, 2.0 * lam).0
+                r.clone()
+                    .calculate(&mut c, &pbc, lam * lam, 2.0 * lam, None)
+                    .0
             };
             let lam = 0.4;
             let eps = 1e-6;
             let fd = (energy(lam + eps) - energy(lam - eps)) / (2.0 * eps);
             let (_, de) = r
                 .clone()
-                .calculate(&mut conf.clone(), &pbc, lam * lam, 2.0 * lam);
+                .calculate(&mut conf.clone(), &pbc, lam * lam, 2.0 * lam, None);
             assert!(
                 (fd - de).abs() <= 1e-6 * de.abs().max(1.0),
                 "dist {dist} mode {mode}: finite difference {fd} vs dH/dλ {de}"
