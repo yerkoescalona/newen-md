@@ -52,7 +52,11 @@ pub struct CoordinateData {
 pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoError> {
     let reader = crate::gz::open_text(path.as_ref())
         .map_err(|_| IoError::FileNotFound(path.as_ref().display().to_string()))?;
+    parse_coordinates(reader)
+}
 
+/// [`read_coordinates`] over an already-open reader — for callers holding the text, not a path.
+pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError> {
     let mut positions = Vec::new();
     let mut velocities = Vec::new();
     let mut box_dims = Vec3::ZERO;
@@ -250,6 +254,26 @@ pub fn format_g96(title: &str, atoms: &[G96Atom], box_dims: Option<Vec3>) -> Str
     o.push_str(&format!("{:15.9}{:15.9}{:15.9}\n", angles, angles, angles));
     o.push_str(&format!("{:15.9}{:15.9}{:15.9}\n", 0.0, 0.0, 0.0));
     o.push_str(&format!("{:15.9}{:15.9}{:15.9}\nEND\n", 0.0, 0.0, 0.0));
+    o
+}
+
+/// A VELOCITY block in the layout of [`format_g96`]'s POSITION block, labelled by `atoms`
+/// (velocities in nm/ps). Readers find blocks by name, so it may follow the GENBOX block.
+pub fn format_g96_velocity_block(atoms: &[G96Atom], velocities: &[Vec3]) -> String {
+    let mut o = String::from("VELOCITY\n");
+    for (k, (a, v)) in atoms.iter().zip(velocities).enumerate() {
+        o.push_str(&format!(
+            "{:>5} {:<5} {:<6}{:>6}{:15.9}{:15.9}{:15.9}\n",
+            a.res_num,
+            a.res_name,
+            a.atom_name,
+            k + 1,
+            v.x,
+            v.y,
+            v.z
+        ));
+    }
+    o.push_str("END\n");
     o
 }
 

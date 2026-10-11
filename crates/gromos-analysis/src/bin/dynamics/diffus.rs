@@ -37,7 +37,7 @@ fn print_usage() {
     eprintln!("            Formats: 'all', '1-10', '1,5,10-20'");
     eprintln!("                     '1:1-10' (mol 1, atoms 1-10)");
     eprintln!("                     'r:1-5' (residues 1-5)");
-    eprintln!("                     'a:OW' (all OW atoms)");
+    eprintln!("                     's:OW' (all solvent OW atoms)");
     eprintln!("  @out      Output file for MSD vs time (default: msd.dat)");
     eprintln!("  @skip     Skip first N frames (default: 0)");
     eprintln!("  @every    Use every Nth frame (default: 1)");
@@ -47,7 +47,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  diffus @topo system.top @traj md.trc");
-    eprintln!("  diffus @topo system.top @traj md.trc @atoms a:OW @skip 1000");
+    eprintln!("  diffus @topo system.top @traj md.trc @atoms s:OW @skip 1000");
     eprintln!("  diffus @topo system.top @traj md.trc @fitstart 50 @fitend 200");
     eprintln!();
     eprintln!("Output:");

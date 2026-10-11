@@ -12,7 +12,8 @@ use crate::topology::PyTopology;
 /// A molecular system: topology paired with a matching configuration.
 ///
 /// Validates at construction that both objects describe the same number of
-/// atoms, mirroring the gromosXX invariant that `.top` and `.cnf` must agree.
+/// atoms, mirroring the gromosXX invariant that `.top` and `.cnf` must agree. A solute-only
+/// topology with a configuration of solute plus whole solvent molecules is solvated here.
 ///
 /// # Example (Python)
 ///
@@ -33,7 +34,8 @@ pub struct PySystem {
 impl PySystem {
     /// Create a System from pre-loaded Topology and Configuration objects.
     ///
-    /// Raises ValueError if atom counts do not match.
+    /// Solvates a solute-only topology to the configuration's size; raises `RecipeError` (a
+    /// `ValueError`) if the atom counts cannot be made to match.
     #[new]
     fn new(
         topology: &Bound<'_, PyTopology>,
@@ -41,21 +43,19 @@ impl PySystem {
     ) -> PyResult<Self> {
         let topo_ref = topology.borrow();
         let conf_ref = configuration.borrow();
-        validate_atom_count_match(&topo_ref.inner, conf_ref.pos_data.len())
-            .map_err(RecipeError::new_err)?;
-        Ok(Self {
-            topology: PyTopology {
+        Self::paired(
+            PyTopology {
                 inner: topo_ref.inner.clone(),
                 physical_constants: topo_ref.physical_constants,
                 parsed: topo_ref.parsed.clone(),
             },
-            configuration: PyConfiguration {
+            PyConfiguration {
                 labels: conf_ref.labels.clone(),
                 pos_data: conf_ref.pos_data.clone(),
                 vel_data: conf_ref.vel_data.clone(),
                 box_dims: conf_ref.box_dims,
             },
-        })
+        )
     }
 
     /// Load a System directly from topology and coordinate file paths.
@@ -63,12 +63,7 @@ impl PySystem {
     fn from_files(topo_file: &str, conf_file: &str) -> PyResult<Self> {
         let topo = PyTopology::from_file(topo_file)?;
         let conf = PyConfiguration::from_file(conf_file)?;
-        validate_atom_count_match(&topo.inner, conf.pos_data.len())
-            .map_err(RecipeError::new_err)?;
-        Ok(Self {
-            topology: topo,
-            configuration: conf,
-        })
+        Self::paired(topo, conf)
     }
 
     // ── Properties ────────────────────────────────────────────────────────────
@@ -261,7 +256,9 @@ impl PySystem {
     /// Returns `(errors, warnings, report)`; `gromos.tools.check_top` wraps it as a
     /// `CheckReport`.
     fn check(&self) -> (Vec<String>, Vec<String>, String) {
-        let report = gromos_tools::programs::check_top::check_top(&self.topology.inner);
+        // check_top reads a topology file, solute only; the System's own may be solvated.
+        let as_file = gromos_io::topology::build_topology(self.topology.parsed.clone());
+        let report = gromos_tools::programs::check_top::check_top(&as_file);
         (report.errors, report.warnings, report.text)
     }
 
@@ -275,6 +272,24 @@ impl PySystem {
             ly,
             lz,
         )
+    }
+}
+
+impl PySystem {
+    /// Pair a topology with its configuration. A solute-only topology with a configuration of
+    /// solute plus whole solvent molecules is solvated here, by the routine `prepare_system`
+    /// uses (`Topology::solvate`), so the System's atom counts agree from the start.
+    fn paired(mut topology: PyTopology, configuration: PyConfiguration) -> PyResult<Self> {
+        let n_conf = configuration.pos_data.len();
+        validate_atom_count_match(&topology.inner, n_conf).map_err(RecipeError::new_err)?;
+        if topology.inner.num_atoms() != n_conf {
+            gromos_io::topology::solvate_to_atoms(&mut topology.inner, n_conf)
+                .map_err(|e| RecipeError::new_err(e.to_string()))?;
+        }
+        Ok(Self {
+            topology,
+            configuration,
+        })
     }
 }
 

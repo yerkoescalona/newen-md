@@ -18,7 +18,10 @@ from gromos import System
 ```python
 System(topology: Topology, configuration: Configuration) -> System
 ```
-Raises `ValueError` if `topology.n_atoms != configuration.n_atoms`.
+A solute-only topology paired with a configuration of solute plus whole solvent molecules is
+solvated at construction (the run builder's rule: the number of solvent molecules comes from the
+coordinates), so `n_atoms`, `topology.n_atoms` and `len(positions)` agree. Any other count
+mismatch raises `ValueError` (`gromos.RecipeError`).
 
 ```python
 System.from_files(topo_file: str, conf_file: str) -> System  # staticmethod
@@ -71,11 +74,22 @@ topo = Topology("system.topo")
 | `n_solvent_atoms` | `int` | Solvent-only count |
 | `masses` | `ndarray (N,) f64` | Atom masses, g/mol |
 | `charges` | `ndarray (N,) f64` | Partial charges, e |
+| `atom_names` | `list[str]` | Atom names in engine order; solvent molecules repeat the SOLVENTATOM names once solvated |
+| `iac` | `ndarray (N,) int64` | Integer atom-type code per atom, **0-based** (the file's IAC column minus 1) |
 
 ### Methods
 
 **`solvate(nsm: int)`**  
 Append `nsm` copies of the solvent template to the topology in-place.
+
+**`lj_parameters(iac_i: int, iac_j: int) -> tuple[float, float, float, float]`**  
+`(c6, c12, cs6, cs12)` of an atom-type pair from the LJPARAMETERS block, codes 0-based as in
+`iac`; `cs6`/`cs12` replace `c6`/`c12` for 1-4 pairs. Raises `IndexError` for an unknown code.
+
+```python
+topo = Topology("pair_lj.topo")
+c6, c12, _, _ = topo.lj_parameters(topo.iac[0], topo.iac[1])   # kJ mol⁻¹ nm⁶, kJ mol⁻¹ nm¹²
+```
 
 ---
 

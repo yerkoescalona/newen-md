@@ -198,6 +198,20 @@ class Topology:
     def masses(self) -> npt.NDArray[np.float64]: ...
     @property
     def charges(self) -> npt.NDArray[np.float64]: ...
+    @property
+    def atom_names(self) -> list[str]:
+        """Atom name of every atom in engine order, solvent included once solvated."""
+        ...
+    @property
+    def iac(self) -> npt.NDArray[np.int64]:
+        """Integer atom-type code (IAC) of every atom, 0-based (the engine's convention; the
+        topology file's IAC column is 1-based, file value k is stored as k - 1)."""
+        ...
+    def lj_parameters(self, iac_i: int, iac_j: int) -> tuple[float, float, float, float]:
+        """``(c6, c12, cs6, cs12)`` of the atom-type pair ``(iac_i, iac_j)``, both 0-based as in
+        ``iac`` — one row of the LJPARAMETERS block. ``cs6``/``cs12`` apply to 1-4 pairs.
+        Raises ``IndexError`` for a code outside the topology's types."""
+        ...
     def solvate(self, nsm: int) -> None: ...
     def apply_perturbation(self, pttopo_file: str) -> None:
         """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs (what `md @pttopo`
@@ -217,11 +231,12 @@ class Configuration:
     def from_file(conf_file: str) -> Configuration: ...
     @staticmethod
     def from_string(text: str) -> Configuration:
-        """Read coordinates from the text of a GROMOS96 file. Velocities are not part of the
-        POSITION block and come back empty."""
+        """Read coordinates from the text of a GROMOS96 file. Keeps what ``Configuration(path)``
+        keeps: positions, velocities (when a VELOCITY block is present), box and labels."""
         ...
     def to_g96(self, title: str | None = None) -> str:
-        """The configuration as GROMOS96 text, with an optional TITLE."""
+        """The configuration as GROMOS96 text, with an optional TITLE; a VELOCITY block follows
+        when the configuration has velocities."""
         ...
     def __str__(self) -> str:
         """The configuration as a GROMOS96 coordinate file."""
@@ -668,6 +683,13 @@ class AlgorithmSequence:
 
 @final
 class System:
+    """A topology paired with a matching configuration.
+
+    A solute-only topology with a configuration of solute plus whole solvent molecules is solvated
+    at construction, so ``n_atoms``, ``topology.n_atoms`` and ``len(positions)`` agree; any other
+    count mismatch raises ``RecipeError`` (a ``ValueError``).
+    """
+
     def __new__(cls, topology: Topology, configuration: Configuration) -> Self: ...
     @staticmethod
     def from_files(topo_file: str, conf_file: str) -> System: ...

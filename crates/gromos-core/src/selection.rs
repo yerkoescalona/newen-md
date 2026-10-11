@@ -14,8 +14,9 @@
 //!            | global_range
 //!
 //! mol_spec ::= mol_sel ':' atom_sel
-//! mol_sel  ::= 'a'                       -- all molecules
-//!            | 's'                       -- all solvent molecules (molecules[1..])
+//! mol_sel  ::= 'a'                       -- all solute molecules (never solvent)
+//!            | 'm'                       -- all solute molecules (role == Solute)
+//!            | 's'                       -- all solvent molecules (role == Solvent)
 //!            | N                         -- molecule N (1-based)
 //!            | N '-' M                   -- molecules N through M
 //!
@@ -37,12 +38,14 @@
 //! Multiple terms are joined by `;` (union). `not()` defines a permanent exclusion
 //! mask applied after all union terms. `minus()` removes atoms from the current set.
 //!
+//! As in gromos++ `AtomSpecifier`, `a:` is every *solute* molecule: on a solvated system
+//! `a:OW` selects no water oxygens, `s:OW` does.
+//!
 //! The implementation deliberately avoids `num_solute_atoms()` as a role boundary.
-//! All molecule-level operations route through `topology.molecules` ranges; `s:` is
-//! simply shorthand for `molecules[1..]` (when role attributes land, swap
-//! the lookup without changing the grammar).
+//! All molecule-level operations route through `topology.molecules` ranges, filtered by
+//! the role of the instance that owns them.
 
-use crate::topology::Topology;
+use crate::topology::{Role, Topology};
 use std::collections::HashSet;
 
 /// Atom selection error with syntax hints.
@@ -60,6 +63,8 @@ pub enum SelectionError {
     InvalidAtomName(String),
     /// The spec parsed successfully but matched zero atoms.
     EmptySelection,
+    /// `s:` was used on a topology without solvent molecules.
+    NoSolvent,
 }
 
 const SYNTAX_HINT: &str = "\
@@ -68,7 +73,7 @@ const SYNTAX_HINT: &str = "\
     1:a              → all atoms in molecule 1
     1:1-10           → atoms 1–10 in molecule 1
     1:CA,N,C         → atoms named CA, N or C in molecule 1
-    a:CA             → CA atoms in every molecule
+    a:CA             → CA atoms in every solute molecule
     m:a              → all solute atoms  (role == Solute)
     m:CA             → CA atoms in solute
     s:a              → all solvent atoms (role == Solvent)
@@ -116,6 +121,15 @@ impl std::fmt::Display for SelectionError {
             },
             SelectionError::EmptySelection => {
                 write!(f, "selection matched no atoms\n{SYNTAX_HINT}")
+            },
+            SelectionError::NoSolvent => {
+                write!(
+                    f,
+                    "'s:' selects solvent, and this topology has no solvent molecules \
+                     (its SOLVENTATOM block is empty, or it is not solvated)\n  \
+                     Hint: molecules of the solute are selected by number ('1-216:a') or \
+                     with 'a:'"
+                )
             },
         }
     }
@@ -311,65 +325,42 @@ fn resolve_mol_prefix(
     let n = topology.num_atoms();
     match prefix {
         "a" => {
-            // All molecules — or all atoms if molecules is empty
+            // Every solute molecule, never solvent (gromos++ `a` = molecules 1..numMolecules).
+            // No `molecules` ranges means no solvent either: `solvate()` adds them.
             if topology.molecules.is_empty() {
-                Ok(vec![std::ops::Range { start: 0, end: n }])
-            } else {
+                Ok(vec![0..n])
+            } else if topology.instances.is_empty() {
                 Ok(topology.molecules.clone())
+            } else {
+                Ok(molecules_with_role(topology, Role::Solute))
             }
         },
         "s" => {
             // s:N — Nth solvent molecule (role == Solvent), 1-based.
             // s:a — all solvent molecules.
             // Routes through the instancing role attribute; falls back to molecules[1..].
-            use crate::topology::Role;
-            let solvent_mol_indices: Vec<usize> = if !topology.instances.is_empty() {
-                topology
-                    .instances
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, inst)| inst.role == Role::Solvent)
-                    .map(|(i, _)| i)
-                    .collect()
+            let solvent = if topology.instances.is_empty() {
+                topology.molecules.get(1..).unwrap_or_default().to_vec()
             } else {
-                (1..topology.molecules.len()).collect()
+                molecules_with_role(topology, Role::Solvent)
             };
-            if solvent_mol_indices.is_empty() {
-                return Err(SelectionError::EmptySelection);
+            if solvent.is_empty() {
+                return Err(SelectionError::NoSolvent);
             }
-            Ok(solvent_mol_indices
-                .iter()
-                .filter_map(|&mi| topology.molecules.get(mi).cloned())
-                .collect())
+            Ok(solvent)
         },
         "m" => {
-            // m:N — Nth solute molecule (role == Solute), 1-based. Role-based facade:
-            // `m:1` = first solute molecule, mirrors `s:1` = first solvent molecule.
-            // Falls back to molecules[0..] when instances are not populated.
-            use crate::topology::Role;
-            let solute_mol_indices: Vec<usize> = if !topology.instances.is_empty() {
-                topology
-                    .instances
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, inst)| inst.role == Role::Solute)
-                    .map(|(i, _)| i)
-                    .collect()
+            // m:a — every solute molecule (role == Solute); `m:CA` the CA atoms in them.
+            // Falls back to molecules[0] when instances are not populated.
+            let solute = if topology.instances.is_empty() {
+                topology.molecules.first().cloned().into_iter().collect()
             } else {
-                // Legacy: assume molecule 0 is the solute
-                if !topology.molecules.is_empty() {
-                    vec![0]
-                } else {
-                    vec![]
-                }
+                molecules_with_role(topology, Role::Solute)
             };
-            if solute_mol_indices.is_empty() {
+            if solute.is_empty() {
                 return Err(SelectionError::EmptySelection);
             }
-            Ok(solute_mol_indices
-                .iter()
-                .filter_map(|&mi| topology.molecules.get(mi).cloned())
-                .collect())
+            Ok(solute)
         },
         // ── Common mistake detection ──────────────────────────────────────────
         "r" => Err(SelectionError::ParseError(
@@ -419,6 +410,18 @@ fn resolve_mol_prefix(
             Ok(ranges)
         },
     }
+}
+
+/// The `molecules` ranges whose atoms belong to an instance of `role`. Matched by atom, not by
+/// index: the solute is one instance spanning all its molecules, so `instances[k]` is not
+/// `molecules[k]` once the solute has more than one.
+fn molecules_with_role(topology: &Topology, role: Role) -> Vec<std::ops::Range<usize>> {
+    topology
+        .molecules
+        .iter()
+        .filter(|r| topology.role_of_atom(r.start) == Some(role))
+        .cloned()
+        .collect()
 }
 
 /// Resolve an atom selector string against a set of molecule ranges.
@@ -883,5 +886,140 @@ mod tests {
         let t = aladip_topo();
         let s = AtomSelection::from_string("1:a minus(a:H)", &t).unwrap();
         assert_eq!(s.indices(), &[0, 1, 2, 3, 5, 6, 7, 8, 9, 11]);
+    }
+
+    // ── multi-molecule solute ─────────────────────────────────────────────────
+    //
+    // water_216_box.topo (gromos-md reference): 216 three-atom SOL molecules (OW, HW1, HW2)
+    // all in the solute — SOLUTEMOLECULES lists 216 ranges, SOLVENTATOM is empty. Built here
+    // the way `gromos_io::topology::build_topology` builds it: one solute moltype, one
+    // `molecules` range per SOLUTEMOLECULES entry.
+
+    fn water_216_solute_topo() -> Topology {
+        let mut topo = Topology::new();
+        for mol in 0..216 {
+            for (name, charge) in [("OW", -0.82), ("HW1", 0.41), ("HW2", 0.41)] {
+                topo.moltypes[0].atoms.push(Atom {
+                    name: name.into(),
+                    residue_nr: mol + 1,
+                    residue_name: "SOL".into(),
+                    iac: 0,
+                    mass: 1.0,
+                    charge,
+                    is_perturbed: false,
+                    is_polarisable: false,
+                    is_coarse_grained: false,
+                });
+                topo.iac.push(0);
+                topo.mass.push(1.0);
+                topo.charge.push(charge);
+            }
+            topo.molecules.push(3 * mol..3 * mol + 3);
+        }
+        topo.init_solute_moltype();
+        topo
+    }
+
+    #[test] // a:OW = the OW of every molecule, not only of the first
+    fn test_multi_molecule_solute_name_in_all_molecules() {
+        let t = water_216_solute_topo();
+        let s = AtomSelection::from_string("a:OW", &t).unwrap();
+        assert_eq!(s.len(), 216);
+        assert!(s.iter().all(|i| i % 3 == 0));
+    }
+
+    #[test] // s: on a topology without solvent is an error that says so
+    fn test_multi_molecule_solute_has_no_solvent() {
+        let t = water_216_solute_topo();
+        let err = AtomSelection::from_string("s:OW", &t).unwrap_err();
+        assert!(matches!(err, SelectionError::NoSolvent), "{err}");
+        assert!(err.to_string().contains("no solvent"), "{err}");
+    }
+
+    #[test] // 1-216:1 = atom 1 of each molecule
+    fn test_multi_molecule_solute_local_atom_in_range() {
+        let t = water_216_solute_topo();
+        let s = AtomSelection::from_string("1-216:1", &t).unwrap();
+        assert_eq!(s.len(), 216);
+        assert_eq!(s.indices()[..3], [0, 3, 6]);
+    }
+
+    #[test] // 2:1 = atom 1 of molecule 2, and it is named
+    fn test_multi_molecule_solute_single_atom() {
+        let t = water_216_solute_topo();
+        let s = AtomSelection::from_string("2:1", &t).unwrap();
+        assert_eq!(s.indices(), &[3]);
+        assert_eq!(t.atom_name(3), Some("OW"));
+        assert_eq!(t.residue_nr(3), Some(2));
+    }
+
+    /// `t` with `nsm` SPC waters (OW, HW1, HW2) appended as solvent.
+    fn solvated(mut t: Topology, nsm: usize) -> Topology {
+        use crate::topology::SolventAtomTemplate;
+        t.solvent_atom_template = ["OW", "HW1", "HW2"]
+            .iter()
+            .map(|n| SolventAtomTemplate {
+                iac: 0,
+                name: (*n).into(),
+                mass: 1.0,
+                charge: 0.0,
+            })
+            .collect();
+        t.solvate(nsm);
+        t
+    }
+
+    #[test] // m:a = every solute molecule; s:a = the solvent once the topology is solvated
+    fn test_multi_molecule_solute_with_solvent() {
+        let t = solvated(water_216_solute_topo(), 2);
+        assert_eq!(AtomSelection::from_string("m:a", &t).unwrap().len(), 648);
+        let solvent = AtomSelection::from_string("s:a", &t).unwrap();
+        assert_eq!(solvent.indices(), &[648, 649, 650, 651, 652, 653]);
+        assert_eq!(AtomSelection::from_string("s:OW", &t).unwrap().len(), 2);
+    }
+
+    // ── a: is solute only (gromos++ `a` = molecules 1..numMolecules) ─────────
+
+    #[test] // aladip + 20 waters: OW exists only in the solvent, so a:OW is empty
+    fn test_a_name_only_in_solvent_selects_nothing() {
+        let t = solvated(aladip_topo(), 20);
+        assert_eq!(t.num_atoms(), 72);
+        assert!(matches!(
+            AtomSelection::from_string("a:OW", &t),
+            Err(SelectionError::EmptySelection)
+        ));
+        let ow = AtomSelection::from_string("s:OW", &t).unwrap();
+        assert_eq!(ow.len(), 20);
+        assert!(ow.iter().all(|i| i >= 12 && (i - 12) % 3 == 0));
+    }
+
+    #[test] // OW in solute and solvent: a:OW takes the 216 solute oxygens only
+    fn test_a_name_in_both_roles_selects_solute_only() {
+        let t = solvated(water_216_solute_topo(), 2);
+        let s = AtomSelection::from_string("a:OW", &t).unwrap();
+        assert_eq!(s.len(), 216);
+        assert!(s.iter().all(|i| i < 648 && i % 3 == 0));
+    }
+
+    #[test] // a:a = every atom of every solute molecule, no solvent
+    fn test_a_all_excludes_solvent() {
+        let t = solvated(aladip_topo(), 20);
+        let s = AtomSelection::from_string("a:a", &t).unwrap();
+        assert_eq!(s.indices(), (0..12).collect::<Vec<_>>());
+        let t = solvated(water_216_solute_topo(), 2);
+        assert_eq!(AtomSelection::from_string("a:a", &t).unwrap().len(), 648);
+    }
+
+    #[test] // local numbers and res() under a: stay inside the solute too
+    fn test_a_local_range_and_res_exclude_solvent() {
+        let t = solvated(aladip_topo(), 20);
+        let s = AtomSelection::from_string("a:1-3", &t).unwrap();
+        assert_eq!(s.indices(), &[0, 1, 2]);
+        let s = AtomSelection::from_string("a:res(1:a)", &t).unwrap();
+        assert_eq!(s.indices(), &[0, 1, 2]);
+        assert_eq!(
+            AtomSelection::from_string("a:N", &t).unwrap().indices(),
+            &[3, 9]
+        );
     }
 }

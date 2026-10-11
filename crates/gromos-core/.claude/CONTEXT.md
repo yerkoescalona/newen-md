@@ -20,7 +20,8 @@ None — foundation crate.
   `instances[k].role` = Solute/Solvent; flat arrays derived from instances; `Solvent` struct removed;
   `Solute` is a ZST shell (atoms moved to moltypes). Direct field access: `topo.moltypes[0].bonds`.
 - AtomSelection: full gromos-rs grammar ✓ — `a:name`, `1:res(N:CA)`, `not()`, `minus()`, `;`-union,
-  `m:` (solute by role), `s:` (solvent by role), syntax-error hints
+  `m:` (solute by role), `s:` (solvent by role), syntax-error hints. `a:` is every *solute*
+  molecule, never solvent (gromos++ `AtomSpecifier`), so on a solvated system `a:OW` is empty
 - PBC gathering: `gather.rs` — `gather_chain`, `gather_bond`, `gather_molecules` ✓
 - Statistics: `stat.rs` — `Stat` with `ave()`, `rmsd()`, `ee()` (block averaging) ✓
 - Pairlist: `PairlistAlgorithm` enum wired everywhere (9a-0 ✓); `CellListPairlistAlgorithm` bit-identical to Standard (9a-1 ✓, margin=0); `water_1000_spc_gridcell` reference validates against gromosXX Grid_Cell_Pairlist

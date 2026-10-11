@@ -4,7 +4,10 @@ use numpy::PyArray2;
 use pyo3::prelude::*;
 
 use gromos_core::math::Vec3;
-use gromos_io::coordinate::{format_g96, parse_g96_labeled, read_coordinates, read_g96_labeled};
+use gromos_io::coordinate::{
+    format_g96, format_g96_velocity_block, parse_coordinates, parse_g96_labeled, read_coordinates,
+    read_g96_labeled,
+};
 use gromos_io::G96Atom;
 
 /// System configuration: positions, velocities, and simulation box.
@@ -66,15 +69,21 @@ impl PyConfiguration {
     /// Read a configuration from the text of a GROMOS coordinate file.
     ///
     /// What `str(configuration)` writes, this reads — so coordinates a program printed need no
-    /// file. Velocities are not part of the G96 POSITION block and come back empty.
+    /// file. Keeps what `Configuration(path)` keeps: positions, velocities, box and labels.
     #[staticmethod]
     pub fn from_string(text: &str) -> PyResult<Self> {
-        let data = parse_g96_labeled(text.as_bytes()).map_err(|e| {
+        let coord_data = parse_coordinates(text.as_bytes()).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Failed to parse coordinates: {e}"
             ))
         })?;
-        Ok(Self::from_atoms(data.atoms, data.box_dims))
+        let labels = parse_g96_labeled(text.as_bytes()).ok().map(|d| d.atoms);
+        Ok(Self {
+            pos_data: coord_data.positions,
+            vel_data: coord_data.velocities,
+            box_dims: coord_data.box_dims,
+            labels,
+        })
     }
 
     /// The configuration as a GROMOS96 coordinate file.
@@ -82,15 +91,17 @@ impl PyConfiguration {
         self.to_g96(None)
     }
 
-    /// The configuration as GROMOS96 text, with an optional TITLE.
+    /// The configuration as GROMOS96 text, with an optional TITLE; a VELOCITY block follows when
+    /// the configuration has velocities.
     #[pyo3(signature = (title = None))]
     pub fn to_g96(&self, title: Option<&str>) -> String {
         let box_dims = (self.box_dims != Vec3::ZERO).then_some(self.box_dims);
-        format_g96(
-            title.unwrap_or("gromos-rs"),
-            &self.atoms_or_placeholders(),
-            box_dims,
-        )
+        let atoms = self.atoms_or_placeholders();
+        let mut text = format_g96(title.unwrap_or("gromos-rs"), &atoms, box_dims);
+        if !self.vel_data.is_empty() && self.vel_data.len() == atoms.len() {
+            text.push_str(&format_g96_velocity_block(&atoms, &self.vel_data));
+        }
+        text
     }
 
     /// Number of atoms with coordinates.

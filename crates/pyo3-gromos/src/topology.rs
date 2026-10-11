@@ -116,6 +116,40 @@ impl PyTopology {
         PyArray1::from_vec_bound(py, self.inner.charge.clone())
     }
 
+    /// Atom name of every atom in engine order, solvent included once the topology is solvated
+    /// (each solvent molecule repeats the SOLVENTATOM names).
+    #[getter]
+    fn atom_names(&self) -> Vec<String> {
+        (0..self.inner.num_atoms())
+            .map(|i| self.inner.atom_name(i).unwrap_or("").to_string())
+            .collect()
+    }
+
+    /// Integer atom-type code (IAC) of every atom, 0-based — the engine's convention, which
+    /// indexes `lj_parameters` directly. The topology file's IAC column is 1-based: file value
+    /// $k$ is stored as $k - 1$.
+    #[getter]
+    fn iac<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<i64>> {
+        PyArray1::from_iter_bound(py, self.inner.iac.iter().map(|&t| t as i64))
+    }
+
+    /// Lennard-Jones parameters `(c6, c12, cs6, cs12)` of the atom-type pair `(iac_i, iac_j)`,
+    /// both 0-based as in `iac` — one row of the LJPARAMETERS block.
+    ///
+    /// The pair energy is $V(r) = C_{12}/r^{12} - C_6/r^6$ (kJ mol⁻¹, $r$ in nm); `cs6`/`cs12`
+    /// replace `c6`/`c12` for third-neighbour (1-4) pairs.
+    fn lj_parameters(&self, iac_i: usize, iac_j: usize) -> PyResult<(f64, f64, f64, f64)> {
+        let n = self.inner.num_atom_types();
+        if iac_i >= n || iac_j >= n {
+            return Err(PyErr::new::<pyo3::exceptions::PyIndexError, _>(format!(
+                "atom-type code out of range: ({iac_i}, {iac_j}), the topology has {n} types \
+                 (0-based)"
+            )));
+        }
+        let p = self.inner.lj_parameter(iac_i, iac_j);
+        Ok((p.c6, p.c12, p.cs6, p.cs12))
+    }
+
     /// Total integer charge of the system (e).
     #[getter]
     pub fn charge(&self) -> i32 {

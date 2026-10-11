@@ -20,7 +20,10 @@
 //!   `init_solute_moltype()` and `solvate()`.
 //!
 //! **Phase 1 invariants:**
-//! - `instances[k]` corresponds 1-to-1 with `molecules[k]`.
+//! - `instances` are in system order (non-decreasing `atom_offset`). They match `molecules`
+//!   1-to-1 only when the solute is one molecule: the solute is a single instance spanning
+//!   every SOLUTEMOLECULES range, so look an atom's instance up by offset
+//!   (`instance_of_atom`), never by `molecule_nr`.
 //! - `role_of_atom(i)` → `Some(Role::Solvent)` iff atom `i` belongs to a
 //!   solvent instance.  Returns `None` when the instance model is not yet
 //!   initialised (pre-`solvate()` test topologies).
@@ -705,11 +708,12 @@ pub struct Topology {
 
     // ── instancing model ─────────────────────────────────────────────────────
     // Populated by init_solute_moltype() + solvate().
-    // instances[k] corresponds 1-to-1 with molecules[k].
+    // One solute instance (however many molecules the solute has), then one per solvent
+    // molecule — so instances[k] is molecules[k] only for a one-molecule solute.
     // Empty until those methods are called (e.g. in raw test topologies).
     /// Registry: one entry per unique molecule type (parameters stored once).
     pub moltypes: Vec<MoleculeType>,
-    /// All instances in system order; instances[k].atom_offset == molecules[k].start.
+    /// All instances in system order (non-decreasing `atom_offset`).
     pub instances: Vec<MoleculeInstance>,
 
     // Force field parameters
@@ -918,25 +922,34 @@ impl Topology {
 
     // ── instancing accessors ─────────────────────────────────────────────────
 
+    /// Index into `instances` of the instance that owns global atom `i`.
+    ///
+    /// Found by atom offset, not by `molecule_nr`: the solute is one instance however many
+    /// molecules it has, so instance and molecule numbers agree only for a one-molecule
+    /// solute. Instances are in system order; an empty instance (the solute of a pure-solvent
+    /// system shares offset 0 with the first solvent molecule) owns no atom.
+    pub fn instance_of_atom(&self, i: usize) -> Option<usize> {
+        let k = self
+            .instances
+            .partition_point(|inst| inst.atom_offset <= i)
+            .checked_sub(1)?;
+        let inst = &self.instances[k];
+        let n = self.moltypes.get(inst.moltype_id)?.atoms.len();
+        (i - inst.atom_offset < n).then_some(k)
+    }
+
     /// Look up the MolTypeAtom for global atom index `i` via instances.
     pub fn moltype_atom(&self, i: usize) -> Option<&MolTypeAtom> {
-        let mol = self.molecule_nr(i)?;
-        let inst = self.instances.get(mol)?;
-        let mt = self.moltypes.get(inst.moltype_id)?;
-        // Guard: instances[mol].atom_offset must be ≤ i.
-        // Can mismatch when molecule_nr returns the pre-initialized empty Solute instance
-        // (instances[0], offset=0) for a pure-solvent system where molecules[0] is a
-        // solvent range but instances[0] still points to the empty solute moltype.
-        let local = i.checked_sub(inst.atom_offset)?;
-        mt.atoms.get(local)
+        let inst = &self.instances[self.instance_of_atom(i)?];
+        self.moltypes[inst.moltype_id]
+            .atoms
+            .get(i - inst.atom_offset)
     }
 
     /// Role of the molecule instance that owns atom `i`.
     /// Returns `None` when the instance model hasn't been initialised yet.
     pub fn role_of_atom(&self, i: usize) -> Option<Role> {
-        self.molecule_nr(i)
-            .and_then(|m| self.instances.get(m))
-            .map(|inst| inst.role)
+        self.instance_of_atom(i).map(|k| self.instances[k].role)
     }
 
     /// `true` iff atom `i` belongs to a `Role::Solvent` instance.

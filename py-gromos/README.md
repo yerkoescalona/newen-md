@@ -57,6 +57,10 @@ uv run maturin develop --release # builds crates/pyo3-gromos into the venv
 uv run pytest tests/ -q          # 306 passed / 8 skipped / 3 xfailed at 0.0.32
 ```
 
+`maturin` is in the `dev` group, so `uv run maturin` uses the venv's own copy and a later
+`uv sync --all-groups` (what `make sync` runs) keeps it; `uv sync --extra education` adds the
+viewer and plotting dependencies of `gromos.education`.
+
 Optional: `uv sync --group ml` + `uv run maturin develop --release --features ml` for
 `Term("schnet", ...)` (libtorch via the venv's torch — `INSTALL.md` §5).
 

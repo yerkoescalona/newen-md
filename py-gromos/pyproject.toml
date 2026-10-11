@@ -27,6 +27,10 @@ dependencies = [
     "numpy>=1.20",
 ]
 
+[project.optional-dependencies]
+# `gromos.education`: the live viewer (anywidget) and the experiment plots (matplotlib).
+education = ["anywidget>=0.9", "matplotlib>=3.8"]
+
 [dependency-groups]
 dev = [
     "pytest>=7.0",
@@ -35,6 +39,9 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.0",
     "pre-commit>=3.0",
+    # `uv run maturin develop` builds the extension into this venv; a sync without it in the
+    # lock uninstalls it.
+    "maturin>=1.0,<2.0",
 ]
 notebooks = [
     "jupyter>=1.0",
@@ -43,6 +50,7 @@ notebooks = [
     "plotly>=5.24",
     "polars>=1.0",
     "nbstripout>=0.7",
+    "anywidget>=0.9",
 ]
 # Real ML potential (--features ml on the Rust side): SchNetPack via TorchScript/`tch`.
 # Version-pinned exactly — tch 0.24.0 links only against libtorch 2.11.0 (see
