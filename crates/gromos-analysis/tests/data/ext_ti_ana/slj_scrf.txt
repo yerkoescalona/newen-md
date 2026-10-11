@@ -1,0 +1,12 @@
+TITLE
+two softness schedules for each of LJ and CRF
+END
+SLJ
+# label  a    b    c    d    e
+  1      0.0  0.0  0.0  1.0  0.0
+  2      0.0  0.0  0.5  0.5  0.0
+END
+SCRF
+  1      0.0  0.0  0.0  1.0  0.0
+  2      0.0  0.0  1.0  0.0  0.0
+END

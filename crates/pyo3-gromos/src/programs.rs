@@ -324,7 +324,253 @@ fn _dgslv_pbsolv(py: Python<'_>, argv: Vec<String>) -> PyResult<Bound<'_, PyDict
     Ok(d)
 }
 
+// ── Free-energy estimators (item 1.8) ───────────────────────────────────────────────────────
+
+/// `ext_ti_ana` in process (`gromos_analysis::programs::ext_ti_ana`): the predictions of every
+/// softness combination as arrays, and the files when `write` is set. `argv` is in `@key` form
+/// without the program name; without `@library` the built-in library is used. `seed` fixes the
+/// bootstrap stream (gromos++ takes the wall clock).
+#[pyfunction]
+#[pyo3(signature = (argv, *, seed = None, write = true))]
+fn _ext_ti_ana(
+    py: Python<'_>,
+    argv: Vec<String>,
+    seed: Option<u32>,
+    write: bool,
+) -> PyResult<Bound<'_, PyDict>> {
+    use gromos_analysis::programs::ext_ti_ana;
+    use numpy::{PyArray1, PyArray2};
+
+    let mut full = vec![ext_ti_ana::PROGRAM.name.to_string()];
+    full.extend(argv);
+    let full = gromos_io::normalize(full).map_err(|e| program_error(py, e, String::new()))?;
+    let result = py.allow_threads(|| -> Result<_, String> {
+        let args =
+            gromos_io::args::Arguments::from_vec(full, ext_ti_ana::KNOWN, ext_ti_ana::USAGE)?;
+        let mut opts = ext_ti_ana::Options::from_args(&args, false)?;
+        opts.seed = seed;
+        let analysis = ext_ti_ana::analyse(&opts)?;
+        let files = if write {
+            ext_ti_ana::write_files(&opts, &analysis)?
+        } else {
+            Vec::new()
+        };
+        Ok((analysis, files))
+    });
+    let (a, files) = result.map_err(|e| program_error(py, e, String::new()))?;
+
+    let rows = |cols: &[Vec<f64>]| -> PyResult<Bound<'_, PyArray2<f64>>> {
+        PyArray2::from_vec2_bound(py, cols)
+            .map_err(|e| PyRuntimeError::new_err(format!("ragged table: {e}")))
+    };
+    let predictions = PyList::empty_bound(py);
+    for p in &a.predictions {
+        let d = PyDict::new_bound(py);
+        d.set_item("labels", p.labels)?;
+        d.set_item("slj", p.slj.to_vec())?;
+        d.set_item("scrf", p.scrf.to_vec())?;
+        d.set_item("plam", PyArray1::from_slice_bound(py, &p.plam))?;
+        d.set_item("dhdl", PyArray1::from_slice_bound(py, &p.dhdl))?;
+        match &p.error {
+            Some(e) => d.set_item("error", PyArray1::from_slice_bound(py, e))?,
+            None => d.set_item("error", py.None())?,
+        }
+        d.set_item("contributing_frames", p.contributing_frames.clone())?;
+        match &p.bar {
+            Some(b) => {
+                let bd = PyDict::new_bound(py);
+                bd.set_item("plam", PyArray1::from_slice_bound(py, &b.plam))?;
+                bd.set_item("e_s", PyArray1::from_slice_bound(py, &b.e_s))?;
+                bd.set_item("e_p", rows(&b.e_p)?)?;
+                d.set_item("bar", bd)?;
+            },
+            None => d.set_item("bar", py.None())?,
+        }
+        match &p.dhdl_data {
+            Some(h) => {
+                let hd = PyDict::new_bound(py);
+                hd.set_item("plam", PyArray1::from_slice_bound(py, &h.plam))?;
+                hd.set_item("de", rows(&h.de)?)?;
+                d.set_item("dhdl_data", hd)?;
+            },
+            None => d.set_item("dhdl_data", py.None())?,
+        }
+        predictions.append(d)?;
+    }
+    let out = PyDict::new_bound(py);
+    out.set_item("n_frames", a.n_frames)?;
+    out.set_item("predictions", predictions)?;
+    out.set_item("files", files)?;
+    Ok(out)
+}
+
+/// `bar` in process (`gromos_analysis::programs::bar::bar`) on `ext_ti_ana @bar_data` files:
+/// per interval and in total, kJ/mol, with the table the program prints.
+#[pyfunction]
+#[pyo3(signature = (files, temperature, *, max_iterations = 500, convergence = 1e-5, bootstrap = 0, seed = None, printdist = None))]
+#[allow(clippy::too_many_arguments)]
+fn _bar(
+    py: Python<'_>,
+    files: Vec<String>,
+    temperature: f64,
+    max_iterations: usize,
+    convergence: f64,
+    bootstrap: usize,
+    seed: Option<u32>,
+    printdist: Option<String>,
+) -> PyResult<Bound<'_, PyDict>> {
+    use gromos_analysis::programs::bar;
+
+    let result = py.allow_threads(|| -> Result<_, (String, String)> {
+        let data = files
+            .iter()
+            .map(|p| bar::read_bar_file(p))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| (e, String::new()))?;
+        let opts = bar::BarOptions {
+            temp: temperature,
+            max_iterations,
+            convergence,
+            bootstrap,
+            seed,
+            printdist: printdist.map(std::path::PathBuf::from),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        let r = bar::bar(&data, &opts, &mut buf);
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        r.map(|r| (r, text.clone())).map_err(|e| (e, text))
+    });
+    let (r, stdout) = result.map_err(|(e, text)| program_error(py, e, text))?;
+    let d = PyDict::new_bound(py);
+    let col = |f: fn(&bar::Interval) -> f64| r.intervals.iter().map(f).collect::<Vec<f64>>();
+    d.set_item("lam_i", col(|i| i.lam_i))?;
+    d.set_item("lam_j", col(|i| i.lam_j))?;
+    d.set_item("dg", col(|i| i.dg))?;
+    d.set_item("error", col(|i| i.error))?;
+    d.set_item("error_corrected", col(|i| i.error_corrected))?;
+    d.set_item(
+        "bootstrap",
+        r.intervals.iter().map(|i| i.bootstrap).collect::<Vec<_>>(),
+    )?;
+    d.set_item("overlap", col(|i| i.overlap))?;
+    d.set_item(
+        "iterations",
+        r.intervals.iter().map(|i| i.iterations).collect::<Vec<_>>(),
+    )?;
+    d.set_item("dg_total", r.dg_total)?;
+    d.set_item("error_total", r.error_total)?;
+    d.set_item("error_total_corrected", r.error_total_corrected)?;
+    d.set_item("bootstrap_total", r.bootstrap_total)?;
+    d.set_item("stdout", stdout)?;
+    Ok(d)
+}
+
+/// `ext_ti_merge` in process (`gromos_analysis::programs::ext_ti_merge::evaluate`): the merged
+/// curve, its integral and the text the program prints. `argv` in `@key` form.
+#[pyfunction]
+#[pyo3(signature = (argv))]
+fn _ext_ti_merge(py: Python<'_>, argv: Vec<String>) -> PyResult<Bound<'_, PyDict>> {
+    use gromos_analysis::programs::ext_ti_merge;
+    use numpy::PyArray1;
+
+    let mut full = vec![ext_ti_merge::PROGRAM.name.to_string()];
+    full.extend(argv);
+    let full = gromos_io::normalize(full).map_err(|e| program_error(py, e, String::new()))?;
+    let (result, buf) = py.allow_threads(|| {
+        let mut buf: Vec<u8> = Vec::new();
+        let result = ext_ti_merge::evaluate(&full, &mut buf);
+        (result, buf)
+    });
+    let stdout = String::from_utf8_lossy(&buf).into_owned();
+    let m = result.map_err(|e| program_error(py, e, stdout.clone()))?;
+    let d = PyDict::new_bound(py);
+    d.set_item("lambda", PyArray1::from_slice_bound(py, &m.lambda))?;
+    d.set_item("dhdl", PyArray1::from_slice_bound(py, &m.dhdl))?;
+    match &m.error {
+        Some(e) => d.set_item("error", PyArray1::from_slice_bound(py, e))?,
+        None => d.set_item("error", py.None())?,
+    }
+    d.set_item("integral", m.integral)?;
+    d.set_item("integral_error", m.integral_error)?;
+    d.set_item("integral_error_corrected", m.integral_error_corrected)?;
+    d.set_item("stdout", stdout)?;
+    Ok(d)
+}
+
+/// MBAR (`gromos_analysis::programs::mbar::mbar`) on potentials `u_kn` in kJ/mol (K × N, the
+/// samples of state 0 first) at `temperature`: free energies and their errors in kJ/mol.
+#[pyfunction]
+#[pyo3(signature = (u_kn, n_k, temperature, *, max_iterations = 10000, tolerance = 1e-10))]
+fn _mbar<'py>(
+    py: Python<'py>,
+    u_kn: numpy::PyReadonlyArray2<'py, f64>,
+    n_k: Vec<usize>,
+    temperature: f64,
+    max_iterations: usize,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    use gromos_analysis::programs::mbar;
+    use numpy::{PyArray1, PyArray2};
+
+    let kbt = gromos_analysis::GROMOSPP_KB * temperature;
+    let view = u_kn.as_array();
+    let rows: Vec<Vec<f64>> = view
+        .rows()
+        .into_iter()
+        .map(|r| r.iter().map(|u| u / kbt).collect())
+        .collect();
+    let r = py
+        .allow_threads(|| mbar::mbar(&rows, &n_k, max_iterations, tolerance))
+        .map_err(|e| program_error(py, e, String::new()))?;
+    let scale = |m: &[Vec<f64>]| -> Vec<Vec<f64>> {
+        m.iter()
+            .map(|r| r.iter().map(|x| x * kbt).collect())
+            .collect()
+    };
+    let d = PyDict::new_bound(py);
+    let f: Vec<f64> = r.f.iter().map(|x| x * kbt).collect();
+    d.set_item("f", PyArray1::from_vec_bound(py, f))?;
+    let to2 = |m: Vec<Vec<f64>>| {
+        PyArray2::from_vec2_bound(py, &m).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    };
+    d.set_item("dg", to2(scale(&r.delta_f))?)?;
+    d.set_item("ddg", to2(scale(&r.d_delta_f))?)?;
+    d.set_item("kT", kbt)?;
+    d.set_item("self_consistent_iterations", r.self_consistent_iterations)?;
+    d.set_item("newton_iterations", r.newton_iterations)?;
+    Ok(d)
+}
+
+/// The plain multi-window TI of `gromos_analysis::ti::trapezoid_from_trg`: ⟨∂H/∂λ⟩ per `.trg`
+/// and the trapezoid ΔG (kJ/mol).
+#[pyfunction]
+#[pyo3(signature = (files, lambdas = None, skip = 0))]
+fn _ti_trapezoid(
+    py: Python<'_>,
+    files: Vec<String>,
+    lambdas: Option<Vec<f64>>,
+    skip: usize,
+) -> PyResult<Bound<'_, PyDict>> {
+    let r = py
+        .allow_threads(|| gromos_analysis::ti::trapezoid_from_trg(&files, lambdas.as_deref(), skip))
+        .map_err(|e| program_error(py, e, String::new()))?;
+    let d = PyDict::new_bound(py);
+    let w = &r.windows;
+    d.set_item("lambda", w.iter().map(|x| x.lambda).collect::<Vec<_>>())?;
+    d.set_item("mean", w.iter().map(|x| x.mean).collect::<Vec<_>>())?;
+    d.set_item("ee", w.iter().map(|x| x.ee).collect::<Vec<_>>())?;
+    d.set_item("n", w.iter().map(|x| x.n).collect::<Vec<_>>())?;
+    d.set_item("dg", r.dg)?;
+    d.set_item("dg_error", r.dg_error)?;
+    Ok(d)
+}
+
 pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(_ext_ti_ana, m)?)?;
+    m.add_function(wrap_pyfunction!(_bar, m)?)?;
+    m.add_function(wrap_pyfunction!(_ext_ti_merge, m)?)?;
+    m.add_function(wrap_pyfunction!(_mbar, m)?)?;
+    m.add_function(wrap_pyfunction!(_ti_trapezoid, m)?)?;
     m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;

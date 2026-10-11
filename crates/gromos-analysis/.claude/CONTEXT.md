@@ -18,9 +18,20 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   @ref/@atomsfit rotational fit, @spec ALL/EVERY/SPEC, @time range, cnf/pdb/trc output, @single;
   all I/O through gromos-io; 8 integration tests
 - `ener` ✓ — energy recalculation from trajectory via `gromos-forces::energy::single_point_energy`
-- `ext_ti_ana` ✓ — trapezoidal ΔG ± ee() from `.trg` files
-- `bar` ✓ — BAR iteration (numerically stable log-sum-exp), bootstrap error
-- `ext_ti_merge` ✓ — λ interpolation, trapezoidal ΔG
+- `ext_ti_ana`, `bar`, `ext_ti_merge` ✓ verified (1.8) — the gromos++ programs, byte for byte
+  on the oracle cases (`tests/data/README.md`: A1–A5 and the five-window CH4 chain): PRECALCLAM
+  reweighting, BAR with gromos++'s error (its extra 1/(ln⟨f⟩)² kept for parity, the corrected
+  error returned too), the merge with its error integral (point N−2 skipped for parity, the full
+  sum returned too). Deliberate differences in each module's header. Library API:
+  `programs::ext_ti_ana::{Options, analyse, write_files}`, `programs::bar::{read_bar_file, bar,
+  do_bar}`, `programs::ext_ti_merge::{merge, integrate, integrate_error}`; Python
+  `gromos.analysis.ext_ti_ana/bar/ext_ti_merge`.
+- `mbar` (no gromos++ counterpart, 1.8) — MBAR on `ext_ti_ana @bar_data` files, against pymbar
+  (`tests/mbar_reference.rs`); `programs::mbar::mbar`, Python `gromos.analysis.mbar`.
+- `ti::trapezoid_from_trg` — the plain trapezoid TI over `.trg` totals the old gromos-rs
+  `ext_ti_ana` was (`scripts/ti_ch4.py --estimator ti`, `gromos.analysis.ti_trapezoid`).
+- `energy_sequence::EnergySequence` — the `@en_files`/`@fr_files` frame stream `ene_ana` and
+  `ext_ti_ana` share.
 - `fit.rs` ✓ — Kabsch rotational fit (Horn 1987 quaternion); `superimpose()`, `rmsd()`, 7 unit tests
 
 - **Ports of gromos++ programs with reference tests (2026-08-30, `tests/gromospp_references.rs`,

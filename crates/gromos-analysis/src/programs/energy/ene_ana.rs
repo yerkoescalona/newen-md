@@ -13,6 +13,7 @@
 //! which needs more than 200 frames — with fewer, gromos++ prints `-nan` and so do we.
 
 use crate::args::Arguments;
+use crate::energy_sequence::EnergySequence;
 use crate::programs::io_err;
 use gromos_core::stat::Stat;
 use gromos_io::args::{Program, Status};
@@ -59,63 +60,6 @@ fn num(x: f64) -> String {
         return format!("{:>15}", "-nan");
     }
     format!("{:>15}", cpp_g(x, 9))
-}
-
-/// The `@en_files`/`@fr_files` list as one stream of frames.
-struct Sequence {
-    files: Vec<String>,
-    next: usize,
-    reader: Option<TextReader>,
-    kind: &'static str,
-    lib_name: String,
-}
-
-impl Sequence {
-    fn new(files: Vec<String>, kind: &'static str, lib_name: &str) -> Self {
-        Sequence {
-            files,
-            next: 0,
-            reader: None,
-            kind,
-            lib_name: lib_name.to_string(),
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.files.is_empty()
-    }
-
-    /// Read the next frame, opening the next file when the current one runs out.
-    fn read_frame(&mut self, etrj: &mut EnergyTraj) -> Result<bool, String> {
-        loop {
-            if self.reader.is_none() {
-                let Some(path) = self.files.get(self.next) else {
-                    return Ok(false);
-                };
-                self.next += 1;
-                let mut reader = TextReader::open(path)
-                    .map_err(|e| format!("{}: cannot open {path}: {e}", self.kind))?;
-                let preamble = read_preamble(&mut reader).map_err(|e| format!("{path}: {e}"))?;
-                etrj.bind(self.kind, &preamble, &self.lib_name, path)?;
-                for w in etrj.drain_warnings() {
-                    eprintln!("{w}");
-                }
-                self.reader = Some(reader);
-            }
-            let reader = self.reader.as_mut().unwrap();
-            let file = &self.files[self.next - 1];
-            let more = etrj
-                .read_frame(reader, self.kind)
-                .map_err(|e| format!("{file}: {e}"))?;
-            for w in etrj.drain_warnings() {
-                eprintln!("{w}");
-            }
-            if more {
-                return Ok(true);
-            }
-            self.reader = None;
-        }
-    }
 }
 
 /// `@print_library [trajectory]`: the library for the built-in layout, or for the layout a
@@ -235,8 +179,8 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
         }
     }
 
-    let mut en = Sequence::new(en_files, "ENERTRJ", &lib_name);
-    let mut fr = Sequence::new(fr_files, "FRENERTRJ", &lib_name);
+    let mut en = EnergySequence::new(en_files, "ENERTRJ", &lib_name);
+    let mut fr = EnergySequence::new(fr_files, "FRENERTRJ", &lib_name);
     let do_en = !en.is_empty();
     let do_fr = !fr.is_empty();
 

@@ -278,13 +278,15 @@ for lam in (0.0, 0.25, 0.5, 0.75, 1.0):
     sim = Simulation(system, recipe.update(perturbation={"lambda": lam}))
     frames = sim.run(5000, ene_freq=10)                  # (501, 13)
     means[lam] = EnergyTimeseries(frames).dhdl[100:].mean()   # drop the first 1 ps
-# ΔG = ∫ <∂H/∂λ> dλ — numpy.trapz(list(means.values()), list(means)) or the `ext_ti_ana` binary
+# ΔG = ∫ <∂H/∂λ> dλ — numpy.trapezoid(list(means.values()), list(means))
 ```
 
 The `md` binary writes the same quantity, as the first value of each frame, to a `.trg` file
-(`@trg`, every `NTWG` steps) that gromos++ `ene_ana` / `ext_ti_ana` and the project's
-`ext_ti_ana` read; `scripts/ti_ch4.py` is a
-complete two-engine TI study.
+(`@trg`, every `NTWG` steps); `gromos.analysis.ti_trapezoid(trg_files, lambdas)` integrates a set
+of windows. With a `PRECALCLAM` block the `.tre`/`.trg` also carry the energies on a λ grid, which
+`gromos.analysis.ext_ti_ana` (gromos++'s program) reweights and writes for `gromos.analysis.bar`
+and `gromos.analysis.mbar`. `scripts/ti_ch4.py` is a complete two-engine study with all three
+estimators (`--estimator ti|bar|mbar`).
 
 ## Migrating from `InputParameters`
 

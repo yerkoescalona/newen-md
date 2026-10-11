@@ -1185,3 +1185,338 @@ fn dgslv_pbsolv_matches_gromospp() {
         ]),
     );
 }
+
+// ── ext_ti_ana → bar → ext_ti_merge (item 1.8): files and stdout byte for byte ─────────────
+
+fn eti(name: &str) -> String {
+    data("ext_ti_ana").join(name).to_string_lossy().into_owned()
+}
+
+/// Run `bin` in `cwd`; the exit status, stdout and stderr.
+fn run_raw(bin: &str, args: &[String], cwd: &Path) -> (bool, String, String) {
+    let out = Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("run");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Every file of `expected` exists in `ours` with the same bytes, and `ours` has no `.dat` file
+/// gromos++ did not write.
+fn assert_same_files(ours: &Path, expected: &Path) {
+    let names = |d: &Path| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".dat"))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(ours), names(expected), "the files written");
+    for n in names(expected) {
+        assert_eq!(
+            read(&ours.join(&n)),
+            read(&expected.join(&n)),
+            "{n} differs from gromos++'s"
+        );
+    }
+}
+
+fn ext_ti_ana_case(case: &str, args: &[&str]) {
+    let dir = tmp_dir(&format!("ext_ti_ana_{case}"));
+    let (ok, stdout, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_ana"), &strs(args), &dir);
+    assert!(ok, "{case}: {stderr}");
+    assert_eq!(stdout, "", "{case}: ext_ti_ana prints nothing on stdout");
+    assert_same_files(&dir, &data("ext_ti_ana").join(case));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The flags of the single-file cases on the aladip precalc reference (RLAM 0.125, 11 λ).
+fn aladip_flags(tre: &str, trg: &str) -> Vec<String> {
+    let mut v = vec![
+        "@en_files".to_string(),
+        eti(tre),
+        "@fr_files".into(),
+        eti(trg),
+    ];
+    v.extend(strs(&[
+        "@temp",
+        "300",
+        "@nrlambdas",
+        "11",
+        "@minlam",
+        "0",
+        "@maxlam",
+        "1",
+        "@slam",
+        "0.125",
+        "@NLAMs",
+        "1",
+    ]));
+    v.extend(["@library".to_string(), eti("ene_ana.md++.lib")]);
+    v
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a1_core() {
+    // interpolated reference energy, every column incl. ABDIH, the frame counts, all three
+    // writers, and 0.125 printed as 0.12 in the file names (round half to even)
+    let mut a = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    a.extend(strs(&["@countframes", "@bar_data", "@dHdl_data"]));
+    ext_ti_ana_case("A1", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a2_coefficients() {
+    let mut a = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    a.extend(strs(&[
+        "@NLAMp",
+        "2",
+        "@lamlj",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lamslj",
+        "0",
+        "0",
+        "0",
+        "0.5",
+        "0.25",
+        "@lamcrf",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lambond",
+        "-0.4",
+        "0.4",
+        "-0.3",
+        "1.3",
+        "0",
+        "@lamdih",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lam_precision",
+        "3",
+        "@pmax",
+        "9",
+        "@bar_data",
+        "0",
+        "0.2",
+        "0.5",
+        "@verbose",
+    ]));
+    ext_ti_ana_case("A2", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a3_softness_sets() {
+    let mut a = aladip_flags("aladip_distres_precalc.tre", "aladip_distres_precalc.trg");
+    a.extend(strs(&[
+        "@countframes",
+        "@bar_data",
+        "@dHdl_data",
+        "@no_crf",
+    ]));
+    a.extend(["@slj_scrf_file".to_string(), eti("slj_scrf.txt")]);
+    ext_ti_ana_case("A3", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a4_imd() {
+    // temp, slam, NLAMs and the grid from the .imd (gromos++'s stdout there is mk_script's
+    // parser noise, not compared)
+    let a = [
+        "@imd".to_string(),
+        eti("ch4_precalc.in"),
+        "@en_files".into(),
+        eti("ch4_precalc.tre"),
+        "@fr_files".into(),
+        eti("ch4_precalc.trg"),
+        "@library".into(),
+        eti("ene_ana.md++.lib"),
+        "@bar_data".into(),
+    ];
+    ext_ti_ana_case("A4", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_refuses_what_gromospp_refuses_a5() {
+    let dir = tmp_dir("ext_ti_ana_A5");
+    let bin = env!("CARGO_BIN_EXE_ext_ti_ana");
+    let fail = |args: Vec<String>, meaning: &[&str]| {
+        let (ok, stdout, stderr) = run_raw(bin, &args, &dir);
+        assert!(!ok, "expected a refusal: {args:?}");
+        assert_eq!(stdout, "");
+        for m in meaning {
+            assert!(stderr.contains(m), "{m:?} not in:\n{stderr}");
+        }
+    };
+    // the LAMBDAS-block input samples λ in [0.2, 0.7]; RLAM 0.125 is outside for kin
+    fail(
+        vec![
+            "@imd".into(),
+            eti("aladip_lambdas_precalc.in"),
+            "@en_files".into(),
+            eti("aladip_precalc.tre"),
+            "@fr_files".into(),
+            eti("aladip_precalc.trg"),
+            "@library".into(),
+            eti("ene_ana.md++.lib"),
+        ],
+        &[
+            "at lambda=0.125: with lambda coefficients [ 0 0 0 1 0 ]",
+            "range [0.2-0.7], interpolation not possible.",
+        ],
+    );
+    let mut cpus = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    cpus.extend(strs(&["@cpus", "2"]));
+    fail(cpus, &["@cpus"]);
+    let mut both = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    both.extend(strs(&[
+        "@lamslj",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0",
+        "@slj_scrf_file",
+    ]));
+    both.push(eti("slj_scrf.txt"));
+    fail(both, &["specify slj_scrf_file OR lamslj/lamscrf"]);
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+    assert!(left.is_empty(), "a refused run wrote files");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Five gromosXX λ windows of CH4 in water through the whole gromos++ chain: ext_ti_ana on each
+/// window, bar on the five `bar_data` files (given out of order), ext_ti_merge on the five
+/// predictions (out of order; its error column is the frame count, as gromos++ reads it).
+#[test]
+fn ext_ti_ana_bar_ext_ti_merge_chain_matches_gromospp() {
+    let dir = tmp_dir("ti_chain");
+    let lams = ["0.00", "0.25", "0.50", "0.75", "1.00"];
+    for l in lams {
+        let mut a = vec![
+            "@en_files".to_string(),
+            eti(&format!("windows/ch4_l{l}.tre")),
+            "@fr_files".into(),
+            eti(&format!("windows/ch4_l{l}.trg")),
+            "@library".into(),
+            eti("ene_ana.md++.lib"),
+        ];
+        a.extend(strs(&[
+            "@temp",
+            "300",
+            "@nrlambdas",
+            "21",
+            "@minlam",
+            "0",
+            "@maxlam",
+            "1",
+            "@slam",
+            l,
+            "@NLAMs",
+            "1",
+            "@countframes",
+            "@bar_data",
+        ]));
+        a.extend(strs(&lams));
+        a.push("@dHdl_data".into());
+        a.extend(strs(&lams));
+        a.extend(strs(&["@outdir", "chain"]));
+        let (ok, stdout, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_ana"), &a, &dir);
+        assert!(ok, "ext_ti_ana @slam {l}: {stderr}");
+        assert_eq!(stdout, "");
+    }
+    let chain = dir.join("chain");
+    let bar_args = strs(&[
+        "@files",
+        "bar_data_l1.00.dat",
+        "bar_data_l0.00.dat",
+        "bar_data_l0.50.dat",
+        "bar_data_l0.25.dat",
+        "bar_data_l0.75.dat",
+        "@temp",
+        "300",
+        "@convergence",
+        "1E-10",
+        "@printdist",
+    ]);
+    let (ok, bar_out, stderr) = run_raw(env!("CARGO_BIN_EXE_bar"), &bar_args, &chain);
+    assert!(ok, "bar: {stderr}");
+    let merge_args = strs(&[
+        "@files",
+        "predicted_l0.50.dat",
+        "predicted_l0.00.dat",
+        "predicted_l1.00.dat",
+        "predicted_l0.25.dat",
+        "predicted_l0.75.dat",
+    ]);
+    let (ok, merge_out, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_merge"), &merge_args, &chain);
+    assert!(ok, "ext_ti_merge: {stderr}");
+    let expected = data("ext_ti_ana").join("chain");
+    assert_eq!(bar_out, read(&expected.join("bar.stdout")), "bar stdout");
+    assert_eq!(
+        merge_out,
+        read(&expected.join("merge.stdout")),
+        "ext_ti_merge stdout"
+    );
+    assert_same_files(&chain, &expected);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn bar_and_ext_ti_merge_refuse_bad_input() {
+    let dir = tmp_dir("bar_bad");
+    let chain = data("ext_ti_ana").join("chain");
+    let good = s(chain.join("bar_data_l0.00.dat"));
+    let text = read(&chain.join("bar_data_l0.25.dat"));
+    for (tag, bad) in [
+        ("blank", format!("{text}\n")),
+        ("short", text.replacen("     88.96947497", "", 1)),
+        ("nan", text.replacen("88.96947497", "nan", 1)),
+    ] {
+        let f = dir.join(format!("{tag}.dat"));
+        std::fs::write(&f, bad).unwrap();
+        let (ok, _, stderr) = run_raw(
+            env!("CARGO_BIN_EXE_bar"),
+            &[
+                "@files".into(),
+                good.clone(),
+                s(f),
+                "@temp".into(),
+                "300".into(),
+            ],
+            &dir,
+        );
+        assert!(!ok, "{tag}");
+        assert!(
+            stderr.contains("failed to read E_s and or E_p values"),
+            "{tag}: {stderr}"
+        );
+    }
+    let (ok, _, stderr) = run_raw(
+        env!("CARGO_BIN_EXE_bar"),
+        &["@files".into(), good, "@temp".into(), "300".into()],
+        &dir,
+    );
+    assert!(!ok && stderr.contains("At least two data files required!"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn s(p: PathBuf) -> String {
+    p.to_string_lossy().into_owned()
+}

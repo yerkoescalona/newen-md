@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
-from .gromos import _dgslv_pbsolv
+from .gromos import _bar, _dgslv_pbsolv, _ext_ti_ana, _ext_ti_merge, _mbar, _ti_trapezoid
 
 
 def _find_gromos_bin() -> Path:
@@ -767,54 +768,298 @@ def int_ener(
 # ==============================================================================
 
 
+def _argv(keys: Sequence[tuple[str, Any]]) -> list[str]:
+    """gromos++ ``@key value ...`` from keyword values: ``None`` leaves a key out, ``True`` gives
+    a bare flag, a sequence several values."""
+    argv: list[str] = []
+    for key, value in keys:
+        if value is None or value is False:
+            continue
+        argv.append(f"@{key}")
+        if value is True:
+            continue
+        if isinstance(value, str | os.PathLike):
+            argv.append(os.fspath(value))
+        elif isinstance(value, Sequence):
+            argv.extend(os.fspath(v) if isinstance(v, os.PathLike) else str(v) for v in value)
+        else:
+            argv.append(str(value))
+    return argv
+
+
+def _lambda_list(value: bool | Sequence[float]) -> bool | list[float]:
+    """``@bar_data``/``@dHdl_data``: off, every predicted λ (``True`` or empty), or those λ."""
+    if value is False:
+        return False
+    if value is True:
+        return True
+    return [float(x) for x in value] or True
+
+
 def bar(
-    forward_work: str | np.ndarray,
-    reverse_work: str | np.ndarray,
-    temperature: float = 300.0,
-    output: str | None = None,
-) -> dict:
+    files: Sequence[str | os.PathLike[str]],
+    *args: Any,
+    temperature: float | None = None,
+    max_iterations: int = 500,
+    convergence: float = 1e-5,
+    bootstrap: int = 0,
+    seed: int | None = None,
+    printdist: str | os.PathLike[str] | None = None,
+) -> dict[str, Any]:
     """
-    Calculate free energy using Bennett Acceptance Ratio (BAR).
+    Free-energy differences between neighbouring λ by Bennett's acceptance ratio (gromos++
+    ``bar``), run in process.
 
     Parameters
     ----------
-    forward_work : str or array
-        Forward work values or file path
-    reverse_work : str or array
-        Reverse work values or file path
-    temperature : float, default=300.0
-        Temperature (K)
-    output : str, optional
-        Output file path
+    files : sequence of path
+        One ``ext_ti_ana @bar_data`` file per simulated λ (any order): each lists the frames'
+        energies at the simulated λ and at the neighbouring ones.
+    temperature : float
+        Temperature (K), second positional argument or keyword.
+    max_iterations, convergence : int, float
+        The self-consistent iteration ends when ΔG changes by at most ``convergence`` relative,
+        or after ``max_iterations`` (gromos++ ``@maxiterations``, ``@convergence``).
+    bootstrap : int
+        Number of bootstrap estimates for an error (0: none).
+    seed : int, optional
+        Bootstrap seed base; gromos++ takes the wall clock, which is the default here too.
+    printdist : path, optional
+        Directory for the ``dist_<k>_<k+1>.dat`` ΔE distributions (``@printdist``).
 
     Returns
     -------
     dict
-        Free energy difference and error estimate
+        Per interval (arrays in ascending λ): ``lam_i``, ``lam_j``, ``dg`` (G(λ_j) − G(λ_i),
+        kJ/mol), ``error`` (gromos++'s analytical error, which divides by an extra (ln⟨f⟩)²),
+        ``error_corrected`` (without that factor), ``bootstrap``, ``overlap``, ``iterations``;
+        the sums ``dg_total``, ``error_total``, ``error_total_corrected``, ``bootstrap_total``;
+        and ``stdout``, the table the program prints.
+
+    Notes
+    -----
+    Until item 1.8, ``bar(forward_work, reverse_work, temperature)`` took two lists of work
+    values. That call raises a ``TypeError``: write the energies with ``ext_ti_ana @bar_data``.
 
     Examples
     --------
-    >>> result = gromos.analysis.bar("forward.dat", "reverse.dat", temperature=300)
-    >>> print(f"ΔG = {result['delta_g']:.2f} ± {result['error']:.2f} kJ/mol")
+    >>> r = gromos.analysis.bar(["bar_data_l0.00.dat", "bar_data_l0.50.dat"], 300.0)
+    >>> r["dg_total"], r["error_total"]
     """
-    # Handle array inputs by writing to temp files
-    if isinstance(forward_work, np.ndarray):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".dat") as f:
-            np.savetxt(f, forward_work)
-            forward_work = f.name
+    def number(x: Any) -> bool:
+        return isinstance(x, int | float) and not isinstance(x, bool)
 
-    if isinstance(reverse_work, np.ndarray):
-        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".dat") as f:
-            np.savetxt(f, reverse_work)
-            reverse_work = f.name
+    # `bar(files, T)` positionally; anything else in that slot is the retired two-list call
+    if len(args) == 1 and temperature is None and number(args[0]):
+        temperature = args[0]
+    elif args or isinstance(files, str | os.PathLike | np.ndarray):
+        raise TypeError(
+            "gromos.analysis.bar(files, temperature) takes the ext_ti_ana @bar_data files of the "
+            "simulated lambdas (gromos++ bar); the two-list bar(forward_work, reverse_work, "
+            "temperature) of earlier releases is gone"
+        )
+    if not number(temperature):
+        raise TypeError("gromos.analysis.bar needs the temperature (K)")
+    assert temperature is not None
+    return _bar(
+        [os.fspath(f) for f in files],
+        float(temperature),
+        max_iterations=max_iterations,
+        convergence=convergence,
+        bootstrap=bootstrap,
+        seed=seed,
+        printdist=None if printdist is None else os.fspath(printdist),
+    )
 
-    args = ["@forward", forward_work, "@reverse", reverse_work, "@temp", str(temperature)]
-    if output:
-        args.extend(["@output", output])
 
-    result = _run_gromos_program("bar", args)
+def ext_ti_ana(
+    *,
+    en_files: Sequence[str | os.PathLike[str]],
+    fr_files: Sequence[str | os.PathLike[str]],
+    library: str | os.PathLike[str] | None = None,
+    imd: str | os.PathLike[str] | None = None,
+    temp: float | None = None,
+    nrlambdas: int | None = None,
+    minlam: float | None = None,
+    maxlam: float | None = None,
+    slam: float | None = None,
+    nlams: float | None = None,
+    nlamp: float | None = None,
+    coefficients_sim: dict[str, Sequence[float]] | None = None,
+    coefficients: dict[str, Sequence[float]] | None = None,
+    slj_scrf_file: str | os.PathLike[str] | None = None,
+    exclude: Sequence[str] = (),
+    countframes: bool = False,
+    pmin: int | None = None,
+    pmax: int | None = None,
+    bootstrap: int | None = None,
+    seed: int | None = None,
+    outdir: str | os.PathLike[str] | None = None,
+    lam_precision: int | None = None,
+    verbose: bool = False,
+    bar_data: bool | Sequence[float] = False,
+    dhdl_data: bool | Sequence[float] = False,
+    write: bool = True,
+) -> dict[str, Any]:
+    """
+    Reweight one simulation's precalculated-λ energies onto other λ (gromos++ ``ext_ti_ana``),
+    run in process.
 
-    return {"delta_g": 0.0, "error": 0.0, "convergence": True, "output": result.stdout}
+    The keywords are the program's ``@`` arguments (``nlams``/``nlamp`` are ``@NLAMs``/
+    ``@NLAMp``, ``dhdl_data`` is ``@dHdl_data``); ``coefficients_sim``/``coefficients`` map a
+    term (``kin bond ang dih impr lj slj crf scrf disres dihres disfld``) to its ``a b c d e``
+    (``@lam<X>_sim``/``@lam<X>``), ``exclude`` lists the ``@no_<X>`` terms. ``bar_data`` /
+    ``dhdl_data``: ``True`` for every predicted λ or a list of λ. Without ``library`` the
+    built-in md++ library is used. With ``write`` the files go to ``outdir`` as gromos++ writes
+    them (``predicted_l<slam>.dat``, ``bar_data_l<slam>.dat``, ``dHdl_data_l<slam>.dat``).
+
+    Returns
+    -------
+    dict
+        ``n_frames``; ``files`` (written paths); ``predictions``, one dict per softness
+        combination: ``labels``, ``slj``, ``scrf``, ``plam``, ``dhdl`` (⟨∂H/∂λ⟩ predicted at each
+        ``plam``, kJ/mol), ``error`` (bootstrap), ``contributing_frames``, ``bar`` (``plam``,
+        ``e_s`` per frame, ``e_p`` per plam × frame, kJ/mol) and ``dhdl_data`` (``plam``, ``de``).
+
+    Examples
+    --------
+    >>> r = gromos.analysis.ext_ti_ana(en_files=["l0.5.tre"], fr_files=["l0.5.trg"],
+    ...     temp=300, nrlambdas=21, minlam=0, maxlam=1, slam=0.5, nlams=1,
+    ...     bar_data=[0.0, 0.5, 1.0], write=False)
+    >>> r["predictions"][0]["dhdl"]
+    """
+    keys: list[tuple[str, Any]] = [
+        ("en_files", list(en_files)),
+        ("fr_files", list(fr_files)),
+        ("library", library),
+        ("imd", imd),
+        ("temp", temp),
+        ("nrlambdas", nrlambdas),
+        ("minlam", minlam),
+        ("maxlam", maxlam),
+        ("slam", slam),
+        ("NLAMs", nlams),
+        ("NLAMp", nlamp),
+    ]
+    for term, c in (coefficients_sim or {}).items():
+        keys.append((f"lam{term}_sim", list(c)))
+    for term, c in (coefficients or {}).items():
+        keys.append((f"lam{term}", list(c)))
+    keys += [("slj_scrf_file", slj_scrf_file)]
+    keys += [(f"no_{term}", True) for term in exclude]
+    keys += [
+        ("countframes", countframes),
+        ("pmin", pmin),
+        ("pmax", pmax),
+        ("bootstrap", bootstrap),
+        ("outdir", outdir),
+        ("lam_precision", lam_precision),
+        ("verbose", verbose),
+        ("bar_data", _lambda_list(bar_data)),
+        ("dHdl_data", _lambda_list(dhdl_data)),
+    ]
+    return _ext_ti_ana(_argv(keys), seed=seed, write=write)
+
+
+def ext_ti_merge(
+    files: Sequence[str | os.PathLike[str]],
+    *,
+    slam: Sequence[float] | None = None,
+    noerrors: bool = False,
+    lam_precision: int | None = None,
+) -> dict[str, Any]:
+    """
+    Merge the ``ext_ti_ana`` predictions of several simulations into one ⟨∂H/∂λ⟩ curve and
+    integrate it (gromos++ ``ext_ti_merge``), run in process.
+
+    Returns
+    -------
+    dict
+        ``lambda``, ``dhdl``, ``error`` (``None`` without errors), ``integral`` (kJ/mol),
+        ``integral_error`` (gromos++'s, which leaves out the second-to-last point),
+        ``integral_error_corrected`` (every point) and ``stdout``. A third column the files
+        carry is read as the error, as gromos++ reads it, even when it is a frame count.
+    """
+    keys: list[tuple[str, Any]] = [
+        ("files", list(files)),
+        ("slam", None if slam is None else list(slam)),
+        ("noerrors", noerrors),
+        ("lam_precision", lam_precision),
+    ]
+    return _ext_ti_merge(_argv(keys))
+
+
+def mbar(
+    u_kn: npt.ArrayLike,
+    N_k: Sequence[int],
+    temperature: float,
+    *,
+    max_iterations: int = 10000,
+    tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    r"""
+    Free energies of K states by MBAR (Shirts & Chodera, J. Chem. Phys. 129 (2008) 124105).
+
+    Parameters
+    ----------
+    u_kn : array (K, N)
+        Potential energy (kJ/mol) of every sample n at every state k; the ``N_k[0]`` samples of
+        state 0 first, then state 1, ... (pymbar's layout, but in kJ/mol, not reduced).
+    N_k : sequence of int
+        Samples per state.
+    temperature : float
+        Temperature (K); kT uses gromos++'s Boltzmann constant.
+
+    Returns
+    -------
+    dict
+        ``f`` (free energies relative to state 0), ``dg[i, j]`` = G_j − G_i and ``ddg`` its
+        asymptotic standard error, all kJ/mol; ``kT``; the iteration counts.
+
+    Notes
+    -----
+    Self-consistent iteration with a Newton–Raphson finish; the error is the asymptotic
+    covariance in the SVD form of the paper's appendix D (pymbar's default). With two states
+    it is BAR (``bar``). ``ext_ti_ana(..., bar_data=[every simulated λ])`` gives the energies.
+
+    .. math::
+
+        f_i = -\ln \sum_n \frac{e^{-u_i(x_n)}}{\sum_k N_k e^{f_k - u_k(x_n)}}
+    """
+    u = np.ascontiguousarray(np.asarray(u_kn, dtype=np.float64))
+    if u.ndim != 2:
+        raise ValueError("u_kn must be a (K, N) array")
+    return _mbar(
+        u,
+        [int(n) for n in N_k],
+        float(temperature),
+        max_iterations=max_iterations,
+        tolerance=tolerance,
+    )
+
+
+def ti_trapezoid(
+    trg_files: Sequence[str | os.PathLike[str]],
+    lambdas: Sequence[float] | None = None,
+    skip: int = 0,
+) -> dict[str, Any]:
+    """
+    Plain multi-window TI: ⟨∂H/∂λ⟩ of each ``.trg`` (the total dH/dλ of every frame after the
+    first ``skip``) and ΔG = ∫⟨∂H/∂λ⟩dλ by the trapezoid rule. No gromos++ counterpart; it is
+    what gromos-rs's ``ext_ti_ana`` did before that became the gromos++ program
+    (``gromos_analysis::ti``).
+
+    Returns
+    -------
+    dict
+        ``lambda``, ``mean``, ``ee`` (block-averaging error, the rmsd below 4 frames), ``n`` per
+        window in ascending λ; ``dg`` and ``dg_error`` (kJ/mol, ``None`` below two windows).
+    """
+    return _ti_trapezoid(
+        [os.fspath(f) for f in trg_files],
+        None if lambdas is None else [float(x) for x in lambdas],
+        skip,
+    )
 
 
 def dgslv_pbsolv(
@@ -920,37 +1165,6 @@ def dgslv_pbsolv(
         else:
             argv.append(str(value))
     return _dgslv_pbsolv(argv)
-
-
-def ext_ti_ana(ti_files: list[str], output: str | None = None) -> dict:
-    """
-    Analyze extended thermodynamic integration (TI) results.
-
-    Parameters
-    ----------
-    ti_files : list of str
-        List of TI output files for each lambda value
-    output : str, optional
-        Output file path
-
-    Returns
-    -------
-    dict
-        Free energy from TI integration
-    """
-    args = ["@files"] + ti_files
-    if output:
-        args.extend(["@output", output])
-
-    result = _run_gromos_program("ext_ti_ana", args)
-
-    return {
-        "delta_g": 0.0,
-        "error": 0.0,
-        "lambdas": np.array([]),
-        "dhdl": np.array([]),
-        "output": result.stdout,
-    }
 
 
 def m_widom(trajectory: str, topology: str, output: str | None = None) -> dict:
@@ -1275,6 +1489,9 @@ __all__ = [
     "bar",
     "dgslv_pbsolv",
     "ext_ti_ana",
+    "ext_ti_merge",
+    "mbar",
+    "ti_trapezoid",
     "m_widom",
     "reweight",
     # X-ray/NMR

@@ -72,6 +72,18 @@ pub fn cpp_g(x: f64, precision: usize) -> String {
     }
 }
 
+/// C++ `std::fixed` with `precision` decimals (`%.*f`): ties round half to even, as glibc does
+/// on the exact binary value (`0.125` → `0.12`); NaN prints `nan`/`-nan` by its sign bit.
+pub fn cpp_fixed(x: f64, precision: usize) -> String {
+    if x.is_nan() {
+        return if x.is_sign_negative() { "-nan" } else { "nan" }.to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
+    format!("{x:.precision$}")
+}
+
 /// C++ `std::scientific` with `precision` digits: mantissa, `e`, signed two-digit exponent
 /// (`1.57000e+07`).
 pub fn cpp_e(x: f64, precision: usize) -> String {
@@ -93,6 +105,17 @@ mod tests {
     fn comments_and_blank_lines_are_skipped() {
         let rows = parse_columns("# t  x\n\n 0.0 1.5 # trailing\n0.002 2.5\n", "test").unwrap();
         assert_eq!(rows, vec![vec![0.0, 1.5], vec![0.002, 2.5]]);
+    }
+
+    #[test]
+    fn fixed_rounds_ties_to_even_like_glibc() {
+        assert_eq!(cpp_fixed(0.125, 2), "0.12");
+        assert_eq!(cpp_fixed(0.375, 2), "0.38");
+        assert_eq!(cpp_fixed(2.5, 0), "2");
+        assert_eq!(cpp_fixed(-0.125, 2), "-0.12");
+        assert_eq!(cpp_fixed(0.125, 3), "0.125");
+        assert_eq!(cpp_fixed(-f64::NAN, 6), "-nan");
+        assert_eq!(cpp_fixed(f64::INFINITY, 6), "inf");
     }
 
     #[test]

@@ -23,7 +23,7 @@ pub mod trajectory;
 pub use distribution::{bilayer_dist, bilayer_oparam};
 pub use energy::{ene_ana, ener};
 pub use free_energy::{
-    bar, dfmult, dg_ener, dgslv_pbsolv, eds_update_1, eds_update_2, ext_ti_ana, ext_ti_merge,
+    bar, dfmult, dg_ener, dgslv_pbsolv, eds_update_1, eds_update_2, ext_ti_ana, ext_ti_merge, mbar,
 };
 pub use noe::{jepot, jval, nhoparam};
 pub use special::{dfgrid, gca, matrix_overlap};
@@ -53,6 +53,7 @@ pub static PROGRAMS: &[&Program] = &[
     &eds_update_2::PROGRAM,
     &ext_ti_ana::PROGRAM,
     &ext_ti_merge::PROGRAM,
+    &mbar::PROGRAM,
     // Trajectory manipulation
     &frameout::PROGRAM,
     &mdf::PROGRAM,

@@ -555,6 +555,52 @@ impl LambdasBlock {
     }
 }
 
+/// The `PRECALCLAM` block (gromosXX `read_PRECALCLAM`, `in_parameter.cc:4478-4515`): energies
+/// and dH/dλ precalculated at `nrlam` λ values evenly spaced over `[minlam, maxlam]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Precalclam {
+    pub nrlam: usize,
+    pub minlam: f64,
+    pub maxlam: f64,
+}
+
+impl ImdParameters {
+    /// The `PRECALCLAM` block, `None` when the file has none. Read from the stored block text
+    /// with gromosXX's checks (NRLAM ≥ 0, MINLAM and MAXLAM in [0, 1], MINLAM < MAXLAM).
+    pub fn precalclam(&self) -> Result<Option<Precalclam>, IoError> {
+        let Some(lines) = self.raw_blocks.get("PRECALCLAM") else {
+            return Ok(None);
+        };
+        let data: Vec<String> = lines
+            .iter()
+            .map(|l| l.split('#').next().unwrap_or_default().trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let mut t = Tokens::new("PRECALCLAM", &data);
+        let missing = |name: &str| IoError::ParseError(format!("block PRECALCLAM: missing {name}"));
+        let nrlam = t.next_i32("NRLAM")?.ok_or_else(|| missing("NRLAM"))?;
+        let minlam = t.next_f64("MINLAM")?.ok_or_else(|| missing("MINLAM"))?;
+        let maxlam = t.next_f64("MAXLAM")?.ok_or_else(|| missing("MAXLAM"))?;
+        let bad = |m: String| Err(IoError::ParseError(format!("block PRECALCLAM: {m}")));
+        if nrlam < 0 {
+            return bad(format!("NRLAM must be >= 0, found {nrlam}"));
+        }
+        for (name, v) in [("MINLAM", minlam), ("MAXLAM", maxlam)] {
+            if !(0.0..=1.0).contains(&v) {
+                return bad(format!("{name} must be in [0, 1], found {v}"));
+            }
+        }
+        if minlam >= maxlam {
+            return bad("MINLAM should be smaller than MAXLAM".to_string());
+        }
+        Ok(Some(Precalclam {
+            nrlam: nrlam as usize,
+            minlam,
+            maxlam,
+        }))
+    }
+}
+
 /// Parse the data lines of a `LAMBDAS` block. `ntg` is PERTURBATION's NTG and `n_groups` the
 /// number of energy groups FORCE declares (NEGR, before gromosXX's implicit trailing group).
 pub fn parse_lambdas(lines: &[String], ntg: i32, n_groups: usize) -> Result<LambdasBlock, IoError> {
@@ -1836,6 +1882,22 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
 
     fn lambdas_err(ntg: i32, body: &str) -> String {
         parse_lambdas_text(ntg, body).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn precalclam_reads_and_checks_its_three_values() {
+        let p = parse_imd_str("PRECALCLAM\n# NRLAM MINLAM MAXLAM\n  21 0.0 1.0\nEND\n").unwrap();
+        let pre = p.precalclam().unwrap().unwrap();
+        assert_eq!((pre.nrlam, pre.minlam, pre.maxlam), (21, 0.0, 1.0));
+        assert!(parse_imd_str("TITLE\nx\nEND\n")
+            .unwrap()
+            .precalclam()
+            .unwrap()
+            .is_none());
+        for bad in ["11 0.7 0.2", "11 0 1.5", "-1 0 1", "11 0"] {
+            let p = parse_imd_str(&format!("PRECALCLAM\n{bad}\nEND\n")).unwrap();
+            assert!(p.precalclam().is_err(), "{bad}");
+        }
     }
 
     #[test]
