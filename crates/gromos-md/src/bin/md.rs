@@ -18,9 +18,9 @@ use gromos::{
     configuration::BoxType,
     io::{
         coordinate::read_coordinates,
-        energy::{EnergyFrame, EnergyWriter},
+        energy::{EnergyWriter, VolumePressure},
         force::ForceWriter,
-        free_energy::{FreeEnergyFrame, FreeEnergyWriter},
+        free_energy::FreeEnergyWriter,
         topology::{build_topology, read_topology_file},
         trajectory::TrajectoryWriter,
         EdsBlock, EdsStatsWriter, EdsVrWriter, GamdBlock, GamdBoostWriter, GamdStatsWriter,
@@ -236,32 +236,32 @@ fn parse_args(args: Vec<String>) -> Result<MDArgs, String> {
     Ok(md_args)
 }
 
-/// One `.tre` frame in gromosXX's layout from the current state: totals and per-bath /
-/// per-group energies from the accumulator, plus mass, box, virial and kinetic tensors.
-fn native_energy_frame(
+/// The `VOLUMEPRESSURE03` block of a `.tre` frame from the current state: mass, temperature,
+/// volume, box, pressure, virial and kinetic tensors.
+fn volume_pressure(
     state: &gromos_core::State,
     topo: &gromos_core::Topology,
-    step: usize,
-    time: f64,
     temp: f64,
-) -> EnergyFrame {
-    let volume = state.box_config.volume();
-    let pressure = state.pressure();
-    let mut frame = EnergyFrame::from_energy(&state.energies, time, temp, volume, pressure);
-    frame.step = step;
-    frame.mass = topo.mass.iter().sum();
+) -> VolumePressure {
+    let mut vp = VolumePressure {
+        mass: topo.mass.iter().sum(),
+        temperature: temp,
+        volume: state.box_config.volume(),
+        pressure: state.pressure(),
+        ..Default::default()
+    };
     let m = &state.box_config.vectors;
     let vir = &state.virial_tensor;
     let kin = &state.kinetic_energy_tensor;
     for a in 0..3 {
         for b in 0..3 {
             // column i of a gromos-core `Mat3` is GROMOS's row i (see `math.rs`)
-            frame.box_vectors[a][b] = m.col(a)[b];
-            frame.virial_tensor[a][b] = vir.col(b)[a];
-            frame.kinetic_tensor[a][b] = kin.col(b)[a];
+            vp.box_vectors[a][b] = m.col(a)[b];
+            vp.virial_tensor[a][b] = vir.col(b)[a];
+            vp.kinetic_tensor[a][b] = kin.col(b)[a];
         }
     }
-    frame
+    vp
 }
 
 fn main() {
@@ -300,6 +300,11 @@ fn main() {
     let mpi_partition: Option<(usize, usize)> = mpi_run.partition();
     #[cfg(not(feature = "use-mpi"))]
     let mpi_partition: Option<(usize, usize)> = None;
+    // Only rank 0 writes files; the other ranks write none, not even the default-named ones.
+    #[cfg(feature = "use-mpi")]
+    let writes_files = mpi_run.rank == 0;
+    #[cfg(not(feature = "use-mpi"))]
+    let writes_files = true;
 
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║                   GROMOS-RS MD Engine                        ║");
@@ -438,6 +443,12 @@ fn main() {
                 println!(
                     "  Adjusting NSM: {} (imd) -> {} (from coordinates)",
                     imd, coordinates
+                );
+            },
+            PrepareNote::EnergyGroupAdded { last_atom } => {
+                println!(
+                    "  FORCE block: added an additional energy group ending at atom {}",
+                    last_atom
                 );
             },
             PrepareNote::Validation { stage, report } => {
@@ -642,7 +653,7 @@ fn main() {
 
     // Echo the effective run next to the energy output (GROMACS's `mdout.mdp` lesson): what
     // was defaulted, what passed through, and every value the engine actually used.
-    {
+    if writes_files {
         let echo_path = std::path::Path::new(&tre_file).with_extension("recipe.toml");
         match recipe.to_toml() {
             Ok(toml) => {
@@ -744,17 +755,21 @@ fn main() {
         .unwrap_or(300.0);
 
     // Setup trajectory writer
-    let mut traj_writer = match TrajectoryWriter::new(
-        &trc_file,
-        "GROMOS-RS MD trajectory",
-        false, // velocities
-        false, // forces
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Error creating trajectory file: {}", e);
-            process::exit(1);
-        },
+    let mut traj_writer = if writes_files {
+        match TrajectoryWriter::new(
+            &trc_file,
+            "GROMOS-RS MD trajectory",
+            false, // velocities
+            false, // forces
+        ) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("Error creating trajectory file: {}", e);
+                process::exit(1);
+            },
+        }
+    } else {
+        None
     };
 
     // Velocity trajectory (@trv, WRITETRAJ NTWV): its own file, as gromosXX writes it.
@@ -778,27 +793,27 @@ fn main() {
         topology: gromos_io::energy_traj::sha256_file(&md_args.topo_file)
             .ok()
             .map(|digest| (digest, md_args.topo_file.clone())),
-        energy_groups: imd
-            .nre
+        energy_groups: topo
+            .energy_groups
             .iter()
-            .scan(0usize, |first, &last| {
-                let range = (*first + 1, last);
-                *first = last;
-                Some(range)
-            })
+            .filter_map(|g| Some((g.first()? + 1, g.last()? + 1)))
             .collect(),
     };
 
     // Setup energy writer
-    let mut ene_writer = match EnergyWriter::new(&tre_file, &imd.title)
-        .map(|w| w.with_layout(imd.num_temp_baths, imd.negr))
-        .and_then(|w| w.with_provenance(&provenance))
-    {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Error creating energy file: {}", e);
-            process::exit(1);
-        },
+    let mut ene_writer = if writes_files {
+        match EnergyWriter::new(&tre_file, &imd.title)
+            .map(|w| w.with_layout(imd.num_temp_baths, topo.energy_groups.len()))
+            .and_then(|w| w.with_provenance(&provenance))
+        {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("Error creating energy file: {}", e);
+                process::exit(1);
+            },
+        }
+    } else {
+        None
     };
 
     // Setup force trajectory writer (if @trf given)
@@ -818,7 +833,7 @@ fn main() {
     };
 
     // Setup GaMD writers if enabled
-    let mut gamd_stats_writer = if gamd_params.is_some() {
+    let mut gamd_stats_writer = if writes_files && gamd_params.is_some() {
         let stats_file = "gamd_stats.dat";
         match GamdStatsWriter::new(stats_file, "GROMOS-RS GaMD Statistics") {
             Ok(mut w) => {
@@ -835,7 +850,7 @@ fn main() {
         None
     };
 
-    let mut gamd_boost_writer = if gamd_params.is_some() {
+    let mut gamd_boost_writer = if writes_files && gamd_params.is_some() {
         let boost_file = "gamd_boost.dat";
         match GamdBoostWriter::new(boost_file, "GROMOS-RS GaMD Boost Potential") {
             Ok(w) => {
@@ -852,7 +867,7 @@ fn main() {
     };
 
     // Setup EDS writers if enabled
-    let mut eds_stats_writer = if eds_params.is_some() {
+    let mut eds_stats_writer = if writes_files && eds_params.is_some() {
         let stats_file = "eds_stats.dat";
         match EdsStatsWriter::new(stats_file, "GROMOS-RS EDS Statistics") {
             Ok(mut w) => {
@@ -869,7 +884,7 @@ fn main() {
         None
     };
 
-    let mut eds_vr_writer = if eds_params.is_some() {
+    let mut eds_vr_writer = if writes_files && eds_params.is_some() {
         let vr_file = "eds_vr.dat";
         match EdsVrWriter::new(vr_file, "GROMOS-RS EDS Reference Energy") {
             Ok(w) => {
@@ -886,13 +901,13 @@ fn main() {
     };
 
     // Setup free-energy trajectory writer (@trg) — only when FEP is active (NTG != 0)
-    let mut free_energy_writer: Option<FreeEnergyWriter> = if imd.ntg != 0 {
+    let mut free_energy_writer: Option<FreeEnergyWriter> = if writes_files && imd.ntg != 0 {
         let trg_path = md_args
             .trg_file
             .clone()
             .unwrap_or_else(|| "md.trg".to_string());
         match FreeEnergyWriter::new(&trg_path, &imd.title)
-            .map(|w| w.with_layout(imd.num_temp_baths, imd.negr))
+            .map(|w| w.with_layout(imd.num_temp_baths, topo.energy_groups.len()))
             .and_then(|w| w.with_provenance(&provenance))
         {
             Ok(w) => {
@@ -1194,13 +1209,18 @@ fn main() {
             println!();
             // Write final frames before breaking. gromosXX writes the converged energies
             // once more, labelled with the previous step (its frame count is NSTEPS + 1).
-            if let Err(e) = traj_writer.write_frame(step, time, &conf) {
-                eprintln!("Error writing final trajectory frame: {}", e);
+            if let Some(tw) = traj_writer.as_mut() {
+                if let Err(e) = tw.write_frame(step, time, &conf) {
+                    eprintln!("Error writing final trajectory frame: {}", e);
+                }
             }
-            let last = step.saturating_sub(1);
-            let ene_frame = native_energy_frame(conf.old(), &topo, last, last as f64 * dt, temp);
-            if let Err(e) = ene_writer.write_frame(&ene_frame) {
-                eprintln!("Error writing final energy frame: {}", e);
+            if let Some(ew) = ene_writer.as_mut() {
+                let last = step.saturating_sub(1);
+                let vp = volume_pressure(conf.old(), &topo, temp);
+                let e = ew.write_energy(last, last as f64 * dt, &conf.old().energies, &vp);
+                if let Err(e) = e {
+                    eprintln!("Error writing final energy frame: {}", e);
+                }
             }
             break;
         }
@@ -1227,7 +1247,8 @@ fn main() {
 
         // Write trajectory — the configuration this step's energies describe, on gromosXX's
         // schedule (frame 0 is the input configuration).
-        if due(step, nstxout) && step < n_steps {
+        if let (true, Some(traj_writer)) = (due(step, nstxout) && step < n_steps, &mut traj_writer)
+        {
             let write = if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
                 // as for the final configuration: gromosXX writes the cube frame
                 let rot = truncoct_triclinic_rotmat(false);
@@ -1257,9 +1278,9 @@ fn main() {
 
         // Write energies — on gromosXX's schedule: steps 0 … NSTLIM−1 (the state after the
         // last step is in the final configuration, not in the energy trajectory).
-        if due(step, nstener) && step < n_steps {
-            let ene_frame = native_energy_frame(conf.old(), &topo, step, time, temp);
-            if let Err(e) = ene_writer.write_frame(&ene_frame) {
+        if let (true, Some(ew)) = (due(step, nstener) && step < n_steps, &mut ene_writer) {
+            let vp = volume_pressure(conf.old(), &topo, temp);
+            if let Err(e) = ew.write_energy(step, time, &conf.old().energies, &vp) {
                 eprintln!("Error writing energy: {}", e);
             }
         }
@@ -1268,21 +1289,8 @@ fn main() {
         // `write.free_energy`); NTWG=0 writes no frames.
         if let Some(ref mut fw) = free_energy_writer {
             if due(step, imd.ntwg) && step < n_steps {
-                let e = &conf.old().energies;
-                let fe_frame = FreeEnergyFrame {
-                    step,
-                    time,
-                    lambda: imd.rlam,
-                    dhdl_bond: e.dhdl_bonded,
-                    dhdl_angle: 0.0,
-                    dhdl_improper: 0.0,
-                    dhdl_dihedral: 0.0,
-                    dhdl_lj: e.dhdl_lj,
-                    dhdl_crf: e.dhdl_crf,
-                    dhdl_special: 0.0,
-                    dhdl_total: e.dhdl_total,
-                };
-                if let Err(e) = fw.write_frame(&fe_frame) {
+                let d = &conf.old().perturbed_energy_derivatives;
+                if let Err(e) = fw.write_derivatives(step, time, imd.rlam, d) {
                     eprintln!("Error writing free-energy trajectory: {}", e);
                 }
             }
@@ -1354,18 +1362,22 @@ fn main() {
 
     // Finalize output files
     log::debug!("Finalizing output files");
-    if let Err(e) = traj_writer.flush() {
-        log::error!("Failed to flush trajectory: {}", e);
-        eprintln!("Error flushing trajectory: {}", e);
-    } else {
-        log::debug!("Trajectory file finalized: {}", trc_file);
+    if let Some(tw) = traj_writer.as_mut() {
+        if let Err(e) = tw.flush() {
+            log::error!("Failed to flush trajectory: {}", e);
+            eprintln!("Error flushing trajectory: {}", e);
+        } else {
+            log::debug!("Trajectory file finalized: {}", trc_file);
+        }
     }
 
-    if let Err(e) = ene_writer.finalize() {
-        log::error!("Failed to finalize energy file: {}", e);
-        eprintln!("Error finalizing energy file: {}", e);
-    } else {
-        log::debug!("Energy file finalized: {}", tre_file);
+    if let Some(ew) = ene_writer.as_mut() {
+        if let Err(e) = ew.finalize() {
+            log::error!("Failed to finalize energy file: {}", e);
+            eprintln!("Error finalizing energy file: {}", e);
+        } else {
+            log::debug!("Energy file finalized: {}", tre_file);
+        }
     }
 
     if let Some(ref mut fw) = force_writer {
@@ -1620,7 +1632,10 @@ mod mpi_support {
                 let world = SimpleCommunicator::world();
                 let root = world.process_at_rank(0);
                 let n = s.forces.len();
-                let mut send = Vec::with_capacity(3 * n + 13);
+                // with more than one energy group the four group-pair matrices travel too
+                let g = &s.groups;
+                let cells = g.lj.len();
+                let mut send = Vec::with_capacity(3 * n + 13 + 4 * cells);
                 for f in &s.forces {
                     send.extend_from_slice(&[f.x, f.y, f.z]);
                 }
@@ -1631,6 +1646,9 @@ mod mpi_support {
                 }
                 send.push(s.dhdl_lj);
                 send.push(s.dhdl_crf);
+                for m in [&g.lj, &g.crf, &g.dhdl_lj, &g.dhdl_crf] {
+                    send.extend_from_slice(m);
+                }
                 let mut recv = vec![0.0f64; send.len()];
                 if world.rank() == 0 {
                     root.reduce_into_root(&send[..], &mut recv[..], SystemOperation::sum());
@@ -1655,6 +1673,12 @@ mod mpi_support {
                 }
                 s.dhdl_lj = recv[k];
                 s.dhdl_crf = recv[k + 1];
+                k += 2;
+                let g = &mut s.groups;
+                for m in [&mut g.lj, &mut g.crf, &mut g.dhdl_lj, &mut g.dhdl_crf] {
+                    m.copy_from_slice(&recv[k..k + cells]);
+                    k += cells;
+                }
             }));
         }
     }

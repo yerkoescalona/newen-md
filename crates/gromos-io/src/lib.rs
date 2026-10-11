@@ -47,7 +47,7 @@ pub use coordinate::{
 };
 pub use dlg::{DlgWriter, LambdaDerivativeFrame};
 pub use energy::read_energy_trajectory_native;
-pub use energy::{EnergyBlock, EnergyFrame, EnergyReader, EnergyWriter};
+pub use energy::{EnergyBlock, EnergyFrame, EnergyReader, EnergyWriter, VolumePressure};
 pub use energy_binary::{BinaryEnergyReader, BinaryEnergyWriter};
 pub use force::ForceWriter;
 pub use free_energy::{

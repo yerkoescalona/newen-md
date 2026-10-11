@@ -1,17 +1,15 @@
 //! End-to-end integration tests against GROMOS double-precision references.
 //!
-//! Runs the `md` binary on each reference system (10 steps) and compares
-//! energy trajectories (all steps) against expected GROMOS output.
+//! Runs the `md` binary on each reference system (10 steps) and compares its output with the
+//! native gromosXX's: every value of every `ENERGY03` block of the `.tre` and, where the system
+//! has a reference `.trg`, of every `FREEENERDERIVS03` block; forces, trajectory and final
+//! configuration.
 //!
-//! Output formats differ:
-//!   - GROMOS expected: ENERGY03 blocks (one per step, one value per line)
-//!   - gromos-rs actual:  ENERTRJ block  (one line per step, multi-column)
-//!
-//! Reference data: `.local/gromos_references/{system}/expected/`
+//! Reference data: `tests/gromosXX_references/{system}/expected/`
 //! Systems matching GROMOS are active; known mismatches are `#[ignore]`.
 //!
-//! Run passing:  cargo test -p gromos-md --test test_GROMOS_references
-//! Run all:      cargo test -p gromos-md --test test_GROMOS_references -- --include-ignored
+//! Run passing:  cargo test -p gromos-md --test test_gromosXX_references
+//! Run all:      cargo test -p gromos-md --test test_gromosXX_references -- --include-ignored
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -73,103 +71,212 @@ fn toml_str_opt(content: &str, key: &str) -> Option<String> {
     None
 }
 
-// ─── Energy frame ───────────────────────────────────────────────────────────
+// ─── Parser: ENERGY03 / FREEENERDERIVS03 blocks, section by section ────────
+//
+// Both blocks are gromosXX's `_print_energyred_helper` body (FREEENERDERIVS03 first carries
+// `# lambda`): `# totals` (52 values), `# baths` (count, then kinetic / COM / internal-rotational
+// per bath), `# bonded` (count, then one row per energy group), `# nonbonded` (one row per group
+// pair), `# special` (one row per group), then `# eds`, `# gamd`, `# precalclam` (each a count
+// and rows) and `# ABdih`. Every value is compared; count lines exactly.
 
-#[derive(Debug)]
-struct EnergyFrame {
-    e_total: f64,
-    e_kinetic: f64,
-    e_potential: f64,
+/// Sections whose first line is an integer count.
+const COUNTED_SECTIONS: [&str; 5] = ["baths", "bonded", "eds", "gamd", "precalclam"];
+/// Comment words that open a section; any other comment line (column headers, `# numstates`)
+/// stays in the current one.
+const SECTIONS: [&str; 10] = [
+    "lambda",
+    "totals",
+    "baths",
+    "bonded",
+    "nonbonded",
+    "special",
+    "eds",
+    "gamd",
+    "precalclam",
+    "ABdih",
+];
+
+/// One energy block: its time (from the preceding `TIMESTEP`) and its sections in file order,
+/// each a list of rows.
+#[derive(Debug, Default)]
+struct EnergyBlock {
+    time: f64,
+    sections: Vec<(String, Vec<Vec<f64>>)>,
 }
 
-// ─── Parser: GROMOS ENERGY03 format (expected) ────────────────────────────
-//
-// Structure: repeated TIMESTEP→END→ENERGY03→END blocks.
-// ENERGY03 starts with "# totals", then one f64 per line:
-//   [0]=e_total, [1]=e_kinetic, [2]=e_potential, ...
-
-fn parse_energy03(path: &Path) -> Vec<EnergyFrame> {
+fn parse_energy_blocks(path: &Path, block: &str) -> Vec<EnergyBlock> {
     let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut frames = Vec::new();
-    let mut in_ene = false;
-    let mut vals: Vec<f64> = Vec::new();
-
+    let mut current: Option<EnergyBlock> = None;
+    let mut in_timestep = false;
+    let mut time = 0.0;
     for line in content.lines() {
         let t = line.trim();
-        match t {
-            "ENERGY03" => {
-                in_ene = true;
-                vals.clear();
-            },
-            "END" => {
-                if in_ene {
-                    if vals.len() >= 3 {
-                        frames.push(EnergyFrame {
-                            e_total: vals[0],
-                            e_kinetic: vals[1],
-                            e_potential: vals[2],
-                        });
-                    }
-                    in_ene = false;
-                }
-            },
-            _ if in_ene && !t.starts_with('#') && !t.is_empty() => {
-                // Single-value lines only (totals); multi-value lines fail parse
-                if let Ok(v) = t.parse::<f64>() {
-                    vals.push(v);
-                }
-            },
-            _ => {},
+        if t == "TIMESTEP" {
+            in_timestep = true;
+            continue;
+        }
+        if t == block {
+            current = Some(EnergyBlock {
+                time,
+                ..Default::default()
+            });
+            continue;
+        }
+        if t == "END" {
+            in_timestep = false;
+            if let Some(f) = current.take() {
+                frames.push(f);
+            }
+            continue;
+        }
+        if in_timestep {
+            if let Some(v) = t.split_whitespace().nth(1).and_then(|x| x.parse().ok()) {
+                time = v;
+            }
+            continue;
+        }
+        let Some(f) = current.as_mut() else { continue };
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(comment) = t.strip_prefix('#') {
+            let word = comment.split_whitespace().next().unwrap_or("");
+            if SECTIONS.contains(&word) {
+                f.sections.push((word.to_string(), Vec::new()));
+            }
+            continue;
+        }
+        let row: Vec<f64> = t
+            .split_whitespace()
+            .map(|x| {
+                x.parse()
+                    .unwrap_or_else(|_| panic!("{}: not a number {x:?} in {block}", path.display()))
+            })
+            .collect();
+        match f.sections.last_mut() {
+            Some((_, rows)) => rows.push(row),
+            None => panic!(
+                "{}: values before the first section of {block}",
+                path.display()
+            ),
         }
     }
     frames
 }
 
-// The engine writes the native layout since 0.0.34, so `parse_energy03` reads both sides.
-// ─── Parser: free-energy trajectories (.trg) ────────────────────────────────
-//
-// gromosXX writes `TIMESTEP` + `FREEENERDERIVS03` blocks (`# lambda`, then `# totals` in
-// ENERGY03 order: total, kinetic, potential, covalent, bond, angle, improper, dihedral,
-// cross-dihedral, nonbonded, LJ, CRF, …). Until 0.0.33 this parser looked for the legacy
-// one-line `FREEENERGY03` block only, so no dH/dλ was ever compared against the native files.
-// Both layouts are read through the crate's own reader now.
-
-#[derive(Debug, Clone)]
-struct FreeEnergyFrame {
-    time: f64,
-    lambda: f64,
-    dhdl_total: f64,
-    dhdl_lj: f64,
-    dhdl_crf: f64,
-    dhdl_bonded: f64,
+/// One value that differs from gromosXX.
+struct Mismatch {
+    frame: usize,
+    block: &'static str,
+    section: String,
+    row: usize,
+    col: usize,
+    expected: f64,
+    actual: f64,
 }
 
-fn parse_freeenergy03(path: &Path) -> Vec<FreeEnergyFrame> {
-    let traj = gromos_io::read_free_energy_trajectory(path)
-        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    for w in &traj.warnings {
-        eprintln!("{}: {w}", path.display());
-    }
-    traj.frames
-        .into_iter()
-        .map(|f| FreeEnergyFrame {
-            time: f.time,
-            lambda: f.lambda,
-            dhdl_total: f.dhdl_total,
-            dhdl_lj: f.dhdl_lj,
-            dhdl_crf: f.dhdl_crf,
-            dhdl_bonded: f.dhdl_bond + f.dhdl_angle + f.dhdl_improper + f.dhdl_dihedral,
+/// Compare two blocks section by section, value by value; `rel_tol` relative (with
+/// `ENERGY_ABS_TOL` as the floor), count lines exactly. Structural differences (a missing
+/// section, a different number of rows or columns) are reported as mismatches with NaN.
+fn compare_energy_block(
+    frame: usize,
+    block: &'static str,
+    expected: &EnergyBlock,
+    actual: &EnergyBlock,
+    rel_tol: f64,
+    out: &mut Vec<Mismatch>,
+) {
+    let mut push = |section: &str, row: usize, col: usize, e: f64, a: f64| {
+        out.push(Mismatch {
+            frame,
+            block,
+            section: section.to_string(),
+            row,
+            col,
+            expected: e,
+            actual: a,
         })
-        .collect()
+    };
+    for (k, (name, exp_rows)) in expected.sections.iter().enumerate() {
+        let Some((act_name, act_rows)) = actual.sections.get(k) else {
+            push(&format!("{name} (missing)"), 0, 0, f64::NAN, f64::NAN);
+            continue;
+        };
+        if act_name != name {
+            push(
+                &format!("{name} (found {act_name})"),
+                0,
+                0,
+                f64::NAN,
+                f64::NAN,
+            );
+            continue;
+        }
+        if exp_rows.len() != act_rows.len() {
+            push(
+                &format!("{name} (row count)"),
+                0,
+                0,
+                exp_rows.len() as f64,
+                act_rows.len() as f64,
+            );
+        }
+        let counted = COUNTED_SECTIONS.contains(&name.as_str());
+        for (r, (er, ar)) in exp_rows.iter().zip(act_rows).enumerate() {
+            if er.len() != ar.len() {
+                push(name, r, 0, er.len() as f64, ar.len() as f64);
+                continue;
+            }
+            for (c, (&e, &a)) in er.iter().zip(ar).enumerate() {
+                let ok = if counted && r == 0 {
+                    e == a
+                } else {
+                    (e - a).abs() <= (e.abs() * rel_tol).max(ENERGY_ABS_TOL)
+                };
+                if !ok {
+                    push(name, r, c, e, a);
+                }
+            }
+        }
+    }
+    if actual.sections.len() > expected.sections.len() {
+        for (name, _) in &actual.sections[expected.sections.len()..] {
+            push(&format!("{name} (extra)"), 0, 0, f64::NAN, f64::NAN);
+        }
+    }
 }
 
-fn assert_dhdl_close(actual: f64, expected: f64, label: &str) {
-    let diff = (actual - expected).abs();
-    let tol = (expected.abs() * DHDL_REL_TOL).max(ENERGY_ABS_TOL);
-    assert!(
-        diff <= tol,
-        "{label}: expected {expected:.10e}, got {actual:.10e}, diff={diff:.2e}, tol={tol:.2e}"
+fn report_mismatches(system: &str, mismatches: &[Mismatch]) {
+    if mismatches.is_empty() {
+        return;
+    }
+    let mut msg = format!(
+        "{system}: {} value(s) differ from gromosXX (frame, block, section, row, column: expected vs actual):\n",
+        mismatches.len()
     );
+    for m in mismatches.iter().take(40) {
+        msg.push_str(&format!(
+            "  [{}] {} {} row {} col {}: {:.10e} vs {:.10e}\n",
+            m.frame, m.block, m.section, m.row, m.col, m.expected, m.actual
+        ));
+    }
+    if mismatches.len() > 40 {
+        msg.push_str(&format!("  … and {} more\n", mismatches.len() - 40));
+    }
+    let mut by_section: Vec<(String, usize)> = Vec::new();
+    for m in mismatches {
+        let key = format!("{} {}", m.block, m.section);
+        match by_section.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, n)) => *n += 1,
+            None => by_section.push((key, 1)),
+        }
+    }
+    msg.push_str("  by section:");
+    for (k, n) in &by_section {
+        msg.push_str(&format!(" [{k}: {n}]"));
+    }
+    panic!("{msg}");
 }
 
 // ─── Force frame ────────────────────────────────────────────────────────────
@@ -218,17 +325,6 @@ fn assert_force_close(actual: f64, expected: f64, label: &str) {
     assert!(
         diff <= FORCE_ABS_TOL,
         "{label}: expected {expected:.10e}, got {actual:.10e}, diff={diff:.2e}, tol={FORCE_ABS_TOL:.2e}"
-    );
-}
-
-// ─── Comparison ─────────────────────────────────────────────────────────────
-
-fn assert_energy_close(actual: f64, expected: f64, label: &str) {
-    let diff = (actual - expected).abs();
-    let tol = (expected.abs() * ENERGY_REL_TOL).max(ENERGY_ABS_TOL);
-    assert!(
-        diff <= tol,
-        "{label}: expected {expected:.10e}, got {actual:.10e}, diff={diff:.2e}, tol={tol:.2e}"
     );
 }
 
@@ -323,9 +419,10 @@ fn run_reference(system: &str) {
         String::from_utf8_lossy(&result.stderr)
     );
 
-    // Parse energies: expected (ENERGY03) vs actual (ENERTRJ)
-    let expected = parse_energy03(&sys_dir.join("expected/energies.tre"));
-    let actual = parse_energy03(&tre);
+    // Energies: every value of every ENERGY03 block, and of every FREEENERDERIVS03 block where
+    // the system has a reference .trg.
+    let expected = parse_energy_blocks(&sys_dir.join("expected/energies.tre"), "ENERGY03");
+    let actual = parse_energy_blocks(&tre, "ENERGY03");
 
     // Both engines run exactly NSTLIM steps and write one frame per step, so the counts must
     // match. (They did not until 0.0.42: our loop ran NSTLIM+1 steps, and this assertion used to
@@ -338,19 +435,56 @@ fn run_reference(system: &str) {
         actual.len()
     );
 
+    let mut mismatches = Vec::new();
     for (i, (exp, act)) in expected.iter().zip(&actual).enumerate() {
-        assert_energy_close(act.e_total, exp.e_total, &format!("{system}[{i}] E_total"));
-        assert_energy_close(
-            act.e_kinetic,
-            exp.e_kinetic,
-            &format!("{system}[{i}] E_kinetic"),
-        );
-        assert_energy_close(
-            act.e_potential,
-            exp.e_potential,
-            &format!("{system}[{i}] E_potential"),
-        );
+        compare_energy_block(i, "ENERGY03", exp, act, ENERGY_REL_TOL, &mut mismatches);
     }
+    if let Some(fe_path) = toml_str_opt(&toml, "free_energy") {
+        let expected_trg = sys_dir.join(fe_path);
+        if expected_trg.exists() {
+            let exp_fe = parse_energy_blocks(&expected_trg, "FREEENERDERIVS03");
+            let act_fe = if trg.exists() {
+                parse_energy_blocks(&trg, "FREEENERDERIVS03")
+            } else {
+                Vec::new()
+            };
+            // Both engines write steps 0 … NSTLIM−1 every NTWG steps, so the frames pair one to
+            // one; a reference written with NTWG=0 (empty) needs an empty or absent .trg.
+            assert_eq!(
+                act_fe.len(),
+                exp_fe.len(),
+                "{system}: FREEENERDERIVS03 frame count differs from gromosXX (expected {}, got {})",
+                exp_fe.len(),
+                act_fe.len()
+            );
+            for (i, (ef, af)) in exp_fe.iter().zip(&act_fe).enumerate() {
+                if (af.time - ef.time).abs() > 1e-9 {
+                    mismatches.push(Mismatch {
+                        frame: i,
+                        block: "FREEENERDERIVS03",
+                        section: "(TIMESTEP time)".to_string(),
+                        row: 0,
+                        col: 0,
+                        expected: ef.time,
+                        actual: af.time,
+                    });
+                    continue;
+                }
+                compare_energy_block(i, "FREEENERDERIVS03", ef, af, DHDL_REL_TOL, &mut mismatches);
+            }
+            // the engine's file also reads back through the crate's own reader
+            if trg.exists() {
+                let read = gromos_io::read_free_energy_trajectory(&trg)
+                    .unwrap_or_else(|e| panic!("{system}: {}: {e}", trg.display()));
+                assert_eq!(
+                    read.frames.len(),
+                    act_fe.len(),
+                    "{system}: gromos-io reads a different number of .trg frames"
+                );
+            }
+        }
+    }
+    report_mismatches(system, &mismatches);
 
     // Compare forces if reference .trf exists
     let expected_trf = sys_dir.join("expected/forces.trf");
@@ -390,61 +524,6 @@ fn run_reference(system: &str) {
                 "{system}: expected {} force frames but got none",
                 exp_forces.len()
             );
-        }
-    }
-
-    // Compare free-energy trajectory if reference .trg exists
-    if let Some(fe_path) = toml_str_opt(&toml, "free_energy") {
-        let expected_trg = sys_dir.join(fe_path);
-        if expected_trg.exists() && trg.exists() {
-            let exp_fe = parse_freeenergy03(&expected_trg);
-            let act_fe = parse_freeenergy03(&trg);
-            assert!(
-                act_fe.len() >= exp_fe.len(),
-                "{system}: too few free-energy frames (expected {}, got {})",
-                exp_fe.len(),
-                act_fe.len()
-            );
-            if exp_fe.is_empty() {
-                // The legacy ch4_water_fep reference was generated with NTWG=0: an empty .trg.
-                // Its λ-range siblings (ch4_water_fep_l*) carry the dH/dλ frames.
-                eprintln!(
-                    "{system}: reference .trg has no free-energy frames — dH/dλ not compared"
-                );
-            }
-            // Align by time: the engine may write a frame at t=0 that gromosXX does not.
-            let mut actual = act_fe.iter().peekable();
-            for (i, ef) in exp_fe.iter().enumerate() {
-                let af = loop {
-                    match actual.next() {
-                        Some(af) if (af.time - ef.time).abs() < 1e-9 => break af,
-                        Some(af) if af.time < ef.time => continue,
-                        other => panic!(
-                            "{system}[{i}]: no free-energy frame at t={:.4} ps (next: {:?})",
-                            ef.time,
-                            other.map(|f| f.time)
-                        ),
-                    }
-                };
-                let label = |what: &str| {
-                    format!(
-                        "{system}[{i}] dH/dλ {what} (t={:.3}ps λ={:.3})",
-                        ef.time, ef.lambda
-                    )
-                };
-                assert_dhdl_close(af.dhdl_total, ef.dhdl_total, &label("total"));
-                // Per-term derivatives only where the engine records them (a frame whose
-                // components are all zero while the total is not carries the total only).
-                let has_split = af.dhdl_total == 0.0
-                    || af.dhdl_lj != 0.0
-                    || af.dhdl_crf != 0.0
-                    || af.dhdl_bonded != 0.0;
-                if has_split {
-                    assert_dhdl_close(af.dhdl_lj, ef.dhdl_lj, &label("LJ"));
-                    assert_dhdl_close(af.dhdl_crf, ef.dhdl_crf, &label("CRF"));
-                    assert_dhdl_close(af.dhdl_bonded, ef.dhdl_bonded, &label("bonded"));
-                }
-            }
         }
     }
 
@@ -728,6 +807,11 @@ ref_test!(aladip_vacuum_fep, "aladip_vacuum_fep");
 // `ch4_water_fep` (zero charge) never exercised. Found and fixed the 1/cutoff³ error in the
 // perturbed pair kernel's softened RF term (0.0.34).
 ref_test!(meoh_water_fep, "meoh_water_fep");
+// Two energy groups (atoms 1-6, 7-12) and a `.trg` every step: every bonded, nonbonded and dH/dλ
+// term booked into the energy group (pair) of its first atom(s), per term.
+ref_test!(aladip_vacuum_fep_groups, "aladip_vacuum_fep_groups");
+// One energy group and a `.trg` every step: the group-0 derivative cells carry the totals.
+ref_test!(aladip_vacuum_fep_trg, "aladip_vacuum_fep_trg");
 
 // ── Energy minimization ──────────────────────────────────────────────────────
 // gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.
@@ -737,6 +821,11 @@ ref_test!(aladip_solvated_em_noshake, "aladip_solvated_em_noshake");
 ref_test!(aladip_solvated_em_shake, "aladip_solvated_em_shake");
 ref_test!(aladip_solvated_em_posres, "aladip_solvated_em_posres");
 ref_test!(aladip_solvated_em, "aladip_solvated_em");
+// Three energy groups (1-4, 5-12, water): position restraints split over two groups.
+ref_test!(
+    aladip_solvated_em_posres_groups,
+    "aladip_solvated_em_posres_groups"
+);
 
 // ── Level 5: the input styles real GROMOS files come in ─────────────────────
 // Added 2026-08-30 after the LiveCoMS tutorial suite exposed a class of defect the levels above
@@ -746,6 +835,13 @@ ref_test!(aladip_multibath, "aladip_multibath");
 ref_test!(aladip_multibath_collapsed, "aladip_multibath_collapsed");
 ref_test!(aladip_wrapped, "aladip_wrapped");
 ref_test!(aladip_harmonic_covalent, "aladip_harmonic_covalent");
+// DOFSET `12 2 2  72 1 1`: the bath numbers do not ascend with the atoms (gromosXX `in_bath`).
+ref_test!(aladip_multibath_swapped, "aladip_multibath_swapped");
+// Three energy groups: harmonic bonds/angles and dihedrals booked by first atom across groups.
+ref_test!(
+    aladip_harmonic_covalent_groups,
+    "aladip_harmonic_covalent_groups"
+);
 // The classical part of this system already matches gromosXX exactly (its potential energy at
 // frame 0 agrees to 1e-9); what differs is the GaMD boost itself. gromosXX accumulates the
 // dihedral and total forces of every acceleration group during the force calculation and scales

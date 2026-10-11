@@ -630,17 +630,23 @@ impl PySimulation {
     /// recipe's `perturbation` is enabled (a `pttopo` in `inputs`, `NTG=1`).
     #[getter]
     fn dhdl(&self) -> f64 {
-        self.configuration.old().energies.dhdl_total
+        self.configuration
+            .old()
+            .perturbed_energy_derivatives
+            .potential_total
     }
 
     /// dH/dλ split by term at the last step: `{"lj", "crf", "bonded"}` (kJ/mol).
     #[getter]
     fn dhdl_terms<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-        let e = &self.configuration.old().energies;
+        let e = &self.configuration.old().perturbed_energy_derivatives;
         let d = pyo3::types::PyDict::new_bound(py);
-        d.set_item("lj", e.dhdl_lj)?;
-        d.set_item("crf", e.dhdl_crf)?;
-        d.set_item("bonded", e.dhdl_bonded)?;
+        d.set_item("lj", e.lj_total)?;
+        d.set_item("crf", e.crf_total)?;
+        d.set_item(
+            "bonded",
+            e.bond_total + e.angle_total + e.improper_total + e.dihedral_total,
+        )?;
         Ok(d)
     }
 
@@ -769,7 +775,7 @@ impl PySimulation {
             frame.dihedral,
             frame.lj,
             frame.coul_real,
-            state.energies.dhdl_total,
+            state.perturbed_energy_derivatives.potential_total,
         ]
     }
 }

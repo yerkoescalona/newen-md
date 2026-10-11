@@ -1330,6 +1330,23 @@ pub fn build_topology(parsed: ParsedTopology) -> Topology {
         }
     }
 
+    // --- Solute temperature groups from TEMPERATUREGROUPS (0-based last atoms; that the last
+    // one is the last solute atom is an MD requirement, checked where a run is prepared);
+    // without the block the solute is one group (gromosXX in_topology.cc:271-276). `solvate`
+    // adds one group per solvent molecule.
+    {
+        let mut start = 0usize;
+        for &last in &parsed.temperature_groups {
+            if last + 1 > start && last < n_solute {
+                topo.temperature_groups.push((start..=last).collect());
+                start = last + 1;
+            }
+        }
+        if parsed.temperature_groups.is_empty() && n_solute > 0 {
+            topo.temperature_groups.push((0..n_solute).collect());
+        }
+    }
+
     // Sort and deduplicate exclusions for fast binary_search lookups
     for excl in &mut topo.exclusions {
         excl.sort_unstable();
@@ -1980,6 +1997,19 @@ END
         assert!((improper.q0 - 0.0_f64.to_radians()).abs() < 1e-12);
 
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn temperature_groups_are_read_as_gromos_pp_reads_them() {
+        // gromos++ InTopology.cc:1405-1429 accepts a block that stops before the last solute
+        // atom; only the MD engine refuses it
+        let short = format!("{CG16_TOPO}\nTEMPERATUREGROUPS\n1\n3\nEND\n");
+        let topo = build_topology(parse_topology(short.as_bytes()).unwrap());
+        assert_eq!(topo.temperature_groups, vec![vec![0, 1, 2]]);
+
+        let full = format!("{CG16_TOPO}\nTEMPERATUREGROUPS\n2\n1 4\nEND\n");
+        let topo = build_topology(parse_topology(full.as_bytes()).unwrap());
+        assert_eq!(topo.temperature_groups, vec![vec![0], vec![1, 2, 3]]);
     }
 
     #[test]

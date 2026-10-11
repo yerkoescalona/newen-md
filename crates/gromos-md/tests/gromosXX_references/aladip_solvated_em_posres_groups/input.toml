@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_solvated_em_posres_groups"
+description = "aladip solvated EM with position restraints split over two solute energy groups"
+level = 4
+isolates = "posres and bonded energies booked per energy group of the first/restrained atom"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_solvated_em_posres_groups.in"
+posresspec = "../aladip_solvated_em_posres/aladip_solvated_em_posres.por"
+refpos = "../aladip_solvated_em_posres/aladip_solvated_em_posres.rpr"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

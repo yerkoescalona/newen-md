@@ -58,6 +58,49 @@ pub struct ForceEnergyLambda {
     pub angle_energy: f64,
     pub improper_energy: f64,
     pub dihedral_energy: f64,
+    /// `lambda_derivative` split the same way (gromosXX `perturbed_energy_derivatives`
+    /// `bond_energy`, … — the per-term columns of FREEENERDERIVS03).
+    pub bond_dhdl: f64,
+    pub angle_dhdl: f64,
+    pub improper_dhdl: f64,
+    pub dihedral_dhdl: f64,
+}
+
+/// Bonded energies per energy group, each term booked to the group of its first atom
+/// (gromosXX `bond_energy[atom_energy_group(i)]`, `angle_energy`, `improper_energy`,
+/// `dihedral_energy`). Empty with one energy group, where nothing is booked per group.
+#[derive(Debug, Clone, Default)]
+pub struct BondedGroupEnergies {
+    pub bond: Vec<f64>,
+    pub angle: Vec<f64>,
+    pub improper: Vec<f64>,
+    pub dihedral: Vec<f64>,
+}
+
+impl BondedGroupEnergies {
+    /// Zeroed arrays for `n_groups` groups; empty for one group.
+    pub fn new(n_groups: usize) -> Self {
+        let n = if n_groups > 1 { n_groups } else { 0 };
+        Self {
+            bond: vec![0.0; n],
+            angle: vec![0.0; n],
+            improper: vec![0.0; n],
+            dihedral: vec![0.0; n],
+        }
+    }
+
+    /// Whether the arrays are sized for more than one group.
+    #[inline]
+    pub fn is_grouped(&self) -> bool {
+        !self.bond.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.bond.fill(0.0);
+        self.angle.fill(0.0);
+        self.improper.fill(0.0);
+        self.dihedral.fill(0.0);
+    }
 }
 
 impl ForceEnergy {
@@ -100,6 +143,10 @@ impl ForceEnergyLambda {
             angle_energy: 0.0,
             improper_energy: 0.0,
             dihedral_energy: 0.0,
+            bond_dhdl: 0.0,
+            angle_dhdl: 0.0,
+            improper_dhdl: 0.0,
+            dihedral_dhdl: 0.0,
         }
     }
 
@@ -110,6 +157,10 @@ impl ForceEnergyLambda {
         self.angle_energy += other.angle_energy;
         self.improper_energy += other.improper_energy;
         self.dihedral_energy += other.dihedral_energy;
+        self.bond_dhdl += other.bond_dhdl;
+        self.angle_dhdl += other.angle_dhdl;
+        self.improper_dhdl += other.improper_dhdl;
+        self.dihedral_dhdl += other.dihedral_dhdl;
         for i in 0..self.forces.len().min(other.forces.len()) {
             self.forces[i] += other.forces[i];
         }
@@ -179,6 +230,7 @@ pub fn calculate_bonded_forces(
         true,
         true,
         true,
+        &mut BondedGroupEnergies::default(),
     )
 }
 
@@ -215,14 +267,48 @@ pub fn calculate_bonded_forces_ntf(
     ntf_angle: bool,
     ntf_dihedral: bool,
     ntf_improper: bool,
+    groups: &mut BondedGroupEnergies,
+) -> ForceEnergy {
+    if groups.is_grouped() {
+        bonded_forces_ntf::<true>(
+            topo,
+            conf,
+            pbc,
+            use_quartic_bonds,
+            form,
+            [ntf_bond, ntf_angle, ntf_dihedral, ntf_improper],
+            groups,
+        )
+    } else {
+        bonded_forces_ntf::<false>(
+            topo,
+            conf,
+            pbc,
+            use_quartic_bonds,
+            form,
+            [ntf_bond, ntf_angle, ntf_dihedral, ntf_improper],
+            groups,
+        )
+    }
+}
+
+/// [`calculate_bonded_forces_ntf`]; with `GROUPS` every term is also booked into `groups`.
+fn bonded_forces_ntf<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    use_quartic_bonds: bool,
+    form: CovalentForm,
+    [ntf_bond, ntf_angle, ntf_dihedral, ntf_improper]: [bool; 4],
+    groups: &mut BondedGroupEnergies,
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
     if ntf_bond {
         let mut bf = if use_quartic_bonds && form.quartic_bonds {
-            calculate_bond_forces_quartic(topo, conf, pbc)
+            calculate_bond_forces_quartic_grouped::<GROUPS>(topo, conf, pbc, &mut groups.bond)
         } else {
-            calculate_bond_forces_harmonic(topo, conf, pbc)
+            calculate_bond_forces_harmonic_grouped::<GROUPS>(topo, conf, pbc, &mut groups.bond)
         };
         log::debug!("  bonded: bond={:.6e}", bf.energy);
         bf.bond_energy = bf.energy;
@@ -231,9 +317,9 @@ pub fn calculate_bonded_forces_ntf(
     if ntf_angle {
         // COVALENTFORM NTBAH: cosine-harmonic (the GROMOS default) or harmonic
         let mut af = if form.cosine_harmonic_angles {
-            calculate_angle_forces(topo, conf, pbc)
+            calculate_angle_forces_grouped::<GROUPS>(topo, conf, pbc, &mut groups.angle)
         } else {
-            calculate_harmonic_angle_forces(topo, conf, pbc)
+            calculate_harmonic_angle_forces_grouped::<GROUPS>(topo, conf, pbc, &mut groups.angle)
         };
         log::debug!("  bonded: angle={:.6e}", af.energy);
         af.angle_energy = af.energy;
@@ -242,16 +328,21 @@ pub fn calculate_bonded_forces_ntf(
     if ntf_dihedral {
         // COVALENTFORM NTBDN: arbitrary phase shifts (the GROMOS default) or 0°/180° only
         let mut df = if form.arbitrary_phase_shifts {
-            calculate_dihedral_new_forces(topo, conf, pbc)
+            calculate_dihedral_new_forces_grouped::<GROUPS>(topo, conf, pbc, &mut groups.dihedral)
         } else {
-            calculate_dihedral_forces(topo, conf, pbc)
+            calculate_dihedral_forces_grouped::<GROUPS>(topo, conf, pbc, &mut groups.dihedral)
         };
         log::debug!("  bonded: dihe={:.6e}", df.energy);
         df.dihedral_energy = df.energy;
         result.add(&df);
     }
     if ntf_improper {
-        let mut imf = calculate_improper_dihedral_forces(topo, conf, pbc);
+        let mut imf = calculate_improper_dihedral_forces_grouped::<GROUPS>(
+            topo,
+            conf,
+            pbc,
+            &mut groups.improper,
+        );
         log::debug!("  bonded: impr={:.6e}", imf.energy);
         imf.improper_energy = imf.energy;
         result.add(&imf);

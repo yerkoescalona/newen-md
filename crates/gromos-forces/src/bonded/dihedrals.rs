@@ -22,6 +22,17 @@ pub fn calculate_dihedral_forces(
     conf: &Configuration,
     pbc: &Periodicity,
 ) -> ForceEnergy {
+    calculate_dihedral_forces_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_dihedral_forces`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `dihedral_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_dihedral_forces_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
+) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
     for dihedral in topo.all_proper_dihedrals_global() {
@@ -113,6 +124,9 @@ pub fn calculate_dihedral_forces(
         let f_k = -(f_i + f_j + f_l);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[dihedral.i]] += energy;
+        }
         result.forces[dihedral.i] += f_i;
         result.forces[dihedral.j] += f_j;
         result.forces[dihedral.k] += f_k;
@@ -152,6 +166,17 @@ pub fn calculate_dihedral_new_forces(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
+) -> ForceEnergy {
+    calculate_dihedral_new_forces_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_dihedral_new_forces`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `dihedral_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_dihedral_new_forces_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
@@ -242,6 +267,9 @@ pub fn calculate_dihedral_new_forces(
         let f_k = -(f_i + f_j + f_l);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[dihedral.i]] += energy;
+        }
         result.forces[dihedral.i] += f_i;
         result.forces[dihedral.j] += f_j;
         result.forces[dihedral.k] += f_k;

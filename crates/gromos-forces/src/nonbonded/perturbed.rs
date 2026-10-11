@@ -1,7 +1,8 @@
 //! Perturbed (free-energy) LJ+CRF interactions with soft-core potentials
 
+use super::innerloops::with_groups;
 use super::lj_crf_interaction;
-use super::{CRFParameters, LJParamMatrix};
+use super::{CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix};
 use gromos_core::math::{BoundaryCondition, Vec3};
 use gromos_core::topology::PerturbedAtomPair;
 
@@ -318,6 +319,9 @@ impl PertNBCorrection {
 /// Alpha convention (faithful to GROMOS):
 ///   single perturbed atom  →  that atom's α
 ///   both perturbed         →  average of the two atoms' α values
+///
+/// With more than one energy group the energy change and the dH/dλ of each pair also go to
+/// cell `[eg(i)][eg(j)]` of `sink` (gromosXX `perturbed_nonbonded_innerloop.cc:391-403`).
 pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
     pos: &[Vec3],
     pairlist: &[(u32, u32)],
@@ -329,6 +333,38 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
     lp: &PerturbedLambdaParams,
     bc: &BC,
     four_pi_eps_i: f64,
+    egroups: EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
+) -> PertNBCorrection {
+    with_groups!(egroups, G => pairlist_correction_impl::<BC, G>(
+        pos,
+        pairlist,
+        pert,
+        charges,
+        iac,
+        lj,
+        crf,
+        lp,
+        bc,
+        four_pi_eps_i,
+        &egroups,
+        sink,
+    ))
+}
+
+fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    pos: &[Vec3],
+    pairlist: &[(u32, u32)],
+    pert: &[Option<PertAtomInfo>],
+    charges: &[f64],
+    iac: &[u32],
+    lj: &LJParamMatrix,
+    crf: &CRFParameters,
+    lp: &PerturbedLambdaParams,
+    bc: &BC,
+    four_pi_eps_i: f64,
+    egroups: &EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
 ) -> PertNBCorrection {
     let n = pos.len();
     let mut out = PertNBCorrection::new(n);
@@ -397,6 +433,15 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
         out.dhdl += de_lj + de_crf;
         out.dhdl_lj += de_lj;
         out.dhdl_crf += de_crf;
+        if GROUPS {
+            sink.book(
+                egroups.cell(i, j),
+                e_lj_p - e_lj_a,
+                e_crf_p - e_crf_a,
+                de_lj,
+                de_crf,
+            );
+        }
     }
     out
 }
@@ -408,17 +453,44 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
 /// The net extra contribution is:
 ///   ΔE_self = 0.5*[(1−(1-λ)^n)*q_A² − λ^n*q_B²]*FPEPSI*crf_cut
 ///   Δ(dH/dλ)  = 0.5*n*[(1-λ)^(n-1)*q_A² − λ^(n-1)*q_B²]*FPEPSI*crf_cut
+///
+/// With more than one energy group each atom's terms also go to cell `[eg(i)][eg(i)]` of `sink`
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:3452-3453`).
 pub fn perturbed_self_energy_correction(
     pert: &[Option<PertAtomInfo>],
     crf: &CRFParameters,
     lp: &PerturbedLambdaParams,
     four_pi_eps_i: f64,
+    egroups: EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
+) -> (f64, f64) {
+    with_groups!(egroups, G => self_energy_correction_impl::<G>(
+        pert,
+        crf,
+        lp,
+        four_pi_eps_i,
+        &egroups,
+        sink,
+    ))
+}
+
+fn self_energy_correction_impl<const GROUPS: bool>(
+    pert: &[Option<PertAtomInfo>],
+    crf: &CRFParameters,
+    lp: &PerturbedLambdaParams,
+    four_pi_eps_i: f64,
+    egroups: &EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
 ) -> (f64, f64) {
     let mut delta_e = 0.0;
     let mut dhdl = 0.0;
     let n = lp.lambda_exp as f64;
 
-    for pi in pert.iter().filter_map(|x| x.as_ref()) {
+    for (i, pi) in pert
+        .iter()
+        .enumerate()
+        .filter_map(|(i, x)| x.as_ref().map(|p| (i, p)))
+    {
         let qa2 = pi.a_charge * pi.a_charge;
         let qb2 = pi.b_charge * pi.b_charge;
 
@@ -436,6 +508,9 @@ pub fn perturbed_self_energy_correction(
             * crf.crf_cut
             * four_pi_eps_i;
         dhdl += 0.5 * de_rf;
+        if GROUPS {
+            sink.book(egroups.cell(i, i), 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
+        }
     }
     (delta_e, dhdl)
 }
@@ -444,6 +519,9 @@ pub fn perturbed_self_energy_correction(
 ///
 /// Regular code computed state-A CRF for ALL exclusions.  This adds
 /// the delta (perturbed_RF − stateA_RF) for each affected pair.
+///
+/// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:3652-3653`).
 pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
     exclusions: &[Vec<usize>],
     pos: &[Vec3],
@@ -455,6 +533,38 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
     n_solute: usize,
     four_pi_eps_i: f64,
     out: &mut PertNBCorrection,
+    egroups: EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
+) {
+    with_groups!(egroups, G => excluded_correction_impl::<BC, G>(
+        exclusions,
+        pos,
+        pert,
+        charges,
+        crf,
+        lp,
+        bc,
+        n_solute,
+        four_pi_eps_i,
+        out,
+        &egroups,
+        sink,
+    ))
+}
+
+fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    exclusions: &[Vec<usize>],
+    pos: &[Vec3],
+    pert: &[Option<PertAtomInfo>],
+    charges: &[f64],
+    crf: &CRFParameters,
+    lp: &PerturbedLambdaParams,
+    bc: &BC,
+    n_solute: usize,
+    four_pi_eps_i: f64,
+    out: &mut PertNBCorrection,
+    egroups: &EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
 ) {
     for i in 0..n_solute {
         let pi = pert[i].as_ref();
@@ -523,6 +633,9 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
             out.delta_e_crf += e_crf_p - e_crf_a;
             out.dhdl += de_crf;
             out.dhdl_crf += de_crf;
+            if GROUPS {
+                sink.book(egroups.cell(i, j), 0.0, e_crf_p - e_crf_a, 0.0, de_crf);
+            }
         }
     }
 }
@@ -531,6 +644,9 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
 ///
 /// Regular loop used state-A cs6/cs12 and charges.  Applies
 /// delta = (1-λ)^n*stateA + λ^n*stateB − stateA for each perturbed pair.
+///
+/// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
+/// (gromosXX `perturbed_nonbonded_innerloop.cc:2257-2271`).
 pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
     one_four_pairs: &[Vec<usize>],
     pos: &[Vec3],
@@ -543,6 +659,40 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
     bc: &BC,
     four_pi_eps_i: f64,
     out: &mut PertNBCorrection,
+    egroups: EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
+) {
+    with_groups!(egroups, G => one_four_correction_impl::<BC, G>(
+        one_four_pairs,
+        pos,
+        pert,
+        charges,
+        iac,
+        lj,
+        crf,
+        lp,
+        bc,
+        four_pi_eps_i,
+        out,
+        &egroups,
+        sink,
+    ))
+}
+
+fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    one_four_pairs: &[Vec<usize>],
+    pos: &[Vec3],
+    pert: &[Option<PertAtomInfo>],
+    charges: &[f64],
+    iac: &[u32],
+    lj: &LJParamMatrix,
+    crf: &CRFParameters,
+    lp: &PerturbedLambdaParams,
+    bc: &BC,
+    four_pi_eps_i: f64,
+    out: &mut PertNBCorrection,
+    egroups: &EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
 ) {
     let _n_exp = lp.lambda_exp as f64;
     for i in 0..one_four_pairs.len() {
@@ -619,6 +769,15 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
             out.dhdl += de_lj + de_crf;
             out.dhdl_lj += de_lj;
             out.dhdl_crf += de_crf;
+            if GROUPS {
+                sink.book(
+                    egroups.cell(i, j),
+                    e_lj_p - e_lj_a,
+                    e_crf_p - e_crf_a,
+                    de_lj,
+                    de_crf,
+                );
+            }
         }
     }
 }
@@ -640,6 +799,9 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
 ///   Δe_lj  = (1-λ)^n * lj_a(c6/c12 or cs6/cs12) − lj_1-4_reg(cs6/cs12)
 ///   Δe_crf = (1-λ)^n * crf(q_i * q_j) − 1.0 * crf(q_i * q_j)
 ///           = −λ^n * crf_reg  (same charges both states, only λ-weighting changes)
+///
+/// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
+/// (gromosXX `perturbed_nonbonded_pair.cc:1583-1611`).
 pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     atom_pairs: &[PerturbedAtomPair],
     one_four_pairs: &[Vec<usize>],
@@ -653,6 +815,42 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     four_pi_eps_i: f64,
     rf_excluded: bool,
     out: &mut PertNBCorrection,
+    egroups: EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
+) {
+    with_groups!(egroups, G => atom_pair_correction_impl::<BC, G>(
+        atom_pairs,
+        one_four_pairs,
+        pos,
+        charges,
+        iac,
+        lj,
+        crf,
+        lp,
+        bc,
+        four_pi_eps_i,
+        rf_excluded,
+        out,
+        &egroups,
+        sink,
+    ))
+}
+
+fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    atom_pairs: &[PerturbedAtomPair],
+    one_four_pairs: &[Vec<usize>],
+    pos: &[Vec3],
+    charges: &[f64],
+    iac: &[u32],
+    lj: &LJParamMatrix,
+    crf: &CRFParameters,
+    lp: &PerturbedLambdaParams,
+    bc: &BC,
+    four_pi_eps_i: f64,
+    rf_excluded: bool,
+    out: &mut PertNBCorrection,
+    egroups: &EnergyGroups<'_>,
+    sink: &mut GroupEnergies,
 ) {
     let n_exp = lp.lambda_exp as f64;
 
@@ -737,6 +935,15 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
         out.dhdl += de_lj + de_crf;
         out.dhdl_lj += de_lj;
         out.dhdl_crf += de_crf;
+        if GROUPS {
+            sink.book(
+                egroups.cell(i, j),
+                e_lj_pert - e_lj_reg,
+                e_crf_pert - e_crf_reg,
+                de_lj,
+                de_crf,
+            );
+        }
     }
 }
 

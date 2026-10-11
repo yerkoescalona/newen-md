@@ -15,6 +15,8 @@ use gromos_core::configuration::Configuration;
 use gromos_core::topology::Topology;
 use gromos_core::units::kB;
 
+use super::multibath::BathRange;
+
 /// Berendsen thermostat parameters for a single temperature bath.
 #[derive(Debug, Clone)]
 pub struct BerendsenThermostatParams {
@@ -36,17 +38,20 @@ pub struct BerendsenThermostatParams {
 #[derive(Debug, Clone)]
 pub struct BerendsenThermostat {
     pub params: Vec<BerendsenThermostatParams>,
-    /// Atom range per bath: (first_atom, last_atom) inclusive
-    pub bath_ranges: Vec<(usize, usize)>,
+    /// The DOFSET ranges that map atoms to `params` (gromosXX `bath_index`), in file order.
+    pub ranges: Vec<BathRange>,
+    /// Scaling factor per bath of the current step.
+    scale: Vec<f64>,
 }
 
 impl BerendsenThermostat {
     /// Create a Berendsen thermostat from resolved baths: reference temperature, coupling time and
-    /// degrees of freedom per bath, and the atom range each one scales.
-    pub fn new(params: Vec<BerendsenThermostatParams>, bath_ranges: Vec<(usize, usize)>) -> Self {
+    /// degrees of freedom per bath, and the DOFSET ranges that assign the atoms to them.
+    pub fn new(params: Vec<BerendsenThermostatParams>, ranges: Vec<BathRange>) -> Self {
         Self {
+            scale: vec![1.0; params.len()],
             params,
-            bath_ranges,
+            ranges,
         }
     }
 
@@ -58,7 +63,12 @@ impl BerendsenThermostat {
                 tau,
                 dof,
             }],
-            bath_ranges: vec![(0, n_atoms - 1)],
+            ranges: vec![BathRange {
+                last_atom: n_atoms - 1,
+                com_bath: 0,
+                ir_bath: 0,
+            }],
+            scale: vec![1.0],
         }
     }
 }
@@ -74,7 +84,10 @@ impl Algorithm for BerendsenThermostat {
         //   current().energies.kinetic_energy_new = E_kin_new from previous step
         // (set by TemperatureCalculation into old().energies, then swapped by exchange_state)
 
+        // gromosXX `Berendsen_Thermostat::calc_scaling`: one factor per bath
+        self.scale.resize(self.params.len(), 1.0);
         for (bath_idx, params) in self.params.iter().enumerate() {
+            self.scale[bath_idx] = 1.0;
             // Skip if no coupling (tau < 0)
             if params.tau < 0.0 {
                 continue;
@@ -124,15 +137,22 @@ impl Algorithm for BerendsenThermostat {
                 scale
             );
 
-            if (scale - 1.0).abs() < 1e-15 {
-                continue; // No scaling needed
-            }
+            self.scale[bath_idx] = scale;
+        }
 
-            // Scale velocities for atoms in this bath range
-            let (first, last) = self.bath_ranges[bath_idx];
-            for i in first..=last {
-                conf.current_mut().vel[i] *= scale;
+        // gromosXX `Thermostat::scale` (`thermostat.cc:45-136`): every DOFSET range is scaled
+        // by its bath. A COM bath different from the IR bath is refused at plan validation.
+        // gromosXX's `continue` on an unscaled range also skips its `last_atom = r_it->last_atom`,
+        // so the next range would scale this range's atoms too; that is not reproduced.
+        let mut first = 0;
+        for r in &self.ranges {
+            let scale = self.scale[r.com_bath];
+            if (scale - 1.0).abs() >= 1e-15 {
+                for v in &mut conf.current_mut().vel[first..=r.last_atom] {
+                    *v *= scale;
+                }
             }
+            first = r.last_atom + 1;
         }
 
         Ok(())
@@ -182,6 +202,38 @@ mod tests {
         let mut bath = BerendsenThermostat::new_single_bath(300.0, -1.0, 3.0, 1);
         bath.apply(&topo, &mut conf, &sim).unwrap();
         assert_eq!(conf.current().vel[0], Vec3::new(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn each_dofset_range_is_scaled_by_its_own_bath() {
+        // DOFSET `1 2 2  2 1 1`: atom 0 couples to bath 2, atom 1 to bath 1 (only bath 2 coupled)
+        let topo = Topology::new();
+        let mut conf = Configuration::new(2, 2, 1);
+        conf.current_mut().vel = vec![Vec3::new(1.0, 0.0, 0.0); 2];
+        conf.current_mut().energies.kinetic_energy_new_bath = vec![0.5, 0.5];
+        let sim = SimulationState::new(0.002, 1);
+        let bath = |tau| BerendsenThermostatParams {
+            temperature: 300.0,
+            tau,
+            dof: 3.0,
+        };
+        let ranges = vec![
+            BathRange {
+                last_atom: 0,
+                com_bath: 1,
+                ir_bath: 1,
+            },
+            BathRange {
+                last_atom: 1,
+                com_bath: 0,
+                ir_bath: 0,
+            },
+        ];
+        let mut t = BerendsenThermostat::new(vec![bath(-1.0), bath(0.002)], ranges);
+        t.apply(&topo, &mut conf, &sim).unwrap();
+        let v = &conf.current().vel;
+        assert_ne!(v[0].x, 1.0);
+        assert_eq!(v[1].x, 1.0);
     }
 
     #[test]

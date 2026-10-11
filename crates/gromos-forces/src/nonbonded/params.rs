@@ -96,6 +96,118 @@ impl CRFParameters {
     }
 }
 
+/// Which energy group each atom belongs to (gromosXX `topo.atom_energy_group()`) and how many
+/// groups there are. With one group nothing is booked per group, and the kernels run their
+/// ungrouped instantiation.
+#[derive(Debug, Clone, Copy)]
+pub struct EnergyGroups<'a> {
+    atom_group: &'a [usize],
+    n_groups: usize,
+}
+
+impl<'a> EnergyGroups<'a> {
+    /// One energy group: no per-group booking.
+    pub const fn single() -> EnergyGroups<'static> {
+        EnergyGroups {
+            atom_group: &[],
+            n_groups: 1,
+        }
+    }
+
+    /// `atom_group[i]` is the energy group of atom `i`; it must cover every atom a kernel sees
+    /// when `n_groups > 1`.
+    pub fn new(atom_group: &'a [usize], n_groups: usize) -> Self {
+        Self {
+            atom_group,
+            n_groups,
+        }
+    }
+
+    /// More than one group: energies are booked per group pair.
+    #[inline(always)]
+    pub fn is_grouped(&self) -> bool {
+        self.n_groups > 1
+    }
+
+    /// Number of energy groups.
+    pub fn n_groups(&self) -> usize {
+        self.n_groups
+    }
+
+    /// Row-major cell `[eg(i)][eg(j)]` of an `n_groups × n_groups` matrix.
+    #[inline(always)]
+    pub fn cell(&self, i: usize, j: usize) -> usize {
+        self.atom_group[i] * self.n_groups + self.atom_group[j]
+    }
+}
+
+/// Pair energies and their λ derivatives per energy-group pair, flat row-major
+/// `n_groups × n_groups` (gromosXX `lj_energy[eg(i)][eg(j)]`, `crf_energy`, and the same two of
+/// `perturbed_energy_derivatives`). Both triangles are booked; the writer folds them.
+/// Empty with one energy group.
+#[derive(Debug, Clone, Default)]
+pub struct GroupEnergies {
+    pub n_groups: usize,
+    pub lj: Vec<f64>,
+    pub crf: Vec<f64>,
+    pub dhdl_lj: Vec<f64>,
+    pub dhdl_crf: Vec<f64>,
+}
+
+impl GroupEnergies {
+    /// Zeroed matrices for `n_groups` groups; empty for one group.
+    pub fn new(n_groups: usize) -> Self {
+        let cells = if n_groups > 1 { n_groups * n_groups } else { 0 };
+        Self {
+            n_groups: if n_groups > 1 { n_groups } else { 1 },
+            lj: vec![0.0; cells],
+            crf: vec![0.0; cells],
+            dhdl_lj: vec![0.0; cells],
+            dhdl_crf: vec![0.0; cells],
+        }
+    }
+
+    /// Whether the matrices are sized for more than one group.
+    #[inline(always)]
+    pub fn is_grouped(&self) -> bool {
+        !self.lj.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.lj.fill(0.0);
+        self.crf.fill(0.0);
+        self.dhdl_lj.fill(0.0);
+        self.dhdl_crf.fill(0.0);
+    }
+
+    /// Element-wise sum of `other` into `self` (same group count, or `other` ungrouped).
+    pub fn merge(&mut self, other: &GroupEnergies) {
+        if !other.is_grouped() {
+            return;
+        }
+        assert_eq!(self.lj.len(), other.lj.len(), "energy-group count mismatch");
+        for (dst, src) in [
+            (&mut self.lj, &other.lj),
+            (&mut self.crf, &other.crf),
+            (&mut self.dhdl_lj, &other.dhdl_lj),
+            (&mut self.dhdl_crf, &other.dhdl_crf),
+        ] {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d += *s;
+            }
+        }
+    }
+
+    /// Add a pair's energies and λ derivatives to flat cell `k`.
+    #[inline(always)]
+    pub fn book(&mut self, k: usize, e_lj: f64, e_crf: f64, de_lj: f64, de_crf: f64) {
+        self.lj[k] += e_lj;
+        self.crf[k] += e_crf;
+        self.dhdl_lj[k] += de_lj;
+        self.dhdl_crf[k] += de_crf;
+    }
+}
+
 /// Storage for forces and energies
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -108,10 +220,18 @@ pub struct ForceStorage {
     pub dhdl_lj: f64,
     /// dH/dλ of the reaction-field part of these pairs
     pub dhdl_crf: f64,
+    /// The same energies and derivatives per energy-group pair (empty with one group); the
+    /// scalars above stay the totals.
+    pub groups: GroupEnergies,
 }
 
 impl ForceStorage {
     pub fn new(n_atoms: usize) -> Self {
+        Self::with_groups(n_atoms, 1)
+    }
+
+    /// Storage that also books energies per energy-group pair when `n_groups > 1`.
+    pub fn with_groups(n_atoms: usize, n_groups: usize) -> Self {
         Self {
             forces: vec![Vec3::ZERO; n_atoms],
             e_lj: 0.0,
@@ -119,6 +239,7 @@ impl ForceStorage {
             virial: [[0.0; 3]; 3],
             dhdl_lj: 0.0,
             dhdl_crf: 0.0,
+            groups: GroupEnergies::new(n_groups),
         }
     }
 
@@ -129,6 +250,7 @@ impl ForceStorage {
         self.virial = [[0.0; 3]; 3];
         self.dhdl_lj = 0.0;
         self.dhdl_crf = 0.0;
+        self.groups.clear();
     }
 
     /// Accumulate another ForceStorage into this one (thread-local reduction).
@@ -145,6 +267,21 @@ impl ForceStorage {
         }
         self.dhdl_lj += other.dhdl_lj;
         self.dhdl_crf += other.dhdl_crf;
+        self.groups.merge(&other.groups);
+    }
+
+    /// Panic unless this storage books the group pairs `groups` describes (checked once per
+    /// kernel call, outside the pair loop).
+    #[inline]
+    pub(crate) fn check_groups(&self, groups: &EnergyGroups<'_>) {
+        if groups.is_grouped() {
+            assert_eq!(
+                self.groups.lj.len(),
+                groups.n_groups() * groups.n_groups(),
+                "ForceStorage is not sized for {} energy groups",
+                groups.n_groups()
+            );
+        }
     }
 }
 

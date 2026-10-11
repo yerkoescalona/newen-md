@@ -432,50 +432,57 @@ pub fn instantiate(
             },
             AlgorithmSpec::LatticeShift => seq.push(Box::new(LatticeShift::new())),
             AlgorithmSpec::LeapFrogVelocity => seq.push(Box::new(LeapFrogVelocity::new())),
-            AlgorithmSpec::Thermostat { algorithm, baths } => {
+            AlgorithmSpec::Thermostat {
+                algorithm,
+                baths,
+                ranges,
+            } => {
                 let first = baths
                     .first()
                     .ok_or_else(|| RunError::Recipe("thermostat without a bath".to_string()))?;
+                if ranges.last().map(|r| r.last_atom + 1) != Some(n_atoms)
+                    || ranges
+                        .iter()
+                        .any(|r| r.com_bath.max(r.ir_bath) >= baths.len())
+                {
+                    return Err(RunError::Recipe(format!(
+                        "thermostat ranges {ranges:?} do not map the {n_atoms} atoms onto {} \
+                         bath(s)",
+                        baths.len()
+                    )));
+                }
                 match algorithm {
                     ThermostatAlgorithm::Berendsen => {
-                        let mut alg = BerendsenThermostat::new_single_bath(
+                        let params = baths
+                            .iter()
+                            .map(|b| BerendsenThermostatParams {
+                                temperature: b.temperature,
+                                tau: b.tau,
+                                dof: b.dof,
+                            })
+                            .collect();
+                        seq.push(Box::new(BerendsenThermostat::new(params, ranges.clone())))
+                    },
+                    ThermostatAlgorithm::NoseHoover => {
+                        let mut alg = NoseHooverThermostat::new_single_bath(
                             first.temperature,
                             first.tau,
                             first.dof,
                             n_atoms,
                         );
-                        if baths.len() > 1 {
-                            alg.params.clear();
-                            alg.bath_ranges.clear();
-                            let mut start = 0;
-                            for b in baths {
-                                alg.params.push(BerendsenThermostatParams {
-                                    temperature: b.temperature,
-                                    tau: b.tau,
-                                    dof: b.dof,
-                                });
-                                alg.bath_ranges.push((start, b.last_atom));
-                                start = b.last_atom + 1;
-                            }
-                        }
+                        alg.ranges.clone_from(ranges);
                         seq.push(Box::new(alg))
                     },
-                    ThermostatAlgorithm::NoseHoover => {
-                        seq.push(Box::new(NoseHooverThermostat::new_single_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                        )))
-                    },
                     ThermostatAlgorithm::NoseHooverChain(n) => {
-                        seq.push(Box::new(NoseHooverThermostat::new_chain_bath(
+                        let mut alg = NoseHooverThermostat::new_chain_bath(
                             first.temperature,
                             first.tau,
                             first.dof,
                             n_atoms,
                             (*n).max(2),
-                        )))
+                        );
+                        alg.ranges.clone_from(ranges);
+                        seq.push(Box::new(alg))
                     },
                 }
             },
@@ -526,9 +533,9 @@ pub fn instantiate(
                     .with_min_steps(*min_steps)
                     .with_force_limit(*force_limit),
             )),
-            AlgorithmSpec::TemperatureCalculation { bath_last_atom } => {
-                seq.push(Box::new(TemperatureCalculation::with_baths(bath_last_atom)))
-            },
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } => seq.push(Box::new(
+                TemperatureCalculation::with_baths(*n_baths, ranges),
+            )),
             AlgorithmSpec::PressureCalculation { virial } => {
                 seq.push(Box::new(PressureCalculation::new(virial_type(*virial))))
             },
@@ -600,7 +607,9 @@ fn summarize(
                     ntc: ConstraintSelection::ntc_mode_of(solute.ntc()),
                 })
             },
-            AlgorithmSpec::Thermostat { algorithm, baths } => {
+            AlgorithmSpec::Thermostat {
+                algorithm, baths, ..
+            } => {
                 let label = match algorithm {
                     ThermostatAlgorithm::Berendsen => "Berendsen".to_string(),
                     ThermostatAlgorithm::NoseHoover => "Nose-Hoover".to_string(),
@@ -740,6 +749,7 @@ mod tests {
 
     use super::*;
     use crate::{legacy_builder::legacy_build_sequence, prepare_system, Coordinates};
+    use gromos_integrators::algorithms::BathRange;
 
     fn refs() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../gromos-md/tests/gromosXX_references")
@@ -809,6 +819,9 @@ mod tests {
         out
     }
 
+    /// `.imd` blocks the test-only legacy builder never modelled.
+    const LEGACY_UNMODELLED_BLOCKS: [&str; 2] = ["LAMBDAS", "PRECALCLAM"];
+
     #[test]
     fn plan_matches_legacy_builder_bit_for_bit() {
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(refs())
@@ -844,6 +857,20 @@ mod tests {
             // Likewise COVALENTFORM: the legacy builder always used the quartic/cosine-harmonic
             // forms, so an input asking for the harmonic ones has no counterpart to compare with.
             if loaded.imd.ntbbh != 0 || loaded.imd.ntbah != 0 || loaded.imd.ntbdn != 0 {
+                continue;
+            }
+            // Nor did it model individual λ (LAMBDAS) or extended TI (PRECALCLAM): an input
+            // carrying either has no legacy counterpart either.
+            let unmodelled: Vec<&str> = LEGACY_UNMODELLED_BLOCKS
+                .iter()
+                .copied()
+                .filter(|b| loaded.imd.raw_blocks.contains_key(*b))
+                .collect();
+            if !unmodelled.is_empty() {
+                println!(
+                    "{name}: skipped, the legacy builder does not model {}",
+                    unmodelled.join(", ")
+                );
                 continue;
             }
             let steps = loaded.imd.nstlim.min(10);
@@ -882,5 +909,93 @@ mod tests {
             compared += 1;
         }
         assert!(compared >= 40, "only {compared} systems compared");
+    }
+
+    /// The DOFSET ranges are the one atom → bath mapping (gromosXX `Multibath::in_bath`), also
+    /// when the bath numbers do not ascend with the atoms.
+    #[test]
+    fn dofset_ranges_map_atoms_to_baths_in_file_order() {
+        let loaded = load(&refs().join("aladip_multibath_swapped")).expect("reference");
+        let built = build_sequence_from_imd(
+            &loaded.imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .unwrap();
+        let swapped = vec![
+            BathRange {
+                last_atom: 11,
+                com_bath: 1,
+                ir_bath: 1,
+            },
+            BathRange {
+                last_atom: 71,
+                com_bath: 0,
+                ir_bath: 0,
+            },
+        ];
+        let thermostat = built.plan.iter().find_map(|a| match a {
+            AlgorithmSpec::Thermostat { ranges, .. } => Some(ranges.clone()),
+            _ => None,
+        });
+        assert_eq!(thermostat, Some(swapped.clone()));
+        let kinetic = built.plan.iter().find_map(|a| match a {
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } => {
+                Some((*n_baths, ranges.clone()))
+            },
+            _ => None,
+        });
+        assert_eq!(kinetic, Some((2, swapped)));
+    }
+
+    #[test]
+    fn a_temperature_group_split_over_two_baths_is_refused() {
+        // gromosXX multibath.cc:161-181: the solute (atoms 1-12) is one temperature group
+        let loaded = load(&refs().join("aladip_multibath_swapped")).expect("reference");
+        let mut imd = loaded.imd.clone();
+        imd.temp_bath[0].dof_sets = vec![[6, 1, 1], [72, 2, 2]];
+        let err = build_sequence_from_imd(
+            &imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            err.to_string()
+                .contains("Temperature group distributed over multiple baths"),
+            "{err}"
+        );
+
+        imd.temp_bath[0].dof_sets = vec![[42, 1, 1], [12, 2, 2], [72, 1, 1]];
+        let err = build_sequence_from_imd(
+            &imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .err()
+        .expect("refused");
+        assert!(err.to_string().contains("Multibath not sorted"), "{err}");
+    }
+
+    #[test]
+    fn solute_temperature_groups_must_reach_the_last_solute_atom() {
+        // gromosXX in_topology.cc:278-290
+        let dir = refs().join("aladip_multibath_swapped");
+        let loaded = load(&dir).expect("reference");
+        let parsed = read_topology_file(dir.join("../shared/aladip.topo")).unwrap();
+        let pc = parsed.physical_constants;
+        let mut topo = build_topology(parsed);
+        topo.temperature_groups = vec![(0..6).collect()];
+        let coords: Coordinates = read_coordinates(dir.join("../shared/aladip.conf"))
+            .unwrap()
+            .into();
+        let err = prepare_system(&loaded.imd, topo, pc, coords, &loaded.inputs)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("TEMPERATUREGROUPS"), "{err}");
     }
 }

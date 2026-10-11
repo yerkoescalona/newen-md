@@ -15,6 +15,17 @@ pub fn calculate_bond_forces_quartic(
     conf: &Configuration,
     pbc: &Periodicity,
 ) -> ForceEnergy {
+    calculate_bond_forces_quartic_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_bond_forces_quartic`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `bond_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_bond_forces_quartic_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
+) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
     for bond in topo.all_bonds_global() {
@@ -42,6 +53,9 @@ pub fn calculate_bond_forces_quartic(
         let force = r_vec * (-params.k_quartic * dr2);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[bond.i]] += energy;
+        }
         result.forces[bond.i] += force;
         result.forces[bond.j] -= force;
 
@@ -66,6 +80,17 @@ pub fn calculate_bond_forces_harmonic(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
+) -> ForceEnergy {
+    calculate_bond_forces_harmonic_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_bond_forces_harmonic`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `bond_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_bond_forces_harmonic_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
@@ -97,6 +122,9 @@ pub fn calculate_bond_forces_harmonic(
         let force = r_vec * (-params.k_harmonic * dr / r);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[bond.i]] += energy;
+        }
         result.forces[bond.i] += force;
         result.forces[bond.j] -= force;
 

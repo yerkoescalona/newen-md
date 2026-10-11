@@ -743,6 +743,14 @@ fn parse_block(
                 let mut nre = Vec::with_capacity(negr);
                 for _ in 0..negr {
                     match t.next_usize("NRE")? {
+                        // gromosXX in_parameter.cc:978-993: each NRE > 0, strictly increasing
+                        Some(v) if v == 0 || nre.last().is_some_and(|&p| v <= p) => {
+                            return Err(IoError::ParseError(format!(
+                                "block FORCE: NRE values must be positive and strictly \
+                                 increasing, found {v} after {:?}",
+                                nre
+                            )));
+                        },
                         Some(v) => nre.push(v),
                         None => break,
                     }
@@ -1642,5 +1650,14 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
             3
         );
         assert!(ImdParameters::nve(0.001, 10, "bogus").is_err());
+    }
+
+    #[test]
+    fn energy_groups_out_of_order_are_an_error() {
+        // gromosXX in_parameter.cc:986-993: NRE strictly increasing
+        let content = "TITLE\nx\nEND\nFORCE\n 1 1 1 1 1 1\n 2 5 5\nEND\n";
+        let path = write_tmp(content, "nre_order");
+        let err = read_imd_file(&path).unwrap_err().to_string();
+        assert!(err.contains("strictly increasing"), "{err}");
     }
 }

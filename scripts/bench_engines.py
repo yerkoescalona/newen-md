@@ -15,6 +15,11 @@ Usage
     scripts/bench_engines.py --system water_216_box --steps 2000 --repeats 5
     scripts/bench_engines.py --system water_1000_spc_gridcell --threads 1,2,4,8
     scripts/bench_engines.py --list
+    scripts/bench_engines.py --engines rust --rust-md bin/md_old --system ch4_water_fep
+
+`--rust-md PATH` (repeatable) adds another gromos-rs build as an engine named
+`rust-<file name>`, run on the same patched input and interleaved with the
+others, so two Rust builds can be compared directly.
 
 Wall time is taken from each engine's own report (gromos-rs "Simulation wall
 time", gromosXX "Wall time simulation") when available, so start-up parsing is
@@ -265,17 +270,21 @@ def report(runs: list[Run]) -> None:
     pairs = [(k, v) for k, v in by_key.items() if len(v) > 1]
     if pairs:
         print()
-        print(f"{'system':<26} {'thr':>4} {'gromosXX/rust (mean)':>22} {'± (propagated)':>15} {'(median)':>9}")
-        print("-" * 82)
+        print(f"{'system':<26} {'thr':>4} {'other':<24} {'other/rust (mean)':>18} "
+              f"{'± (propagated)':>15} {'(median)':>9}")
+        print("-" * 101)
         for (system, threads), engines in pairs:
             rust = engines.get("rust")
-            xx = next((e for name, e in engines.items() if name != "rust"), None)
-            if rust and xx:
-                ratio = xx.mean() / rust.mean()
+            if not rust:
+                continue
+            for name, other in engines.items():
+                if name == "rust":
+                    continue
+                ratio = other.mean() / rust.mean()
                 # First-order error propagation on the ratio of two means.
-                rel = ((xx.std() / xx.mean()) ** 2 + (rust.std() / rust.mean()) ** 2) ** 0.5
-                print(f"{system:<26} {threads:>4} {ratio:>21.3f}x {ratio * rel:>14.3f} "
-                      f"{xx.median()/rust.median():>8.2f}x")
+                rel = ((other.std() / other.mean()) ** 2 + (rust.std() / rust.mean()) ** 2) ** 0.5
+                print(f"{system:<26} {threads:>4} {name:<24} {ratio:>17.3f}x {ratio * rel:>14.3f} "
+                      f"{other.median()/rust.median():>8.2f}x")
 
 
 def main() -> None:
@@ -289,6 +298,9 @@ def main() -> None:
                     help="comma-separated thread counts (default 1)")
     ap.add_argument("--engines", "-e", default="rust,native",
                     help="comma-separated: rust + any of " + ",".join(GROMOSXX_BUILDS))
+    ap.add_argument("--rust-md", type=Path, action="append", default=[],
+                    help="another gromos-rs md binary to time as engine rust-<file name> "
+                         "(repeatable)")
     ap.add_argument("--ref-dir", type=Path, default=REF_DIR,
                     help="directory of system subdirectories with input.toml "
                          "(default: the gromosXX reference suite; use bench/systems for generated boxes)")
@@ -314,6 +326,8 @@ def main() -> None:
             binaries[f"gromosXX-{e}"] = ("gromosXX", GROMOSXX_BUILDS[e])
         else:
             raise SystemExit(f"unknown engine: {e}")
+    for path in args.rust_md:
+        binaries[f"rust-{path.name}"] = ("rust", path.resolve())
 
     for name, (_, path) in binaries.items():
         if not path.exists():

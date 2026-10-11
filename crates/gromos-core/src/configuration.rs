@@ -98,9 +98,14 @@ impl Box {
     }
 }
 
-/// Energy storage for the system
+/// Energy storage for the system, laid out like gromosXX's `configuration::Energy`
+/// (`configuration/energy.h`): totals, per-energy-group arrays, energy-group-pair matrices and
+/// per-bath kinetic energies. A `State` carries two of them: the energies and their λ
+/// derivatives (`State::perturbed_energy_derivatives`).
 ///
-/// Stores both total energies and per-group energies for detailed accounting
+/// The `*_total` scalars are the engine's totals; the per-group arrays and the matrices are what
+/// the `# bonded`, `# nonbonded` and `# special` sections of `ENERGY03` / `FREEENERDERIVS03`
+/// print. Neither object is cleared each step: whoever fills a field assigns it every step.
 #[derive(Debug, Clone)]
 pub struct Energy {
     /// Total kinetic energy (kJ mol⁻¹).
@@ -137,36 +142,71 @@ pub struct Energy {
     /// order. Their sum is booked in `special_total`; this keeps them visible one by one
     /// (3.9 G10) so a compensating error between two terms cannot hide.
     pub term_energies: Vec<(String, f64)>,
+    /// Sum of position-restraint energies (also part of `special_total`).
+    pub posrest_total: f64,
     /// Sum of distance-restraint energies.
     pub distanceres_total: f64,
     /// Solvent-accessible surface-area (SASA) solvation energy.
     pub sasa_total: f64,
     /// Energy contribution from holonomic constraints (SHAKE/LINCS).
     pub constraint_total: f64,
-
-    /// Accumulated dH/dλ across all perturbed terms this step (free-energy / TI).
-    pub dhdl_total: f64,
-    /// dH/dλ of the bonded terms (perturbed bonds, angles, impropers, dihedrals).
-    pub dhdl_bonded: f64,
-    /// dH/dλ of the Lennard-Jones part of the perturbed nonbonded terms.
-    pub dhdl_lj: f64,
-    /// dH/dλ of the reaction-field part (pairs, self and excluded-pair terms).
-    pub dhdl_crf: f64,
+    /// gromosXX `entropy_term`: on the derivative object, dH/dλ · H of the potential
+    /// (`energy_calculation.cc:87-89`); zero on the energies.
+    pub entropy_term: f64,
 
     /// Kinetic energy from the current (new) velocities, used for thermostat scaling.
     pub kinetic_energy_new: f64,
 
-    /// Per-temperature-group kinetic energies (length = number of temperature groups).
+    /// Kinetic energy per temperature bath: `com_kinetic_energy + ir_kinetic_energy`.
     pub kinetic_energy: Vec<f64>,
+    /// Centre-of-mass translational kinetic energy of the temperature groups, per bath.
+    pub com_kinetic_energy: Vec<f64>,
+    /// Internal and rotational kinetic energy of the temperature groups, per bath.
+    pub ir_kinetic_energy: Vec<f64>,
 
     /// Per-bath kinetic energy from the current (new) velocities — what a thermostat scales on.
     /// Empty for a single-bath run, where `kinetic_energy_new` carries the same number.
     pub kinetic_energy_new_bath: Vec<f64>,
 
+    /// Bond energy per energy group (booked to the group of the bond's first atom).
+    pub bond_energy: Vec<f64>,
+    /// Angle energy per energy group.
+    pub angle_energy: Vec<f64>,
+    /// Improper-dihedral energy per energy group.
+    pub improper_energy: Vec<f64>,
+    /// Proper-dihedral energy per energy group.
+    pub dihedral_energy: Vec<f64>,
+    /// Cross-dihedral energy per energy group.
+    pub crossdihedral_energy: Vec<f64>,
+    /// Position-restraint energy per energy group.
+    pub posrest_energy: Vec<f64>,
+    /// Distance-restraint energy per energy group.
+    pub distanceres_energy: Vec<f64>,
+    /// Distance-field restraint energy per energy group.
+    pub disfieldres_energy: Vec<f64>,
+    /// Angle-restraint energy per energy group.
+    pub angrest_energy: Vec<f64>,
+    /// Dihedral-restraint energy per energy group.
+    pub dihrest_energy: Vec<f64>,
+    /// Constraint energy per energy group.
+    pub constraints_energy: Vec<f64>,
+    /// SASA energy per energy group.
+    pub sasa_energy: Vec<f64>,
+    /// SASA volume energy per energy group.
+    pub sasa_volume_energy: Vec<f64>,
+    /// RDC restraint energy per energy group.
+    pub rdc_energy: Vec<f64>,
+
     /// Per-energy-group-pair LJ energies (energy_groups × energy_groups matrix).
     pub lj_energy: Vec<Vec<f64>>,
     /// Per-energy-group-pair CRF energies (energy_groups × energy_groups matrix).
     pub crf_energy: Vec<Vec<f64>>,
+    /// Per-energy-group-pair lattice-sum k-space energies.
+    pub ls_k_energy: Vec<Vec<f64>>,
+    /// Per-energy-group-pair shifted-RF extra energy, original form.
+    pub shift_extra_orig: Vec<Vec<f64>>,
+    /// Per-energy-group-pair shifted-RF extra energy, physical form.
+    pub shift_extra_phys: Vec<Vec<f64>>,
 
     /// Scalar virial (trace of the virial tensor), used for pressure coupling.
     pub virial_total: f64,
@@ -175,7 +215,7 @@ pub struct Energy {
 impl Energy {
     /// Create a zeroed energy accumulator for the given number of temperature and energy groups.
     pub fn new(num_temperature_groups: usize, num_energy_groups: usize) -> Self {
-        Self {
+        let mut e = Self {
             kinetic_total: 0.0,
             potential_total: 0.0,
             bond_total: 0.0,
@@ -190,20 +230,114 @@ impl Energy {
             ls_kspace_total: 0.0,
             special_total: 0.0,
             term_energies: Vec::new(),
+            posrest_total: 0.0,
             distanceres_total: 0.0,
             sasa_total: 0.0,
             constraint_total: 0.0,
-            dhdl_total: 0.0,
-            dhdl_bonded: 0.0,
-            dhdl_lj: 0.0,
-            dhdl_crf: 0.0,
+            entropy_term: 0.0,
             kinetic_energy_new: 0.0,
+            kinetic_energy: Vec::new(),
+            com_kinetic_energy: Vec::new(),
+            ir_kinetic_energy: Vec::new(),
             kinetic_energy_new_bath: Vec::new(),
-            kinetic_energy: vec![0.0; num_temperature_groups],
-            lj_energy: vec![vec![0.0; num_energy_groups]; num_energy_groups],
-            crf_energy: vec![vec![0.0; num_energy_groups]; num_energy_groups],
+            bond_energy: Vec::new(),
+            angle_energy: Vec::new(),
+            improper_energy: Vec::new(),
+            dihedral_energy: Vec::new(),
+            crossdihedral_energy: Vec::new(),
+            posrest_energy: Vec::new(),
+            distanceres_energy: Vec::new(),
+            disfieldres_energy: Vec::new(),
+            angrest_energy: Vec::new(),
+            dihrest_energy: Vec::new(),
+            constraints_energy: Vec::new(),
+            sasa_energy: Vec::new(),
+            sasa_volume_energy: Vec::new(),
+            rdc_energy: Vec::new(),
+            lj_energy: Vec::new(),
+            crf_energy: Vec::new(),
+            ls_k_energy: Vec::new(),
+            shift_extra_orig: Vec::new(),
+            shift_extra_phys: Vec::new(),
             virial_total: 0.0,
+        };
+        e.resize(num_energy_groups, num_temperature_groups);
+        e
+    }
+
+    /// Size the per-group arrays to `n_groups`, the group-pair matrices to `n_groups × n_groups`
+    /// and the per-bath arrays to `n_baths` (gromosXX `Energy::resize(num, numb)`), zeroing them.
+    pub fn resize(&mut self, n_groups: usize, n_baths: usize) {
+        for v in self.group_arrays_mut() {
+            v.clear();
+            v.resize(n_groups, 0.0);
         }
+        for m in self.group_matrices_mut() {
+            m.clear();
+            m.resize(n_groups, vec![0.0; n_groups]);
+        }
+        for v in [
+            &mut self.kinetic_energy,
+            &mut self.com_kinetic_energy,
+            &mut self.ir_kinetic_energy,
+        ] {
+            v.clear();
+            v.resize(n_baths, 0.0);
+        }
+    }
+
+    /// Number of energy groups the per-group arrays are sized for.
+    pub fn num_energy_groups(&self) -> usize {
+        self.bond_energy.len()
+    }
+
+    fn group_arrays_mut(&mut self) -> [&mut Vec<f64>; 14] {
+        [
+            &mut self.bond_energy,
+            &mut self.angle_energy,
+            &mut self.improper_energy,
+            &mut self.dihedral_energy,
+            &mut self.crossdihedral_energy,
+            &mut self.posrest_energy,
+            &mut self.distanceres_energy,
+            &mut self.disfieldres_energy,
+            &mut self.angrest_energy,
+            &mut self.dihrest_energy,
+            &mut self.constraints_energy,
+            &mut self.sasa_energy,
+            &mut self.sasa_volume_energy,
+            &mut self.rdc_energy,
+        ]
+    }
+
+    fn group_matrices_mut(&mut self) -> [&mut Vec<Vec<f64>>; 5] {
+        [
+            &mut self.lj_energy,
+            &mut self.crf_energy,
+            &mut self.ls_k_energy,
+            &mut self.shift_extra_orig,
+            &mut self.shift_extra_phys,
+        ]
+    }
+
+    /// With a single energy group every group cell is the total of its term, as gromosXX's
+    /// group sums are: book the totals into group 0 (and pair (0, 0)). No-op for any other
+    /// group count — those cells are booked by the terms themselves.
+    pub fn book_totals_into_single_group(&mut self) {
+        if self.bond_energy.len() != 1 || self.lj_energy.len() != 1 {
+            return;
+        }
+        self.bond_energy[0] = self.bond_total;
+        self.angle_energy[0] = self.angle_total;
+        self.improper_energy[0] = self.improper_total;
+        self.dihedral_energy[0] = self.dihedral_total;
+        self.crossdihedral_energy[0] = self.cross_dihedral_total;
+        self.posrest_energy[0] = self.posrest_total;
+        self.distanceres_energy[0] = self.distanceres_total;
+        self.constraints_energy[0] = self.constraint_total;
+        self.sasa_energy[0] = self.sasa_total;
+        self.lj_energy[0][0] = self.lj_total;
+        self.crf_energy[0][0] = self.crf_total;
     }
 
     /// Total energy (kinetic + potential + special), mirroring GROMOS:
@@ -226,7 +360,7 @@ impl Energy {
             + self.sasa_total;
     }
 
-    /// Clear all energies
+    /// Clear all energies (sizes are kept).
     pub fn clear(&mut self) {
         self.kinetic_total = 0.0;
         self.potential_total = 0.0;
@@ -242,27 +376,25 @@ impl Energy {
         self.ls_kspace_total = 0.0;
         self.special_total = 0.0;
         self.term_energies.clear();
+        self.posrest_total = 0.0;
         self.distanceres_total = 0.0;
         self.sasa_total = 0.0;
         self.constraint_total = 0.0;
-        self.dhdl_total = 0.0;
-        self.dhdl_bonded = 0.0;
-        self.dhdl_lj = 0.0;
-        self.dhdl_crf = 0.0;
+        self.entropy_term = 0.0;
         self.kinetic_energy_new = 0.0;
-        for e in self.kinetic_energy_new_bath.iter_mut() {
-            *e = 0.0;
-        }
+        self.kinetic_energy_new_bath.fill(0.0);
         self.virial_total = 0.0;
 
         self.kinetic_energy.fill(0.0);
-
-        for row in &mut self.lj_energy {
-            row.fill(0.0);
+        self.com_kinetic_energy.fill(0.0);
+        self.ir_kinetic_energy.fill(0.0);
+        for v in self.group_arrays_mut() {
+            v.fill(0.0);
         }
-
-        for row in &mut self.crf_energy {
-            row.fill(0.0);
+        for m in self.group_matrices_mut() {
+            for row in m.iter_mut() {
+                row.fill(0.0);
+            }
         }
     }
 }
@@ -290,6 +422,9 @@ pub struct State {
     pub pressure_tensor: Mat3,
     /// All energy components for this state.
     pub energies: Energy,
+    /// dH/dλ of every energy component, laid out like `energies` (gromosXX
+    /// `perturbed_energy_derivatives`); zero unless the run is perturbed.
+    pub perturbed_energy_derivatives: Energy,
 }
 
 impl State {
@@ -305,6 +440,7 @@ impl State {
             kinetic_energy_tensor: Mat3::ZERO,
             pressure_tensor: Mat3::ZERO,
             energies: Energy::new(num_temperature_groups, num_energy_groups),
+            perturbed_energy_derivatives: Energy::new(num_temperature_groups, num_energy_groups),
         }
     }
 
@@ -499,6 +635,33 @@ mod tests {
 
         assert_eq!(energy.potential_total, 100.0);
         assert_eq!(energy.total(), 200.0);
+    }
+
+    #[test]
+    fn energy_is_laid_out_per_group_pair_and_bath() {
+        let mut e = Energy::new(2, 3);
+        assert_eq!(e.num_energy_groups(), 3);
+        assert_eq!((e.lj_energy.len(), e.ls_k_energy[2].len()), (3, 3));
+        assert_eq!((e.kinetic_energy.len(), e.ir_kinetic_energy.len()), (2, 2));
+        e.resize(1, 4);
+        assert_eq!((e.rdc_energy.len(), e.shift_extra_phys.len()), (1, 1));
+        assert_eq!(e.com_kinetic_energy.len(), 4);
+        // a single group carries the totals
+        e.bond_total = 1.5;
+        e.lj_total = -2.0;
+        e.posrest_total = 0.25;
+        e.book_totals_into_single_group();
+        assert_eq!(
+            (e.bond_energy[0], e.lj_energy[0][0], e.posrest_energy[0]),
+            (1.5, -2.0, 0.25)
+        );
+        e.clear();
+        assert_eq!((e.bond_energy[0], e.lj_energy[0][0]), (0.0, 0.0));
+        // more than one group: the cells are the terms' to book
+        let mut two = Energy::new(1, 2);
+        two.bond_total = 1.0;
+        two.book_totals_into_single_group();
+        assert_eq!(two.bond_energy, vec![0.0, 0.0]);
     }
 
     #[test]

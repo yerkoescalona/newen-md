@@ -65,8 +65,8 @@ use gromos_core::pairlist::{PairlistAlgorithm, PairlistContainer, StandardPairli
 use gromos_core::topology::Topology;
 use gromos_forces::bonded::calculate_bonded_forces;
 use gromos_forces::nonbonded::{
-    lj_crf_innerloop, lj_crf_innerloop_parallel, CRFParameters, ForceStorage, LJParamMatrix,
-    LJParameters as NBLJParams,
+    lj_crf_innerloop, lj_crf_innerloop_parallel, CRFParameters, EnergyGroups, ForceStorage,
+    LJParamMatrix, LJParameters as NBLJParams,
 };
 
 /// GaMD search mode
@@ -613,6 +613,7 @@ impl GamdRunner {
                 &periodicity,
                 self.four_pi_eps_i,
                 n_atoms,
+                EnergyGroups::single(),
             )
         } else {
             let mut storage = ForceStorage::new(n_atoms);
@@ -626,6 +627,7 @@ impl GamdRunner {
                 &periodicity,
                 self.four_pi_eps_i,
                 &mut storage,
+                EnergyGroups::single(),
             );
             storage
         };

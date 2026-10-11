@@ -862,7 +862,8 @@ impl Topology {
                 })
                 .sum()
         } else {
-            self.num_solute_atoms()
+            // no instances: the solute is `moltypes[0]`
+            self.moltypes.first().map_or(0, |mt| mt.num_atoms())
         }
     }
 
@@ -1366,8 +1367,10 @@ impl Topology {
             let base = n_solute + mol * atoms_per_solvent;
             // Populate molecules list
             self.molecules.push(base..base + atoms_per_solvent);
-            // Each solvent molecule is its own pressure group (GROMOS convention)
+            // Each solvent molecule is its own pressure and temperature group (GROMOS convention)
             self.pressure_groups.push(base..base + atoms_per_solvent);
+            self.temperature_groups
+                .push((base..base + atoms_per_solvent).collect());
             for a in 0..atoms_per_solvent {
                 for b in (a + 1)..atoms_per_solvent {
                     self.exclusions[base + a].push(base + b);
@@ -1460,6 +1463,29 @@ impl Default for Topology {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solute_atoms_without_instances_come_from_the_solute_moltype() {
+        let mut topo = Topology::new();
+        topo.instances.clear();
+        assert_eq!(topo.num_solute_atoms(), 0);
+        assert_eq!(topo.num_atoms(), 0);
+        for name in ["C", "O"] {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: name.into(),
+                residue_nr: 1,
+                residue_name: "RES".into(),
+                iac: 0,
+                mass: 12.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        assert_eq!(topo.num_solute_atoms(), 2);
+        assert_eq!(topo.num_atoms(), 2);
+    }
 
     #[test]
     fn test_lj_parameters() {

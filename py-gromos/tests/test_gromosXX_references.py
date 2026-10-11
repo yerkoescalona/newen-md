@@ -257,6 +257,7 @@ REFERENCE_SYSTEMS = [
     "aladip_solvated_em_shake",
     "aladip_solvated_em_posres",
     "aladip_solvated_em",
+    "aladip_solvated_em_posres_groups",
     # Free-energy perturbation (Topology.apply_perturbation + NTG != 0), 3.9 step 1
     "ch4_water_fep",
     "ch4_water_fep_l000",
@@ -265,6 +266,11 @@ REFERENCE_SYSTEMS = [
     "ch4_water_fep_l100",
     "meoh_water_fep",
     "aladip_vacuum_fep",
+    "aladip_vacuum_fep_groups",
+    "aladip_vacuum_fep_trg",
+    # Energy groups across the solute, DOFSET ranges not in bath order (1.8)
+    "aladip_harmonic_covalent_groups",
+    "aladip_multibath_swapped",
 ]
 
 # Systems with a known, pre-existing position-output mismatch that is not a

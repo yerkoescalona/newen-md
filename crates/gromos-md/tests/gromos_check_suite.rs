@@ -104,6 +104,11 @@ fn load(input: &str, pttopo: bool, distrest: bool) -> System {
 /// Energies of the starting configuration: build the force field for `imd` (optionally with
 /// NSLFEXCL and RLAM overridden), run `init` + step 0, read the accumulated totals.
 fn step0_energies(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gromos_core::Energy {
+    step0_state(sys, nslfexcl, rlam).energies
+}
+
+/// The old state after step 0: its energies and their λ derivatives.
+fn step0_state(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gromos_core::State {
     let mut imd = sys.imd.clone();
     if let Some(v) = nslfexcl {
         imd.nslfexcl = v;
@@ -146,7 +151,7 @@ fn step0_energies(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gro
         &state,
     )
     .expect("start");
-    prepared.configuration.old().energies.clone()
+    prepared.configuration.old().clone()
 }
 
 /// The check suite's reference values are single molecules in vacuum: no box, no minimum image.
@@ -165,6 +170,7 @@ fn bonded_split(topo: &Topology, conf: &Configuration, lambda: f64) -> [f64; 12]
         true,
         true,
         true,
+        &mut gromos_forces::bonded::BondedGroupEnergies::default(),
     );
     let dl = 1.0; // NLAM = 1 → dλ/dλ = 1
     let pb = calculate_perturbed_bond_forces(topo, conf, &vacuum(), lambda, dl);
@@ -217,7 +223,8 @@ fn aladip_bonded_terms_match_the_check_suite() {
     term(e[10], 13.3146020649, 13.314602, "PerturbedDihedral");
 
     // The force field books the same split into its totals.
-    let tot = step0_energies(&sys, None, None);
+    let st = step0_state(&sys, None, None);
+    let tot = &st.energies;
     close(
         tot.bond_total,
         e[0] + e[1] + e[2],
@@ -232,7 +239,29 @@ fn aladip_bonded_terms_match_the_check_suite() {
         "improper_total",
     );
     close(tot.dihedral_total, e[9] + e[10], 1e-9, "dihedral_total");
-    close(tot.dhdl_bonded, e[11], 1e-9, "dH/dλ of the bonded terms");
+    // dH/dλ per term, as gromosXX books it (soft terms with their kind)
+    let d = &st.perturbed_energy_derivatives;
+    let (topo, conf) = (&sys.prepared.topology, &sys.prepared.configuration);
+    let v = vacuum();
+    let dl = |f: fn(&Topology, &Configuration, &gromos_core::math::Periodicity, f64, f64) -> _| {
+        let r: gromos_forces::bonded::ForceEnergyLambda = f(topo, conf, &v, lambda, 1.0);
+        r.lambda_derivative
+    };
+    let bond = dl(calculate_perturbed_bond_forces) + dl(calculate_soft_bond_forces);
+    let angle = dl(calculate_perturbed_angle_forces) + dl(calculate_soft_angle_forces);
+    let improper =
+        dl(calculate_perturbed_improper_dihedral_forces) + dl(calculate_soft_improper_forces);
+    let dihedral = dl(calculate_perturbed_dihedral_forces);
+    close(d.bond_total, bond, 1e-9, "dH/dλ of the bonds");
+    close(d.angle_total, angle, 1e-9, "dH/dλ of the angles");
+    close(d.improper_total, improper, 1e-9, "dH/dλ of the impropers");
+    close(d.dihedral_total, dihedral, 1e-9, "dH/dλ of the dihedrals");
+    close(
+        d.bond_total + d.angle_total + d.improper_total + d.dihedral_total,
+        e[11],
+        1e-9,
+        "dH/dλ of the bonded terms",
+    );
 }
 
 #[test]
@@ -284,8 +313,8 @@ fn aladip_nonbonded_lambda_derivative_is_a_finite_difference() {
         e.lj_total + e.crf_total
     };
     let fd = (nb(lambda + eps) - nb(lambda - eps)) / (2.0 * eps);
-    let e = step0_energies(&sys, Some(1), None);
-    let analytic = e.dhdl_lj + e.dhdl_crf;
+    let d = step0_state(&sys, Some(1), None).perturbed_energy_derivatives;
+    let analytic = d.lj_total + d.crf_total;
     assert!(
         (fd - analytic).abs() < 1e-3 * analytic.abs().max(1.0),
         "nonbonded dH/dλ: finite difference {fd:.6} vs analytic {analytic:.6}"

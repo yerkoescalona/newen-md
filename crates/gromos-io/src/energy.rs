@@ -8,14 +8,11 @@
 //!   `# energy-layout` line per declaration, and `# energy-provenance` when the caller gives it
 //!   ([`with_provenance`](EnergyWriter::with_provenance)) — all comment lines to gromosXX and
 //!   gromos++ (`docs/src/reference/energy-library.md`).
-//! * `ENERGY03`: the 52 `# totals` in gromosXX order (total, kinetic, potential, covalent, bond,
-//!   angle, improper, dihedral, cross-dihedral, nonbonded, LJ, CRF, lattice-sum slots, …, special
-//!   at 21, SASA 22, constraints 24, distance restraints 25), then `# baths` (kinetic energy per temperature
-//!   bath — the engine tracks the total per bath, so the COM / internal-rotation split is written
-//!   as zeros), `# bonded` per energy group (the engine tracks bonded totals, not per group: group
-//!   1 carries them), `# nonbonded` per group pair (LJ and CRF from the engine's own per-group
-//!   accumulators; lattice-sum slots zero), `# special` per group (zeros — restraint energies are
-//!   in the totals), and the empty EDS / GaMD / precalculated-λ / AB-dihedral sections.
+//! * `ENERGY03`: the body [`write_energyred_body`] prints for one [`Energy`] record, shared with
+//!   the `.trg` writer: the 52 `# totals` in gromosXX order, `# baths` (kinetic, centre-of-mass
+//!   and internal/rotational kinetic energy per bath), `# bonded` and `# special` per energy
+//!   group, `# nonbonded` per group pair (gromosXX's folded cells), and the EDS / GaMD /
+//!   precalculated-λ / AB-dihedral sections.
 //! * `VOLUMEPRESSURE03`: total mass, temperature per bath (total; COM / internal split and the
 //!   scaling factor are not tracked: 0, 0, 1), volume, the box vectors, the pressure (the two
 //!   scalars gromosXX prints after it — virial and kinetic contributions — are not tracked: 0),
@@ -102,12 +99,6 @@ pub struct EnergyFrame {
     pub special: f64,
     /// SASA solvation energy (`ENER[22]`).
     pub sasa: f64,
-    /// Kinetic energy per temperature bath (`# baths`).
-    pub bath_kinetic: Vec<f64>,
-    /// LJ energy per energy-group pair, `group_lj[i][j]` (`# nonbonded`).
-    pub group_lj: Vec<Vec<f64>>,
-    /// CRF energy per energy-group pair, `group_crf[i][j]`.
-    pub group_crf: Vec<Vec<f64>>,
     /// Total mass of the system (`VOLUMEPRESSURE03`).
     pub mass: f64,
     /// Box vectors K, L, M as rows.
@@ -142,9 +133,6 @@ impl Default for EnergyFrame {
             step: 0,
             special: 0.0,
             sasa: 0.0,
-            bath_kinetic: Vec::new(),
-            group_lj: Vec::new(),
-            group_crf: Vec::new(),
             mass: 0.0,
             box_vectors: [[0.0; 3]; 3],
             virial_tensor: [[0.0; 3]; 3],
@@ -185,13 +173,10 @@ impl EnergyFrame {
             + self.restraint;
     }
 
-    /// Build a `.tre`-shaped frame from the runtime [`Energy`] accumulator.
-    ///
-    /// The single conversion point from `gromos-core`'s `Energy` to the GROMOS
-    /// `.tre` block layout — reused by the `md` binary's file writer and by the
-    /// `pyo3-gromos` in-memory `Simulation.run()` array, so the two never drift
-    /// apart on which component landed in which column (they used to: `angle`,
-    /// `dihedral`, and `improper` were separately hardcoded to `0.0` in each).
+    /// The scalar summary of the runtime [`Energy`] accumulator: which total lands in which
+    /// field (`pyo3-gromos`'s `Simulation.run()` columns). The frame does not keep the record:
+    /// a `.tre` frame of the engine is written from the record itself
+    /// ([`EnergyWriter::write_energy`]), so per-bath and per-group values have one source.
     pub fn from_energy(
         energy: &Energy,
         time: f64,
@@ -219,12 +204,225 @@ impl EnergyFrame {
             restraint: energy.distanceres_total,
             special: energy.special_total + energy.distanceres_total,
             sasa: energy.sasa_total,
-            bath_kinetic: energy.kinetic_energy.clone(),
-            group_lj: energy.lj_energy.clone(),
-            group_crf: energy.crf_energy.clone(),
             ..Default::default()
         }
     }
+
+    /// What the `VOLUMEPRESSURE03` block of this frame prints.
+    pub fn volume_pressure(&self) -> VolumePressure {
+        VolumePressure {
+            mass: self.mass,
+            temperature: self.temperature,
+            volume: self.volume,
+            pressure: self.pressure,
+            box_vectors: self.box_vectors,
+            virial_tensor: self.virial_tensor,
+            kinetic_tensor: self.kinetic_tensor,
+        }
+    }
+
+    /// The energy record derived from the scalar fields, for `n_baths` baths and `n_groups`
+    /// energy groups (group 0 carries the bonded terms, the per-bath and per-pair sections are
+    /// zero; the total is recomputed as kinetic + potential + special, where `special` includes
+    /// `restraint`).
+    pub fn to_energy(&self, n_baths: usize, n_groups: usize) -> Energy {
+        let mut e = Energy::new(n_baths.max(1), n_groups.max(1));
+        e.kinetic_total = self.kinetic;
+        e.potential_total = self.potential;
+        e.bond_total = self.bond;
+        e.angle_total = self.angle;
+        e.improper_total = self.improper;
+        e.dihedral_total = self.dihedral;
+        e.lj_total = self.lj;
+        e.crf_total = self.coul_real;
+        e.ls_kspace_total = self.coul_recip;
+        e.constraint_total = self.shake;
+        e.distanceres_total = self.restraint;
+        e.special_total = self.special - self.restraint;
+        e.sasa_total = self.sasa;
+        e.bond_energy[0] = self.bond;
+        e.angle_energy[0] = self.angle;
+        e.improper_energy[0] = self.improper;
+        e.dihedral_energy[0] = self.dihedral;
+        e
+    }
+}
+
+/// What a `VOLUMEPRESSURE03` block prints: the system's mass, its temperature (one row per
+/// bath, the same value), the volume and box, the pressure, and the virial and molecular
+/// kinetic-energy tensors (`[a][b]`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct VolumePressure {
+    pub mass: f64,
+    pub temperature: f64,
+    pub volume: f64,
+    pub pressure: f64,
+    /// Box vectors K, L, M as rows.
+    pub box_vectors: [[f64; 3]; 3],
+    pub virial_tensor: [[f64; 3]; 3],
+    pub kinetic_tensor: [[f64; 3]; 3],
+}
+
+/// gromosXX's `_print_energyred_helper` (`out_configuration.cc:3068-3267`): the body of one
+/// `ENERGY03` (energies) or `FREEENERDERIVS03` (λ derivatives) block, from `# totals` to the
+/// `# ABdih` row. The section sizes are the record's: its baths (`kinetic_energy`) and energy
+/// groups (`bond_energy`). `n_accel_groups` is the GaMD acceleration-group count of the record:
+/// gromosXX sizes the energies for its default IGROUPS = 1 even without GaMD (one zero row in
+/// every `.tre`) and never sizes the derivatives (none in a `.trg`).
+pub fn write_energyred_body<W: Write>(
+    w: &mut W,
+    e: &Energy,
+    n_accel_groups: usize,
+) -> std::io::Result<()> {
+    fn row<W: Write>(w: &mut W, vals: &[f64]) -> std::io::Result<()> {
+        for v in vals {
+            write!(w, "{v:>18.9e}")?;
+        }
+        writeln!(w)
+    }
+    let n = e.bond_energy.len();
+    let at = |v: &Vec<f64>, i: usize| v.get(i).copied().unwrap_or(0.0);
+    let cell = |m: &Vec<Vec<f64>>, i: usize, j: usize| {
+        m.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0.0)
+    };
+    // gromosXX `calculate_totals` folds every pair into [max][min]: [j][i] + [i][j] (energy.cc:433-470)
+    let folded = |m: &Vec<Vec<f64>>, i: usize, j: usize| {
+        if i == j {
+            cell(m, i, i)
+        } else {
+            cell(m, j, i) + cell(m, i, j)
+        }
+    };
+    let folded_total = |m: &Vec<Vec<f64>>| {
+        let mut t = 0.0;
+        for i in 0..n {
+            for j in i..n {
+                t += folded(m, i, j);
+            }
+        }
+        t
+    };
+
+    let total = e.total();
+    let mut totals = [0.0f64; N_TOTALS];
+    totals[0] = total;
+    totals[1] = e.kinetic_total;
+    totals[2] = e.potential_total;
+    totals[3] =
+        e.bond_total + e.angle_total + e.dihedral_total + e.improper_total + e.cross_dihedral_total;
+    totals[4] = e.bond_total;
+    totals[5] = e.angle_total;
+    totals[6] = e.improper_total;
+    totals[7] = e.dihedral_total;
+    totals[8] = e.cross_dihedral_total;
+    totals[9] = e.lj_total + e.crf_total + e.ls_realspace_total + e.ls_kspace_total;
+    totals[10] = e.lj_total;
+    totals[11] = e.crf_total;
+    totals[12] = e.ls_total;
+    totals[13] = e.ls_realspace_total + e.ls_kspace_total;
+    totals[14] = e.ls_realspace_total;
+    totals[15] = e.ls_kspace_total;
+    totals[20] = e.special_total + e.distanceres_total;
+    totals[21] = e.sasa_total;
+    totals[23] = e.constraint_total;
+    totals[24] = e.distanceres_total;
+    totals[27] = e.posrest_total;
+    totals[39] = e.entropy_term;
+    totals[46] = total + folded_total(&e.shift_extra_orig);
+    totals[47] = total + folded_total(&e.shift_extra_phys);
+    writeln!(w, "# totals")?;
+    for v in totals {
+        row(w, &[v])?;
+    }
+
+    let nb = e.kinetic_energy.len();
+    writeln!(w, "# baths")?;
+    writeln!(w, "{nb}")?;
+    for b in 0..nb {
+        row(
+            w,
+            &[
+                e.kinetic_energy[b],
+                at(&e.com_kinetic_energy, b),
+                at(&e.ir_kinetic_energy, b),
+            ],
+        )?;
+    }
+
+    writeln!(w, "# bonded")?;
+    writeln!(w, "{n}")?;
+    for g in 0..n {
+        row(
+            w,
+            &[
+                e.bond_energy[g],
+                at(&e.angle_energy, g),
+                at(&e.improper_energy, g),
+                at(&e.dihedral_energy, g),
+                at(&e.crossdihedral_energy, g),
+            ],
+        )?;
+    }
+
+    writeln!(w, "# nonbonded")?;
+    for i in 0..n {
+        for j in i..n {
+            row(
+                w,
+                &[
+                    folded(&e.lj_energy, i, j),
+                    folded(&e.crf_energy, i, j),
+                    e.ls_total,
+                    folded(&e.ls_k_energy, i, j),
+                    folded(&e.shift_extra_orig, i, j),
+                    folded(&e.shift_extra_phys, i, j),
+                ],
+            )?;
+        }
+    }
+
+    writeln!(w, "# special")?;
+    for g in 0..n {
+        row(
+            w,
+            &[
+                at(&e.constraints_energy, g),
+                at(&e.posrest_energy, g),
+                at(&e.distanceres_energy, g),
+                at(&e.disfieldres_energy, g),
+                at(&e.angrest_energy, g),
+                at(&e.dihrest_energy, g),
+                at(&e.sasa_energy, g),
+                at(&e.sasa_volume_energy, g),
+                0.0,
+                at(&e.rdc_energy, g),
+                0.0,
+                0.0,
+                0.0,
+            ],
+        )?;
+    }
+
+    writeln!(w, "# eds\n# numstates\n0")?;
+    writeln!(
+        w,
+        "           # total         nonbonded           special            offset        total_orig       total_phys"
+    )?;
+    writeln!(w, "# gamd\n# numaccelgroups\n{n_accel_groups}")?;
+    writeln!(
+        w,
+        "      # E_dihedral       E_potential        K_dihedral       K_potential         dV_group"
+    )?;
+    for _ in 0..n_accel_groups {
+        row(w, &[0.0; 5])?;
+    }
+    writeln!(w, "# precalclam\n# nr_lambdas\n0")?;
+    writeln!(
+        w,
+        "          # A_e_lj            B_e_lj           A_e_crf           B_e_crf        AB_kinetic           AB_bond          AB_angle       AB_improper         AB_disres         AB_angres         AB_dihres        AB_disfld"
+    )?;
+    writeln!(w, "# ABdih\n      # A_dihedral       B_dihedral")?;
+    row(w, &[0.0, 0.0])
 }
 
 /// Writer for gromosXX-layout energy trajectories (`.tre`).
@@ -289,118 +487,55 @@ impl EnergyWriter {
 
     /// Append one frame: `TIMESTEP`, `ENERGY03` and `VOLUMEPRESSURE03` blocks.
     pub fn write_frame(&mut self, frame: &EnergyFrame) -> Result<(), IoError> {
-        let (nb, ng) = (self.n_baths, self.n_groups);
+        let energy = frame.to_energy(self.n_baths, self.n_groups);
+        self.write_energy(frame.step, frame.time, &energy, &frame.volume_pressure())
+    }
+
+    /// Append one frame of the engine: a `TIMESTEP` block, the `ENERGY03` block printed from
+    /// `energy` (the single source of its body), and the `VOLUMEPRESSURE03` block from `vp`.
+    pub fn write_energy(
+        &mut self,
+        step: usize,
+        time: f64,
+        energy: &Energy,
+        vp: &VolumePressure,
+    ) -> Result<(), IoError> {
+        let nb = self.n_baths;
         let w = &mut self.writer;
         let num = |v: f64| format!("{:>18.9e}", v);
         let row = |vals: &[f64]| vals.iter().map(|&v| num(v)).collect::<Vec<_>>().join("");
         writeln!(w, "TIMESTEP")?;
-        writeln!(w, "{:>15}{:>15.9}", frame.step, frame.time)?;
+        writeln!(w, "{:>15}{:>15.9}", step, time)?;
         writeln!(w, "END")?;
 
         writeln!(w, "ENERGY03")?;
-        writeln!(w, "# totals")?;
-        let mut totals = [0.0f64; N_TOTALS];
-        let bonded = frame.bond + frame.angle + frame.improper + frame.dihedral;
-        totals[0] = frame.total;
-        totals[1] = frame.kinetic;
-        totals[2] = frame.potential;
-        totals[3] = bonded;
-        totals[4] = frame.bond;
-        totals[5] = frame.angle;
-        totals[6] = frame.improper;
-        totals[7] = frame.dihedral;
-        totals[9] = frame.lj + frame.coul_real + frame.coul_recip;
-        totals[10] = frame.lj;
-        totals[11] = frame.coul_real;
-        totals[13] = frame.coul_recip;
-        totals[20] = frame.special;
-        totals[21] = frame.sasa;
-        totals[23] = frame.shake;
-        totals[24] = frame.restraint;
-        for v in totals {
-            writeln!(w, "{}", num(v))?;
-        }
-        writeln!(w, "# baths")?;
-        writeln!(w, "{nb}")?;
-        for b in 0..nb {
-            let kin = frame.bath_kinetic.get(b).copied().unwrap_or(0.0);
-            writeln!(w, "{}", row(&[kin, 0.0, 0.0]))?;
-        }
-        writeln!(w, "# bonded")?;
-        writeln!(w, "{ng}")?;
-        for g in 0..ng {
-            let v = if g == 0 {
-                [frame.bond, frame.angle, frame.improper, frame.dihedral, 0.0]
-            } else {
-                [0.0; 5]
-            };
-            writeln!(w, "{}", row(&v))?;
-        }
-        writeln!(w, "# nonbonded")?;
-        for i in 0..ng {
-            for j in i..ng {
-                let lj = frame
-                    .group_lj
-                    .get(i)
-                    .and_then(|r| r.get(j))
-                    .copied()
-                    .unwrap_or(0.0);
-                let crf = frame
-                    .group_crf
-                    .get(i)
-                    .and_then(|r| r.get(j))
-                    .copied()
-                    .unwrap_or(0.0);
-                writeln!(w, "{}", row(&[lj, crf, 0.0, 0.0, 0.0, 0.0]))?;
-            }
-        }
-        writeln!(w, "# special")?;
-        for _ in 0..ng {
-            writeln!(w, "{}", row(&[0.0; 13]))?;
-        }
-        writeln!(w, "# eds\n# numstates\n0")?;
-        writeln!(
-            w,
-            "           # total         nonbonded           special            offset        total_orig       total_phys"
-        )?;
-        writeln!(w, "# gamd\n# numaccelgroups\n0")?;
-        writeln!(
-            w,
-            "      # E_dihedral       E_potential        K_dihedral       K_potential         dV_group"
-        )?;
-        writeln!(w, "# precalclam\n# nr_lambdas\n0")?;
-        writeln!(
-            w,
-            "          # A_e_lj            B_e_lj           A_e_crf           B_e_crf        AB_kinetic           AB_bond          AB_angle       AB_improper         AB_disres         AB_angres         AB_dihres        AB_disfld"
-        )?;
-        writeln!(w, "# ABdih\n      # A_dihedral       B_dihedral")?;
-        writeln!(w, "{}", row(&[0.0, 0.0]))?;
+        write_energyred_body(w, energy, 1)?;
         writeln!(w, "END")?;
 
         writeln!(w, "VOLUMEPRESSURE03")?;
         writeln!(w, "# mass")?;
-        writeln!(w, "{}", num(frame.mass))?;
+        writeln!(w, "{}", num(vp.mass))?;
         writeln!(w, "# temperature")?;
         writeln!(w, "{nb}")?;
         for _ in 0..nb {
-            writeln!(w, "{}", row(&[frame.temperature, 0.0, 0.0, 1.0]))?;
+            writeln!(w, "{}", row(&[vp.temperature, 0.0, 0.0, 1.0]))?;
         }
         writeln!(w, "# volume")?;
-        writeln!(w, "{}", num(frame.volume))?;
-        for r in &frame.box_vectors {
+        writeln!(w, "{}", num(vp.volume))?;
+        for r in &vp.box_vectors {
             writeln!(w, "{}", row(r))?;
         }
         writeln!(w, "# pressure")?;
-        writeln!(w, "{}", num(frame.pressure))?;
+        writeln!(w, "{}", num(vp.pressure))?;
         writeln!(w, "{}", num(0.0))?;
         writeln!(w, "{}", num(0.0))?;
         for _ in 0..3 {
             writeln!(w, "{}", row(&[0.0; 3]))?;
         }
-        for r in &frame.virial_tensor {
+        for r in &vp.virial_tensor {
             writeln!(w, "{}", row(r))?;
         }
-        for r in &frame.kinetic_tensor {
+        for r in &vp.kinetic_tensor {
             writeln!(w, "{}", row(r))?;
         }
         writeln!(w, "END")?;
@@ -731,6 +866,53 @@ impl EnergyReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared body prints gromosXX's layout: folded group pairs, the global lattice-sum
+    /// total in column 3, `total + shift_extra` in slots 47/48, the GaMD count it is given.
+    #[test]
+    fn the_energyred_body_is_gromosxx_layout() {
+        let mut e = Energy::new(2, 2);
+        e.kinetic_total = 10.0;
+        e.potential_total = -4.0;
+        e.lj_energy[0][1] = 1.0;
+        e.lj_energy[1][0] = 2.0;
+        e.crf_energy[1][1] = -3.0;
+        e.kinetic_energy = vec![6.0, 4.0];
+        e.com_kinetic_energy = vec![1.0, 0.5];
+        e.ir_kinetic_energy = vec![5.0, 3.5];
+        e.posrest_energy[1] = 0.25;
+        let mut out = Vec::new();
+        write_energyred_body(&mut out, &e, 1).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let rows = |section: &str| -> Vec<Vec<f64>> {
+            text.lines()
+                .skip_while(|l| l.trim() != section)
+                .skip(1)
+                .take_while(|l| !l.trim_start().starts_with('#'))
+                .map(|l| l.split_whitespace().map(|x| x.parse().unwrap()).collect())
+                .collect()
+        };
+        let totals = rows("# totals");
+        assert_eq!(totals.len(), 52);
+        assert_eq!(
+            (totals[0][0], totals[46][0], totals[47][0]),
+            (6.0, 6.0, 6.0)
+        );
+        assert_eq!(
+            rows("# baths"),
+            vec![vec![2.0], vec![6.0, 1.0, 5.0], vec![4.0, 0.5, 3.5]]
+        );
+        let nb = rows("# nonbonded");
+        assert_eq!(nb.len(), 3); // (0,0) (0,1) (1,1)
+        assert_eq!((nb[1][0], nb[2][1]), (3.0, -3.0));
+        assert_eq!(rows("# special")[1][1], 0.25);
+        assert!(text.contains("# numaccelgroups\n1\n"));
+        let mut out = Vec::new();
+        write_energyred_body(&mut out, &e, 0).unwrap();
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("# numaccelgroups\n0\n"));
+    }
 
     #[test]
     fn test_energy_frame_creation() {

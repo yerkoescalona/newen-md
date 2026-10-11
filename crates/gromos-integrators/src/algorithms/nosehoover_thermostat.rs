@@ -34,6 +34,8 @@ use gromos_core::configuration::Configuration;
 use gromos_core::topology::Topology;
 use gromos_core::units::kB;
 
+use super::multibath::BathRange;
+
 /// Nosé-Hoover thermostat parameters for a single temperature bath.
 #[derive(Debug, Clone)]
 pub struct NoseHooverThermostatParams {
@@ -57,8 +59,10 @@ pub struct NoseHooverThermostatParams {
 #[derive(Debug, Clone)]
 pub struct NoseHooverThermostat {
     pub params: Vec<NoseHooverThermostatParams>,
-    /// Atom range per bath: (first_atom, last_atom) inclusive
-    pub bath_ranges: Vec<(usize, usize)>,
+    /// The DOFSET ranges that map atoms to `params` (gromosXX `bath_index`), in file order.
+    pub ranges: Vec<BathRange>,
+    /// Scaling factor per bath of the current step.
+    scale: Vec<f64>,
     /// Per-bath ζ chain state — length = nhc per bath
     zeta: Vec<Vec<f64>>,
 }
@@ -75,7 +79,8 @@ impl NoseHooverThermostat {
                 dof,
                 nhc: 1,
             }],
-            bath_ranges: vec![(0, n_atoms - 1)],
+            ranges: whole_system(n_atoms),
+            scale: vec![1.0],
             zeta: vec![vec![0.0; 1]],
         }
     }
@@ -106,7 +111,8 @@ impl NoseHooverThermostat {
                 dof,
                 nhc,
             }],
-            bath_ranges: vec![(0, n_atoms - 1)],
+            ranges: whole_system(n_atoms),
+            scale: vec![1.0],
             zeta: vec![vec![0.0; nhc]],
         }
     }
@@ -121,7 +127,9 @@ impl Algorithm for NoseHooverThermostat {
     ) -> Result<(), String> {
         let dt = sim.dt;
 
+        self.scale.resize(self.params.len(), 1.0);
         for bath_idx in 0..self.params.len() {
+            self.scale[bath_idx] = 1.0;
             // Copy all params as plain scalars (f64/usize are Copy) so that
             // the borrow of self.params is released before we mutate self.zeta.
             let temperature = self.params[bath_idx].temperature;
@@ -138,8 +146,15 @@ impl Algorithm for NoseHooverThermostat {
                 return Err(format!("NoseHoover bath {bath_idx}: nhc must be >= 1"));
             }
 
-            // E_kin from previous step (set by TemperatureCalculation)
-            let ekin = conf.current().energies.kinetic_energy_new;
+            // E_kin from previous step (set by TemperatureCalculation): per bath with several
+            // baths, the total with one
+            let ekin = conf
+                .current()
+                .energies
+                .kinetic_energy_new_bath
+                .get(bath_idx)
+                .copied()
+                .unwrap_or(conf.current().energies.kinetic_energy_new);
 
             // T_free = 2·E_kin / (dof·k_B)
             let mut free_temp = if dof > 0.0 {
@@ -213,15 +228,19 @@ impl Algorithm for NoseHooverThermostat {
                 self.zeta[bath_idx][0],
             );
 
-            if (scale - 1.0).abs() < 1e-15 {
-                continue;
-            }
+            self.scale[bath_idx] = scale;
+        }
 
-            // Scale velocities for atoms in this bath range
-            let (first, last) = self.bath_ranges[bath_idx];
-            for i in first..=last {
-                conf.current_mut().vel[i] *= scale;
+        // gromosXX `Thermostat::scale`: every DOFSET range is scaled by its bath
+        let mut first = 0;
+        for r in &self.ranges {
+            let scale = self.scale[r.com_bath];
+            if (scale - 1.0).abs() >= 1e-15 {
+                for v in &mut conf.current_mut().vel[first..=r.last_atom] {
+                    *v *= scale;
+                }
             }
+            first = r.last_atom + 1;
         }
 
         Ok(())
@@ -230,6 +249,15 @@ impl Algorithm for NoseHooverThermostat {
     fn name(&self) -> &str {
         "NoseHoover_Thermostat"
     }
+}
+
+/// One DOFSET range over all `n_atoms`, coupled to bath 0.
+fn whole_system(n_atoms: usize) -> Vec<BathRange> {
+    vec![BathRange {
+        last_atom: n_atoms - 1,
+        com_bath: 0,
+        ir_bath: 0,
+    }]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

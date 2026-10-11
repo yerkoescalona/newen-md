@@ -9,7 +9,8 @@ description = "Run assembly for GROMOS-RS: RunRecipe (a .imd as data) + topology
 [dependencies]
 gromos-core = { workspace = true }
 gromos-forces = { workspace = true }
-gromos-integrators = { workspace = true }
+# `serde`: the plan carries `BathRange` (the DOFSET ranges) as data
+gromos-integrators = { workspace = true, features = ["serde"] }
 gromos-io = { workspace = true }
 
 # The recipe and the plan are plain data: serde is the Rust<->Python bridge (3.9 A12),

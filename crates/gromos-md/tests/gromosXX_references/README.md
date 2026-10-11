@@ -56,6 +56,11 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | ch4_water_fep | 2998 | CH4→dummy in 999 SPC water, λ=0.5, twin-range NB FEP | **PASS** (its `.trg` is empty — NTWG=0; dH/dλ is covered by the rows below) |
 | 4   | ch4_water_fep_l000 / l025 / l075 / l100 | 2998 | the same system at λ = 0, 0.25, 0.75, 1; ten steps; dH/dλ total, LJ, CRF, bonded per step | **PASS** (2026-08-29) |
 | 4   | meoh_water_fep | 2862 | charged CH3OH→dummy in 953 SPC water, λ=0.5, ten steps, dH/dλ per term (soft-core RF for charged atoms) | **PASS** (2026-08-29, after the kernel fix) |
+| 4   | aladip_vacuum_fep_groups | 12 | aladip vacuum FEP (RLAM=0.125) with two energy groups (1-6, 7-12), `.trg` every step: per-group bonded/nonbonded energies, per-term per-group bonded dH/dλ, kinetic dH/dλ of the perturbed masses (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_trg | 12 | aladip vacuum FEP with one energy group and a `.trg` every step: the single-group derivative cells carry the dH/dλ totals (1.8) | **PASS** |
+| 4   | aladip_solvated_em_posres_groups | 72 | SD EM + position restraints with three energy groups (1-4, 5-12, water): restraint energy booked per group of the restrained atom (1.8) | **PASS** |
+| 4   | aladip_harmonic_covalent_groups | 72 | `COVALENTFORM` harmonic bonds/angles with three energy groups (1-4, 5-12, water): bonded energies booked by first atom across solute groups (1.8) | **PASS** |
+| 4   | aladip_multibath_swapped | 72 | `DOFSET 12 2 2  72 1 1`, baths at 300 K and 250 K: atoms map to baths by DOFSET range, not by bath number (gromosXX `in_bath`), dynamics included (1.8) | **PASS** |
 
 **45 of 45 tests pass** (2026-08-30; nothing ignored). Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

@@ -66,6 +66,12 @@ pub enum PrepareNote {
     /// The number of solvent molecules in the coordinate file differs from `NSM`; the
     /// coordinate file wins.
     NsmAdjusted { imd: usize, coordinates: usize },
+    /// The last energy group (`FORCE` NRE) ends before the last atom: gromosXX appends one more
+    /// group ending at the last atom, with a warning ("added an additional energy group").
+    EnergyGroupAdded {
+        /// last atom of the appended group, 1-based
+        last_atom: usize,
+    },
     /// Non-fatal validation findings (errors or warnings) for `stage`.
     Validation {
         stage: &'static str,
@@ -199,7 +205,17 @@ pub fn prepare_system(
         topology.solvate(actual_nsm);
     }
 
-    // 3b. Hand the bonds that a constraint algorithm owns to the topology, so the bonded force
+    // 3a. gromosXX in_topology.cc:278-290 (with solute molecules only): the last temperature
+    //     group of the solute ends with the last solute atom.
+    check_solute_temperature_groups(&topology, imd.npm)?;
+
+    // 3b. Energy groups over every atom, solvent included (gromosXX assigns them after
+    //     `solvate`, in_topology.cc:433-459).
+    if let Some(note) = assign_energy_groups(&mut topology, &imd.nre)? {
+        notes.push(note);
+    }
+
+    // 3c. Hand the bonds that a constraint algorithm owns to the topology, so the bonded force
     //     loop leaves them alone — gromosXX does this when it creates the constraints
     //     (`create_constraints.cc`): a constrained bond has no potential energy and no force.
     {
@@ -220,7 +236,7 @@ pub fn prepare_system(
         }
     }
 
-    // 3c. Make every charge group whole around its first atom, as gromosXX does on reading a
+    // 3d. Make every charge group whole around its first atom, as gromosXX does on reading a
     //     configuration. A `.cnf` written with the molecules put back into the box has charge
     //     groups split across the boundary; the pairlist works on their centres of geometry.
     if imd.ntb != 0 && box_dims.x > 0.0 {
@@ -251,7 +267,8 @@ pub fn prepare_system(
     )?;
 
     // 7. Configuration (double-buffered state). Velocities: generated (NTIVEL=1), read, or zero.
-    let mut conf = Configuration::new(n_atoms, 1, 1);
+    let n_baths = imd.num_temp_baths.max(1);
+    let mut conf = Configuration::new(n_atoms, n_baths, topology.energy_groups.len().max(1));
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)
@@ -281,6 +298,81 @@ pub fn prepare_system(
         truncoct_box,
         notes,
     })
+}
+
+/// Partition the atoms into energy groups from the `FORCE` block's NRE (1-based last atom of
+/// each group), as gromosXX's `In_Topology` does (in_topology.cc:433-459): none → one group
+/// over everything; a last NRE beyond the last atom is an error; one before the last atom gets
+/// a trailing group appended (and a note). NRE must be positive and strictly increasing
+/// (in_parameter.cc:978-993).
+fn assign_energy_groups(
+    topology: &mut Topology,
+    nre: &[usize],
+) -> Result<Option<PrepareNote>, RunError> {
+    let n_atoms = topology.num_atoms();
+    let mut last_atoms = Vec::with_capacity(nre.len() + 1);
+    let mut previous = 0usize;
+    for &e in nre {
+        if e == 0 || e <= previous {
+            return Err(RunError::Recipe(format!(
+                "FORCE block: energy group last atoms {nre:?} must be positive and strictly                  increasing"
+            )));
+        }
+        previous = e;
+        last_atoms.push(e - 1);
+    }
+    let mut note = None;
+    match last_atoms.last().copied() {
+        None => last_atoms.push(n_atoms.saturating_sub(1)),
+        Some(last) if last + 1 > n_atoms => {
+            return Err(RunError::Recipe(format!(
+                "FORCE block: the last energy group ends at atom {} but the system has {n_atoms}                  atoms",
+                last + 1
+            )));
+        },
+        Some(last) if last + 1 < n_atoms => {
+            last_atoms.push(n_atoms - 1);
+            note = Some(PrepareNote::EnergyGroupAdded { last_atom: n_atoms });
+        },
+        Some(_) => {},
+    }
+    topology.energy_groups.clear();
+    topology.atom_to_energy_group.clear();
+    topology.atom_to_energy_group.reserve(n_atoms);
+    let mut atom = 0usize;
+    for (g, &last) in last_atoms.iter().enumerate() {
+        let mut members = Vec::with_capacity((last + 1).saturating_sub(atom));
+        while atom <= last && atom < n_atoms {
+            members.push(atom);
+            topology.atom_to_energy_group.push(g);
+            atom += 1;
+        }
+        topology.energy_groups.push(members);
+    }
+    Ok(note)
+}
+
+/// gromosXX `In_Topology::read` (in_topology.cc:278-290): a TEMPERATUREGROUPS block whose last
+/// group stops before the last solute atom is an error for MD (gromos++ reads such a topology).
+fn check_solute_temperature_groups(topo: &Topology, npm: usize) -> Result<(), RunError> {
+    let n_solute = topo.num_solute_atoms();
+    if npm == 0 || n_solute == 0 {
+        return Ok(());
+    }
+    let end = topo
+        .temperature_groups
+        .iter()
+        .filter_map(|g| g.last().copied())
+        .filter(|&last| last < n_solute)
+        .max();
+    match end {
+        Some(last) if last + 1 != n_solute => Err(RunError::Inconsistent(format!(
+            "Error in TEMPERATUREGROUPS block: last temperature group has to end with last \
+             solute atom (it ends at atom {}, the solute at atom {n_solute})",
+            last + 1
+        ))),
+        _ => Ok(()),
+    }
 }
 
 fn validate(
@@ -321,6 +413,60 @@ mod tests {
             ..Default::default()
         };
         prepare_system(imd, topo, constants, coords, &inputs).unwrap()
+    }
+
+    #[test]
+    fn energy_groups_cover_every_atom_as_gromosxx_assigns_them() {
+        // NRE stops at the last solute atom: the solvent gets a group of its own
+        let imd = ImdParameters {
+            nsm: 20,
+            negr: 1,
+            nre: vec![12],
+            ..Default::default()
+        };
+        let p = aladip(&imd, false);
+        let t = &p.topology;
+        assert_eq!(t.energy_groups.len(), 2);
+        assert_eq!(t.atom_to_energy_group.len(), 72);
+        assert_eq!((t.energy_group(11), t.energy_group(12)), (0, 1));
+        assert!(p
+            .notes
+            .iter()
+            .any(|n| matches!(n, PrepareNote::EnergyGroupAdded { last_atom: 72 })));
+        assert_eq!(p.configuration.current().energies.num_energy_groups(), 2);
+        assert_eq!(
+            p.configuration
+                .current()
+                .perturbed_energy_derivatives
+                .lj_energy
+                .len(),
+            2
+        );
+
+        // no NRE: one group over everything
+        let imd = ImdParameters {
+            nsm: 20,
+            ..Default::default()
+        };
+        let p = aladip(&imd, false);
+        assert_eq!(p.topology.energy_groups, vec![(0..72).collect::<Vec<_>>()]);
+    }
+
+    #[test]
+    fn energy_groups_beyond_the_last_atom_are_an_error() {
+        let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+        let constants = parsed.physical_constants;
+        let topo = build_topology(parsed);
+        let coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+            .unwrap()
+            .into();
+        let imd = ImdParameters {
+            nsm: 20,
+            nre: vec![6, 73],
+            ..Default::default()
+        };
+        let err = prepare_system(&imd, topo, constants, coords, &RunInputs::default());
+        assert!(matches!(err, Err(RunError::Recipe(m)) if m.contains("ends at atom 73")));
     }
 
     #[test]

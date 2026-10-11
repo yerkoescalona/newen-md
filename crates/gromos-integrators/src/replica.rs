@@ -15,7 +15,8 @@ use gromos_core::topology::Topology;
 use gromos_core::units::kB;
 use gromos_forces::bonded::calculate_bonded_forces;
 use gromos_forces::nonbonded::{
-    lj_crf_innerloop, lj_crf_innerloop_parallel, CRFParameters, ForceStorage, LJParamMatrix,
+    lj_crf_innerloop, lj_crf_innerloop_parallel, CRFParameters, EnergyGroups, ForceStorage,
+    LJParamMatrix,
 };
 
 /// Unique identifier for a replica
@@ -225,6 +226,7 @@ impl Replica {
                 &periodicity,
                 self.four_pi_eps_i,
                 topology.num_atoms(),
+                EnergyGroups::single(),
             )
         } else {
             // Convert pairlist to (u32, u32) format
@@ -246,6 +248,7 @@ impl Replica {
                 &periodicity,
                 self.four_pi_eps_i,
                 &mut storage,
+                EnergyGroups::single(),
             );
             storage
         };

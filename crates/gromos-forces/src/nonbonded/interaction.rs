@@ -20,7 +20,8 @@ use gromos_core::spatial_index::SpatialIndex;
 use gromos_core::topology::Topology;
 
 use crate::nonbonded::{
-    lj_crf_innerloop_novirial, CRFParameters, ForceStorage, LJParamMatrix, LJParameters,
+    lj_crf_innerloop_novirial, CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix,
+    LJParameters,
 };
 use crate::provider::{Contribution, PotentialProvider, ProviderError, ProviderExtra};
 use crate::zones::{Zone, ZonePartition};
@@ -125,6 +126,7 @@ impl PotentialProvider for LjCrfInteraction {
                 &periodicity,
                 gromos_core::units::four_pi_eps_i,
                 &mut storage,
+                EnergyGroups::single(),
             );
         }
 
@@ -158,6 +160,7 @@ impl PotentialProvider for LjCrfInteraction {
                     &periodicity,
                     gromos_core::units::four_pi_eps_i,
                     &mut storage,
+                    EnergyGroups::single(),
                 );
             }
         }
@@ -271,6 +274,7 @@ mod tests {
             &periodicity,
             gromos_core::units::four_pi_eps_i,
             &mut storage,
+            EnergyGroups::single(),
         );
 
         assert_eq!(contribution.energy, storage.e_lj + storage.e_crf);
@@ -371,6 +375,7 @@ mod tests {
             &periodicity,
             gromos_core::units::four_pi_eps_i,
             &mut storage,
+            EnergyGroups::single(),
         );
         let mut lj_only_charges = charges.clone();
         lj_only_charges[0] = 0.0;
@@ -385,6 +390,7 @@ mod tests {
             &periodicity,
             gromos_core::units::four_pi_eps_i,
             &mut storage,
+            EnergyGroups::single(),
         );
 
         assert_eq!(partitioned.energy, storage.e_lj + storage.e_crf);
@@ -448,6 +454,7 @@ mod tests {
             &periodicity,
             gromos_core::units::four_pi_eps_i,
             &mut oracle,
+            EnergyGroups::single(),
         );
 
         assert_eq!(partitioned.energy, oracle.e_lj + oracle.e_crf);

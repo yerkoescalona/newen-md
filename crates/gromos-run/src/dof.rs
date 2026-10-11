@@ -11,19 +11,9 @@
 use gromos_core::Topology;
 use gromos_integrators::constraints::{NtcMode, ShakeBuffers};
 
-use crate::ConstraintSelection;
+use gromos_integrators::algorithms::{in_bath, BathRange};
 
-/// One temperature bath's share of the system: the atoms up to `last_atom` (0-based, inclusive)
-/// that a `MULTIBATH` DOFSET line assigns to it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BathRange {
-    /// last atom of the range (0-based, inclusive)
-    pub last_atom: usize,
-    /// bath index that takes the centre-of-mass degrees of freedom of the range
-    pub com_bath: usize,
-    /// bath index that takes the internal/rotational degrees of freedom
-    pub ir_bath: usize,
-}
+use crate::ConstraintSelection;
 
 /// Degrees of freedom per temperature bath, as gromosXX's
 /// `Multibath::calculate_degrees_of_freedom` counts them:
@@ -57,17 +47,13 @@ pub fn bath_dof(
         dof[r.ir_bath] += 3.0 * atoms_in_range as f64 - 3.0 * group_starts as f64;
         last = r.last_atom as i64;
     }
-    // constraints go to the bath of their atoms (gromosXX: Topology::calculate_constraint_dof)
-    let bath_of = |atom: usize| -> usize {
-        ranges
-            .iter()
-            .find(|r| atom <= r.last_atom)
-            .map(|r| r.ir_bath)
-            .unwrap_or(n_baths - 1)
-    };
+    // constraints go to the IR bath of their atoms, half to each end
+    // (gromosXX Topology::calculate_constraint_dof, topology.cc:1076-1110)
+    let ir_bath = |atom: usize| in_bath(ranges, atom).1;
     if sel.solute_constrained() {
         for c in &ShakeBuffers::new(topo, ntc, false).solute_constraints {
-            dof[bath_of(c.0)] -= 1.0;
+            dof[ir_bath(c.0)] -= 0.5;
+            dof[ir_bath(c.1)] -= 0.5;
         }
     }
     if sel.solvent_constrained() {
@@ -77,7 +63,7 @@ pub fn bath_dof(
         for m in 0..topo.num_solvent_molecules() {
             let first = n_solute + m * atoms_per_molecule;
             if first < n_atoms {
-                dof[bath_of(first)] -= per_molecule as f64;
+                dof[ir_bath(first)] -= per_molecule as f64;
             }
         }
     }

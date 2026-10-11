@@ -75,6 +75,26 @@ impl PositionRestraints {
             .map(|r| r.calculate(conf, periodicity))
             .sum()
     }
+
+    /// [`Self::calculate_all`], also adding each restraint's energy to `per_group` at the
+    /// energy group of its atom (gromosXX `posrest_energy[atom_energy_group(seq)]`,
+    /// `position_restraint_interaction.cc:101`).
+    pub fn calculate_all_grouped(
+        &self,
+        conf: &mut Configuration,
+        periodicity: &Periodicity,
+        atom_group: &[usize],
+        per_group: &mut [f64],
+    ) -> f64 {
+        self.restraints
+            .iter()
+            .map(|r| {
+                let e = r.calculate(conf, periodicity);
+                per_group[atom_group[r.atom]] += e;
+                e
+            })
+            .sum()
+    }
 }
 
 // ─── Distance restraints (GROMOS distance_restraint_interaction.cc) ────────
@@ -265,6 +285,26 @@ impl DistanceRestraints {
             .map(|r| r.calculate(conf, periodicity))
             .sum()
     }
+
+    /// [`Self::calculate_all`], also adding each restraint's energy to `per_group` at the
+    /// energy group of its first atom (gromosXX `distanceres_energy[atom_energy_group(v1.atom(0))]`,
+    /// `distance_restraint_interaction.cc:191`).
+    pub fn calculate_all_grouped(
+        &mut self,
+        conf: &mut Configuration,
+        periodicity: &Periodicity,
+        atom_group: &[usize],
+        per_group: &mut [f64],
+    ) -> f64 {
+        self.restraints
+            .iter_mut()
+            .map(|r| {
+                let e = r.calculate(conf, periodicity);
+                per_group[atom_group[r.atom1]] += e;
+                e
+            })
+            .sum()
+    }
 }
 
 // ─── Perturbed distance restraints (perturbed_distance_restraint_interaction.cc) ──
@@ -375,6 +415,26 @@ impl PerturbedDistanceRestraints {
         self.restraints
             .iter()
             .map(|r| r.calculate(conf, periodicity, lambda))
+            .sum()
+    }
+
+    /// [`Self::calculate_all`], also adding each restraint's energy to `per_group` at the
+    /// energy group of its first atom (gromosXX `perturbed_distance_restraint_interaction.cc`).
+    pub fn calculate_all_grouped(
+        &self,
+        conf: &mut Configuration,
+        periodicity: &Periodicity,
+        lambda: f64,
+        atom_group: &[usize],
+        per_group: &mut [f64],
+    ) -> f64 {
+        self.restraints
+            .iter()
+            .map(|r| {
+                let e = r.calculate(conf, periodicity, lambda);
+                per_group[atom_group[r.atom1]] += e;
+                e
+            })
             .sum()
     }
 }
