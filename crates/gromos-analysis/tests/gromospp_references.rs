@@ -310,6 +310,31 @@ fn bilayer_oparam_matches_gromospp() {
 }
 
 #[test]
+fn rdf_matches_gromospp() {
+    let cases: [(&str, &[&str]); 3] = [
+        ("centre_1_with_ow", &["@centre", "1:1", "@with", "s:OW"]),
+        // the centres are also with-atoms: the density excludes the centre itself
+        ("ow_ow", &["@centre", "s:OW", "@with", "s:OW"]),
+        (
+            "nointra",
+            &["@centre", "1:1", "@with", "1:a", "s:OW", "@nointra"],
+        ),
+    ];
+    for (name, sel) in cases {
+        let (topo, trc) = (topo(), trc());
+        let mut argv = vec!["@topo", &topo, "@pbc", "r"];
+        argv.extend_from_slice(sel);
+        argv.extend_from_slice(&["@cut", "1.5", "@grid", "50", "@traj", &trc]);
+        let out = run(env!("CARGO_BIN_EXE_rdf"), &strs(&argv), None);
+        assert_same_text(
+            &out,
+            &std::fs::read_to_string(data("rdf").join(format!("{name}.gromospp.out"))).unwrap(),
+            1e-6,
+        );
+    }
+}
+
+#[test]
 fn jval_matches_gromospp() {
     let d = data("jval");
     let jv = d.join("aladip.jval").to_string_lossy().into_owned();

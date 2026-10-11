@@ -454,17 +454,23 @@ r = rmsd(
 
 ### `rdf`
 
-Radial distribution function between two atom index groups.
+Radial distribution function of `group2` around `group1` in one frame, computed as gromos++
+`rdf` does: minimum-image distances in the rectangular box, density of `group2` over the box
+volume (less one when the centre is itself in `group2`), shell volume 4πr²Δr at each bin
+centre. g(r) tends to 1 at long range.
 
 ```python
-from gromos import rdf
+from gromos import System, rdf
 
+system = System.from_files("water.topo", "water.conf")
+oxygens = list(range(0, system.n_atoms, 3))
 r_vals, g_vals = rdf(
-    positions,                     # (N, 3) float64
-    group1=[0, 3, 6],              # list[int] — indices in group 1
-    group2=[1, 4, 7],              # list[int] — indices in group 2
-    n_bins=100,
-    r_max=1.5,                     # nm
+    system.positions,              # (N, 3) float64
+    group1=oxygens,                # list[int] — centre atoms
+    group2=oxygens,                # list[int] — atoms counted around them
+    n_bins=45,
+    r_max=0.9,                     # nm
+    box=system.box,                # (Lx, Ly, Lz) nm — required
 )
 # r_vals: (n_bins,) float64 — bin centres, nm
 # g_vals: (n_bins,) float64 — g(r) values

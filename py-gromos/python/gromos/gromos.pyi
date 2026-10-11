@@ -773,6 +773,7 @@ def rdf(
     group2: list[int],
     n_bins: int,
     r_max: float,
+    box: tuple[float, float, float],
 ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]: ...
 
 # =============================================================================

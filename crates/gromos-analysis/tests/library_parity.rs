@@ -182,6 +182,14 @@ fn cases() -> Vec<Case> {
                 &trc,
             ],
         ),
+        (
+            "rdf",
+            env!("CARGO_BIN_EXE_rdf"),
+            vec![
+                "@topo", &topo, "@pbc", "r", "@centre", "1:1", "@with", "s:OW", "@cut", "1.5",
+                "@grid", "50", "@traj", &trc,
+            ],
+        ),
         // ── Free energy ──────────────────────────────────────────────
         (
             "dfmult",

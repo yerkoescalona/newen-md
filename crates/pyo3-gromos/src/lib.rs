@@ -300,7 +300,9 @@ pub fn rmsd<'py>(
     Ok((sum_sq / n_atoms as f64).sqrt())
 }
 
-/// Calculate radial distribution function
+/// Radial distribution function of `group2` around `group1` in one frame, gromos++ `rdf`
+/// (`gromos_analysis::rdf`): minimum images in the rectangular box `box = (Lx, Ly, Lz)`,
+/// density over the box volume. Returns the bin centres and g(r).
 #[pyfunction]
 pub fn rdf<'py>(
     py: Python<'py>,
@@ -309,54 +311,43 @@ pub fn rdf<'py>(
     group2: Vec<usize>,
     n_bins: usize,
     r_max: f64,
+    r#box: (f64, f64, f64),
 ) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    use gromos_core::math::{Periodicity, Rectangular};
+    let value_err = |m: String| PyErr::new::<pyo3::exceptions::PyValueError, _>(m);
     let pos = positions.as_array();
-    let dr = r_max / n_bins as f64;
-
-    let mut hist = vec![0u64; n_bins];
-
-    // Calculate distances
-    for &i in &group1 {
-        for &j in &group2 {
-            if i != j {
-                let dx = pos[[i, 0]] - pos[[j, 0]];
-                let dy = pos[[i, 1]] - pos[[j, 1]];
-                let dz = pos[[i, 2]] - pos[[j, 2]];
-                let r = (dx * dx + dy * dy + dz * dz).sqrt();
-
-                let bin = (r / dr) as usize;
-                if bin < n_bins {
-                    hist[bin] += 1;
-                }
-            }
-        }
+    if pos.ncols() != 3 {
+        return Err(value_err("positions must have shape (N, 3)".into()));
     }
-
-    // Normalize to g(r)
-    let n1 = group1.len() as f64;
-    let n2 = group2.len() as f64;
-    let volume = (4.0 / 3.0) * std::f64::consts::PI * r_max.powi(3);
-    let rho = n2 / volume;
-
-    let mut r_values = Vec::with_capacity(n_bins);
-    let mut g_values = Vec::with_capacity(n_bins);
-
-    #[allow(clippy::needless_range_loop)] // one index over several arrays
-    for bin in 0..n_bins {
-        let r_inner = bin as f64 * dr;
-        let r_outer = (bin + 1) as f64 * dr;
-        let shell_volume = (4.0 / 3.0) * std::f64::consts::PI * (r_outer.powi(3) - r_inner.powi(3));
-
-        let r = (r_inner + r_outer) / 2.0;
-        let g = (hist[bin] as f64) / (n1 * rho * shell_volume);
-
-        r_values.push(r);
-        g_values.push(g);
+    let n = pos.nrows();
+    if let Some(&bad) = group1.iter().chain(&group2).find(|&&i| i >= n) {
+        return Err(value_err(format!(
+            "atom index {bad} out of range for {n} atoms"
+        )));
     }
-
+    let (lx, ly, lz) = r#box;
+    if !(lx > 0.0 && ly > 0.0 && lz > 0.0) {
+        return Err(value_err("box lengths must be positive".into()));
+    }
+    let coords: Vec<Vec3> = pos
+        .rows()
+        .into_iter()
+        .map(|r| Vec3::new(r[0], r[1], r[2]))
+        .collect();
+    let mut acc = gromos_analysis::rdf::Rdf::new(r_max, n_bins).map_err(value_err)?;
+    acc.add_frame(
+        &coords,
+        &group1,
+        &group2,
+        &vec![-1; n],
+        &Periodicity::Rectangular(Rectangular::new(Vec3::new(lx, ly, lz))),
+        lx * ly * lz,
+        false,
+    );
+    let r: Vec<f64> = (0..n_bins).map(|k| acc.r(k)).collect();
     Ok((
-        PyArray1::from_vec_bound(py, r_values),
-        PyArray1::from_vec_bound(py, g_values),
+        PyArray1::from_vec_bound(py, r),
+        PyArray1::from_vec_bound(py, acc.g()),
     ))
 }
 

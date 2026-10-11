@@ -1,7 +1,7 @@
 //! GROMOS-RS Analysis: Trajectory analysis tools
 //!
 //! This crate provides analysis functions:
-//! - RDF (radial distribution function)
+//! - RDF (radial distribution function, gromos++ `rdf`)
 //! - RMSD, RMSF
 //! - Hydrogen bonds
 //! - Gyration radius
@@ -34,7 +34,7 @@ pub use programs::{find, PROGRAMS};
 // Re-export main functions
 pub use diffusion::{calculate_diffusion_coefficient, calculate_msd};
 pub use gyration::calculate_gyration_radius;
-pub use rdf::calculate_rdf;
+pub use rdf::Rdf;
 pub use rmsd::calculate_rmsd;
 
 /// The Boltzmann constant gromos++ uses when no topology supplies one (`gmath/Physics.cc`):

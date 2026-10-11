@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.51] (2026-10-07)
+
+**`gromos.rdf()` returned a wrong g(r), and three implementations became one.** The binding
+had its own histogram: no periodic box, and the density taken over a sphere of radius `r_max`,
+so on `water_216_box` g(r) levelled off near 0.24 instead of 1. It now runs one frame of a port of
+gromos++ `rdf`, which the `rdf` program also runs and which matches gromos++ to the last digit
+printed.
+
+### Fixed
+
+- **`gromos.rdf()` was wrong in normalisation and ignored the box.** Distances were plain
+  Euclidean, and g(r) was divided by the density of a sphere of radius `r_max` rather than of the
+  box, so on `water_216_box` (45 bins to 0.9 nm) g(r) tended to about 0.24 instead of 1. It went
+  unnoticed because notebook 01 asserted only the position of the first peak, which a scale
+  error leaves where it is. `rdf(positions, group1, group2, n_bins, r_max, box)` now takes the
+  rectangular box lengths `(Lx, Ly, Lz)` (what `System.box` returns) as a required argument.
+  Notebook 01 now also asserts that g(r) tends to 1, and takes the RDF on `water_216_box`'s
+  `expected/final.conf`: the starting `.conf` is a simple-cubic lattice.
+
+### Added
+
+- **`rdf`**, the gromos++ program (`@topo @pbc @centre @with @cut @grid [@nointra] @traj`),
+  as a library function (`gromos_analysis::programs::rdf`); the physics is
+  `gromos_analysis::rdf::Rdf`, a per-frame accumulator the Python binding also calls. Reference
+  tests (`rdf_matches_gromospp`) against gromos++ output on `aladip_solvated`: a solute centre
+  among the water oxygens, oxygen around oxygen (the centre is left out of the density), and
+  `@nointra`. gromos++'s `@nointra` puts all solvent in one molecule, so every solvent–solvent
+  pair is skipped; this is reproduced and documented. `@doDCF` is refused. The `water_216_box`
+  liquid has no gromos++ reference: gromos++ refuses its topology, whose waters are solute.
+  `py-gromos/tests/test_analysis_rdf.py` checks every bin of `gromos.rdf()` against a numpy
+  minimum-image histogram.
+
+### Removed
+
+- The `calculate_rdf` stub in `gromos_analysis` (it returned an empty vector and had no callers)
+  and the 500-line hand-rolled `rdf` binary without periodic images; the binary is now the
+  one-line shim of the program above.
+
 ## [0.0.50] (2026-10-06)
 
 **A first MD run for newcomers: two argon atoms in 30 minutes.** The mdBook tutorial

@@ -20,7 +20,7 @@ pub mod structural;
 pub mod trajectory;
 
 // Every program is reachable by its own name as well as through its category.
-pub use distribution::{bilayer_dist, bilayer_oparam};
+pub use distribution::{bilayer_dist, bilayer_oparam, rdf};
 pub use energy::{ene_ana, ener};
 pub use free_energy::{bar, dfmult, dg_ener, eds_update_1, eds_update_2, ext_ti_ana, ext_ti_merge};
 pub use noe::{jepot, jval, nhoparam};
@@ -42,6 +42,7 @@ pub static PROGRAMS: &[&Program] = &[
     // Distribution
     &bilayer_dist::PROGRAM,
     &bilayer_oparam::PROGRAM,
+    &rdf::PROGRAM,
     // Free energy
     &bar::PROGRAM,
     &dfmult::PROGRAM,
