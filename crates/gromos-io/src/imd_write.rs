@@ -48,6 +48,7 @@ pub const MODELLED_BLOCKS: &[&str] = &[
     "ROTTRANS",
     "DISTANCERES",
     "PERTURBATION",
+    "LAMBDAS",
     "ENERGYMIN",
 ];
 
@@ -303,6 +304,18 @@ pub fn write_imd(params: &ImdParameters, n_atoms: Option<usize>) -> String {
             row(o, vals![p.ntg, p.nrdgl, p.rlam, p.dlamt]);
             o.push_str("#  ALPHLJ   ALPHC   NLAM   NSCALE\n");
             row(o, vals![p.alphlj, p.alphc, p.nlam, p.nscale]);
+        });
+    }
+
+    if let Some(l) = &p.lambdas {
+        block(&mut out, "LAMBDAS", |o| {
+            o.push_str("#    NTIL\n");
+            row(o, vals![if l.enabled { "on" } else { "off" }]);
+            o.push_str("#    NTLI  NILG1  NILG2  ALI  BLI  CLI  DLI  ELI\n");
+            for r in &l.rows {
+                let [a, b, c, d, e] = r.coefficients;
+                row(o, vals![r.kind.gromos_name(), r.g1, r.g2, a, b, c, d, e]);
+            }
         });
     }
 

@@ -284,6 +284,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,     // Not used for CG bonds
@@ -349,6 +350,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,
@@ -409,6 +411,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,
@@ -506,6 +509,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,

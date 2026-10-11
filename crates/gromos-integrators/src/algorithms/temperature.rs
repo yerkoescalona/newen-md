@@ -21,6 +21,7 @@
 
 use gromos_core::algorithm::{Algorithm, SimulationState};
 use gromos_core::configuration::Configuration;
+use gromos_core::lambdas::InteractionLambda;
 use gromos_core::math::Vec3;
 use gromos_core::topology::Topology;
 
@@ -206,15 +207,19 @@ impl Algorithm for TemperatureCalculation {
             }
         }
 
-        // dE_kin/dλ over the perturbed solute atoms, with L′_mass = 1
+        // dE_kin/dλ over the perturbed solute atoms, with the mass L′ of each atom's energy
+        // group (gromosXX `temperature_calculation.cc:163-178`)
         let perturbed = !self.perturbed_mass.is_empty();
         if perturbed {
             self.de_kin.clear();
             self.de_kin.resize(n_baths, 0.0);
             let vel = &conf.current().vel;
             let old_vel = &conf.old().vel;
-            let l_deriv = 1.0;
             for &(i, dm) in &self.perturbed_mass {
+                let g = topo.atom_to_energy_group.get(i).copied().unwrap_or(0);
+                let l_deriv = topo
+                    .individual_lambdas
+                    .derivative(InteractionLambda::Mass, g, g);
                 let avg_v2 = (old_vel[i].length_squared() + vel[i].length_squared()) * 0.5;
                 let (bath, _) = in_bath(&self.ranges, i);
                 self.de_kin[bath] -= l_deriv * dm * avg_v2;

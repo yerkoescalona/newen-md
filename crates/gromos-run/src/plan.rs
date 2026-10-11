@@ -49,16 +49,21 @@ pub struct DistanceRestraintsPlan {
     /// `Some(tau)` for time-averaged restraints (NTDIR < 0); needs `dt`.
     pub time_averaging: Option<f64>,
     pub dt: f64,
-    pub lambda: f64,
+    /// A perturbed run (NTG = 1): only then are the file's PERTDISRESSPEC rows restraints.
+    #[serde(default)]
+    pub perturbed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PerturbationPlan {
-    pub lambda: f64,
-    pub nlam: i32,
     pub alpha_lj: f64,
     pub alpha_c: f64,
+    /// A `LAMBDAS` block sets individual λ (NTIL on). λ itself, NLAM and the individual-λ table
+    /// travel with the prepared topology (`Topology::lambda`, `lambda_exp`,
+    /// `individual_lambdas`), as in gromosXX.
+    #[serde(default)]
+    pub individual_lambdas: bool,
 }
 
 /// Everything `Forcefield` needs, resolved.
@@ -629,6 +634,116 @@ fn thermostat_baths(
     Ok((baths, ranges))
 }
 
+/// Whether a `LAMBDAS` block sets individual λ: NTIL on in a perturbed run (gromosXX ignores
+/// the block otherwise).
+fn individual_lambdas_on(recipe: &RunRecipe) -> bool {
+    recipe.perturbation.enabled != 0 && ntil_on(recipe)
+}
+
+/// NTIL on, perturbed run or not: gromosXX raises its `individual_lambdas` feature flag before
+/// it looks at NTG (`in_parameter.cc:4367-4379`), so the feature locks apply either way.
+fn ntil_on(recipe: &RunRecipe) -> bool {
+    recipe
+        .perturbation
+        .lambdas
+        .as_ref()
+        .is_some_and(|l| l.enabled)
+}
+
+/// Whether the recipe carries the `md` binary's out-of-band `EDS` block in its accelerated
+/// form (SEARCH = 1, gromosXX's AEDS).
+fn aeds_passthrough(recipe: &RunRecipe) -> bool {
+    recipe.passthrough.get("EDS").is_some_and(|lines| {
+        let text = format!("EDS\n{}\nEND\n", lines.join("\n"));
+        gromos_io::input::eds_block::EdsBlock::parse(&mut text.as_bytes())
+            .ok()
+            .flatten()
+            .is_some_and(|b| b.search_enabled)
+    })
+}
+
+/// The PERTURBATION settings gromos-rs does not implement, refused instead of ignored, and the
+/// features gromosXX refuses together with individual λ (`check_parameter.cc:1581-1644`: slow
+/// growth, lattice sum, the conjugate-gradient minimiser, QM/MM, GaMD and AEDS stay locked
+/// against `individual_lambdas`; plain EDS is unlocked). Every build path runs it.
+pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
+    let p = &recipe.perturbation;
+    if ntil_on(recipe) {
+        let refuse = |what: &str| {
+            Err(RunError::Recipe(format!(
+                "LAMBDAS on (individual λ) together with {what}: gromosXX refuses this \
+                 combination"
+            )))
+        };
+        if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3) {
+            return refuse("lattice-sum electrostatics (NLRELE 2/3)");
+        }
+        if recipe.minimisation.method >= 2 {
+            return refuse("the conjugate-gradient minimiser (NTEM >= 2)");
+        }
+        if !recipe.forcefield.terms.is_empty() {
+            return refuse("QM/ML terms");
+        }
+        if recipe.passthrough.contains_key("GAMD") {
+            return refuse("Gaussian accelerated MD (GAMD)");
+        }
+        if aeds_passthrough(recipe) {
+            return refuse("accelerated EDS (EDS with SEARCH = 1)");
+        }
+    }
+    if p.enabled == 0 {
+        return Ok(());
+    }
+    if p.dlamt != 0.0 {
+        return Err(RunError::Recipe(format!(
+            "PERTURBATION DLAMT = {}: slow growth (λ changing during the run) is not \
+             implemented; set DLAMT = 0",
+            p.dlamt
+        )));
+    }
+    if p.nscale != 0 {
+        return Err(RunError::Recipe(format!(
+            "PERTURBATION NSCALE = {}: scaled interactions (SCALEDINTERACTIONS) are not \
+             implemented; set NSCALE = 0",
+            p.nscale
+        )));
+    }
+    if individual_lambdas_on(recipe) {
+        let negr = recipe.forcefield.energy_groups.count.max(1);
+        for r in p.lambdas.iter().flat_map(|l| &l.rows) {
+            if r.g1 == 0 || r.g2 < r.g1 || r.g2 > negr {
+                return Err(RunError::Recipe(format!(
+                    "LAMBDAS row {} {} {}: the groups must satisfy 1 <= NILG1 <= NILG2 <= NEGR \
+                     ({negr})",
+                    r.kind.0.gromos_name(),
+                    r.g1,
+                    r.g2,
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The individual-λ lock of a plan built elsewhere (`build_sequence_from_plan`): whether
+/// LAMBDAS applies is the recipe's, not the plan's editable flag.
+pub(crate) fn check_plan_against_recipe(
+    recipe: &RunRecipe,
+    plan: &[AlgorithmSpec],
+) -> Result<(), RunError> {
+    let has_terms = plan
+        .iter()
+        .any(|a| matches!(a, AlgorithmSpec::Orchestrator { terms } if !terms.is_empty()));
+    if ntil_on(recipe) && has_terms {
+        return Err(RunError::Recipe(
+            "LAMBDAS on (individual λ) together with QM/ML terms: gromosXX refuses this \
+             combination"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn build_plan(
     recipe: &RunRecipe,
     topo: &Topology,
@@ -679,6 +794,20 @@ pub fn build_plan(
     };
     let distance_restraints = if ff.restraints.distance.mode != 0 {
         let d = &ff.restraints.distance;
+        if d.mode < 0 && d.forcescale != 0 {
+            return Err(RunError::Recipe(format!(
+                "DISTANCERES FORCESCALE = {}: only FORCESCALE = 0 (d<r>/dr = 1) is implemented \
+                 for time-averaged distance restraints",
+                d.forcescale
+            )));
+        }
+        if d.mode < 0 && d.ntdira != 0 {
+            return Err(RunError::Recipe(
+                "DISTANCERES NTDIRA = 1: reading the initial averages (DISRESEXPAVE) from the \
+                 configuration is not implemented; use NTDIRA = 0"
+                    .to_string(),
+            ));
+        }
         Some(DistanceRestraintsPlan {
             file: inputs
                 .distrest
@@ -692,16 +821,16 @@ pub fn build_plan(
             r_linear: d.r_linear,
             time_averaging: (d.mode < 0).then_some(d.tau),
             dt: recipe.control.dt,
-            lambda: recipe.perturbation.lambda,
+            perturbed: recipe.perturbation.enabled != 0,
         })
     } else {
         None
     };
+    check_perturbation(recipe)?;
     let perturbation = (recipe.perturbation.enabled != 0).then_some(PerturbationPlan {
-        lambda: recipe.perturbation.lambda,
-        nlam: recipe.perturbation.nlam,
         alpha_lj: recipe.perturbation.alpha_lj,
         alpha_c: recipe.perturbation.alpha_c,
+        individual_lambdas: individual_lambdas_on(recipe),
     });
 
     let is_minimization = recipe.is_minimization();
@@ -905,6 +1034,14 @@ pub fn validate_plan(plan: &[AlgorithmSpec]) -> Result<(), RunError> {
                 return err(format!("{kind} requires {other}"));
             }
         }
+    }
+    // gromosXX refuses QM/MM together with individual λ (`check_parameter.cc`)
+    let individual_lambdas = plan.iter().any(|a| {
+        matches!(a, AlgorithmSpec::Forcefield(ff)
+            if ff.perturbation.as_ref().is_some_and(|p| p.individual_lambdas))
+    });
+    if individual_lambdas && position("orchestrator").is_some() {
+        return err("individual λ (LAMBDAS on) cannot be combined with QM/ML terms".into());
     }
     // Terms: a barostat needs every provider to report a virial; `Replace` coupling needs a
     // zone-aware Forcefield (2.8) — declared, never silently additive.
@@ -1115,5 +1252,175 @@ mod tests {
         let mut p = dynamics_plan();
         p.push(pick("forcefield")); // second forcefield, and energy_calculation no longer last
         assert!(validate_plan(&p).is_err());
+    }
+
+    // ── PERTURBATION / LAMBDAS refusals (1.8) ───────────────────────────────────────────
+
+    fn perturbed_recipe(lambdas_on: bool) -> RunRecipe {
+        use crate::recipe::{LambdaKind, LambdaRow, Lambdas};
+        let mut r = RunRecipe::default();
+        r.perturbation.enabled = 1;
+        r.perturbation.lambda = 0.25;
+        r.forcefield.energy_groups.count = 2;
+        r.perturbation.lambdas = Some(Lambdas {
+            enabled: lambdas_on,
+            rows: vec![LambdaRow {
+                kind: LambdaKind(gromos_core::lambdas::InteractionLambda::Lj),
+                g1: 1,
+                g2: 2,
+                a: 0.0,
+                b: 0.0,
+                c: 0.1,
+                d: 0.9,
+                e: 0.0,
+            }],
+        });
+        r
+    }
+
+    fn refusal(r: &RunRecipe) -> String {
+        check_perturbation(r).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn slow_growth_and_scaled_interactions_are_refused() {
+        let mut r = perturbed_recipe(false);
+        assert!(check_perturbation(&r).is_ok());
+        r.perturbation.dlamt = 0.001;
+        assert!(refusal(&r).contains("slow growth"), "{}", refusal(&r));
+        r.perturbation.dlamt = 0.0;
+        r.perturbation.nscale = 1;
+        assert!(
+            refusal(&r).contains("SCALEDINTERACTIONS"),
+            "{}",
+            refusal(&r)
+        );
+        // without perturbation gromosXX never reads them
+        r.perturbation.enabled = 0;
+        assert!(check_perturbation(&r).is_ok());
+    }
+
+    #[test]
+    fn individual_lambdas_refuse_what_gromosxx_refuses() {
+        let mut r = perturbed_recipe(true);
+        assert!(check_perturbation(&r).is_ok());
+        r.forcefield.electrostatics.electrostatics = 2;
+        assert!(refusal(&r).contains("lattice-sum"), "{}", refusal(&r));
+        r.forcefield.electrostatics.electrostatics = 1;
+        r.minimisation.method = 2;
+        assert!(
+            refusal(&r).contains("conjugate-gradient"),
+            "{}",
+            refusal(&r)
+        );
+        r.minimisation.method = 1;
+        assert!(
+            check_perturbation(&r).is_ok(),
+            "steepest descent is allowed"
+        );
+        r.minimisation.method = 0;
+        r.forcefield.terms = vec![xtb_term(Coupling::Delta)];
+        assert!(refusal(&r).contains("QM/ML"), "{}", refusal(&r));
+        // the same block switched off refuses nothing
+        let mut off = perturbed_recipe(false);
+        off.forcefield.terms = vec![xtb_term(Coupling::Delta)];
+        off.forcefield.electrostatics.electrostatics = 2;
+        assert!(check_perturbation(&off).is_ok());
+    }
+
+    #[test]
+    fn ntil_on_locks_features_without_perturbation_too() {
+        // gromosXX sets `individual_lambdas` before it checks NTG (in_parameter.cc:4367-4379)
+        let mut r = perturbed_recipe(true);
+        r.perturbation.enabled = 0;
+        assert!(check_perturbation(&r).is_ok());
+        r.forcefield.electrostatics.electrostatics = 2;
+        assert!(refusal(&r).contains("lattice-sum"), "{}", refusal(&r));
+    }
+
+    #[test]
+    fn individual_lambdas_refuse_gamd_and_aeds_but_not_eds() {
+        let mut r = perturbed_recipe(true);
+        r.passthrough
+            .insert("GAMD".into(), vec!["1 0 0".into(), "0 0 0".into()]);
+        assert!(refusal(&r).contains("GAMD"), "{}", refusal(&r));
+        r.passthrough.remove("GAMD");
+        // the md binary's EDS block: NUMSTATES FORM S / E offsets / TEMP / SEARCH E_MAX E_MIN
+        let eds = |search: &str| {
+            vec![
+                "2 1 0.5".to_string(),
+                "0.0 0.0".to_string(),
+                "300.0".to_string(),
+                format!("{search} 10.0 -10.0"),
+            ]
+        };
+        r.passthrough.insert("EDS".into(), eds("0"));
+        assert!(check_perturbation(&r).is_ok(), "plain EDS is unlocked");
+        r.passthrough.insert("EDS".into(), eds("1"));
+        assert!(refusal(&r).contains("accelerated EDS"), "{}", refusal(&r));
+        // LAMBDAS off: nothing to lock
+        let mut off = perturbed_recipe(false);
+        off.passthrough = r.passthrough.clone();
+        off.passthrough
+            .insert("GAMD".into(), vec!["1 0 0".into(), "0 0 0".into()]);
+        assert!(check_perturbation(&off).is_ok());
+    }
+
+    #[test]
+    fn a_plan_with_terms_is_refused_by_the_recipe_not_the_plan_flag() {
+        // a plan built with LAMBDAS off (flag false) and edited to carry a term
+        let plan = nve_plan_with(xtb_term(Coupling::Delta));
+        validate_plan(&plan).unwrap();
+        let err = check_plan_against_recipe(&perturbed_recipe(true), &plan)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("QM/ML"), "{err}");
+        assert!(check_plan_against_recipe(&perturbed_recipe(false), &plan).is_ok());
+    }
+
+    #[test]
+    fn lambdas_rows_must_name_existing_groups() {
+        let mut r = perturbed_recipe(true);
+        r.forcefield.energy_groups.count = 1;
+        assert!(
+            refusal(&r).contains("NILG1 <= NILG2 <= NEGR"),
+            "{}",
+            refusal(&r)
+        );
+    }
+
+    #[test]
+    fn an_edited_plan_cannot_add_terms_to_individual_lambdas() {
+        let mut plan = nve_plan_with(xtb_term(Coupling::Delta));
+        let AlgorithmSpec::Forcefield(ff) = &mut plan[0] else {
+            panic!("forcefield first")
+        };
+        ff.perturbation = Some(PerturbationPlan {
+            alpha_lj: 0.5,
+            alpha_c: 0.5,
+            individual_lambdas: true,
+        });
+        let err = validate_plan(&plan).unwrap_err().to_string();
+        assert!(err.contains("individual λ"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_kind_is_a_gromos_name_or_number() {
+        use crate::recipe::LambdaKind;
+        let k: LambdaKind = serde_json::from_str(r#""vdw_soft""#).unwrap();
+        assert_eq!(k.0, gromos_core::lambdas::InteractionLambda::LjSoftness);
+        let k: LambdaKind = serde_json::from_str(r#""12""#).unwrap();
+        assert_eq!(serde_json::to_string(&k).unwrap(), r#""mass""#);
+        assert!(serde_json::from_str::<LambdaKind>(r#""angleres""#).is_err());
+        // a bare number, as in a .imd, from JSON (Python dicts) and TOML
+        let k: LambdaKind = serde_json::from_str("5").unwrap();
+        assert_eq!(k.0, gromos_core::lambdas::InteractionLambda::Lj);
+        assert!(serde_json::from_str::<LambdaKind>("13").is_err());
+        #[derive(serde::Deserialize)]
+        struct Row {
+            kind: LambdaKind,
+        }
+        let row: Row = toml::from_str("kind = 12").unwrap();
+        assert_eq!(row.kind.0, gromos_core::lambdas::InteractionLambda::Mass);
     }
 }

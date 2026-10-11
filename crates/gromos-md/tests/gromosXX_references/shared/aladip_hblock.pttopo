@@ -1,0 +1,20 @@
+TITLE
+Perturbation of aladipeptide: bond blocks in both PERTBONDSTRETCHH and PERTBONDSTRETCH
+(N4-H5 in the H block; C2-N4 shares atom 4; C8-N10 in energy group 2 changes its length)
+END
+PERTATOMPARAM
+3
+# JLA RESNR ATNAM IACA      WMA      CGA IACB      WMB      CGB ALPHAJ  ALPHACRF
+    1     1 CB      14  15.0350    0.000   11  12.0350    1.000    0.3       0.6
+    4     1 N        5  14.0067   -0.280   19  14.0067    0.200    0.3       0.6
+   11     1 H       18   1.0080    0.280   14   2.0080    0.000    0.3       0.6
+END
+PERTBONDSTRETCHH
+   1
+	4	5	2	36
+END
+PERTBONDSTRETCH
+   2
+	2	4	26	20
+	8	10	9	26
+END

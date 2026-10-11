@@ -623,7 +623,70 @@ fn run_reference(system: &str) {
         }
     }
 
+    // A perturbed run ends its final configuration with PERTDATA (λ, `%15.7f`), the start of a
+    // run with NRDGL=1; an unperturbed one has none.
+    if expected_fin.exists() {
+        let ours = parse_pertdata(&out.join("final.conf"));
+        let theirs = parse_pertdata(&expected_fin);
+        assert_eq!(
+            ours.is_some(),
+            theirs.is_some(),
+            "{system}: final configuration PERTDATA present in ours: {}, in gromosXX's: {}",
+            ours.is_some(),
+            theirs.is_some()
+        );
+        if let (Some(a), Some(b)) = (ours, theirs) {
+            assert!(
+                (a - b).abs() <= 5e-8,
+                "{system}: final configuration PERTDATA {a} vs gromosXX {b}"
+            );
+        }
+        // Time-averaged distance restraints (NTDIR < 0): the ⟨r⁻³⟩ a continuation starts from.
+        let ours = parse_block_values(&out.join("final.conf"), "DISRESEXPAVE");
+        let theirs = parse_block_values(&expected_fin, "DISRESEXPAVE");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration DISRESEXPAVE has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-5 * b.abs().max(1.0),
+                "{system}: DISRESEXPAVE value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
+    }
+
     let _ = fs::remove_dir_all(&out);
+}
+
+/// Every number of a `.cnf` block (empty if the block is absent).
+fn parse_block_values(path: &Path, block: &str) -> Vec<f64> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .skip_while(|l| l.trim() != block)
+        .skip(1)
+        .map(str::trim)
+        .take_while(|l| *l != "END")
+        .filter(|l| !l.starts_with('#'))
+        .flat_map(|l| l.split_whitespace().map(|x| x.parse::<f64>().unwrap()))
+        .collect()
+}
+
+/// The λ of a `.cnf`'s PERTDATA block, if it has one.
+fn parse_pertdata(path: &Path) -> Option<f64> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines()
+        .skip_while(|l| l.trim() != "PERTDATA")
+        .skip(1)
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .and_then(|l| l.split_whitespace().next()?.parse().ok())
 }
 
 /// Fold a coordinate difference into the periodic images of a reference `.cnf`'s box, so that a
@@ -812,6 +875,49 @@ ref_test!(meoh_water_fep, "meoh_water_fep");
 ref_test!(aladip_vacuum_fep_groups, "aladip_vacuum_fep_groups");
 // One energy group and a `.trg` every step: the group-0 derivative cells carry the totals.
 ref_test!(aladip_vacuum_fep_trg, "aladip_vacuum_fep_trg");
+// Individual λ (LAMBDAS, 1.8): vdw/vdw_soft polynomials on the solute-solvent pair (its crf rows
+// are inert: CH4 is uncharged in both states); the same block switched off (must equal
+// `ch4_water_fep_l025`); and NLAM = 2 on the soft-core kernel.
+ref_test!(ch4_water_fep_lambdas, "ch4_water_fep_lambdas");
+ref_test!(ch4_water_fep_lambdas_off, "ch4_water_fep_lambdas_off");
+ref_test!(ch4_water_fep_nlam2, "ch4_water_fep_nlam2");
+// NRDGL = 1: λ comes from the configuration's PERTDATA (0.25, `ch4_water_fep_l025`'s final
+// configuration), not from RLAM (0).
+ref_test!(ch4_water_fep_nrdgl, "ch4_water_fep_nrdgl");
+// Two energy groups: bonded, mass and nonbonded individual λ per group (pair); NLAM = 2.
+ref_test!(aladip_vacuum_fep_lambdas, "aladip_vacuum_fep_lambdas");
+ref_test!(aladip_vacuum_fep_nlam2, "aladip_vacuum_fep_nlam2");
+// NLAM = 2 with the LAMBDAS rows of `aladip_vacuum_fep_lambdas`: the per-kind (1−L)^(n−1)·L′
+// factors with L_lj ≠ L_crf.
+ref_test!(
+    aladip_vacuum_fep_lambdas_nlam2,
+    "aladip_vacuum_fep_lambdas_nlam2"
+);
+// Perturbed SHAKE (NTC = 3): λ-mixed constraint lengths and their dH/dλ in the constraints
+// column, with and without individual λ.
+ref_test!(aladip_vacuum_fep_shake, "aladip_vacuum_fep_shake");
+ref_test!(
+    aladip_vacuum_fep_shake_lambdas,
+    "aladip_vacuum_fep_shake_lambdas"
+);
+// PERTBONDSTRETCHH and PERTBONDSTRETCH sharing atom 4: gromosXX shakes the H block first; the
+// group-2 bond 8-10 changes length, so its bond λ and constraint dH/dλ are those of group 2.
+ref_test!(
+    aladip_vacuum_fep_shake_hblock,
+    "aladip_vacuum_fep_shake_hblock"
+);
+// Perturbed distance restraints: energy and dH/dλ per group, with and without individual λ.
+ref_test!(aladip_vacuum_fep_distres, "aladip_vacuum_fep_distres");
+ref_test!(
+    aladip_vacuum_fep_distres_lambdas,
+    "aladip_vacuum_fep_distres_lambdas"
+);
+// NTDIR = −2: the r⁻³ running average (TAUDIR 0.1) in energy, force and dH/dλ, perturbed and
+// unperturbed restraints alike, and the DISRESEXPAVE block of the final configuration.
+ref_test!(
+    aladip_vacuum_fep_distres_tavg,
+    "aladip_vacuum_fep_distres_tavg"
+);
 
 // ── Energy minimization ──────────────────────────────────────────────────────
 // gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.

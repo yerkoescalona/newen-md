@@ -43,11 +43,14 @@ pub struct CoordinateData {
     pub box_dims: Vec3,
     /// Box type from GENBOX (0=vacuum, 1=rectangular, 2=triclinic, 3=truncated octahedron)
     pub box_type: i32,
+    /// λ of a `PERTDATA` block (gromosXX writes it into the final configuration of a perturbed
+    /// run; a run with NRDGL=1 starts from it).
+    pub pertdata: Option<f64>,
 }
 
 /// Read raw coordinate data from a GROMOS coordinate file (.conf/.cnf/.g96).
 ///
-/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, and GENBOX blocks.
+/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, GENBOX and PERTDATA blocks.
 /// Returns raw data without constructing a Configuration object.
 pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoError> {
     let reader = crate::gz::open_text(path.as_ref())
@@ -57,6 +60,7 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
     let mut velocities = Vec::new();
     let mut box_dims = Vec3::ZERO;
     let mut box_type: i32 = -1; // unknown until parsed
+    let mut pertdata: Option<f64> = None;
 
     #[derive(PartialEq)]
     enum Section {
@@ -67,6 +71,7 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
         VelocityRed,
         Box,
         GenBox,
+        PertData,
     }
     let mut section = Section::None;
     let mut genbox_line_num: usize = 0;
@@ -99,6 +104,10 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
             "GENBOX" => {
                 section = Section::GenBox;
                 genbox_line_num = 0;
+                continue;
+            },
+            "PERTDATA" => {
+                section = Section::PertData;
                 continue;
             },
             "END" => {
@@ -179,6 +188,16 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
                 }
                 genbox_line_num += 1;
             },
+            // gromosXX `_read_pertdata` (in_configuration.cc:2351-2371): one value, λ. Only a
+            // run with NRDGL=1 reads it, so an unreadable value is left as `None` here.
+            Section::PertData => {
+                if pertdata.is_none() {
+                    pertdata = trimmed
+                        .split_whitespace()
+                        .next()
+                        .and_then(|x| x.parse::<f64>().ok());
+                }
+            },
             Section::None => {},
         }
     }
@@ -194,6 +213,7 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
         velocities,
         box_dims,
         box_type,
+        pertdata,
     })
 }
 
@@ -540,6 +560,27 @@ END
         assert!((data.positions[0].x - 0.1).abs() < 1e-9);
         assert!((data.velocities[1].z - 0.006).abs() < 1e-9);
 
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn pertdata_is_read_and_absent_is_none() {
+        let with = "\
+TITLE
+  pertdata
+END
+POSITION
+    1 AR     AR        1   0.000000000  0.000000000  0.000000000
+END
+PERTDATA
+      0.2500000
+END
+";
+        let path = write_tmp(with, "pertdata_with");
+        assert_eq!(read_coordinates(&path).unwrap().pertdata, Some(0.25));
+        std::fs::remove_file(path).ok();
+        let path = write_tmp(CG16_CONF, "pertdata_without");
+        assert_eq!(read_coordinates(&path).unwrap().pertdata, None);
         std::fs::remove_file(path).ok();
     }
 

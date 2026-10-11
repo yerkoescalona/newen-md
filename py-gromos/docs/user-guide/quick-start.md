@@ -266,8 +266,10 @@ and two terms of one kind report as `xtb:0` / `xtb:1` (each with its own work di
 ## Free-energy perturbation from Python
 
 A recipe with a perturbation topology in its `inputs` and `perturbation.enabled = 1` runs FEP;
-`sim.dhdl` is the thermodynamic-integration integrand ∂H/∂λ at the current step, `sim.dhdl_terms`
-its LJ / CRF / bonded split, and `run()`'s last column is `dhdl`:
+`sim.dhdl` is the thermodynamic-integration integrand ∂H/∂λ at the current step — the whole
+derivative: kinetic (λ-dependent masses), potential, perturbed constraints and restraints —
+`sim.dhdl_terms` its `lj` / `crf` / `bonded` / `kinetic` / `constraints` / `distanceres` split,
+and `run()`'s last column is `dhdl`:
 
 ```python
 recipe = Recipe.from_imd("run.imd").with_inputs(pttopo="solute_dummy.ptp")
@@ -279,8 +281,9 @@ for lam in (0.0, 0.25, 0.5, 0.75, 1.0):
 # ΔG = ∫ <∂H/∂λ> dλ — numpy.trapz(list(means.values()), list(means)) or the `ext_ti_ana` binary
 ```
 
-The `md` binary writes the same quantity to a `.trg` file (`@trg`, every `NTWG` steps) that
-gromos++ `ene_ana` / `ext_ti_ana` and the project's `ext_ti_ana` read; `scripts/ti_ch4.py` is a
+The `md` binary writes the same quantity, as the first value of each frame, to a `.trg` file
+(`@trg`, every `NTWG` steps) that gromos++ `ene_ana` / `ext_ti_ana` and the project's
+`ext_ti_ana` read; `scripts/ti_ch4.py` is a
 complete two-engine TI study.
 
 ## Migrating from `InputParameters`

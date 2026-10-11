@@ -30,6 +30,8 @@ pub struct PyConfiguration {
     /// (`sim_box` labels its solvent `SOLV`, `ion` names the ion it places), so a `Configuration`
     /// that came from a `.cnf` or from `gromos.tools` carries them along.
     pub(crate) labels: Option<Vec<G96Atom>>,
+    /// λ of the file's PERTDATA block (a run with NRDGL=1 starts from it).
+    pub(crate) pertdata: Option<f64>,
 }
 
 #[pymethods]
@@ -60,6 +62,7 @@ impl PyConfiguration {
             vel_data: coord_data.velocities,
             box_dims: coord_data.box_dims,
             labels,
+            pertdata: coord_data.pertdata,
         })
     }
 
@@ -138,6 +141,7 @@ impl PyConfiguration {
             vel_data: Vec::new(),
             box_dims,
             labels: Some(atoms),
+            pertdata: None,
         }
     }
 

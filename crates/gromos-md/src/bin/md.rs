@@ -451,6 +451,14 @@ fn main() {
                     last_atom
                 );
             },
+            PrepareNote::AtomPairLambdasDiffer { atoms } => {
+                log::warn!(
+                    "perturbed atom pair {}-{}: different individual lambdas for lj and crf \
+                     (gromosXX: not implemented, critical message; its force uses the lj lambda)",
+                    atoms.0,
+                    atoms.1
+                );
+            },
             PrepareNote::Validation { stage, report } => {
                 report.print();
                 if report.has_errors() {
@@ -1290,7 +1298,7 @@ fn main() {
         if let Some(ref mut fw) = free_energy_writer {
             if due(step, imd.ntwg) && step < n_steps {
                 let d = &conf.old().perturbed_energy_derivatives;
-                if let Err(e) = fw.write_derivatives(step, time, imd.rlam, d) {
+                if let Err(e) = fw.write_derivatives(step, time, topo.lambda, d) {
                     eprintln!("Error writing free-energy trajectory: {}", e);
                 }
             }
@@ -1460,9 +1468,35 @@ fn main() {
         };
         let box_opt = if box_vec.x > 0.0 { Some(box_vec) } else { None };
         let title = format!("Final configuration after {} steps", actual_steps);
-        if let Err(e) =
-            gromos::io::g96::write_g96(fin_path, &title, positions, vels, box_opt, Some(&topo))
-        {
+        // gromosXX `out_configuration.cc:540-546`: a perturbed run (NTG=1) adds PERTDATA, the λ
+        // a run with NRDGL=1 continues from; time-averaged distance restraints (NTDIR < 0) add
+        // their ⟨r⁻³⟩ (DISRESEXPAVE).
+        let disres_averages = if imd.ntdir < 0 {
+            md_sequence
+                .find_mut::<gromos_integrators::algorithms::Forcefield>()
+                .map(|ff| ff.distance_restraints.averages())
+        } else {
+            None
+        };
+        let write = || -> Result<(), String> {
+            let mut w = gromos::io::g96::G96Writer::new(fin_path)?;
+            w.write_title(&title)?;
+            w.write_positions(positions, Some(&topo))?;
+            if let Some(v) = vels {
+                w.write_velocities(v)?;
+            }
+            if let Some(b) = box_opt {
+                w.write_box(b)?;
+            }
+            if imd.ntg != 0 {
+                w.write_pertdata(topo.lambda)?;
+            }
+            if let Some(averages) = &disres_averages {
+                w.write_disresexpave(averages)?;
+            }
+            w.close()
+        };
+        if let Err(e) = write() {
             eprintln!("Error writing final configuration: {}", e);
         } else {
             log::info!("Final configuration written to: {}", fin_path);

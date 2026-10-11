@@ -70,6 +70,8 @@ pub struct ParsedTopology {
     pub exclusions: Vec<Vec<usize>>,
     pub one_four_pairs: Vec<Vec<usize>>, // 1-4 pairs from INE14 (0-based)
     pub bonds: Vec<(usize, usize, usize)>, // (i, j, type)
+    /// The `(i, j)` of the bonds read from BONDH (bonds to hydrogen, what NTC = 2 constrains).
+    pub bondh: Vec<(usize, usize)>,
     pub bond_parameters: Vec<BondParameters>,
     pub angles: Vec<(usize, usize, usize, usize)>, // (i, j, k, type)
     pub angle_parameters: Vec<AngleParameters>,
@@ -109,6 +111,7 @@ pub fn parse_topology(reader: impl BufRead) -> Result<ParsedTopology, IoError> {
     let mut exclusions = Vec::new();
     let mut one_four_pairs = Vec::new();
     let mut bonds = Vec::new();
+    let mut bondh = Vec::new();
     let mut bond_parameters = Vec::new();
     let mut angles = Vec::new();
     let mut angle_parameters = Vec::new();
@@ -161,8 +164,13 @@ pub fn parse_topology(reader: impl BufRead) -> Result<ParsedTopology, IoError> {
             "BONDSTRETCHTYPE" => {
                 parse_bond_types(&mut lines, &mut bond_parameters)?;
             },
-            "BOND" | "BONDH" => {
+            "BOND" => {
                 parse_bonds(&mut lines, &mut bonds)?;
+            },
+            "BONDH" => {
+                let start = bonds.len();
+                parse_bonds(&mut lines, &mut bonds)?;
+                bondh.extend(bonds[start..].iter().map(|&(i, j, _)| (i, j)));
             },
             "BONDANGLEBENDTYPE" => {
                 parse_angle_types(&mut lines, &mut angle_parameters)?;
@@ -224,6 +232,7 @@ pub fn parse_topology(reader: impl BufRead) -> Result<ParsedTopology, IoError> {
         exclusions,
         one_four_pairs,
         bonds,
+        bondh,
         bond_parameters,
         angles,
         angle_parameters,
@@ -1202,8 +1211,14 @@ pub fn build_topology(parsed: ParsedTopology) -> Topology {
     }
 
     // Build bonds
+    let bondh: std::collections::HashSet<(usize, usize)> = parsed.bondh.iter().copied().collect();
     for (i, j, bond_type) in parsed.bonds {
-        topo.moltypes[0].bonds.push(Bond { i, j, bond_type });
+        topo.moltypes[0].bonds.push(Bond {
+            i,
+            j,
+            bond_type,
+            hydrogen: bondh.contains(&(i, j)),
+        });
         topo.exclusions[i].push(j);
         topo.exclusions[j].push(i);
     }

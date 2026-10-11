@@ -615,12 +615,15 @@ class Simulation:
     def kinetic_energy(self) -> float: ...
     @property
     def dhdl(self) -> float:
-        """dH/dλ (kJ/mol) at the last step — the TI integrand; 0 unless the recipe's
-        ``perturbation`` is enabled (a ``pttopo`` in ``inputs`` and ``NTG=1``)."""
+        """dH/dλ (kJ/mol) at the last step — the TI integrand: the whole derivative (kinetic,
+        potential, constraints and restraints), the first value of a ``.trg`` frame; 0 unless
+        the recipe's ``perturbation`` is enabled (a ``pttopo`` in ``inputs`` and ``NTG=1``)."""
         ...
     @property
     def dhdl_terms(self) -> dict[str, float]:
-        """dH/dλ split by term at the last step: ``{"lj", "crf", "bonded"}`` (kJ/mol)."""
+        """dH/dλ split by term at the last step (kJ/mol): ``lj``, ``crf``, ``bonded``,
+        ``kinetic`` (λ-dependent masses), ``constraints`` (perturbed SHAKE) and
+        ``distanceres`` (perturbed distance restraints)."""
         ...
     @property
     def term_energies(self) -> dict[str, float]:

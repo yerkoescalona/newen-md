@@ -42,7 +42,7 @@ pub mod pme_mpi;
 // Re-export main types
 pub use bonded::{
     calculate_angle_forces, calculate_bonded_forces, calculate_dihedral_forces,
-    calculate_improper_dihedral_forces, ForceEnergy, ForceEnergyLambda, LambdaController,
+    calculate_improper_dihedral_forces, ForceEnergy, ForceEnergyLambda,
 };
 pub use nonbonded::{lj_crf_interaction, CRFParameters, ForceStorage, LJParamMatrix, LJParameters};
 pub use orchestrator::ProviderOrchestrator;

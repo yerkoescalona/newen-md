@@ -51,9 +51,9 @@ pub fn bath_dof(
     // (gromosXX Topology::calculate_constraint_dof, topology.cc:1076-1110)
     let ir_bath = |atom: usize| in_bath(ranges, atom).1;
     if sel.solute_constrained() {
-        for c in &ShakeBuffers::new(topo, ntc, false).solute_constraints {
-            dof[ir_bath(c.0)] -= 0.5;
-            dof[ir_bath(c.1)] -= 0.5;
+        for (i, j) in ShakeBuffers::new(topo, ntc, false).solute_constraint_pairs() {
+            dof[ir_bath(i)] -= 0.5;
+            dof[ir_bath(j)] -= 0.5;
         }
     }
     if sel.solvent_constrained() {
@@ -86,7 +86,9 @@ pub fn total_dof(topo: &Topology, sel: &ConstraintSelection, ntc: NtcMode, ndfmi
         0
     };
     let solute_constraints = if sel.solute_constrained() {
-        ShakeBuffers::new(topo, ntc, false).solute_constraints.len()
+        ShakeBuffers::new(topo, ntc, false)
+            .solute_constraint_pairs()
+            .count()
     } else {
         0
     };
@@ -133,6 +135,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,

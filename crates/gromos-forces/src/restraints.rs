@@ -7,6 +7,8 @@
 use gromos_core::configuration::Configuration;
 use gromos_core::math::{Periodicity, Vec3};
 
+use crate::bonded::TermLambda;
+
 /// Position restraint - restrains atom to reference position
 ///
 /// Direct translation from position_restraint_interaction.cc
@@ -188,9 +190,10 @@ pub struct DistanceRestraint {
     pub r_linear: f64,
     /// 1 = no w0 scaling, 2 = multiply by w0
     pub mode: i32,
-    /// r⁻³ time average for NOE (None = instantaneous)
+    /// The running ⟨r⁻³⟩ of a time-averaged restraint (gromosXX `distanceres.av`); `None`
+    /// until seeded.
     pub avg_r_inv3: Option<f64>,
-    /// Exponential memory parameter exp(-dt/tau); None = instantaneous
+    /// exp(−dt/τ) of a time-averaged restraint (NTDIR < 0); `None` = instantaneous.
     pub exp_mem: Option<f64>,
 }
 
@@ -219,36 +222,33 @@ impl DistanceRestraint {
         }
     }
 
+    /// Time-average the restraint (NTDIR < 0): `exp_mem = exp(−dt/τ)`
+    /// (`distance_restraint_interaction.cc:269-271`).
     pub fn with_time_averaging(mut self, tau: f64, dt: f64) -> Self {
         self.exp_mem = Some((-dt / tau).exp());
         self
     }
 
+    /// Seed the average of a time-averaged restraint with `|r|⁻³` of the start-up configuration
+    /// (NTDIRA = 0, gromosXX `_init_averages`, :236-252: the unmasked distance).
+    pub fn init_average(&mut self, conf: &Configuration, periodicity: &Periodicity) {
+        if self.exp_mem.is_some() {
+            let pos = &conf.current().pos;
+            let v = periodicity.nearest_image(pos[self.atom1], pos[self.atom2]);
+            self.avg_r_inv3 = Some(v.length().powf(-3.0));
+        }
+    }
+
     pub fn calculate(&mut self, conf: &mut Configuration, periodicity: &Periodicity) -> f64 {
+        if let Some(exp_t) = self.exp_mem {
+            return self.calculate_time_averaged(conf, periodicity, exp_t);
+        }
         let v = periodicity.nearest_image(
             conf.current().pos[self.atom2],
             conf.current().pos[self.atom1],
         );
-
-        let dist = v.length();
-        let effective_dist = if let (Some(exp_t), Some(avg)) = (self.exp_mem, self.avg_r_inv3) {
-            let r3 = dist * dist * dist;
-            let new_avg = (1.0 - exp_t) / r3 + exp_t * avg;
-            self.avg_r_inv3 = Some(new_avg);
-            new_avg.powf(-1.0 / 3.0)
-        } else {
-            dist
-        };
-
-        // Recompute v scaled to effective_dist when time-averaging is active
-        let v_eff = if self.avg_r_inv3.is_some() && dist > 1e-10 {
-            v * (effective_dist / dist)
-        } else {
-            v
-        };
-
         let (energy, f1) = distres_en_force(
-            v_eff,
+            v,
             self.r0,
             self.w0,
             self.rah,
@@ -258,6 +258,60 @@ impl DistanceRestraint {
         );
         conf.current_mut().force[self.atom1] += f1;
         conf.current_mut().force[self.atom2] -= f1;
+        energy
+    }
+
+    /// NTDIR < 0 (FORCESCALE 0), as gromosXX `_calculate_distance_restraint_interactions`
+    /// (`distance_restraint_interaction.cc:120-190`): `⟨r⁻³⟩ = (1−e)·r⁻³ + e·⟨r⁻³⟩`, the energy at
+    /// `⟨r⁻³⟩^(−1/3)`, the force along the instantaneous unit vector.
+    fn calculate_time_averaged(
+        &mut self,
+        conf: &mut Configuration,
+        periodicity: &Periodicity,
+        exp_t: f64,
+    ) -> f64 {
+        if self.avg_r_inv3.is_none() {
+            self.init_average(conf, periodicity);
+        }
+        // gromosXX: v = v1 − v2, masked by RAH's dimension
+        let v = periodicity.nearest_image(
+            conf.current().pos[self.atom1],
+            conf.current().pos[self.atom2],
+        );
+        let (rah, mask) = decode_rah(self.rah);
+        let v = Vec3::new(v.x * mask.x, v.y * mask.y, v.z * mask.z);
+        let vabs = v.length();
+        let ave = (1.0 - exp_t) * vabs.powf(-3.0) + exp_t * self.avg_r_inv3.unwrap_or(0.0);
+        self.avg_r_inv3 = Some(ave);
+        let dist = ave.powf(-1.0 / 3.0);
+
+        let (k, r0, r_l) = (self.k, self.r0, self.r_linear);
+        let rah_f = rah as f64;
+        let (mut energy, mut f) = if rah_f * dist < rah_f * r0 {
+            (0.0, Vec3::ZERO)
+        } else if (r0 - dist).abs() < r_l {
+            (
+                0.5 * k * (dist - r0) * (dist - r0),
+                v * (-k * (dist - r0)) / vabs,
+            )
+        } else if dist < r0 {
+            (-k * r_l * (dist - r0 + 0.5 * r_l), v * (r_l * k) / vabs)
+        } else {
+            (k * r_l * (dist - r0 - 0.5 * r_l), v * (-r_l * k) / vabs)
+        };
+        match self.mode {
+            1 => {},
+            2 => {
+                energy *= self.w0;
+                f *= self.w0;
+            },
+            _ => {
+                energy = 0.0;
+                f = Vec3::ZERO;
+            },
+        }
+        conf.current_mut().force[self.atom1] += f;
+        conf.current_mut().force[self.atom2] -= f;
         energy
     }
 }
@@ -277,6 +331,22 @@ impl DistanceRestraints {
 
     pub fn add(&mut self, r: DistanceRestraint) {
         self.restraints.push(r);
+    }
+
+    /// Seed every time-averaged restraint from the start-up configuration.
+    pub fn init_averages(&mut self, conf: &Configuration, periodicity: &Periodicity) {
+        for r in &mut self.restraints {
+            r.init_average(conf, periodicity);
+        }
+    }
+
+    /// The running ⟨r⁻³⟩ of the time-averaged restraints, in restraint order (gromosXX writes
+    /// them as DISRESEXPAVE into the final configuration).
+    pub fn averages(&self) -> Vec<f64> {
+        self.restraints
+            .iter()
+            .filter_map(|r| r.avg_r_inv3)
+            .collect()
     }
 
     pub fn calculate_all(&mut self, conf: &mut Configuration, periodicity: &Periodicity) -> f64 {
@@ -328,6 +398,10 @@ pub struct PerturbedDistanceRestraint {
     pub k: f64,
     pub r_linear: f64,
     pub mode: i32,
+    /// The running ⟨r⁻³⟩ of a time-averaged restraint (gromosXX `pertdistanceres.av`).
+    pub avg_r_inv3: Option<f64>,
+    /// exp(−dt/τ) of a time-averaged restraint (NTDIR < 0); `None` = instantaneous.
+    pub exp_mem: Option<f64>,
 }
 
 impl PerturbedDistanceRestraint {
@@ -358,34 +432,137 @@ impl PerturbedDistanceRestraint {
             k,
             r_linear,
             mode,
+            avg_r_inv3: None,
+            exp_mem: None,
         }
     }
 
+    /// Time-average the restraint (NTDIR < 0): `exp_mem = exp(−dt/τ)`
+    /// (`perturbed_distance_restraint_interaction.cc:445-447`).
+    pub fn with_time_averaging(mut self, tau: f64, dt: f64) -> Self {
+        self.exp_mem = Some((-dt / tau).exp());
+        self
+    }
+
+    /// Seed the average with `|r|⁻³` of the start-up configuration (NTDIRA = 0,
+    /// `_init_averages`, :403-421: the unmasked distance).
+    pub fn init_average(&mut self, conf: &Configuration, periodicity: &Periodicity) {
+        if self.exp_mem.is_some() {
+            let pos = &conf.current().pos;
+            let v = periodicity.nearest_image(pos[self.atom1], pos[self.atom2]);
+            self.avg_r_inv3 = Some(v.length().powf(-3.0));
+        }
+    }
+
+    /// Energy and dH/dλ at the individual λ `l` (and `l_deriv` = dL/dλ) of this restraint,
+    /// adding its forces to `conf` — gromosXX `perturbed_distance_restraint_interaction.cc`
+    /// (`_calculate_perturbed_distance_restraint_interactions`, :82-285).
+    ///
+    /// `r0` and `w0` are linear in `l`; the prefactor is `2^(n+m)·lⁿ·(1−l)ᵐ` with the restraint's
+    /// own exponents (not NLAM); dH/dλ = `l_deriv·(dprefactor/dl·en + prefactor·den/dl)`.
+    /// Time-averaged (NTDIR < 0, :149-155): the distance is `⟨r⁻³⟩^(−1/3)` everywhere, the force
+    /// direction `v/dist` included.
     pub fn calculate(
-        &self,
+        &mut self,
         conf: &mut Configuration,
         periodicity: &Periodicity,
-        lambda: f64,
-    ) -> f64 {
-        let r0 = (1.0 - lambda) * self.a_r0 + lambda * self.b_r0;
-        let w0 = (1.0 - lambda) * self.a_w0 + lambda * self.b_w0;
-        let prefactor =
-            2_f64.powi(self.n + self.m) * lambda.powi(self.n) * (1.0 - lambda).powi(self.m);
-
+        l: f64,
+        l_deriv: f64,
+    ) -> (f64, f64) {
+        let (n, m) = (self.n as f64, self.m as f64);
+        // gromosXX: v = v1 − v2
         let v = periodicity.nearest_image(
-            conf.current().pos[self.atom2],
             conf.current().pos[self.atom1],
+            conf.current().pos[self.atom2],
         );
+        let (rah, mask) = decode_rah(self.rah);
+        let v = Vec3::new(v.x * mask.x, v.y * mask.y, v.z * mask.z);
+        let mut dist = v.length();
+        if let Some(exp_t) = self.exp_mem {
+            if self.avg_r_inv3.is_none() {
+                self.init_average(conf, periodicity);
+            }
+            let ave = (1.0 - exp_t) * dist.powf(-3.0) + exp_t * self.avg_r_inv3.unwrap_or(0.0);
+            self.avg_r_inv3 = Some(ave);
+            dist = ave.powf(-1.0 / 3.0);
+        }
 
-        // en_term without w0 (mode=1), then apply w0 via prefactor logic
-        let (en_no_w0, f1_no_w0) = distres_en_force(v, r0, w0, self.rah, self.k, self.r_linear, 1);
-        let w = if self.mode == 2 { w0 } else { 1.0 };
-        let energy = prefactor * en_no_w0 * w;
-        let f1 = f1_no_w0 * (prefactor * w);
+        let w0 = (1.0 - l) * self.a_w0 + l * self.b_w0;
+        let r0 = (1.0 - l) * self.a_r0 + l * self.b_r0;
+        let k = self.k;
+        let r_l = self.r_linear;
+        let d_r0 = self.b_r0 - self.a_r0;
+        let d_w0 = self.b_w0 - self.a_w0;
 
-        conf.current_mut().force[self.atom1] += f1;
-        conf.current_mut().force[self.atom2] -= f1;
-        energy
+        let prefactor = 2.0_f64.powf(n + m) * l.powf(n) * (1.0 - l).powf(m);
+
+        let rah_f = rah as f64;
+        let fulfilled = rah_f * dist < rah_f * r0;
+        let harmonic = (r0 - dist).abs() < r_l;
+        let (mut f, mut en_term) = if fulfilled {
+            (Vec3::ZERO, 0.0)
+        } else if harmonic {
+            (
+                v * (-k * (dist - r0)) / dist,
+                0.5 * k * (dist - r0) * (dist - r0),
+            )
+        } else if dist < r0 {
+            (v * (r_l * k) / dist, -k * (dist + 0.5 * r_l - r0) * r_l)
+        } else {
+            (v * (-r_l * k) / dist, k * (dist - 0.5 * r_l - r0) * r_l)
+        };
+        match self.mode {
+            1 => {},
+            2 => {
+                f *= w0;
+                en_term *= w0;
+            },
+            _ => {
+                f = Vec3::ZERO;
+                en_term = 0.0;
+            },
+        }
+        let f = f * prefactor;
+        let energy = prefactor * en_term;
+        conf.current_mut().force[self.atom1] += f;
+        conf.current_mut().force[self.atom2] -= f;
+
+        let dlam_term = if fulfilled {
+            0.0
+        } else if self.mode == 1 {
+            if harmonic {
+                -k * (dist - r0) * d_r0
+            } else if dist < r0 {
+                k * d_r0 * r_l
+            } else {
+                -k * d_r0 * r_l
+            }
+        } else if self.mode == 2 {
+            if harmonic {
+                0.5 * k * d_w0 * (dist - r0) * (dist - r0) - k * w0 * (dist - r0) * d_r0
+            } else if dist < r0 {
+                -k * d_w0 * (dist + 0.5 * r_l - r0) * r_l + k * w0 * d_r0 * r_l
+            } else {
+                k * d_w0 * (dist - 0.5 * r_l - r0) * r_l - k * w0 * d_r0 * r_l
+            }
+        } else {
+            // gromosXX leaves the previous restraint's value here; with |NTDIR| ∉ {1, 2} there
+            // is no restraint energy to differentiate
+            0.0
+        };
+        let dprefndl = if self.n == 0 {
+            0.0
+        } else {
+            n * l.powf(n - 1.0) * (1.0 - l).powf(m)
+        };
+        let dprefmdl = if self.m == 0 {
+            0.0
+        } else {
+            m * l.powf(n) * (1.0 - l).powf(m - 1.0)
+        };
+        let dprefdl = 2.0_f64.powf(m + n) * (dprefndl - dprefmdl) * en_term;
+        let dpotdl = prefactor * dlam_term;
+        (energy, l_deriv * (dprefdl + dpotdl))
     }
 }
 
@@ -406,36 +583,55 @@ impl PerturbedDistanceRestraints {
         self.restraints.push(r);
     }
 
-    pub fn calculate_all(
-        &self,
-        conf: &mut Configuration,
-        periodicity: &Periodicity,
-        lambda: f64,
-    ) -> f64 {
-        self.restraints
-            .iter()
-            .map(|r| r.calculate(conf, periodicity, lambda))
-            .sum()
+    /// Seed every time-averaged restraint from the start-up configuration.
+    pub fn init_averages(&mut self, conf: &Configuration, periodicity: &Periodicity) {
+        for r in &mut self.restraints {
+            r.init_average(conf, periodicity);
+        }
     }
 
-    /// [`Self::calculate_all`], also adding each restraint's energy to `per_group` at the
-    /// energy group of its first atom (gromosXX `perturbed_distance_restraint_interaction.cc`).
-    pub fn calculate_all_grouped(
-        &self,
+    /// Total energy and dH/dλ; each restraint takes `lam.at(atom1)` (the `distanceres`
+    /// individual λ of its first atom's energy group).
+    pub fn calculate_all(
+        &mut self,
         conf: &mut Configuration,
         periodicity: &Periodicity,
-        lambda: f64,
+        lam: TermLambda<'_>,
+    ) -> (f64, f64) {
+        let mut e = 0.0;
+        let mut d = 0.0;
+        for r in &mut self.restraints {
+            let (l, dl) = lam.at(r.atom1);
+            let (ei, di) = r.calculate(conf, periodicity, l, dl);
+            e += ei;
+            d += di;
+        }
+        (e, d)
+    }
+
+    /// [`Self::calculate_all`], also adding each restraint's energy to `energy_groups` and its
+    /// dH/dλ to `dhdl_groups` at the energy group of its first atom
+    /// (`perturbed_distance_restraint_interaction.cc:194-196, 283-285`).
+    pub fn calculate_all_grouped(
+        &mut self,
+        conf: &mut Configuration,
+        periodicity: &Periodicity,
+        lam: TermLambda<'_>,
         atom_group: &[usize],
-        per_group: &mut [f64],
-    ) -> f64 {
-        self.restraints
-            .iter()
-            .map(|r| {
-                let e = r.calculate(conf, periodicity, lambda);
-                per_group[atom_group[r.atom1]] += e;
-                e
-            })
-            .sum()
+        energy_groups: &mut [f64],
+        dhdl_groups: &mut [f64],
+    ) -> (f64, f64) {
+        let mut e = 0.0;
+        let mut d = 0.0;
+        for r in &mut self.restraints {
+            let (l, dl) = lam.at(r.atom1);
+            let (ei, di) = r.calculate(conf, periodicity, l, dl);
+            energy_groups[atom_group[r.atom1]] += ei;
+            dhdl_groups[atom_group[r.atom1]] += di;
+            e += ei;
+            d += di;
+        }
+        (e, d)
     }
 }
 
@@ -918,15 +1114,50 @@ mod tests {
         conf.current_mut().clear_forces();
         let mut ptotal = 0.0_f64;
         for &(a1, a2, n, m, a_r0, a_w0, b_r0, b_w0, rah) in pspecs {
-            let r = PerturbedDistanceRestraint::new(
+            let mut r = PerturbedDistanceRestraint::new(
                 a1, a2, n, m, a_r0, b_r0, a_w0, b_w0, rah, k, r_linear, mode,
             );
-            ptotal += r.calculate(&mut conf, &periodicity, lambda);
+            ptotal += r.calculate(&mut conf, &periodicity, lambda, 1.0).0;
         }
         assert!(
             (ptotal - 195.899012).abs() < 1e-3,
             "PerturbedDistanceRestraint total: expected 195.899012, got {ptotal:.6}"
         );
+    }
+
+    /// dH/dλ of a perturbed distance restraint is the λ derivative of its energy, in every
+    /// zone (harmonic, linear below and above r0) and for both NTDIR forms, with L′ ≠ 1.
+    #[test]
+    fn perturbed_distance_restraint_lambda_derivative_is_a_finite_difference() {
+        let pbc = Periodicity::Vacuum(gromos_core::math::Vacuum);
+        for (dist, mode, rah) in [
+            (0.25, 1, 0),
+            (0.25, 2, 0),
+            (0.9, 2, 0),
+            (0.02, 1, 0),
+            (0.3, 2, 1),
+        ] {
+            let mut conf = Configuration::new(2, 1, 1);
+            conf.current_mut().pos[1] = Vec3::new(dist, 0.0, 0.0);
+            let r = PerturbedDistanceRestraint::new(
+                0, 1, 1, 2, 0.2, 0.3, 1.0, 2.0, rah, 1000.0, 0.1, mode,
+            );
+            // L(λ) = λ² (so L′ = 2λ)
+            let energy = |lam: f64| {
+                let mut c = conf.clone();
+                r.clone().calculate(&mut c, &pbc, lam * lam, 2.0 * lam).0
+            };
+            let lam = 0.4;
+            let eps = 1e-6;
+            let fd = (energy(lam + eps) - energy(lam - eps)) / (2.0 * eps);
+            let (_, de) = r
+                .clone()
+                .calculate(&mut conf.clone(), &pbc, lam * lam, 2.0 * lam);
+            assert!(
+                (fd - de).abs() <= 1e-6 * de.abs().max(1.0),
+                "dist {dist} mode {mode}: finite difference {fd} vs dH/dλ {de}"
+            );
+        }
     }
 
     #[test]

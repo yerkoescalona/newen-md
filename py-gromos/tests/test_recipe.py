@@ -188,6 +188,22 @@ def test_update_returns_a_new_recipe_and_deep_merges():
     assert recipe.update() == recipe
 
 
+def test_lambdas_kind_is_a_name_or_its_number():
+    """A LAMBDAS row's `kind` takes gromosXX's NTLI name or its number 1-12, as in a `.imd`."""
+    _, recipe = _system_and_recipe(WATER)
+    row = {"g1": 1, "g2": 1, "a": 0.0, "b": 0.0, "c": 0.1, "d": 0.9, "e": 0.0}
+    by_number = recipe.update(
+        perturbation={"lambdas": {"enabled": True, "rows": [{"kind": 5, **row}]}}
+    )
+    by_name = recipe.update(
+        perturbation={"lambdas": {"enabled": True, "rows": [{"kind": "vdw", **row}]}}
+    )
+    assert by_number == by_name
+    assert by_number.perturbation["lambdas"]["rows"][0]["kind"] == "vdw"
+    with pytest.raises(RecipeError):
+        recipe.update(perturbation={"lambdas": {"enabled": True, "rows": [{"kind": 13, **row}]}})
+
+
 def test_a_typo_is_a_recipe_error_not_a_silent_default():
     _, recipe = _system_and_recipe(WATER)
     with pytest.raises(RecipeError):

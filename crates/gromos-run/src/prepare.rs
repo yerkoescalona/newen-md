@@ -21,7 +21,7 @@ use gromos_core::{
     validation::{
         validate_configuration, validate_coordinates, validate_topology, ValidationReport,
     },
-    Topology,
+    IndividualLambdas, Topology,
 };
 use gromos_io::{coordinate::CoordinateData, imd::ImdParameters, ptp::read_pttopo};
 
@@ -36,6 +36,9 @@ pub struct Coordinates {
     pub velocities: Vec<Vec3>,
     /// Zero for a vacuum system.
     pub box_dims: Vec3,
+    /// λ of the configuration's `PERTDATA` block, if it has one; a run with NRDGL=1 starts
+    /// from it.
+    pub pertdata: Option<f64>,
 }
 
 impl From<CoordinateData> for Coordinates {
@@ -44,6 +47,7 @@ impl From<CoordinateData> for Coordinates {
             positions: c.positions,
             velocities: c.velocities,
             box_dims: c.box_dims,
+            pertdata: c.pertdata,
         }
     }
 }
@@ -71,6 +75,14 @@ pub enum PrepareNote {
     EnergyGroupAdded {
         /// last atom of the appended group, 1-based
         last_atom: usize,
+    },
+    /// A perturbed atom pair whose energy groups have different individual λ for Lennard-Jones
+    /// and reaction field: gromosXX runs it but reports a critical message ("Perturbed atom
+    /// pairs with different individual lambdas for lj and crf not implemented",
+    /// `perturbed_nonbonded_pair.cc:309-312`) — its force uses the LJ λ for both.
+    AtomPairLambdasDiffer {
+        /// the pair's atoms, 1-based
+        atoms: (usize, usize),
     },
     /// Non-fatal validation findings (errors or warnings) for `stage`.
     Validation {
@@ -139,33 +151,30 @@ pub fn prepare_system(
         ));
     }
 
-    // gromosXX `Topology::update_for_lambda`: a perturbed atom's mass is λ-mixed,
-    // m(λ) = (1 − λ)·m_A + λ·m_B (the mass λ has no NLAM exponent). It changes the kinetic
-    // energy and the integration, so it is part of the prepared topology — whichever way the
-    // perturbation arrived (the `.ptp` file above, or `Topology.apply_perturbation` from Python).
-    if imd.ntg != 0 && !topology.perturbed_solute.atoms.is_empty() {
-        let lambda = imd.rlam;
-        let mixed: Vec<(usize, f64)> = topology
-            .perturbed_solute
-            .atoms
-            .iter()
-            .map(|a| (a.seq, (1.0 - lambda) * a.a_mass + lambda * a.b_mass))
-            .collect();
-        for (seq, mass) in mixed {
-            if seq < topology.mass.len() && mass > 0.0 {
-                topology.mass[seq] = mass;
-                topology.inverse_mass[seq] = 1.0 / mass;
-            }
-        }
-    }
-    // 2. NTB=-1: truncated octahedron. GROMOS converts the legacy "cube edge length L" BOX
-    //    block into the lower-triangular triclinic box vectors and rotates positions and
-    //    velocities into that frame on read (io/configuration/in_configuration.cc).
     let Coordinates {
         mut positions,
         mut velocities,
         box_dims,
+        pertdata,
     } = coords;
+    // gromosXX `in_topology.cc:367-370`: the run's λ and NLAM live on the topology. With NTG=1
+    // and NRDGL=1, λ comes from the configuration's PERTDATA block instead, which must be
+    // there (`in_configuration.cc:876-897`, `_read_pertdata` :2351-2371).
+    topology.lambda = if imd.ntg != 0 && imd.nrdgl == 1 {
+        pertdata.ok_or_else(|| {
+            RunError::Inconsistent(
+                "PERTURBATION NRDGL = 1 reads λ from the configuration, but it has no \
+                 (readable) PERTDATA block"
+                    .to_string(),
+            )
+        })?
+    } else {
+        imd.rlam
+    };
+    topology.lambda_exp = imd.nlam;
+    // 2. NTB=-1: truncated octahedron. GROMOS converts the legacy "cube edge length L" BOX
+    //    block into the lower-triangular triclinic box vectors and rotates positions and
+    //    velocities into that frame on read (io/configuration/in_configuration.cc).
     let truncoct_box = if imd.ntb == -1 {
         let cubic = Mat3::from_diagonal(box_dims);
         let triclinic_box = truncoct_triclinic_box(cubic, true);
@@ -215,6 +224,27 @@ pub fn prepare_system(
         notes.push(note);
     }
 
+    // 3b'. The individual λ over those groups (LAMBDAS, identity where no row applies), then
+    //      gromosXX `Topology::init` → `update_for_lambda`: evaluate them at RLAM and mix the
+    //      perturbed masses with the mass λ of each atom's group. The masses change the kinetic
+    //      energy and the integration, so they are part of the prepared topology — whichever
+    //      way the perturbation arrived (`.ptp` above, or `Topology.apply_perturbation`).
+    topology.individual_lambdas = individual_lambdas(imd, topology.energy_groups.len())?;
+    topology.update_for_lambda();
+    {
+        use gromos_core::lambdas::InteractionLambda::{Crf, Lj};
+        let t = &topology.individual_lambdas;
+        let group = |i: usize| topology.atom_to_energy_group.get(i).copied().unwrap_or(0);
+        for ap in &topology.perturbed_solute.atom_pairs {
+            let (n1, n2) = (group(ap.i), group(ap.j));
+            if t.lambda(Lj, n1, n2) != t.lambda(Crf, n1, n2) {
+                notes.push(PrepareNote::AtomPairLambdasDiffer {
+                    atoms: (ap.i + 1, ap.j + 1),
+                });
+            }
+        }
+    }
+
     // 3c. Hand the bonds that a constraint algorithm owns to the topology, so the bonded force
     //     loop leaves them alone — gromosXX does this when it creates the constraints
     //     (`create_constraints.cc`): a constrained bond has no potential energy and no force.
@@ -225,6 +255,7 @@ pub fn prepare_system(
             topology.num_atoms() > topology.num_solute_atoms(),
         );
         topology.constrained_bonds.clear();
+        hand_perturbed_bonds_to_constraints(&mut topology, imd, &sel)?;
         if sel.solute_constrained() {
             let ntc = crate::ConstraintSelection::ntc_mode_of(imd.ntc);
             {
@@ -305,6 +336,72 @@ pub fn prepare_system(
 /// over everything; a last NRE beyond the last atom is an error; one before the last atom gets
 /// a trailing group appended (and a note). NRE must be positive and strictly increasing
 /// (in_parameter.cc:978-993).
+/// The individual-λ table of a run over `n_groups` energy groups: the identity, with the rows
+/// of a `LAMBDAS` block that applies (NTIL on, NTG ≠ 0) written in file order (a later row for
+/// the same kind and pair overwrites, `in_parameter.cc:4459-4468`).
+fn individual_lambdas(imd: &ImdParameters, n_groups: usize) -> Result<IndividualLambdas, RunError> {
+    let mut t = IndividualLambdas::identity(n_groups);
+    let Some(block) = imd.lambdas.as_ref().filter(|l| l.applies(imd.ntg)) else {
+        return Ok(t);
+    };
+    for r in &block.rows {
+        if r.g1 == 0 || r.g2 < r.g1 || r.g2 > imd.nre.len().max(1) {
+            return Err(RunError::Recipe(format!(
+                "LAMBDAS row {} {} {}: the groups must satisfy 1 <= NILG1 <= NILG2 <= NEGR ({})",
+                r.kind.gromos_name(),
+                r.g1,
+                r.g2,
+                imd.nre.len().max(1)
+            )));
+        }
+        t.set_row(r.kind, r.g1 - 1, r.g2 - 1, r.coefficients);
+    }
+    Ok(t)
+}
+
+/// gromosXX `in_perturbation.cc:183-300`: with NTC = 3 every perturbed bond becomes a perturbed
+/// distance constraint (perturbed SHAKE holds it at its λ-mixed length); with NTC = 2 perturbed
+/// bonds stay flexible, and one that perturbs a BONDH bond (which NTC = 2 constrains) is an
+/// error there ("Perturbation of a non-existing bond"). LINCS has no perturbed variant: a perturbed bond it
+/// would own is refused instead of being left unconstrained and without a force, which is what
+/// gromosXX does (it only warns, `create_constraints.cc:139-143`).
+fn hand_perturbed_bonds_to_constraints(
+    topology: &mut Topology,
+    imd: &ImdParameters,
+    sel: &crate::ConstraintSelection,
+) -> Result<(), RunError> {
+    let p = &topology.perturbed_solute;
+    if p.bonds.is_empty() || !sel.solute_constrained() {
+        return Ok(());
+    }
+    match imd.ntc {
+        3 if sel.solute_lincs => Err(RunError::Recipe(format!(
+            "NTC = 3 with LINCS for the solute and {} perturbed bonds: LINCS has no perturbed \
+             variant (no λ-dependent lengths, no dH/dλ); use SHAKE",
+            p.bonds.len()
+        ))),
+        3 => {
+            let bonds = std::mem::take(&mut topology.perturbed_solute.bonds);
+            topology.perturbed_solute.distance_constraints = bonds;
+            Ok(())
+        },
+        2 => {
+            // the bonds `ShakeBuffers` constrains for NTC = 2 (NtcMode::HydrogenBonds)
+            if let Some(b) = p.bonds.iter().find(|b| b.hydrogen) {
+                return Err(RunError::Recipe(format!(
+                    "NTC = 2 constrains the bond {}-{} to a hydrogen, which the perturbation \
+                     topology perturbs: gromosXX has no perturbed constraint for NTC = 2 \
+                     (\"Perturbation of a non-existing bond\")",
+                    b.i + 1,
+                    b.j + 1
+                )));
+            }
+            Ok(())
+        },
+        _ => Ok(()),
+    }
+}
+
 fn assign_energy_groups(
     topology: &mut Topology,
     nre: &[usize],
@@ -499,5 +596,164 @@ mod tests {
             mixed.topology.mass, plain.topology.mass,
             "λ-mixed masses expected"
         );
+    }
+
+    fn try_aladip(imd: &ImdParameters) -> Result<Prepared, RunError> {
+        let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+        let constants = parsed.physical_constants;
+        let topo = build_topology(parsed);
+        let coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+            .unwrap()
+            .into();
+        let inputs = RunInputs {
+            pttopo: Some(shared().join("aladip.pttopo")),
+            ..Default::default()
+        };
+        prepare_system(imd, topo, constants, coords, &inputs)
+    }
+
+    fn perturbed(ntc: i32, ntcp: i32) -> ImdParameters {
+        ImdParameters {
+            nsm: 20,
+            ntg: 1,
+            rlam: 0.125,
+            ntc,
+            ntcp,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ntc_3_hands_the_perturbed_bonds_to_perturbed_shake() {
+        let p = aladip(&perturbed(3, 1), true);
+        let ps = &p.topology.perturbed_solute;
+        assert!(ps.bonds.is_empty(), "no flexible perturbed bond left");
+        assert_eq!(ps.distance_constraints.len(), 2);
+        // NTC = 1: they stay flexible
+        let p = aladip(&perturbed(1, 1), true);
+        assert_eq!(p.topology.perturbed_solute.bonds.len(), 2);
+        assert!(p.topology.perturbed_solute.distance_constraints.is_empty());
+    }
+
+    #[test]
+    fn lincs_cannot_own_a_perturbed_bond() {
+        let err = try_aladip(&perturbed(3, 2)).err().expect("refused");
+        assert!(err.to_string().contains("LINCS has no perturbed"), "{err}");
+    }
+
+    #[test]
+    fn ntc_2_keeps_heavy_perturbed_bonds_flexible() {
+        // aladip.pttopo perturbs two bonds between heavy atoms: gromosXX keeps them as perturbed
+        // bonds under NTC = 2 (with a warning), and so does prepare_system
+        let p = aladip(&perturbed(2, 1), true);
+        assert_eq!(p.topology.perturbed_solute.bonds.len(), 2);
+        assert!(p.topology.perturbed_solute.distance_constraints.is_empty());
+    }
+
+    #[test]
+    fn ntc_2_constrains_the_bondh_bonds_whatever_the_mixed_masses() {
+        // aladip.pttopo takes H11 from 1.008 to 2.008: at RLAM = 1 both atoms of BONDH 10-11 are
+        // heavier than 2, and gromosXX still constrains it (BONDH membership, not masses)
+        let mut imd = perturbed(2, 1);
+        imd.rlam = 1.0;
+        let p = aladip(&imd, true);
+        assert!(p.topology.mass[10] > 2.0 && p.topology.mass[9] > 2.0);
+        let bondh: Vec<(usize, usize)> = p.topology.moltypes[0]
+            .bonds
+            .iter()
+            .filter(|b| b.hydrogen)
+            .map(|b| (b.i, b.j))
+            .collect();
+        assert_eq!(bondh, vec![(3, 4), (9, 10)]);
+        for (i, j) in bondh {
+            assert!(p.topology.constrained_bonds.contains(&(i, j)));
+        }
+        assert_eq!(
+            p.topology.constrained_bonds.len(),
+            4,
+            "the two BONDH bonds, both ways"
+        );
+    }
+
+    #[test]
+    fn ntc_2_refuses_a_perturbed_bondh_bond() {
+        // aladip_hblock.pttopo perturbs BONDH 4-5: "Perturbation of a non-existing bond"
+        let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+        let constants = parsed.physical_constants;
+        let coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+            .unwrap()
+            .into();
+        let inputs = RunInputs {
+            pttopo: Some(shared().join("aladip_hblock.pttopo")),
+            ..Default::default()
+        };
+        let err = prepare_system(
+            &perturbed(2, 1),
+            build_topology(parsed),
+            constants,
+            coords,
+            &inputs,
+        )
+        .err()
+        .expect("refused");
+        assert!(err.to_string().contains("bond 4-5"), "{err}");
+    }
+
+    #[test]
+    fn nrdgl_1_takes_lambda_from_pertdata() {
+        let run = |nrdgl: i32, pertdata: Option<f64>| {
+            let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+            let constants = parsed.physical_constants;
+            let mut coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+                .unwrap()
+                .into();
+            coords.pertdata = pertdata;
+            let mut imd = perturbed(1, 1);
+            imd.nrdgl = nrdgl;
+            let inputs = RunInputs {
+                pttopo: Some(shared().join("aladip.pttopo")),
+                ..Default::default()
+            };
+            prepare_system(&imd, build_topology(parsed), constants, coords, &inputs)
+        };
+        assert_eq!(run(1, Some(0.5)).unwrap().topology.lambda, 0.5);
+        assert_eq!(run(0, Some(0.5)).unwrap().topology.lambda, 0.125);
+        let err = run(1, None).err().expect("PERTDATA required");
+        assert!(err.to_string().contains("PERTDATA"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_mass_row_mixes_with_its_groups_lambda() {
+        use gromos_io::imd::{LambdasBlock, LambdasRow};
+        let mut imd = perturbed(1, 1);
+        imd.negr = 2;
+        imd.nre = vec![6, 72];
+        imd.lambdas = Some(LambdasBlock {
+            enabled: true,
+            rows: vec![LambdasRow {
+                kind: gromos_core::lambdas::InteractionLambda::Mass,
+                g1: 1,
+                g2: 1,
+                coefficients: [0.0, 1.0, -1.0, 1.0, 0.0],
+            }],
+        });
+        let p = aladip(&imd, true);
+        let t = &p.topology;
+        let lam: f64 = 0.125;
+        let (b, c, d) = (1.0, -1.0, 1.0);
+        let l = b * lam * lam * lam + c * lam * lam + d * lam;
+        for a in &t.perturbed_solute.atoms {
+            let l_atom = if t.energy_group(a.seq) == 0 { l } else { lam };
+            assert_eq!(t.mass[a.seq], (1.0 - l_atom) * a.a_mass + l_atom * a.b_mass);
+        }
+        // off: the identity, every mass at RLAM
+        imd.lambdas.as_mut().unwrap().enabled = false;
+        let p = aladip(&imd, true);
+        for a in &p.topology.perturbed_solute.atoms {
+            assert_eq!(
+                p.topology.mass[a.seq],
+                (1.0 - lam) * a.a_mass + lam * a.b_mass
+            );
+        }
     }
 }

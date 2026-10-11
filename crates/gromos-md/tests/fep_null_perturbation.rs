@@ -5,7 +5,9 @@
 //! the unperturbed system: energies and forces must be bit-identical to a run without any
 //! perturbation topology, for a perturbed atom anywhere in the topology (the pairlist routing
 //! bug only showed for atoms that were not the first). With a non-zero α the same `.ptp` must
-//! change the energy: soft-core is not a no-op even at equal end states.
+//! change the energy: soft-core is not a no-op even at equal end states. A `LAMBDAS` block that
+//! is on but gives every interaction kind the identity polynomial (`L = λ`, `L′ = 1`) must leave
+//! the null perturbation bit-identical too.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,6 +52,14 @@ fn ptp(atoms: &[(usize, &str, usize, f64, f64)], alpha_lj: f64, alpha_crf: f64) 
 }
 
 fn run(pttopo: Option<&Path>, tag: &str) -> (Vec<f64>, String) {
+    run_input(
+        pttopo,
+        &refs().join("aladip_vacuum_fep/aladip_vacuum_fep.in"),
+        tag,
+    )
+}
+
+fn run_input(pttopo: Option<&Path>, input: &Path, tag: &str) -> (Vec<f64>, String) {
     let r = refs();
     let out = std::env::temp_dir().join(format!("gromos_rs_fep_null_{tag}_{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
@@ -59,7 +69,7 @@ fn run(pttopo: Option<&Path>, tag: &str) -> (Vec<f64>, String) {
         .arg("@conf")
         .arg(r.join("aladip_vacuum/aladip_vacuum.conf"))
         .arg("@input")
-        .arg(r.join("aladip_vacuum_fep/aladip_vacuum_fep.in"))
+        .arg(input)
         .arg("@fin")
         .arg(out.join("fin.cnf"))
         .arg("@tre")
@@ -125,5 +135,51 @@ fn null_perturbation_is_a_no_op_and_soft_core_is_not() {
     assert_ne!(
         e[7], reference[7],
         "soft-core LJ with α_lj = 0.3 left the energy unchanged"
+    );
+}
+
+/// `aladip_vacuum_fep.in` with a `LAMBDAS` block that is on and sets every kind gromosXX lets a
+/// row set to the identity polynomial `0 0 0 1 0`.
+fn identity_lambdas_input(dir: &Path) -> PathBuf {
+    let text = fs::read_to_string(refs().join("aladip_vacuum_fep/aladip_vacuum_fep.in")).unwrap();
+    let mut block = String::from("LAMBDAS\n# NTIL\n  on\n# NTLI NILG1 NILG2 ALI BLI CLI DLI ELI\n");
+    for kind in [
+        "bond",
+        "angle",
+        "dihedral",
+        "improper",
+        "vdw",
+        "vdw_soft",
+        "crf",
+        "crf_soft",
+        "distanceres",
+        "distancefield",
+        "dihedralres",
+        "mass",
+    ] {
+        block += &format!("  {kind} 1 1 0 0 0 1 0\n");
+    }
+    block += "END\n";
+    let path = dir.join("identity_lambdas.in");
+    fs::write(&path, text + &block).unwrap();
+    path
+}
+
+#[test]
+fn identity_individual_lambdas_keep_the_null_perturbation_a_no_op() {
+    let dir = std::env::temp_dir().join(format!("gromos_rs_fep_null_lam_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (reference, ref_forces) = run(None, "lam_none");
+    let null = dir.join("null.ptp");
+    fs::write(&null, ptp(ATOMS, 0.0, 0.0)).unwrap();
+    let input = identity_lambdas_input(&dir);
+    let (e, forces) = run_input(Some(&null), &input, "lam_null");
+    assert_eq!(
+        e, reference,
+        "identity LAMBDAS on a null perturbation changed the energies: {e:?} vs {reference:?}"
+    );
+    assert_eq!(
+        forces, ref_forces,
+        "identity LAMBDAS on a null perturbation changed the forces"
     );
 }

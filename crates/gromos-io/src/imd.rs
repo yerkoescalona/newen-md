@@ -34,6 +34,7 @@
 //! - PRINTOUT: Energy output settings
 
 use crate::IoError;
+use gromos_core::lambdas::InteractionLambda;
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::Path;
@@ -187,6 +188,8 @@ pub struct ImdParameters {
     pub nlam: i32,
     /// NSCALE: energy group scaling (0=off)
     pub nscale: i32,
+    /// LAMBDAS block (individual λ per interaction kind and energy-group pair); `None` = absent.
+    pub lambdas: Option<LambdasBlock>,
 
     // ENERGYMIN block
     /// Energy minimization method (0=off, 1=steepest descent, 2=Fletcher-Reeves CG)
@@ -398,6 +401,7 @@ impl Default for ImdParameters {
             ncyc: 0,
             ntcs0: 1e-4,
             nonbonded_extra: NonbondedExtra::default(),
+            lambdas: None,
             raw_blocks: HashMap::new(),
         }
     }
@@ -478,7 +482,177 @@ pub fn parse_imd<R: BufRead>(reader: R) -> Result<ImdParameters, IoError> {
         }
     }
 
+    // LAMBDAS depends on PERTURBATION (NTG) and FORCE (NEGR), which may come later in the file;
+    // gromosXX reads it after both (`in_parameter.cc:121`).
+    if let Some(lines) = params.raw_blocks.get("LAMBDAS") {
+        let data: Vec<String> = lines
+            .iter()
+            .filter(|l| !l.starts_with('#'))
+            .cloned()
+            .collect();
+        params.lambdas = Some(
+            parse_lambdas(&data, params.ntg, params.nre.len()).map_err(|e| match e {
+                IoError::ParseError(m) => IoError::ParseError(format!("block LAMBDAS: {m}")),
+                other => other,
+            })?,
+        );
+    }
+
     Ok(params)
+}
+
+/// One `LAMBDAS` row: `L = a·λ⁴ + b·λ³ + c·λ² + d·λ + e` for `kind` between energy groups
+/// `g1` and `g2` (1-based, as in the file, `g1 ≤ g2`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdasRow {
+    pub kind: InteractionLambda,
+    pub g1: usize,
+    pub g2: usize,
+    /// `[ALI, BLI, CLI, DLI, ELI]`
+    pub coefficients: [f64; 5],
+}
+
+/// The `LAMBDAS` block (gromosXX `read_LAMBDAS`, `in_parameter.cc:4326-4472`).
+///
+/// The rows act only when the block is on *and* the run is perturbed (NTG ≠ 0); otherwise
+/// gromosXX never reads them and every individual λ stays the identity. They are kept anyway
+/// (when they parse) so the block round-trips.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LambdasBlock {
+    /// NTIL: `on`/`1` or `off`/`0`.
+    pub enabled: bool,
+    pub rows: Vec<LambdasRow>,
+}
+
+impl LambdasBlock {
+    /// Whether the rows set the individual λ of a run with this NTG.
+    pub fn applies(&self, ntg: i32) -> bool {
+        self.enabled && ntg != 0
+    }
+
+    /// The warnings gromosXX prints for this block (it runs anyway).
+    pub fn warnings(&self, ntg: i32) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.enabled && ntg == 0 {
+            out.push("LAMBDAS block without perturbation is ignored".to_string());
+            return out;
+        }
+        if !self.enabled {
+            return out;
+        }
+        for r in &self.rows {
+            if !r.kind.is_nonbonded() && r.g1 != r.g2 {
+                out.push(format!(
+                    "NILG1 != NILG2 in LAMBDAS block only allowed for nonbonded interactions \
+                     ({} {} {}: never read, the term uses its own group's diagonal)",
+                    r.kind.gromos_name(),
+                    r.g1,
+                    r.g2
+                ));
+            }
+        }
+        out
+    }
+}
+
+/// Parse the data lines of a `LAMBDAS` block. `ntg` is PERTURBATION's NTG and `n_groups` the
+/// number of energy groups FORCE declares (NEGR, before gromosXX's implicit trailing group).
+pub fn parse_lambdas(lines: &[String], ntg: i32, n_groups: usize) -> Result<LambdasBlock, IoError> {
+    // gromosXX's `io::getline` drops everything after a `#` (blockinput.cc:37-62)
+    let lines: Vec<String> = lines
+        .iter()
+        .map(|l| l.split('#').next().unwrap_or_default().trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut t = Tokens::new("LAMBDAS", &lines);
+    let enabled = match t.next_raw().as_deref() {
+        Some("on") | Some("1") => true,
+        Some("off") | Some("0") => false,
+        Some(other) => {
+            return Err(IoError::ParseError(format!(
+                "NTIL must be on, off, 1 or 0, found {other:?}"
+            )))
+        },
+        None => return Err(IoError::ParseError("missing NTIL".to_string())),
+    };
+    // gromosXX: `num = block.numlines() - 3`, one row per line after NTIL's
+    let num = lines.len().saturating_sub(1);
+    let rows = read_lambdas_rows(&mut t, num, n_groups);
+    if enabled && ntg != 0 {
+        let rows = rows?;
+        // `block.get_final_messages()` (in_parameter.cc:4470, blockinput.cc:281-286)
+        if let Some(extra) = t.next_raw() {
+            return Err(IoError::ParseError(format!(
+                "Left-over parameters in LAMBDAS block (from {extra:?}): one row per line"
+            )));
+        }
+        return Ok(LambdasBlock { enabled, rows });
+    }
+    // off, or on without perturbation: gromosXX returns before reading a row
+    Ok(LambdasBlock {
+        enabled,
+        rows: rows.unwrap_or_default(),
+    })
+}
+
+fn read_lambdas_rows(
+    t: &mut Tokens<'_>,
+    num: usize,
+    n_groups: usize,
+) -> Result<Vec<LambdasRow>, IoError> {
+    let mut rows = Vec::with_capacity(num);
+    for i in 0..num {
+        let missing = |name: &str| IoError::ParseError(format!("missing {name}[{i}]"));
+        let ntli = t.next_raw().ok_or_else(|| missing("NTLI"))?;
+        let kind = InteractionLambda::from_ntli(&ntli).ok_or_else(|| {
+            IoError::ParseError(format!(
+                "NTLI[{i}] = {ntli:?} is not one of 1..12, bond, angle, dihedral, improper, \
+                 vdw, vdw_soft, crf, crf_soft, distanceres, distancefield, dihedralres, mass"
+            ))
+        })?;
+        let mut group = |name: &str| -> Result<usize, IoError> {
+            let v = t
+                .next_i32(&format!("{name}[{i}]"))?
+                .ok_or_else(|| missing(name))?;
+            if v <= 0 {
+                return Err(IoError::ParseError(format!(
+                    "{name}[{i}] must be > 0, found {v}"
+                )));
+            }
+            Ok(v as usize)
+        };
+        let g1 = group("NILG1")?;
+        let g2 = group("NILG2")?;
+        let mut coefficients = [0.0; 5];
+        for (c, name) in coefficients
+            .iter_mut()
+            .zip(["ALI", "BLI", "CLI", "DLI", "ELI"])
+        {
+            *c = t
+                .next_f64(&format!("{name}[{i}]"))?
+                .ok_or_else(|| missing(name))?;
+        }
+        if g1 > n_groups || g2 > n_groups {
+            return Err(IoError::ParseError(format!(
+                "NILG1 and NILG2 need to be smaller than the number of energy groups \
+                 (row {kind} {g1} {g2}, NEGR = {n_groups})",
+                kind = kind.gromos_name()
+            )));
+        }
+        if g2 < g1 {
+            return Err(IoError::ParseError(format!(
+                "only give NILG2 >= NILG1 in LAMBDAS BLOCK (row {} {g1} {g2})",
+                kind.gromos_name()
+            )));
+        }
+        rows.push(LambdasRow {
+            kind,
+            g1,
+            g2,
+            coefficients,
+        });
+    }
+    Ok(rows)
 }
 
 /// Parse a specific IMD block using GROMOS positional format.
@@ -1184,21 +1358,6 @@ impl ImdParameters {
             ..Self::default()
         }
     }
-
-    /// Compute the individual lambda and its derivative with respect to RLAM.
-    ///
-    /// Following GROMOS: individual_lambda = RLAM^NLAM,
-    /// d(individual_lambda)/d(RLAM) = NLAM * RLAM^(NLAM-1).
-    pub fn lambda_and_derivative(&self) -> (f64, f64) {
-        let nlam = self.nlam as f64;
-        let l = self.rlam.powf(nlam);
-        let dl = if self.nlam <= 0 {
-            0.0
-        } else {
-            nlam * self.rlam.powf(nlam - 1.0)
-        };
-        (l, dl)
-    }
 }
 
 /// Split a line into whitespace-separated tokens
@@ -1659,5 +1818,158 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
         let path = write_tmp(content, "nre_order");
         let err = read_imd_file(&path).unwrap_err().to_string();
         assert!(err.contains("strictly increasing"), "{err}");
+    }
+
+    // ── LAMBDAS (gromosXX read_LAMBDAS, in_parameter.cc:4326-4472) ──────────────────────────
+
+    /// A perturbed input with two energy groups and the given LAMBDAS body; `ntg` sets NTG.
+    fn lambdas_input(ntg: i32, body: &str) -> String {
+        format!(
+            "FORCE\n 1 1 1 1 1 1\n 2 6 12\nEND\nPERTURBATION\n {ntg} 0 0.125 0.0\n 0.5 0.5 1 0\nEND\n\
+             LAMBDAS\n{body}END\n"
+        )
+    }
+
+    fn parse_lambdas_text(ntg: i32, body: &str) -> Result<ImdParameters, IoError> {
+        parse_imd_str(&lambdas_input(ntg, body))
+    }
+
+    fn lambdas_err(ntg: i32, body: &str) -> String {
+        parse_lambdas_text(ntg, body).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn lambdas_ntil_takes_on_off_one_zero() {
+        for (ntil, on) in [("on", true), ("1", true), ("off", false), ("0", false)] {
+            let p = parse_lambdas_text(1, &format!(" {ntil}\n")).unwrap();
+            assert_eq!(p.lambdas.as_ref().unwrap().enabled, on, "{ntil}");
+        }
+        let err = lambdas_err(1, " yes\n");
+        assert!(err.contains("NTIL"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_off_ignores_the_rows() {
+        // gromosXX returns right after NTIL: a row it would refuse is not even read
+        let p = parse_lambdas_text(1, " off\n angleres 1 1 0 0 1 0 0\n").unwrap();
+        let l = p.lambdas.unwrap();
+        assert!(!l.enabled && !l.applies(1));
+        assert!(l.warnings(1).is_empty());
+        // rows that parse are kept for the round trip, inert
+        let p = parse_lambdas_text(1, " off\n vdw 1 2 0 0 1 0 0\n").unwrap();
+        let l = p.lambdas.unwrap();
+        assert_eq!(l.rows.len(), 1);
+        assert!(!l.applies(1));
+    }
+
+    #[test]
+    fn lambdas_on_without_perturbation_is_ignored_with_a_warning() {
+        let p = parse_lambdas_text(0, " on\n angleres 1 1 0 0 1 0 0\n").unwrap();
+        let l = p.lambdas.unwrap();
+        assert!(l.enabled && !l.applies(0));
+        assert_eq!(
+            l.warnings(0),
+            vec!["LAMBDAS block without perturbation is ignored".to_string()]
+        );
+    }
+
+    #[test]
+    fn lambdas_ntli_is_a_name_or_its_number() {
+        let p = parse_lambdas_text(
+            1,
+            " on\n vdw 1 2 0 0 0.1 0.9 0\n 5 1 1 0 1 0 0 0\n 12 2 2 0.2 0 0 0.8 0\n",
+        )
+        .unwrap();
+        let rows = p.lambdas.unwrap().rows;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].kind, InteractionLambda::Lj);
+        assert_eq!((rows[0].g1, rows[0].g2), (1, 2));
+        assert_eq!(rows[0].coefficients, [0.0, 0.0, 0.1, 0.9, 0.0]);
+        assert_eq!(rows[1].kind, InteractionLambda::Lj);
+        assert_eq!(rows[2].kind, InteractionLambda::Mass);
+    }
+
+    #[test]
+    fn lambdas_refuses_angleres_and_unknown_kinds() {
+        for ntli in ["angleres", "13", "0", "colvarres", "lj"] {
+            let err = lambdas_err(1, &format!(" on\n {ntli} 1 1 0 0 1 0 0\n"));
+            assert!(err.contains("NTLI"), "{ntli}: {err}");
+        }
+    }
+
+    #[test]
+    fn lambdas_groups_must_be_positive() {
+        let err = lambdas_err(1, " on\n bond 0 1 0 0 1 0 0\n");
+        assert!(err.contains("NILG1[0] must be > 0"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_groups_must_exist_before_the_implicit_one() {
+        // NEGR = 2: group 3 would be gromosXX's implicit trailing group, which LAMBDAS cannot name
+        let err = lambdas_err(1, " on\n vdw 1 3 0 0 1 0 0\n");
+        assert!(
+            err.contains("smaller than the number of energy groups"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn lambdas_second_group_must_not_precede_the_first() {
+        let err = lambdas_err(1, " on\n vdw 2 1 0 0 1 0 0\n");
+        assert!(err.contains("NILG2 >= NILG1"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_off_diagonal_bonded_row_is_kept_with_a_warning() {
+        let p = parse_lambdas_text(1, " on\n bond 1 2 0 0 1 0 0\n crf 1 2 0 0 1 0 0\n").unwrap();
+        let l = p.lambdas.unwrap();
+        assert_eq!(l.rows.len(), 2);
+        let w = l.warnings(1);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("only allowed for nonbonded"), "{w:?}");
+    }
+
+    #[test]
+    fn lambdas_rows_are_checked_against_blocks_that_come_later() {
+        // gromosXX reads LAMBDAS after FORCE and PERTURBATION whatever the file order
+        let text = "LAMBDAS\n on\n vdw 1 3 0 0 1 0 0\nEND\nFORCE\n 1 1 1 1 1 1\n 2 6 12\nEND\n\
+                    PERTURBATION\n 1 0 0.125 0.0\n 0.5 0.5 1 0\nEND\n";
+        let err = parse_imd_str(text).unwrap_err().to_string();
+        assert!(
+            err.contains("smaller than the number of energy groups"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn lambdas_missing_value_is_an_error() {
+        let err = lambdas_err(1, " on\n vdw 1 2 0 0 1 0\n");
+        assert!(err.contains("missing ELI[0]"), "{err}");
+    }
+
+    #[test]
+    fn lambdas_left_over_values_are_an_error() {
+        // two rows on one line: gromosXX reads one row per line and reports the rest
+        let err = lambdas_err(1, " on\n vdw 1 2 0 0 1 0 0  crf 1 2 0 0 1 0 0\n");
+        assert!(err.contains("Left-over parameters"), "{err}");
+        let err = lambdas_err(1, " on\n vdw 1 2 0 0 1 0 0 7\n");
+        assert!(err.contains("Left-over parameters"), "{err}");
+        // a trailing comment is not a value
+        let p = parse_lambdas_text(1, " on # NTIL\n vdw 1 2 0 0 1 0 0 # the LJ row\n").unwrap();
+        assert_eq!(p.lambdas.unwrap().rows.len(), 1);
+        // a block that does not apply is never read to the end
+        assert!(parse_lambdas_text(0, " on\n vdw 1 2 0 0 1 0 0 7\n").is_ok());
+    }
+
+    #[test]
+    fn lambdas_round_trip_through_the_writer() {
+        let p = parse_lambdas_text(
+            1,
+            " on\n bond 1 1 0 0 1 0 0\n vdw 1 2 0 0 0.1 0.9 0\n crf_soft 2 2 1 1 -1 0 0\n",
+        )
+        .unwrap();
+        let text = crate::imd_write::write_imd(&p, None);
+        let back = parse_imd_str(&text).unwrap();
+        assert_eq!(back.lambdas, p.lambdas, "{text}");
     }
 }

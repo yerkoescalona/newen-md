@@ -16,7 +16,7 @@ pub use improper::*;
 pub use perturbed::{
     calculate_perturbed_angle_forces, calculate_perturbed_bond_forces,
     calculate_perturbed_bonded_forces, calculate_perturbed_dihedral_forces,
-    calculate_perturbed_improper_dihedral_forces,
+    calculate_perturbed_improper_dihedral_forces, TermLambda,
 };
 
 use gromos_core::configuration::Configuration;
@@ -164,50 +164,6 @@ impl ForceEnergyLambda {
         for i in 0..self.forces.len().min(other.forces.len()) {
             self.forces[i] += other.forces[i];
         }
-    }
-}
-
-// ─── LambdaController (kept for back-compat with existing test code) ─────────
-
-#[derive(Debug, Clone, Default)]
-pub struct InteractionLambdas {
-    pub bond: f64,
-    pub angle: f64,
-    pub dihedral: f64,
-    pub improper: f64,
-    pub lj: f64,
-    pub coulomb: f64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct LambdaController {
-    pub lambda: f64,
-    pub interaction_lambdas: InteractionLambdas,
-}
-
-impl LambdaController {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_lambda(mut self, lambda: f64) -> Self {
-        self.lambda = lambda;
-        self.interaction_lambdas = InteractionLambdas {
-            bond: lambda,
-            angle: lambda,
-            dihedral: lambda,
-            improper: lambda,
-            lj: lambda,
-            coulomb: lambda,
-        };
-        self
-    }
-
-    pub fn get_lambda(&self) -> f64 {
-        self.lambda
-    }
-    pub fn lambda_derivative(&self) -> f64 {
-        1.0
     }
 }
 

@@ -61,6 +61,8 @@ struct Parts {
     positions: Vec<Vec3>,
     velocities: Vec<Vec3>,
     box_dims: Vec3,
+    /// λ of the configuration file's PERTDATA block (NRDGL=1).
+    pertdata: Option<f64>,
 }
 
 impl Parts {
@@ -71,6 +73,7 @@ impl Parts {
             positions: conf.pos_data.clone(),
             velocities: conf.vel_data.clone(),
             box_dims: conf.box_dims,
+            pertdata: conf.pertdata,
         }
     }
 
@@ -99,6 +102,7 @@ impl Parts {
             positions: coord_data.positions,
             velocities: coord_data.velocities,
             box_dims: coord_data.box_dims,
+            pertdata: coord_data.pertdata,
         })
     }
 
@@ -107,6 +111,7 @@ impl Parts {
             positions: self.positions,
             velocities: self.velocities,
             box_dims: self.box_dims,
+            pertdata: self.pertdata,
         };
         (self.topo, self.physical_constants, coords)
     }
@@ -626,17 +631,21 @@ impl PySimulation {
         Ok(d)
     }
 
-    /// dH/dλ (kJ/mol) at the last step — the thermodynamic-integration integrand; 0 unless the
-    /// recipe's `perturbation` is enabled (a `pttopo` in `inputs`, `NTG=1`).
+    /// dH/dλ (kJ/mol) at the last step — the thermodynamic-integration integrand: the whole
+    /// derivative (kinetic, potential, constraints and restraints; gromosXX `energy.cc:597`),
+    /// what the first value of a `.trg` frame holds. 0 unless the recipe's `perturbation` is
+    /// enabled (a `pttopo` in `inputs`, `NTG=1`).
     #[getter]
     fn dhdl(&self) -> f64 {
         self.configuration
             .old()
             .perturbed_energy_derivatives
-            .potential_total
+            .total()
     }
 
-    /// dH/dλ split by term at the last step: `{"lj", "crf", "bonded"}` (kJ/mol).
+    /// dH/dλ split by term at the last step (kJ/mol): `lj`, `crf`, `bonded`, `kinetic` (the
+    /// λ-dependent masses), `constraints` (perturbed SHAKE) and `distanceres` (perturbed
+    /// distance restraints).
     #[getter]
     fn dhdl_terms<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let e = &self.configuration.old().perturbed_energy_derivatives;
@@ -647,6 +656,9 @@ impl PySimulation {
             "bonded",
             e.bond_total + e.angle_total + e.improper_total + e.dihedral_total,
         )?;
+        d.set_item("kinetic", e.kinetic_total)?;
+        d.set_item("constraints", e.constraint_total)?;
+        d.set_item("distanceres", e.distanceres_total)?;
         Ok(d)
     }
 
@@ -775,7 +787,7 @@ impl PySimulation {
             frame.dihedral,
             frame.lj,
             frame.coul_real,
-            state.perturbed_energy_derivatives.potential_total,
+            state.perturbed_energy_derivatives.total(),
         ]
     }
 }

@@ -147,11 +147,13 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
         }
     }
 
-    // ── PERTBONDSTRETCH / PERTBONDSTRETCHH ───────────────────────────────────
-    // Format: count \n i j A_type B_type   (1-indexed)
-    for bname in &["PERTBONDSTRETCH", "PERTBONDSTRETCHH", "PERTBOND03"] {
+    // ── PERTBONDSTRETCHH / PERTBONDSTRETCH ───────────────────────────────────
+    // Format: count \n i j A_type B_type   (1-indexed). The H block first, as gromosXX reads
+    // them (`in_perturbation.cc:172-175`): with NTC = 3 this is the perturbed SHAKE order.
+    for bname in &["PERTBONDSTRETCHH", "PERTBONDSTRETCH", "PERTBOND03"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
+            let before = ps.bonds.len();
             for line in &data {
                 let v = tokenize(line);
                 if v.len() < 4 {
@@ -166,19 +168,24 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
                     j,
                     a_type,
                     b_type,
+                    hydrogen: *bname == "PERTBONDSTRETCHH",
                 });
             }
-            if ps.bonds.len() != count {
-                log::warn!("{bname}: expected {count} bonds, got {}", ps.bonds.len());
+            if ps.bonds.len() - before != count {
+                log::warn!(
+                    "{bname}: expected {count} bonds, got {}",
+                    ps.bonds.len() - before
+                );
             }
         }
     }
 
-    // ── PERTBONDANGLE / PERTBONDANGLEH ───────────────────────────────────────
-    // Format: count \n i j k A_type B_type
-    for bname in &["PERTBONDANGLE", "PERTBONDANGLEH", "PERTBANGLE03"] {
+    // ── PERTBONDANGLEH / PERTBONDANGLE ───────────────────────────────────────
+    // Format: count \n i j k A_type B_type (H block first, `in_perturbation.cc:590-591`)
+    for bname in &["PERTBONDANGLEH", "PERTBONDANGLE", "PERTBANGLE03"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
+            let before = ps.angles.len();
             for line in &data {
                 let v = tokenize(line);
                 if v.len() < 5 {
@@ -197,17 +204,21 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
                     b_type,
                 });
             }
-            if ps.angles.len() != count {
-                log::warn!("{bname}: expected {count} angles, got {}", ps.angles.len());
+            if ps.angles.len() - before != count {
+                log::warn!(
+                    "{bname}: expected {count} angles, got {}",
+                    ps.angles.len() - before
+                );
             }
         }
     }
 
-    // ── PERTIMPROPERDIH / PERTIMPROPERDIHH ───────────────────────────────────
-    // Format: count \n i j k l A_type B_type
-    for bname in &["PERTIMPROPERDIH", "PERTIMPROPERDIHH", "PERTIMPDIHEDRAL03"] {
+    // ── PERTIMPROPERDIHH / PERTIMPROPERDIH ───────────────────────────────────
+    // Format: count \n i j k l A_type B_type (H block first, `in_perturbation.cc:827-828`)
+    for bname in &["PERTIMPROPERDIHH", "PERTIMPROPERDIH", "PERTIMPDIHEDRAL03"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
+            let before = ps.improper_dihedrals.len();
             for line in &data {
                 let v = tokenize(line);
                 if v.len() < 6 {
@@ -228,20 +239,21 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
                     b_type,
                 });
             }
-            if ps.improper_dihedrals.len() != count {
+            if ps.improper_dihedrals.len() - before != count {
                 log::warn!(
                     "{bname}: expected {count} impropers, got {}",
-                    ps.improper_dihedrals.len()
+                    ps.improper_dihedrals.len() - before
                 );
             }
         }
     }
 
-    // ── PERTPROPERDIH / PERTPROPERDIHH ───────────────────────────────────────
-    // Format: count \n i j k l A_type B_type
-    for bname in &["PERTPROPERDIH", "PERTPROPERDIHH", "PERTDIHEDRAL03"] {
+    // ── PERTPROPERDIHH / PERTPROPERDIH ───────────────────────────────────────
+    // Format: count \n i j k l A_type B_type (H block first, `in_perturbation.cc:1058-1059`)
+    for bname in &["PERTPROPERDIHH", "PERTPROPERDIH", "PERTDIHEDRAL03"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
+            let before = ps.proper_dihedrals.len();
             for line in &data {
                 let v = tokenize(line);
                 if v.len() < 6 {
@@ -262,10 +274,10 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
                     b_type,
                 });
             }
-            if ps.proper_dihedrals.len() != count {
+            if ps.proper_dihedrals.len() - before != count {
                 log::warn!(
                     "{bname}: expected {count} dihedrals, got {}",
-                    ps.proper_dihedrals.len()
+                    ps.proper_dihedrals.len() - before
                 );
             }
         }
@@ -651,6 +663,44 @@ END
             (a.crf_soft - 0.5).abs() < 1e-9,
             "crf_soft must be read from column 10 (ACRF)"
         );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn hydrogen_blocks_come_first_and_are_marked() {
+        // gromosXX reads PERTBONDSTRETCHH before PERTBONDSTRETCH (in_perturbation.cc:172-175)
+        let content = "\
+TITLE
+order
+END
+PERTBONDSTRETCH
+   2
+    2    4   26   20
+    8   10    9   26
+END
+PERTBONDSTRETCHH
+   1
+    4    5    2   36
+END
+PERTBONDANGLE
+   1
+    1    2    3    1    2
+END
+PERTBONDANGLEH
+   1
+    3    4    5    3    4
+END
+";
+        let path =
+            std::env::temp_dir().join(format!("gromos_ptp_order_{}.tmp", std::process::id()));
+        std::fs::write(&path, content).unwrap();
+        let ps = read_pttopo(&path).expect("read_pttopo").perturbed_solute;
+        let bonds: Vec<(usize, usize, bool)> =
+            ps.bonds.iter().map(|b| (b.i, b.j, b.hydrogen)).collect();
+        assert_eq!(bonds, vec![(3, 4, true), (1, 3, false), (7, 9, false)]);
+        let angles: Vec<(usize, usize, usize)> =
+            ps.angles.iter().map(|a| (a.i, a.j, a.k)).collect();
+        assert_eq!(angles, vec![(2, 3, 4), (0, 1, 2)]);
         std::fs::remove_file(path).ok();
     }
 

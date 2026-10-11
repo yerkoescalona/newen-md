@@ -279,8 +279,8 @@ ts.plot("bond", "angle")
 | `n_solvent_atoms` | `int` | Solvent atom count |
 | `algorithm_names` | `list[str]` | Names of algorithms in the sequence |
 | `term_energies` | `dict[str, float]` | Energy of each additive term at the last step, keyed by registry name (`xtb`, `xtb:1` for a repeated kind); their sum is what the terms add to `total_energy` |
-| `dhdl` | `float` | ∂H/∂λ at the last step (kJ/mol) — the TI integrand; 0 without a perturbation |
-| `dhdl_terms` | `dict[str, float]` | ∂H/∂λ split: `lj`, `crf`, `bonded` |
+| `dhdl` | `float` | ∂H/∂λ at the last step (kJ/mol) — the TI integrand, the whole derivative (the `.trg`'s first value); 0 without a perturbation |
+| `dhdl_terms` | `dict[str, float]` | ∂H/∂λ split: `lj`, `crf`, `bonded`, `kinetic`, `constraints`, `distanceres` |
 | `recipe` | `Recipe` | The effective recipe the engine ran (`recipe_toml`: as TOML) |
 | `plan` | `Plan` | The plan the engine instantiated, a frozen snapshot (`plan_json`: as JSON) |
 | `diagnostics` | `list[str]` | Absent optional blocks (and what that means), passed-through blocks |

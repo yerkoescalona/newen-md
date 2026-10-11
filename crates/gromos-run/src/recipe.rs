@@ -18,7 +18,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gromos_io::imd::{ImdParameters, NonbondedExtra, PressureParameters, TempBathParameters};
+use gromos_core::lambdas::InteractionLambda;
+use gromos_io::imd::{
+    ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PressureParameters, TempBathParameters,
+};
 use gromos_io::imd_write::{write_imd, MODELLED_BLOCKS};
 use serde::{Deserialize, Serialize};
 
@@ -540,6 +543,123 @@ pub struct Perturbation {
     /// NLAM
     pub nlam: i32,
     pub nscale: i32,
+    /// LAMBDAS block: individual λ per interaction kind and energy-group pair; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lambdas: Option<Lambdas>,
+}
+
+/// The `LAMBDAS` block. Its rows act only when `enabled` and the run is perturbed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lambdas {
+    /// NTIL
+    pub enabled: bool,
+    #[serde(default)]
+    pub rows: Vec<LambdaRow>,
+}
+
+/// One `LAMBDAS` row: `L = a·λ⁴ + b·λ³ + c·λ² + d·λ + e` for `kind` between energy groups
+/// `g1 ≤ g2` (1-based, as in the file).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LambdaRow {
+    pub kind: LambdaKind,
+    pub g1: usize,
+    pub g2: usize,
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    pub e: f64,
+}
+
+/// A `LAMBDAS` NTLI: one of gromosXX's twelve names (`bond` … `mass`, `vdw` for Lennard-Jones)
+/// or its number 1-12 (as a number or a string); serialised as the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+pub struct LambdaKind(pub InteractionLambda);
+
+impl<'de> Deserialize<'de> for LambdaKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = LambdaKind;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a LAMBDAS kind: a gromosXX name or its number 1-12")
+            }
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<LambdaKind, E> {
+                LambdaKind::try_from(s.to_string()).map_err(E::custom)
+            }
+            fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<LambdaKind, E> {
+                self.visit_str(&n.to_string())
+            }
+            fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<LambdaKind, E> {
+                self.visit_str(&n.to_string())
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
+impl TryFrom<String> for LambdaKind {
+    type Error = String;
+    fn try_from(s: String) -> Result<Self, String> {
+        InteractionLambda::from_ntli(&s)
+            .map(LambdaKind)
+            .ok_or_else(|| {
+                format!(
+                    "unknown LAMBDAS kind {s:?}: expected bond, angle, dihedral, improper, vdw, \
+                 vdw_soft, crf, crf_soft, distanceres, distancefield, dihedralres or mass"
+                )
+            })
+    }
+}
+
+impl From<LambdaKind> for String {
+    fn from(k: LambdaKind) -> String {
+        k.0.gromos_name().to_string()
+    }
+}
+
+impl Lambdas {
+    fn from_block(b: &LambdasBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            rows: b
+                .rows
+                .iter()
+                .map(|r| {
+                    let [a, b, c, d, e] = r.coefficients;
+                    LambdaRow {
+                        kind: LambdaKind(r.kind),
+                        g1: r.g1,
+                        g2: r.g2,
+                        a,
+                        b,
+                        c,
+                        d,
+                        e,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn to_block(&self) -> LambdasBlock {
+        LambdasBlock {
+            enabled: self.enabled,
+            rows: self
+                .rows
+                .iter()
+                .map(|r| LambdasRow {
+                    kind: r.kind.0,
+                    g1: r.g1,
+                    g2: r.g2,
+                    coefficients: [r.a, r.b, r.c, r.d, r.e],
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -718,6 +838,13 @@ impl RunRecipe {
                 if !present(block) {
                     diag.notes.push(format!("{block} block absent: {meaning}"));
                 }
+            }
+        }
+
+        if let Some(l) = &imd.lambdas {
+            for w in l.warnings(imd.ntg) {
+                diag.notes
+                    .push(format!("LAMBDAS: {w} (gromosXX warns and runs)"));
             }
         }
 
@@ -929,6 +1056,7 @@ impl RunRecipe {
                 alpha_c: imd.alphc,
                 nlam: imd.nlam,
                 nscale: imd.nscale,
+                lambdas: imd.lambdas.as_ref().map(Lambdas::from_block),
             },
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
@@ -1081,6 +1209,7 @@ impl RunRecipe {
             alphc: r.perturbation.alpha_c,
             nlam: r.perturbation.nlam,
             nscale: r.perturbation.nscale,
+            lambdas: r.perturbation.lambdas.as_ref().map(Lambdas::to_block),
             ntem: r.minimisation.method,
             nmin: r.minimisation.min_steps,
             dele: r.minimisation.tolerance,

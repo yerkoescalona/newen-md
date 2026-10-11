@@ -7,6 +7,7 @@
 //!   perturbed_dihedral_interaction.cc
 
 use gromos_core::configuration::Configuration;
+use gromos_core::lambdas::{IndividualLambdas, InteractionLambda};
 use gromos_core::topology::Topology;
 
 use super::{BondedGroupEnergies, ForceEnergyLambda};
@@ -43,6 +44,46 @@ fn chebyshev(m: i32, cos_phi: f64) -> (f64, f64) {
     }
 }
 
+/// Where a perturbed bonded term takes its `(L, L′)`: one fixed pair (the single-term entry
+/// points), or the individual λ of one interaction kind at the energy group of the term's first
+/// atom.
+#[derive(Debug, Clone, Copy)]
+pub enum TermLambda<'a> {
+    Fixed(f64, f64),
+    Table {
+        lambdas: &'a IndividualLambdas,
+        kind: InteractionLambda,
+        atom_group: &'a [usize],
+    },
+}
+
+impl<'a> TermLambda<'a> {
+    /// The individual λ of `kind` from the topology's table.
+    pub fn table(topo: &'a Topology, kind: InteractionLambda) -> Self {
+        Self::Table {
+            lambdas: &topo.individual_lambdas,
+            kind,
+            atom_group: &topo.atom_to_energy_group,
+        }
+    }
+
+    /// `(L, L′)` of a term whose first atom is `first`.
+    #[inline]
+    pub fn at(&self, first: usize) -> (f64, f64) {
+        match *self {
+            Self::Fixed(l, dl) => (l, dl),
+            Self::Table {
+                lambdas,
+                kind,
+                atom_group,
+            } => {
+                let g = atom_group.get(first).copied().unwrap_or(0);
+                lambdas.get(kind, g, g)
+            },
+        }
+    }
+}
+
 // ─── Perturbed quartic bond ───────────────────────────────────────────────────
 
 /// Perturbed quartic bond (GROMOS `perturbed_quartic_bond_interaction.cc`).
@@ -63,8 +104,7 @@ pub fn calculate_perturbed_bond_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -76,14 +116,14 @@ pub(crate) fn calculate_perturbed_bond_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for bond in &topo.perturbed_solute.bonds {
+        let (lambda, lambda_derivative) = lam.at(bond.i);
         let pa = &topo.bond_parameters[bond.a_type];
         let pb = &topo.bond_parameters[bond.b_type];
 
@@ -138,8 +178,7 @@ pub fn calculate_perturbed_angle_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -151,14 +190,14 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for angle in &topo.perturbed_solute.angles {
+        let (lambda, lambda_derivative) = lam.at(angle.i);
         let pa = &topo.angle_parameters[angle.a_type];
         let pb = &topo.angle_parameters[angle.b_type];
 
@@ -225,8 +264,7 @@ pub fn calculate_perturbed_improper_dihedral_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -238,14 +276,14 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for imp in &topo.perturbed_solute.improper_dihedrals {
+        let (lambda, lambda_derivative) = lam.at(imp.i);
         let pa = &topo.improper_dihedral_parameters[imp.a_type];
         let pb = &topo.improper_dihedral_parameters[imp.b_type];
 
@@ -352,8 +390,7 @@ pub fn calculate_perturbed_dihedral_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -365,14 +402,14 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for dih in &topo.perturbed_solute.proper_dihedrals {
+        let (lambda, lambda_derivative) = lam.at(dih.i);
         let pa = &topo.dihedral_parameters[dih.a_type];
         let pb = &topo.dihedral_parameters[dih.b_type];
 
@@ -465,8 +502,7 @@ pub fn calculate_soft_bond_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -478,14 +514,14 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for sb in &topo.perturbed_solute.soft_bonds {
+        let (lambda, lambda_derivative) = lam.at(sb.i);
         let pa = &topo.bond_parameters[sb.a_type];
         let (k_a, r0_a) = (pa.k_harmonic, pa.r0);
         let (k_b, r0_b) = match sb.b_type {
@@ -558,8 +594,7 @@ pub fn calculate_soft_angle_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -571,14 +606,14 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for sa in &topo.perturbed_solute.soft_angles {
+        let (lambda, lambda_derivative) = lam.at(sa.i);
         let pa = &topo.angle_parameters[sa.a_type];
         let (k_a, cos0_a) = (pa.k_cosine, pa.theta0.cos());
         let (k_b, cos0_b) = match sa.b_type {
@@ -658,8 +693,7 @@ pub fn calculate_soft_improper_forces(
         topo,
         conf,
         pbc,
-        lambda,
-        lambda_derivative,
+        TermLambda::Fixed(lambda, lambda_derivative),
         &mut [],
         &mut [],
     )
@@ -671,14 +705,14 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
+    lam: TermLambda<'_>,
     e_group: &mut [f64],
     d_group: &mut [f64],
 ) -> ForceEnergyLambda {
     let mut result = ForceEnergyLambda::new(topo.num_atoms());
 
     for si in &topo.perturbed_solute.soft_impropers {
+        let (lambda, lambda_derivative) = lam.at(si.i);
         let pa = &topo.improper_dihedral_parameters[si.a_type];
         let (k_a, q0_a) = (pa.k, pa.q0);
         let (k_b, q0_b) = match si.b_type {
@@ -772,42 +806,23 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
 
 // ─── Top-level combiner ───────────────────────────────────────────────────────
 
-/// Calculate all perturbed bonded forces and dH/dλ for a given lambda.
-///
-/// `lambda_derivative` = d(lambda)/d(RLAM) = NLAM·RLAM^(NLAM-1).
-/// For standard NLAM=1 this is 1.0; use `ImdParameters::lambda_and_derivative()`.
+/// Calculate all perturbed bonded forces and dH/dλ, each term at the individual λ of its kind
+/// for the energy group of its first atom (`topo.individual_lambdas`, gromosXX
+/// `individual_lambda(bond_lambda)[eg(i)][eg(i)]` and likewise; soft terms count as their kind).
 ///
 /// With more than one energy group each term's energy is added to `energy_groups` and its
-/// dH/dλ to `dhdl_groups`, at the group of its first atom (soft terms count as their kind).
+/// dH/dλ to `dhdl_groups`, at the group of its first atom.
 pub fn calculate_perturbed_bonded_forces(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
     energy_groups: &mut BondedGroupEnergies,
     dhdl_groups: &mut BondedGroupEnergies,
 ) -> ForceEnergyLambda {
     if energy_groups.is_grouped() {
-        perturbed_bonded_forces::<true>(
-            topo,
-            conf,
-            pbc,
-            lambda,
-            lambda_derivative,
-            energy_groups,
-            dhdl_groups,
-        )
+        perturbed_bonded_forces::<true>(topo, conf, pbc, energy_groups, dhdl_groups)
     } else {
-        perturbed_bonded_forces::<false>(
-            topo,
-            conf,
-            pbc,
-            lambda,
-            lambda_derivative,
-            energy_groups,
-            dhdl_groups,
-        )
+        perturbed_bonded_forces::<false>(topo, conf, pbc, energy_groups, dhdl_groups)
     }
 }
 
@@ -815,22 +830,19 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
-    lambda: f64,
-    lambda_derivative: f64,
     eg: &mut BondedGroupEnergies,
     dg: &mut BondedGroupEnergies,
 ) -> ForceEnergyLambda {
     let n = topo.num_atoms();
     let mut result = ForceEnergyLambda::new(n);
-    let (l, ld) = (lambda, lambda_derivative);
+    let of = |kind| TermLambda::table(topo, kind);
 
     if !topo.perturbed_solute.bonds.is_empty() {
         let term = calculate_perturbed_bond_forces_grouped::<GROUPS>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Bond),
             &mut eg.bond,
             &mut dg.bond,
         );
@@ -843,8 +855,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Angle),
             &mut eg.angle,
             &mut dg.angle,
         );
@@ -857,8 +868,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Improper),
             &mut eg.improper,
             &mut dg.improper,
         );
@@ -871,8 +881,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Dihedral),
             &mut eg.dihedral,
             &mut dg.dihedral,
         );
@@ -885,8 +894,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Bond),
             &mut eg.bond,
             &mut dg.bond,
         );
@@ -899,8 +907,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Angle),
             &mut eg.angle,
             &mut dg.angle,
         );
@@ -913,8 +920,7 @@ fn perturbed_bonded_forces<const GROUPS: bool>(
             topo,
             conf,
             pbc,
-            l,
-            ld,
+            of(InteractionLambda::Improper),
             &mut eg.improper,
             &mut dg.improper,
         );
@@ -979,6 +985,7 @@ mod tests {
             j: 1,
             a_type: 0,
             b_type: 1,
+            hydrogen: false,
         });
 
         let mut conf = Configuration::new(2, 1, 1);
@@ -1022,6 +1029,7 @@ mod tests {
             j: 1,
             a_type: 0,
             b_type: 1,
+            hydrogen: false,
         });
 
         let mut conf = Configuration::new(2, 1, 1);
@@ -1063,6 +1071,7 @@ mod tests {
             j: 1,
             a_type: 0,
             b_type: 1,
+            hydrogen: false,
         });
 
         let lambda = 0.5_f64;

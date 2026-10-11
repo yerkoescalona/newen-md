@@ -268,6 +268,22 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep",
     "aladip_vacuum_fep_groups",
     "aladip_vacuum_fep_trg",
+    # Individual λ (LAMBDAS), NLAM, perturbed SHAKE and perturbed distance restraints (1.8)
+    "ch4_water_fep_lambdas",
+    "ch4_water_fep_lambdas_off",
+    "ch4_water_fep_nlam2",
+    "aladip_vacuum_fep_lambdas",
+    "aladip_vacuum_fep_nlam2",
+    "aladip_vacuum_fep_shake",
+    "aladip_vacuum_fep_shake_lambdas",
+    "aladip_vacuum_fep_distres",
+    "aladip_vacuum_fep_distres_lambdas",
+    # NRDGL = 1 (λ from PERTDATA), PERTBONDSTRETCHH order, time-averaged distance restraints,
+    # NLAM = 2 with LAMBDAS (1.8)
+    "ch4_water_fep_nrdgl",
+    "aladip_vacuum_fep_shake_hblock",
+    "aladip_vacuum_fep_distres_tavg",
+    "aladip_vacuum_fep_lambdas_nlam2",
     # Energy groups across the solute, DOFSET ranges not in bath order (1.8)
     "aladip_harmonic_covalent_groups",
     "aladip_multibath_swapped",
@@ -378,6 +394,54 @@ def test_reference_energies(system_name):
                 )
             else:
                 assert abs(a - e) < 1e-10, f"{system_name} frame {i} {key}: {a} vs {e}"
+
+
+# ============================================================================
+# dH/dλ tests — through Python Simulation API
+# ============================================================================
+
+
+def _parse_expected_dhdl(trg_path):
+    """The first value of every FREEENERDERIVS03 block's totals: the whole dH/dλ."""
+    values = []
+    lines = trg_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "# totals":
+            values.append(float(lines[i + 1]))
+    return values
+
+
+@pytest.mark.parametrize("system_name", REFERENCE_PARAMS)
+def test_reference_dhdl(system_name):
+    """`Simulation.dhdl` is the whole derivative gromosXX writes first in each `.trg` frame
+    (kinetic + potential + constraints + restraints), and `dhdl_terms` splits it."""
+    system_dir = REF_DIR / system_name
+    expected_trg = system_dir / "expected" / "free_energy.trg"
+    if not expected_trg.exists():
+        pytest.skip(f"No expected free-energy trajectory for {system_name}")
+
+    expected = _parse_expected_dhdl(expected_trg)
+    if not expected:
+        pytest.skip(f"{system_name}: its .trg has no frames (NTWG = 0)")
+    every = _recipe_for(system_dir).outputs["ntwg"] or 1
+
+    sim = _create_simulation(system_dir)
+    actual = [sim.dhdl]
+    terms = [sim.dhdl_terms]
+    step = 0
+    while len(actual) < len(expected):
+        sim.step(1)
+        step += 1
+        if step % every == 0:
+            actual.append(sim.dhdl)
+            terms.append(sim.dhdl_terms)
+
+    for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
+        assert abs(a - e) <= max(abs(e) * 1e-6, 1e-8), (
+            f"{system_name} frame {i} dhdl: {a} vs {e}"
+        )
+    for t in terms:
+        assert set(t) == {"lj", "crf", "bonded", "kinetic", "constraints", "distanceres"}
 
 
 # ============================================================================

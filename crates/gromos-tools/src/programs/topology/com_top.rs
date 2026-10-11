@@ -180,6 +180,7 @@ fn merge(
         exclusions: Vec::new(),
         one_four_pairs: Vec::new(),
         bonds: Vec::new(),
+        bondh: Vec::new(),
         bond_parameters: param_topo.bond_parameters.clone(),
         angles: Vec::new(),
         angle_parameters: param_topo.angle_parameters.clone(),
@@ -232,6 +233,9 @@ fn merge(
             // Merge bonds with renumbered atoms
             for &(i, j, t) in &topo.bonds {
                 combined.bonds.push((i + atom_offset, j + atom_offset, t));
+            }
+            for &(i, j) in &topo.bondh {
+                combined.bondh.push((i + atom_offset, j + atom_offset));
             }
 
             // Merge angles

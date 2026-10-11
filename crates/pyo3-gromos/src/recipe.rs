@@ -743,6 +743,7 @@ impl PyRecipe {
             positions: system.configuration.pos_data.clone(),
             velocities: system.configuration.vel_data.clone(),
             box_dims: system.configuration.box_dims,
+            pertdata: system.configuration.pertdata,
         };
         let prepared = prepare_system(
             &imd,

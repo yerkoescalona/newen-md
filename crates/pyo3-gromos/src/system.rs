@@ -54,6 +54,7 @@ impl PySystem {
                 pos_data: conf_ref.pos_data.clone(),
                 vel_data: conf_ref.vel_data.clone(),
                 box_dims: conf_ref.box_dims,
+                pertdata: conf_ref.pertdata,
             },
         })
     }
@@ -121,6 +122,7 @@ impl PySystem {
             pos_data: self.configuration.pos_data.clone(),
             vel_data: self.configuration.vel_data.clone(),
             box_dims: self.configuration.box_dims,
+            pertdata: self.configuration.pertdata,
         }
     }
 

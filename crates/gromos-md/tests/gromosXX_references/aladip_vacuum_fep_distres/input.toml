@@ -1,0 +1,25 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_vacuum_fep_distres"
+description = "aladip vacuum FEP with perturbed distance restraints"
+level = 4
+isolates = "perturbed distance restraint energy and dH/dlambda per energy group"
+
+[input]
+distrest = "../shared/check/aladip.distrest"
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_fep_distres.in"
+pttopo = "../shared/aladip.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

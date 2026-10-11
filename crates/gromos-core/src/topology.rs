@@ -31,6 +31,7 @@
 //! flat `iac`/`mass`/`charge` arrays into rebuildable caches; remove `Solute`
 //! and `Vec<Solvent>`; add `promote(instance)` with CG/exclusion renumbering.
 
+use crate::lambdas::{IndividualLambdas, InteractionLambda};
 use crate::math::Vec3;
 
 // ─── instancing model ───────────────────────────────────────────────────────
@@ -132,6 +133,9 @@ pub struct Bond {
     pub j: usize,
     /// Index into `Topology::bond_parameters`.
     pub bond_type: usize,
+    /// The bond is in the topology's BONDH block (a bond to hydrogen): the set NTC = 2
+    /// constrains (gromosXX `in_topology.cc:2143-2178`).
+    pub hydrogen: bool,
 }
 
 /// Three-body bonded term (angles)
@@ -248,6 +252,9 @@ pub struct PerturbedBond {
     pub a_type: usize,
     /// State B bond type index.
     pub b_type: usize,
+    /// A bond to hydrogen: the topology bond it replaces is in BONDH (or, with no such bond,
+    /// it was read from PERTBONDSTRETCHH).
+    pub hydrogen: bool,
 }
 
 /// Perturbed angle (for FEP calculations)
@@ -540,6 +547,10 @@ pub struct PerturbedSolute {
     pub soft_angles: Vec<SoftAngle>,
     /// Soft-core perturbed impropers (PERTIMPROPERDIHSOFT): improper absent in one state.
     pub soft_impropers: Vec<SoftImproper>,
+    /// Perturbed bonds a constraint algorithm owns (gromosXX
+    /// `perturbed_solute().distance_constraints()`): with NTC = 3 every perturbed bond moves
+    /// here, out of `bonds`, and perturbed SHAKE holds it at the λ-mixed length.
+    pub distance_constraints: Vec<PerturbedBond>,
 }
 
 impl PerturbedSolute {
@@ -555,6 +566,7 @@ impl PerturbedSolute {
             soft_bonds: Vec::new(),
             soft_angles: Vec::new(),
             soft_impropers: Vec::new(),
+            distance_constraints: Vec::new(),
         }
     }
 
@@ -572,6 +584,7 @@ impl PerturbedSolute {
             && self.soft_bonds.is_empty()
             && self.soft_angles.is_empty()
             && self.soft_impropers.is_empty()
+            && self.distance_constraints.is_empty()
     }
 }
 
@@ -745,6 +758,14 @@ pub struct Topology {
 
     /// Per-solute-atom FEP flag; `true` if the atom appears in PERTATOMPARAM.
     pub is_perturbed: Vec<bool>,
+
+    /// The global λ of a perturbed run (gromosXX `topo.lambda()`, RLAM).
+    pub lambda: f64,
+    /// NLAM, the exponent of the nonbonded λ dependence (gromosXX `topo.lambda_exp()`).
+    pub lambda_exp: i32,
+    /// The individual λ of every interaction kind and energy-group pair, evaluated at
+    /// [`Self::lambda`] by [`Self::update_for_lambda`].
+    pub individual_lambdas: IndividualLambdas,
 }
 
 impl Topology {
@@ -798,6 +819,9 @@ impl Topology {
             distance_restraints: Vec::new(),
             perturbed_distance_restraints: Vec::new(),
             is_perturbed: Vec::new(),
+            lambda: 0.0,
+            lambda_exp: 1,
+            individual_lambdas: IndividualLambdas::identity(1),
         }
     }
 
@@ -915,6 +939,27 @@ impl Topology {
     #[inline]
     pub fn energy_group(&self, i: usize) -> usize {
         self.atom_to_energy_group[i]
+    }
+
+    /// gromosXX `Topology::update_for_lambda` (`topology.cc:1419-1478`): evaluate the
+    /// individual λ at [`Self::lambda`] over the energy groups, then mix each perturbed atom's
+    /// mass with the mass λ of its own group, `m = (1 − L)·m_A + L·m_B` (no NLAM exponent).
+    /// Call it after the energy groups are assigned and whenever λ changes.
+    pub fn update_for_lambda(&mut self) {
+        let n_groups = self.energy_groups.len().max(1);
+        self.individual_lambdas.resize(n_groups);
+        self.individual_lambdas.update(self.lambda);
+        for a in &self.perturbed_solute.atoms {
+            let g = self.atom_to_energy_group.get(a.seq).copied().unwrap_or(0);
+            let l = self
+                .individual_lambdas
+                .lambda(InteractionLambda::Mass, g, g);
+            let mass = (1.0 - l) * a.a_mass + l * a.b_mass;
+            if a.seq < self.mass.len() && mass > 0.0 {
+                self.mass[a.seq] = mass;
+                self.inverse_mass[a.seq] = 1.0 / mass;
+            }
+        }
     }
 
     // ── instancing accessors ─────────────────────────────────────────────────
@@ -1050,7 +1095,7 @@ impl Topology {
             mt.bonds.iter().map(move |b| Bond {
                 i: off + b.i,
                 j: off + b.j,
-                bond_type: b.bond_type,
+                ..*b
             })
         })
     }
@@ -1250,6 +1295,23 @@ impl Topology {
         self.is_perturbed = is_perturbed;
         self.perturbed_solute = perturbed_solute;
 
+        let bondh: HashSet<(usize, usize)> = self.moltypes[0]
+            .bonds
+            .iter()
+            .filter(|b| b.hydrogen)
+            .map(|b| (b.i.min(b.j), b.i.max(b.j)))
+            .collect();
+        let regular: HashSet<(usize, usize)> = self.moltypes[0]
+            .bonds
+            .iter()
+            .map(|b| (b.i.min(b.j), b.i.max(b.j)))
+            .collect();
+        for b in &mut self.perturbed_solute.bonds {
+            let key = (b.i.min(b.j), b.i.max(b.j));
+            if regular.contains(&key) {
+                b.hydrogen = bondh.contains(&key);
+            }
+        }
         let pb: HashSet<(usize, usize)> = self
             .perturbed_solute
             .bonds
@@ -1555,11 +1617,13 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 1,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].angles.push(Angle {
             i: 0,

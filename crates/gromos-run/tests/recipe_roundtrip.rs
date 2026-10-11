@@ -33,9 +33,9 @@ fn every_reference_input_round_trips_through_the_recipe() {
     assert!(inputs.len() >= 40);
     for path in &inputs {
         let imd = read_imd_file(path).unwrap();
-        // Individual λ (LAMBDAS) and extended TI (PRECALCLAM) are not modelled by the recipe yet
-        // (1.8); their reference inputs are refused, by design, until they are.
-        let unmodelled: Vec<&str> = ["LAMBDAS", "PRECALCLAM"]
+        // Extended TI (PRECALCLAM) is not modelled by the recipe yet (1.8); its reference inputs
+        // are refused, by design, until it is.
+        let unmodelled: Vec<&str> = ["PRECALCLAM"]
             .into_iter()
             .filter(|b| imd.raw_blocks.contains_key(*b))
             .collect();

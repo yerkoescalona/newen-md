@@ -55,7 +55,8 @@ pub use free_energy::{
 };
 pub use g96::{write_por, write_rpr};
 pub use imd::{
-    parse_imd_str, ImdParameters, NonbondedExtra, PressureParameters, TempBathParameters,
+    parse_imd_str, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PressureParameters,
+    TempBathParameters,
 };
 pub use imd_write::{write_imd, write_imd_file};
 pub use input::{EdsBlock, GamdBlock, ReplicaBlock};

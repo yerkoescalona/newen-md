@@ -3,6 +3,7 @@
 use super::innerloops::with_groups;
 use super::lj_crf_interaction;
 use super::{CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix};
+use gromos_core::lambdas::{IndividualLambdas, InteractionLambda};
 use gromos_core::math::{BoundaryCondition, Vec3};
 use gromos_core::topology::PerturbedAtomPair;
 
@@ -49,12 +50,15 @@ pub struct PerturbedLambdaParams {
 
     /// Lambda exponent (n)
     pub lambda_exp: i32,
+
+    /// The cell's Lennard-Jones and reaction-field individual λ are equal (`L_lj == L_crf`):
+    /// the perturbed atom-pair force then keeps its per-kind form.
+    pub lj_crf_equal: bool,
 }
 
 impl PerturbedLambdaParams {
-    /// Create lambda parameters from lambda controller
-    ///
-    /// Direct translation from set_lambda() in perturbed_nonbonded_term.cc
+    /// gromosXX `set_lambda` (`perturbed_nonbonded_term.cc:322-347`), whose `pow(x, n)` is the
+    /// double-precision `pow`: `powf`, not `powi` (they differ in the last bits for n ≥ 2).
     pub fn from_lambda(
         lj_lambda: f64,
         ljs_lambda: f64,
@@ -68,20 +72,20 @@ impl PerturbedLambdaParams {
     ) -> Self {
         Self {
             // State A: (1-λ)^n
-            a_lj_lambda_n: (1.0 - lj_lambda).powi(n),
-            a_crf_lambda_n: (1.0 - crf_lambda).powi(n),
+            a_lj_lambda_n: (1.0 - lj_lambda).powf(n as f64),
+            a_crf_lambda_n: (1.0 - crf_lambda).powf(n as f64),
 
             // State B: λ^n
-            b_lj_lambda_n: lj_lambda.powi(n),
-            b_crf_lambda_n: crf_lambda.powi(n),
+            b_lj_lambda_n: lj_lambda.powf(n as f64),
+            b_crf_lambda_n: crf_lambda.powf(n as f64),
 
             // Derivatives: (1-λ)^(n-1) * dλ/dt
-            a_lj_lambda_n_1: (1.0 - lj_lambda).powi(n - 1) * lj_lambda_derivative,
-            a_crf_lambda_n_1: (1.0 - crf_lambda).powi(n - 1) * crf_lambda_derivative,
+            a_lj_lambda_n_1: (1.0 - lj_lambda).powf((n - 1) as f64) * lj_lambda_derivative,
+            a_crf_lambda_n_1: (1.0 - crf_lambda).powf((n - 1) as f64) * crf_lambda_derivative,
 
             // Derivatives: λ^(n-1) * dλ/dt
-            b_lj_lambda_n_1: lj_lambda.powi(n - 1) * lj_lambda_derivative,
-            b_crf_lambda_n_1: crf_lambda.powi(n - 1) * crf_lambda_derivative,
+            b_lj_lambda_n_1: lj_lambda.powf((n - 1) as f64) * lj_lambda_derivative,
+            b_crf_lambda_n_1: crf_lambda.powf((n - 1) as f64) * crf_lambda_derivative,
 
             // Soft-core lambdas: (1-λ) * dλ/dt for state A
             a_ljs_lambda: (1.0 - ljs_lambda) * ljs_lambda_derivative,
@@ -98,8 +102,44 @@ impl PerturbedLambdaParams {
             b_crfs_lambda2: crfs_lambda * crfs_lambda,
 
             lambda_exp: n,
+            lj_crf_equal: lj_lambda == crf_lambda,
         }
     }
+
+    /// One parameter set per energy-group pair, row-major `[g1][g2]` over the groups of
+    /// `lambdas`, from the individual λ of the four nonbonded kinds and NLAM `n` — what gromosXX's
+    /// innerloops pass to `set_lambda` for a pair in groups `(g1, g2)`
+    /// (`perturbed_nonbonded_innerloop.cc:191-200`). `set_lambda` is a pure function of its
+    /// inputs, so one evaluation per pair of groups gives the per-pair values exactly.
+    pub fn fill_table(lambdas: &IndividualLambdas, n: i32, table: &mut Vec<Self>) {
+        use InteractionLambda::{Crf, CrfSoftness, Lj, LjSoftness};
+        let groups = lambdas.n_groups();
+        table.clear();
+        for g1 in 0..groups {
+            for g2 in 0..groups {
+                let (lj, dlj) = lambdas.get(Lj, g1, g2);
+                let (ljs, dljs) = lambdas.get(LjSoftness, g1, g2);
+                let (crf, dcrf) = lambdas.get(Crf, g1, g2);
+                let (crfs, dcrfs) = lambdas.get(CrfSoftness, g1, g2);
+                table.push(Self::from_lambda(
+                    lj, ljs, crf, crfs, dlj, dljs, dcrf, dcrfs, n,
+                ));
+            }
+        }
+    }
+}
+
+/// The parameter set of the pair `(i, j)`: its energy-group cell when there are several groups
+/// (the table is then `n_groups²` long), the only entry otherwise.
+#[inline(always)]
+fn pair_params<'a, const GROUPS: bool>(
+    lps: &'a [PerturbedLambdaParams],
+    egroups: &EnergyGroups<'_>,
+    i: usize,
+    j: usize,
+) -> (usize, &'a PerturbedLambdaParams) {
+    let k = if GROUPS { egroups.cell(i, j) } else { 0 };
+    (k, &lps[k])
 }
 
 /// Perturbed LJ+CRF interaction with soft-core potentials
@@ -330,7 +370,7 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     egroups: EnergyGroups<'_>,
@@ -344,7 +384,7 @@ pub fn perturbed_pairlist_correction<BC: BoundaryCondition>(
         iac,
         lj,
         crf,
-        lp,
+        lps,
         bc,
         four_pi_eps_i,
         &egroups,
@@ -360,7 +400,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     egroups: &EnergyGroups<'_>,
@@ -382,6 +422,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
         }
         let pi = pert[i].as_ref();
         let pj = pert[j].as_ref();
+        let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, j);
 
         let a_iac_i = pi.map_or(iac[i] as usize, |p| p.a_iac);
         let a_iac_j = pj.map_or(iac[j] as usize, |p| p.a_iac);
@@ -434,13 +475,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
         out.dhdl_lj += de_lj;
         out.dhdl_crf += de_crf;
         if GROUPS {
-            sink.book(
-                egroups.cell(i, j),
-                e_lj_p - e_lj_a,
-                e_crf_p - e_crf_a,
-                de_lj,
-                de_crf,
-            );
+            sink.book(k, e_lj_p - e_lj_a, e_crf_p - e_crf_a, de_lj, de_crf);
         }
     }
     out
@@ -459,7 +494,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 pub fn perturbed_self_energy_correction(
     pert: &[Option<PertAtomInfo>],
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     four_pi_eps_i: f64,
     egroups: EnergyGroups<'_>,
     sink: &mut GroupEnergies,
@@ -467,7 +502,7 @@ pub fn perturbed_self_energy_correction(
     with_groups!(egroups, G => self_energy_correction_impl::<G>(
         pert,
         crf,
-        lp,
+        lps,
         four_pi_eps_i,
         &egroups,
         sink,
@@ -477,20 +512,22 @@ pub fn perturbed_self_energy_correction(
 fn self_energy_correction_impl<const GROUPS: bool>(
     pert: &[Option<PertAtomInfo>],
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     four_pi_eps_i: f64,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
 ) -> (f64, f64) {
     let mut delta_e = 0.0;
     let mut dhdl = 0.0;
-    let n = lp.lambda_exp as f64;
 
     for (i, pi) in pert
         .iter()
         .enumerate()
         .filter_map(|(i, x)| x.as_ref().map(|p| (i, p)))
     {
+        // the self term takes the individual λ of the atom's own group (innerloop.cc:3367-3377)
+        let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, i);
+        let n = lp.lambda_exp as f64;
         let qa2 = pi.a_charge * pi.a_charge;
         let qb2 = pi.b_charge * pi.b_charge;
 
@@ -509,7 +546,7 @@ fn self_energy_correction_impl<const GROUPS: bool>(
             * four_pi_eps_i;
         dhdl += 0.5 * de_rf;
         if GROUPS {
-            sink.book(egroups.cell(i, i), 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
+            sink.book(k, 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
         }
     }
     (delta_e, dhdl)
@@ -528,7 +565,7 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
     pert: &[Option<PertAtomInfo>],
     charges: &[f64],
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     n_solute: usize,
     four_pi_eps_i: f64,
@@ -542,7 +579,7 @@ pub fn perturbed_excluded_correction<BC: BoundaryCondition>(
         pert,
         charges,
         crf,
-        lp,
+        lps,
         bc,
         n_solute,
         four_pi_eps_i,
@@ -558,7 +595,7 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     pert: &[Option<PertAtomInfo>],
     charges: &[f64],
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     n_solute: usize,
     four_pi_eps_i: f64,
@@ -576,6 +613,7 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             if pi.is_none() && pj.is_none() {
                 continue;
             }
+            let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, j);
 
             let a_q_i = pi.map_or(charges[i], |p| p.a_charge);
             let b_q_i = pi.map_or(charges[i], |p| p.b_charge);
@@ -634,7 +672,7 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             out.dhdl += de_crf;
             out.dhdl_crf += de_crf;
             if GROUPS {
-                sink.book(egroups.cell(i, j), 0.0, e_crf_p - e_crf_a, 0.0, de_crf);
+                sink.book(k, 0.0, e_crf_p - e_crf_a, 0.0, de_crf);
             }
         }
     }
@@ -655,7 +693,7 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     out: &mut PertNBCorrection,
@@ -670,7 +708,7 @@ pub fn perturbed_one_four_correction<BC: BoundaryCondition>(
         iac,
         lj,
         crf,
-        lp,
+        lps,
         bc,
         four_pi_eps_i,
         out,
@@ -687,14 +725,13 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     out: &mut PertNBCorrection,
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
 ) {
-    let _n_exp = lp.lambda_exp as f64;
     for i in 0..one_four_pairs.len() {
         let pi = pert[i].as_ref();
         for &j in &one_four_pairs[i] {
@@ -705,6 +742,7 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             if pi.is_none() && pj.is_none() {
                 continue;
             }
+            let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, j);
 
             let a_iac_i = pi.map_or(iac[i] as usize, |p| p.a_iac);
             let b_iac_i = pi.map_or(iac[i] as usize, |p| p.b_iac);
@@ -770,13 +808,7 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             out.dhdl_lj += de_lj;
             out.dhdl_crf += de_crf;
             if GROUPS {
-                sink.book(
-                    egroups.cell(i, j),
-                    e_lj_p - e_lj_a,
-                    e_crf_p - e_crf_a,
-                    de_lj,
-                    de_crf,
-                );
+                sink.book(k, e_lj_p - e_lj_a, e_crf_p - e_crf_a, de_lj, de_crf);
             }
         }
     }
@@ -810,7 +842,7 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     rf_excluded: bool,
@@ -826,7 +858,7 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
         iac,
         lj,
         crf,
-        lp,
+        lps,
         bc,
         four_pi_eps_i,
         rf_excluded,
@@ -844,7 +876,7 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     iac: &[u32],
     lj: &LJParamMatrix,
     crf: &CRFParameters,
-    lp: &PerturbedLambdaParams,
+    lps: &[PerturbedLambdaParams],
     bc: &BC,
     four_pi_eps_i: f64,
     rf_excluded: bool,
@@ -852,10 +884,10 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     egroups: &EnergyGroups<'_>,
     sink: &mut GroupEnergies,
 ) {
-    let n_exp = lp.lambda_exp as f64;
-
     for ap in atom_pairs {
         let (i, j) = (ap.i, ap.j);
+        let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, j);
+        let n_exp = lp.lambda_exp as f64;
 
         // Only handle pairs that are in the regular 1-4 list (the typical case)
         let in_14 = one_four_pairs.get(i).is_some_and(|l| l.contains(&j))
@@ -921,13 +953,28 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 
         let e_lj_pert = lp.a_lj_lambda_n * e_lj_a + lp.b_lj_lambda_n * e_lj_b;
         let e_crf_pert = lp.a_crf_lambda_n * e_crf_a + lp.b_crf_lambda_n * e_crf_b;
-        let f_lj_pert = lp.a_lj_lambda_n * f_lj_a + lp.b_lj_lambda_n * f_lj_b;
-        let f_crf_pert = lp.a_crf_lambda_n * f_crf_a + lp.b_crf_lambda_n * f_crf_b;
 
         let de_lj = n_exp * (lp.b_lj_lambda_n_1 * e_lj_b - lp.a_lj_lambda_n_1 * e_lj_a);
         let de_crf = n_exp * (lp.b_crf_lambda_n_1 * e_crf_b - lp.a_crf_lambda_n_1 * e_crf_a);
 
-        let df = r * ((f_lj_pert - f_lj_reg) + (f_crf_pert - f_crf_reg));
+        let df = if lp.lj_crf_equal {
+            let f_lj_pert = lp.a_lj_lambda_n * f_lj_a + lp.b_lj_lambda_n * f_lj_b;
+            let f_crf_pert = lp.a_crf_lambda_n * f_crf_a + lp.b_crf_lambda_n * f_crf_b;
+            r * ((f_lj_pert - f_lj_reg) + (f_crf_pert - f_crf_reg))
+        } else {
+            // gromosXX scales a state's combined LJ + RF force by that state's *LJ* λ factor (the
+            // RF λ only for an excluded state, `perturbed_nonbonded_pair.cc:405, 592, 798, 935,
+            // 1115, 1329`), so with individual λ that differ for LJ and CRF the force is not the
+            // derivative of the energy — gromosXX reports this as a critical message after the
+            // run (`:309-312`) but computes it; reproduced. With equal λ both forms are the same
+            // force; the branch above keeps its rounding.
+            let f_a = lp.a_lj_lambda_n * (f_lj_a + f_crf_a);
+            let f_b = match ap.b_type {
+                Some(_) => lp.b_lj_lambda_n * (f_lj_b + f_crf_b),
+                None => lp.b_crf_lambda_n * f_crf_b,
+            };
+            r * ((f_b + f_a) - (f_lj_reg + f_crf_reg))
+        };
         out.forces[i] += df;
         out.forces[j] -= df;
         out.delta_e_lj += e_lj_pert - e_lj_reg;
@@ -937,7 +984,7 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
         out.dhdl_crf += de_crf;
         if GROUPS {
             sink.book(
-                egroups.cell(i, j),
+                k,
                 e_lj_pert - e_lj_reg,
                 e_crf_pert - e_crf_reg,
                 de_lj,

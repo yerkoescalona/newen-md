@@ -179,9 +179,11 @@ fn load_distance_restraints(
         }
         dr.add(r);
     }
+    // gromosXX creates the perturbed restraints only for a perturbed run
+    // (`create_special.cc:125-133`; `in_distanceres.cc:520-524` ignores PERTDISRESSPEC otherwise)
     let mut pdr = PerturbedDistanceRestraints::new();
-    for spec in &perturbed {
-        pdr.add(PerturbedDistanceRestraint::new(
+    for spec in perturbed.iter().filter(|_| plan.perturbed) {
+        let mut r = PerturbedDistanceRestraint::new(
             spec.atom1,
             spec.atom2,
             spec.n,
@@ -194,22 +196,13 @@ fn load_distance_restraints(
             plan.k,
             plan.r_linear,
             plan.mode,
-        ));
+        );
+        if let Some(tau) = plan.time_averaging {
+            r = r.with_time_averaging(tau, plan.dt);
+        }
+        pdr.add(r);
     }
     Ok((dr, pdr))
-}
-
-/// GROMOS: individual λ = RLAM^NLAM, dλ/dRLAM = NLAM · RLAM^(NLAM−1)
-/// (same arithmetic as `ImdParameters::lambda_and_derivative`, bit for bit).
-fn lambda_and_derivative(lambda: f64, nlam: i32) -> (f64, f64) {
-    let n = nlam as f64;
-    let l = lambda.powf(n);
-    let dl = if nlam <= 0 {
-        0.0
-    } else {
-        n * lambda.powf(n - 1.0)
-    };
-    (l, dl)
 }
 
 struct ForcefieldBuilt {
@@ -282,11 +275,9 @@ fn instantiate_forcefield(
         distance_restraints = (dr.restraints.len(), pdr.restraints.len());
         forcefield.distance_restraints = dr;
         forcefield.perturbed_distance_restraints = pdr;
-        forcefield.lambda = plan.lambda;
     }
     if let Some(p) = &ff.perturbation {
-        forcefield.lambda_and_derivative = lambda_and_derivative(p.lambda, p.nlam);
-        forcefield.lambda_exp = p.nlam;
+        // λ, NLAM and the individual λ come with the topology (`prepare_system`)
         forcefield.global_alphlj = p.alpha_lj;
         forcefield.global_alphc = p.alpha_c;
     }
@@ -670,6 +661,9 @@ pub fn build_sequence_from_plan(
     plan: Vec<AlgorithmSpec>,
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
+    // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
+    crate::plan::check_perturbation(recipe)?;
+    crate::plan::check_plan_against_recipe(recipe, &plan)?;
     validate_plan(&plan)?;
     let periodicity = periodicity_of(prepared);
     let inst = instantiate(
@@ -979,6 +973,56 @@ mod tests {
         .err()
         .expect("refused");
         assert!(err.to_string().contains("Multibath not sorted"), "{err}");
+    }
+
+    #[test]
+    fn perturbed_distance_restraints_only_in_a_perturbed_run() {
+        // gromosXX ignores PERTDISRESSPEC with NTG = 0 (in_distanceres.cc:520-524)
+        let dir = refs().join("aladip_vacuum_fep_distres");
+        let mut loaded = load(&dir).expect("reference");
+        let built = build_sequence_from_imd(
+            &loaded.imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(built.summary.distance_restraints, (6, 6));
+        loaded.imd.ntg = 0;
+        let imd = loaded.imd.clone();
+        let inputs = loaded.inputs.clone();
+        let parsed = read_topology_file(dir.join("../shared/aladip.topo")).unwrap();
+        let pc = parsed.physical_constants;
+        let coords: Coordinates = read_coordinates(dir.join("../aladip_vacuum/aladip_vacuum.conf"))
+            .unwrap()
+            .into();
+        let prepared = prepare_system(&imd, build_topology(parsed), pc, coords, &inputs).unwrap();
+        let built =
+            build_sequence_from_imd(&imd, &prepared, &inputs, &RunOptions::default()).unwrap();
+        assert_eq!(built.summary.distance_restraints, (6, 0));
+    }
+
+    #[test]
+    fn a_plan_from_another_recipe_still_meets_the_recipes_refusals() {
+        // `Simulation(system, recipe, plan=…)`: the plan was made from a recipe without DLAMT
+        let dir = refs().join("aladip_vacuum_fep");
+        let loaded = load(&dir).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        let plan = build_plan(
+            &recipe,
+            &prepared.topology,
+            prepared.physical_constants.four_pi_eps_i,
+        )
+        .unwrap();
+        assert!(build_sequence_from_plan(&recipe, plan.clone(), &prepared).is_ok());
+        let mut slow_growth = recipe.clone();
+        slow_growth.perturbation.dlamt = 0.01;
+        let err = build_sequence_from_plan(&slow_growth, plan, &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("slow growth"), "{err}");
     }
 
     #[test]

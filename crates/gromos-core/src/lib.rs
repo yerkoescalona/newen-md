@@ -31,6 +31,7 @@ pub mod algorithm;
 pub mod configuration;
 pub mod float;
 pub mod gather;
+pub mod lambdas;
 pub mod math;
 pub mod matrix;
 pub mod pairlist;
@@ -60,6 +61,9 @@ pub use math::{BoundaryCondition, Mat3, Periodicity, Rectangular, Triclinic, Vac
 
 // Re-export configuration types
 pub use configuration::{Box, BoxType, Configuration, Energy, State, StochasticVariables};
+
+// Re-export the individual-λ table
+pub use lambdas::{IndividualLambdas, InteractionLambda};
 
 // Re-export topology types
 pub use topology::{

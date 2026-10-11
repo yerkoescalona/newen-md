@@ -123,6 +123,27 @@ impl G96Writer {
         Ok(())
     }
 
+    /// Write the PERTDATA block (λ) — gromosXX `_print_pertdata` (out_configuration.cc:2271-2277),
+    /// written into the final configuration of a perturbed run.
+    pub fn write_pertdata(&mut self, lambda: f64) -> Result<(), String> {
+        writeln!(self.writer, "PERTDATA\n{lambda:15.7}\nEND")
+            .map_err(|e| format!("Write error: {}", e))
+    }
+
+    /// Write the DISRESEXPAVE block (the ⟨r⁻³⟩ of time-averaged distance restraints, five per
+    /// line) — gromosXX `_print_distance_restraint_averages` (out_configuration.cc:2555-2578).
+    pub fn write_disresexpave(&mut self, averages: &[f64]) -> Result<(), String> {
+        let err = |e: std::io::Error| format!("Write error: {}", e);
+        writeln!(self.writer, "DISRESEXPAVE").map_err(err)?;
+        for chunk in averages.chunks(5) {
+            for a in chunk {
+                write!(self.writer, "{a:15.7}").map_err(err)?;
+            }
+            writeln!(self.writer).map_err(err)?;
+        }
+        writeln!(self.writer, "END").map_err(err)
+    }
+
     /// Write position block with full atom labels (residue number, name, atom name).
     ///
     /// Atoms are renumbered sequentially starting from 1.
@@ -272,5 +293,33 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn pertdata_is_written_as_gromosxx_does() {
+        let path = std::env::temp_dir().join(format!("gromos_pertdata_{}.cnf", std::process::id()));
+        let mut w = G96Writer::new(&path).unwrap();
+        w.write_pertdata(0.25).unwrap();
+        w.close().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "PERTDATA\n      0.2500000\nEND\n");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn disresexpave_has_five_values_per_line() {
+        let path =
+            std::env::temp_dir().join(format!("gromos_disresexpave_{}.cnf", std::process::id()));
+        let mut w = G96Writer::new(&path).unwrap();
+        w.write_disresexpave(&[32.304151, 39.9546641, 1.0, 2.0, 3.0, 4.0])
+            .unwrap();
+        w.close().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            "DISRESEXPAVE\n     32.3041510     39.9546641      1.0000000      2.0000000      \
+             3.0000000\n      4.0000000\nEND\n"
+        );
+        std::fs::remove_file(path).ok();
     }
 }

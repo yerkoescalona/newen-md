@@ -2,7 +2,8 @@
 //!
 //! Reads DISTANCERESSPEC and PERTDISRESSPEC blocks.
 //! Only virtual atom type 0 (explicit atom) is supported; other types are
-//! logged as warnings and skipped.
+//! logged as warnings and skipped in DISTANCERESSPEC, and are an error in PERTDISRESSPEC
+//! (a perturbed restraint left out would silently change the energy and dH/dλ).
 
 use std::io::BufRead;
 use std::path::Path;
@@ -124,11 +125,10 @@ pub fn read_distanceres<P: AsRef<Path>>(
                 let type1: i32 = tokens[4].parse().unwrap_or(0);
                 let type2: i32 = tokens[9].parse().unwrap_or(0);
                 if type1 != 0 || type2 != 0 {
-                    log::warn!(
-                        "distanceres: virtual atom type {}/{} not supported (only type 0), skipping",
-                        type1, type2
-                    );
-                    continue;
+                    return Err(IoError::ParseError(format!(
+                        "PERTDISRESSPEC: virtual atom types {type1}/{type2} are not supported \
+                         (only type 0, an explicit atom): {trimmed}"
+                    )));
                 }
                 let atom1_1: usize = tokens[0].parse::<usize>().map_err(|_| {
                     IoError::ParseError(format!("Invalid atom index: {}", tokens[0]))
@@ -202,5 +202,17 @@ mod tests {
             read_distanceres("/nonexistent/x.distrest"),
             Err(IoError::FileNotFound(_))
         ));
+    }
+
+    #[test]
+    fn a_perturbed_restraint_on_a_virtual_atom_is_an_error() {
+        let text = "PERTDISRESSPEC\n 0.1 0.153\n    5    0    0    0    5         9    0    0    0    0   \
+                    1 1 0.19   2.0    0.21   1.0 1\nEND\n";
+        let path =
+            std::env::temp_dir().join(format!("gromos_pertdisres_{}.tmp", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let err = read_distanceres(&path).unwrap_err().to_string();
+        assert!(err.contains("virtual atom types 5/0"), "{err}");
+        std::fs::remove_file(path).ok();
     }
 }

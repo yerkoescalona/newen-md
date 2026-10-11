@@ -58,6 +58,19 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | meoh_water_fep | 2862 | charged CH3OH→dummy in 953 SPC water, λ=0.5, ten steps, dH/dλ per term (soft-core RF for charged atoms) | **PASS** (2026-08-29, after the kernel fix) |
 | 4   | aladip_vacuum_fep_groups | 12 | aladip vacuum FEP (RLAM=0.125) with two energy groups (1-6, 7-12), `.trg` every step: per-group bonded/nonbonded energies, per-term per-group bonded dH/dλ, kinetic dH/dλ of the perturbed masses (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_trg | 12 | aladip vacuum FEP with one energy group and a `.trg` every step: the single-group derivative cells carry the dH/dλ totals (1.8) | **PASS** |
+| 4   | ch4_water_fep_lambdas | 2998 | `ch4_water_fep_l025` with `LAMBDAS` on: the vdw/vdw_soft polynomials on the solute-solvent pair (1,2) are what it tests; its crf/crf_soft rows are inert, CH4 being uncharged in both states (charged perturbed atoms under crf rows: `aladip_vacuum_fep_lambdas`, solute–solute only) (1.8) | **PASS** |
+| 4   | ch4_water_fep_lambdas_off | 2998 | the same `LAMBDAS` block switched off: rows ignored, identical to `ch4_water_fep_l025` outside the title (1.8) | **PASS** |
+| 4   | ch4_water_fep_nlam2 | 2998 | NLAM = 2: `(1−λ)ⁿ`, `λⁿ` on the soft-core nonbonded kernel only (1.8) | **PASS** |
+| 4   | ch4_water_fep_nrdgl | 2998 | NRDGL = 1, RLAM = 0: λ = 0.25 comes from the PERTDATA block of `ch4_water_fep_l025`'s final configuration, which is the start configuration here; the final configuration's PERTDATA is compared (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_lambdas | 12 | two energy groups, `LAMBDAS` on: bond/angle/dihedral/improper/mass polynomials on (1,1) and (2,2), vdw/crf (+soft) on every pair; the PERTATOMPAIR's LJ and CRF λ differ, as gromosXX allows with a critical message (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_nlam2 | 12 | aladip vacuum FEP, two energy groups, NLAM = 2: bonded terms and masses linear in λ (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_lambdas_nlam2 | 12 | NLAM = 2 with the `LAMBDAS` rows of `aladip_vacuum_fep_lambdas`: the per-kind `(1−L)ⁿ⁻¹·L′` factors with L_lj ≠ L_crf (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_shake | 12 | NTC = 3: the perturbed bonds become perturbed SHAKE constraints at the λ-mixed length; their dH/dλ in the constraints column (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_shake_lambdas | 12 | the same with bond individual λ per group; group 2's perturbed constraint keeps its length (same b0 in A and B), so only group 1's row acts (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_shake_hblock | 12 | `../shared/aladip_hblock.pttopo`: PERTBONDSTRETCHH 4-5 and PERTBONDSTRETCH 2-4 share atom 4 (gromosXX shakes the H block first), and the group-2 bond 8-10 changes length 0.133 → 0.153 nm under its own bond row (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_distres | 12 | perturbed distance restraints (NTDIR = 2, `../shared/check/aladip.distrest`): energy and dH/dλ per group (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_distres_lambdas | 12 | the same with `distanceres` individual λ on (1,1) and (2,2) (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_distres_tavg | 12 | NTDIR = −2, TAUDIR 0.1: the r⁻³ running average in energy, force and dH/dλ of perturbed and unperturbed restraints, and the DISRESEXPAVE block of the final configuration (1.8) | **PASS** |
 | 4   | aladip_solvated_em_posres_groups | 72 | SD EM + position restraints with three energy groups (1-4, 5-12, water): restraint energy booked per group of the restrained atom (1.8) | **PASS** |
 | 4   | aladip_harmonic_covalent_groups | 72 | `COVALENTFORM` harmonic bonds/angles with three energy groups (1-4, 5-12, water): bonded energies booked by first atom across solute groups (1.8) | **PASS** |
 | 4   | aladip_multibath_swapped | 72 | `DOFSET 12 2 2  72 1 1`, baths at 300 K and 250 K: atoms map to baths by DOFSET range, not by bath number (gromosXX `in_bath`), dynamics included (1.8) | **PASS** |

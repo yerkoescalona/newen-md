@@ -12,8 +12,9 @@ use gromos_core::math::{Mat3, Periodicity, Vec3};
 use gromos_core::pairlist::{PairlistAlgorithm, PairlistContainer, CG_RADIUS_MARGIN};
 use gromos_core::topology::Topology;
 
+use gromos_core::lambdas::InteractionLambda;
 use gromos_forces::bonded::{
-    calculate_bonded_forces_ntf, calculate_perturbed_bonded_forces, BondedGroupEnergies,
+    calculate_bonded_forces_ntf, calculate_perturbed_bonded_forces, BondedGroupEnergies, TermLambda,
 };
 use gromos_forces::nonbonded::{
     lj_crf_innerloop, lj_crf_innerloop_cg_grouped, lj_crf_innerloop_cg_grouped_novirial,
@@ -138,6 +139,8 @@ pub struct Forcefield {
     bonded_dhdl_groups: BondedGroupEnergies,
     /// Scratch for a restraint energy per energy group.
     restraint_groups: Vec<f64>,
+    /// Scratch for a restraint dH/dλ per energy group.
+    restraint_dhdl_groups: Vec<f64>,
     /// Whether twin-range is active (RCUTP < RCUTL)
     twin_range_active: bool,
     /// Whether long-range forces have been computed at least once
@@ -155,13 +158,9 @@ pub struct Forcefield {
     pub distance_restraints: DistanceRestraints,
     /// Perturbed distance restraints (empty = none)
     pub perturbed_distance_restraints: PerturbedDistanceRestraints,
-    /// Current lambda value (for perturbed restraints)
-    pub lambda: f64,
-    /// (lambda, lambda_derivative) for FEP/TI perturbed bonded terms.
-    /// lambda_derivative = NLAM * RLAM^(NLAM-1); set from ImdParameters::lambda_and_derivative().
-    pub lambda_and_derivative: (f64, f64),
-    /// NLAM exponent (1 = linear, 2 = quadratic, etc.)
-    pub lambda_exp: i32,
+    /// The perturbed nonbonded λ parameters of every energy-group pair, rebuilt each step from
+    /// the topology's individual λ (`Topology::individual_lambdas`, `lambda_exp`).
+    lambda_table: Vec<PerturbedLambdaParams>,
     /// Global soft-core alpha for LJ (ALPHLJ from imd PERTURBATION block).
     /// Per-atom lj_soft from .ptp is multiplied by this to get effective alpha_lj,
     /// matching GROMOS in_perturbation.cc:1308 `lj_soft *= param.perturbation.soft_vdw`.
@@ -218,6 +217,7 @@ impl Forcefield {
             bonded_groups: BondedGroupEnergies::default(),
             bonded_dhdl_groups: BondedGroupEnergies::default(),
             restraint_groups: Vec::new(),
+            restraint_dhdl_groups: Vec::new(),
             twin_range_active,
             longrange_computed: false,
             use_cg_grouped_solute: false, // computed at init when box size is known
@@ -226,9 +226,7 @@ impl Forcefield {
             position_restraints: PositionRestraints::new(),
             distance_restraints: DistanceRestraints::new(),
             perturbed_distance_restraints: PerturbedDistanceRestraints::new(),
-            lambda: 0.0,
-            lambda_and_derivative: (0.0, 1.0),
-            lambda_exp: 1,
+            lambda_table: Vec::new(),
             global_alphlj: 1.0,
             global_alphc: 1.0,
             pert_info: Vec::new(),
@@ -309,6 +307,7 @@ impl Forcefield {
         self.bonded_groups = BondedGroupEnergies::new(n_groups);
         self.bonded_dhdl_groups = BondedGroupEnergies::new(n_groups);
         self.restraint_groups = vec![0.0; n_groups];
+        self.restraint_dhdl_groups = vec![0.0; n_groups];
         self.charges = topo.charge.clone();
         self.iac_u32 = topo.iac.iter().map(|&i| i as u32).collect();
         self.longrange_forces = vec![Vec3::ZERO; n];
@@ -329,10 +328,16 @@ impl Algorithm for Forcefield {
     fn init(
         &mut self,
         topo: &Topology,
-        _conf: &mut Configuration,
+        conf: &mut Configuration,
         _sim: &SimulationState,
     ) -> Result<(), String> {
         self.size_for(topo);
+        // gromosXX `Distance_Restraint_Interaction::init` and its perturbed twin: the r⁻³
+        // averages start from the start-up configuration
+        self.distance_restraints
+            .init_averages(conf, &self.periodicity);
+        self.perturbed_distance_restraints
+            .init_averages(conf, &self.periodicity);
         Ok(())
     }
 
@@ -498,14 +503,11 @@ impl Algorithm for Forcefield {
 
         // --- 2b. Perturbed bonded forces (FEP/TI, NTG != 0) ---
         // Forces are accumulated in the returned ForceEnergyLambda and applied in step 4.
-        let (lambda, lambda_deriv) = self.lambda_and_derivative;
         let perturbed_bonded = if !topo.perturbed_solute.is_empty() {
             let pr = calculate_perturbed_bonded_forces(
                 topo,
                 conf,
                 &self.periodicity,
-                lambda,
-                lambda_deriv,
                 &mut self.bonded_groups,
                 &mut self.bonded_dhdl_groups,
             );
@@ -1132,18 +1134,20 @@ impl Algorithm for Forcefield {
         let has_atom_pairs = !topo.perturbed_solute.atom_pairs.is_empty();
         let (pert_nb_dhdl, pert_nb_dhdl_lj, pert_nb_dhdl_crf) =
             if has_perturbed_atoms || has_atom_pairs {
-                let (lam, _) = self.lambda_and_derivative;
-                let lp = PerturbedLambdaParams::from_lambda(
-                    lam,
-                    lam,
-                    lam,
-                    lam,
-                    1.0,
-                    1.0,
-                    1.0,
-                    1.0,
-                    self.lambda_exp,
+                if topo.individual_lambdas.n_groups() != self.n_energy_groups {
+                    return Err(format!(
+                        "the individual-λ table covers {} energy groups, the topology has {}: \
+                         call Topology::update_for_lambda after assigning the energy groups",
+                        topo.individual_lambdas.n_groups(),
+                        self.n_energy_groups
+                    ));
+                }
+                PerturbedLambdaParams::fill_table(
+                    &topo.individual_lambdas,
+                    topo.lambda_exp,
+                    &mut self.lambda_table,
                 );
+                let lp = &self.lambda_table;
                 // 3b-1: pairlist correction (delta over what state-A innerloop already computed)
                 // Applied to BOTH short-range and long-range pairlists:
                 // the regular innerloops computed state-A for all pairs; here we replace the
@@ -1156,7 +1160,7 @@ impl Algorithm for Forcefield {
                     &self.iac_u32,
                     &self.lj_params,
                     &self.crf_params,
-                    &lp,
+                    lp,
                     &self.periodicity,
                     self.four_pi_eps_i,
                     egroups,
@@ -1194,7 +1198,7 @@ impl Algorithm for Forcefield {
                         &self.iac_u32,
                         &self.lj_params,
                         &self.crf_params,
-                        &lp,
+                        lp,
                         &self.periodicity,
                         self.four_pi_eps_i,
                         egroups,
@@ -1229,7 +1233,7 @@ impl Algorithm for Forcefield {
                     let (e, dhdl_self) = perturbed_self_energy_correction(
                         &self.pert_info,
                         &self.crf_params,
-                        &lp,
+                        lp,
                         self.four_pi_eps_i,
                         egroups,
                         &mut self.local_storage.groups,
@@ -1250,7 +1254,7 @@ impl Algorithm for Forcefield {
                         &self.pert_info,
                         &self.charges,
                         &self.crf_params,
-                        &lp,
+                        lp,
                         &self.periodicity,
                         topo.num_solute_atoms(),
                         self.four_pi_eps_i,
@@ -1278,7 +1282,7 @@ impl Algorithm for Forcefield {
                         &self.iac_u32,
                         &self.lj_params,
                         &self.crf_params,
-                        &lp,
+                        lp,
                         &self.periodicity,
                         self.four_pi_eps_i,
                         &mut corr14,
@@ -1311,7 +1315,7 @@ impl Algorithm for Forcefield {
                         &self.iac_u32,
                         &self.lj_params,
                         &self.crf_params,
-                        &lp,
+                        lp,
                         &self.periodicity,
                         self.four_pi_eps_i,
                         self.rf_excluded,
@@ -1409,6 +1413,11 @@ impl Algorithm for Forcefield {
             d.lj_total = pert_nb_dhdl_lj;
             d.crf_total = pert_nb_dhdl_crf;
             d.potential_total = dhdl_bonded + pert_nb_dhdl;
+            // perturbed SHAKE adds its dH/dλ here after the step's position update
+            // (gromosXX `perturbed_shake.cc:224`, on the state the force field just filled)
+            d.constraint_total = 0.0;
+            d.special_total = 0.0;
+            d.constraints_energy.fill(0.0);
 
             // Per energy group (more than one group; with one, `EnergyCalculation` books the
             // totals into group 0). Both records are double-buffered and never cleared, so
@@ -1514,51 +1523,66 @@ impl Algorithm for Forcefield {
         }
 
         // --- 4c. Distance restraints ---
+        // Energies and dH/dλ are assigned (not accumulated) each step: both records are
+        // double-buffered and never cleared.
         let any_distres = !self.distance_restraints.restraints.is_empty()
             || !self.perturbed_distance_restraints.restraints.is_empty();
-        let distres_groups = egroups.is_grouped() && any_distres;
-        if distres_groups {
-            self.restraint_groups.fill(0.0);
-        }
-        if !self.distance_restraints.restraints.is_empty() {
-            let e_dr = if distres_groups {
-                self.distance_restraints.calculate_all_grouped(
-                    conf,
-                    &self.periodicity,
-                    &topo.atom_to_energy_group,
-                    &mut self.restraint_groups,
-                )
-            } else {
-                self.distance_restraints
-                    .calculate_all(conf, &self.periodicity)
-            };
-            conf.current_mut().energies.distanceres_total = e_dr;
-            log::debug!("  Distance restraints: {:.10e} kJ/mol", e_dr);
-        }
-        if !self.perturbed_distance_restraints.restraints.is_empty() {
-            let e_pdr = if distres_groups {
-                self.perturbed_distance_restraints.calculate_all_grouped(
-                    conf,
-                    &self.periodicity,
-                    self.lambda,
-                    &topo.atom_to_energy_group,
-                    &mut self.restraint_groups,
-                )
-            } else {
-                self.perturbed_distance_restraints.calculate_all(
-                    conf,
-                    &self.periodicity,
-                    self.lambda,
-                )
-            };
-            conf.current_mut().energies.distanceres_total += e_pdr;
-            log::debug!("  Perturbed distance restraints: {:.10e} kJ/mol", e_pdr);
-        }
-        if distres_groups {
-            conf.current_mut()
-                .energies
-                .distanceres_energy
-                .copy_from_slice(&self.restraint_groups);
+        if any_distres {
+            let grouped = egroups.is_grouped();
+            if grouped {
+                self.restraint_groups.fill(0.0);
+                self.restraint_dhdl_groups.fill(0.0);
+            }
+            let mut e_dr = 0.0;
+            if !self.distance_restraints.restraints.is_empty() {
+                e_dr = if grouped {
+                    self.distance_restraints.calculate_all_grouped(
+                        conf,
+                        &self.periodicity,
+                        &topo.atom_to_energy_group,
+                        &mut self.restraint_groups,
+                    )
+                } else {
+                    self.distance_restraints
+                        .calculate_all(conf, &self.periodicity)
+                };
+                log::debug!("  Distance restraints: {:.10e} kJ/mol", e_dr);
+            }
+            let (mut e_pdr, mut d_pdr) = (0.0, 0.0);
+            if !self.perturbed_distance_restraints.restraints.is_empty() {
+                let lam = TermLambda::table(topo, InteractionLambda::Disres);
+                (e_pdr, d_pdr) = if grouped {
+                    self.perturbed_distance_restraints.calculate_all_grouped(
+                        conf,
+                        &self.periodicity,
+                        lam,
+                        &topo.atom_to_energy_group,
+                        &mut self.restraint_groups,
+                        &mut self.restraint_dhdl_groups,
+                    )
+                } else {
+                    self.perturbed_distance_restraints
+                        .calculate_all(conf, &self.periodicity, lam)
+                };
+                log::debug!(
+                    "  Perturbed distance restraints: {:.10e} kJ/mol, dH/dλ {:.10e}",
+                    e_pdr,
+                    d_pdr
+                );
+            }
+            let state = conf.current_mut();
+            state.energies.distanceres_total = e_dr + e_pdr;
+            state.perturbed_energy_derivatives.distanceres_total = d_pdr;
+            if grouped {
+                state
+                    .energies
+                    .distanceres_energy
+                    .copy_from_slice(&self.restraint_groups);
+                state
+                    .perturbed_energy_derivatives
+                    .distanceres_energy
+                    .copy_from_slice(&self.restraint_dhdl_groups);
+            }
         }
 
         // --- 5. atomic_to_molecular_virial: correct virial from atomic to molecular ---
