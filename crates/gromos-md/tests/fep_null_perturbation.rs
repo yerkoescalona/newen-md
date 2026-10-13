@@ -31,6 +31,16 @@ const ATOMS: &[(usize, &str, usize, f64, f64)] = &[
 ];
 
 fn ptp(atoms: &[(usize, &str, usize, f64, f64)], alpha_lj: f64, alpha_crf: f64) -> String {
+    ptp_with_pairs(atoms, alpha_lj, alpha_crf, &[])
+}
+
+/// [`ptp`] with `PERTATOMPAIR` rows `(i, j, A type, B type)`, 1-based, types as in the file.
+fn ptp_with_pairs(
+    atoms: &[(usize, &str, usize, f64, f64)],
+    alpha_lj: f64,
+    alpha_crf: f64,
+    pairs: &[(usize, usize, u8, u8)],
+) -> String {
     let mut s = String::from("TITLE\nnull perturbation\nEND\nPERTATOMPARAM\n");
     s += &format!("{}\n", atoms.len());
     for (nr, name, iac, mass, q) in atoms {
@@ -39,8 +49,12 @@ fn ptp(atoms: &[(usize, &str, usize, f64, f64)], alpha_lj: f64, alpha_crf: f64) 
         );
     }
     s += "END\n";
+    s += &format!("PERTATOMPAIR\n{}\n", pairs.len());
+    for (i, j, a, b) in pairs {
+        s += &format!("{i:5} {j:5} {a} {b}\n");
+    }
+    s += "END\n";
     for block in [
-        "PERTATOMPAIR",
         "PERTBONDSTRETCH",
         "PERTBONDANGLE",
         "PERTIMPROPERDIH",
@@ -60,6 +74,10 @@ fn run(pttopo: Option<&Path>, tag: &str) -> (Vec<f64>, String) {
 }
 
 fn run_input(pttopo: Option<&Path>, input: &Path, tag: &str) -> (Vec<f64>, String) {
+    run_with(pttopo, input, tag, &[])
+}
+
+fn run_with(pttopo: Option<&Path>, input: &Path, tag: &str, extra: &[&str]) -> (Vec<f64>, String) {
     let r = refs();
     let out = std::env::temp_dir().join(format!("gromos_rs_fep_null_{tag}_{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
@@ -83,6 +101,7 @@ fn run_input(pttopo: Option<&Path>, input: &Path, tag: &str) -> (Vec<f64>, Strin
     if let Some(p) = pttopo {
         cmd.arg("@pttopo").arg(p);
     }
+    cmd.args(extra);
     let status = cmd.output().expect("run md");
     assert!(
         status.status.success(),
@@ -181,5 +200,60 @@ fn identity_individual_lambdas_keep_the_null_perturbation_a_no_op() {
     assert_eq!(
         forces, ref_forces,
         "identity LAMBDAS on a null perturbation changed the forces"
+    );
+}
+
+/// The numbers of a force trajectory, in order.
+fn numbers(text: &str) -> Vec<f64> {
+    text.split_whitespace()
+        .filter_map(|t| t.parse::<f64>().ok())
+        .collect()
+}
+
+/// `PERTATOMPAIR` rows on a perturbed atom whose A and B types are the pair's topology type
+/// (4-10 a 1-4 pair, 4-11 a normal one, both charged) take the pair out of the regular loops
+/// into the atom-pair term: with equal end states and α = 0 that is still the unperturbed
+/// system, to rounding, under the intended kernel. gromosXX's shifted call is not.
+#[test]
+fn pertatompair_rows_with_equal_states_keep_the_null_perturbation_a_no_op() {
+    let dir = std::env::temp_dir().join(format!("gromos_rs_fep_null_pair_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let input = refs().join("aladip_vacuum_fep/aladip_vacuum_fep.in");
+    let (reference, ref_forces) = run(None, "pair_none");
+    let null = dir.join("null_pairs.ptp");
+    fs::write(
+        &null,
+        ptp_with_pairs(ATOMS, 0.0, 0.0, &[(4, 10, 2, 2), (4, 11, 1, 1)]),
+    )
+    .unwrap();
+
+    let (e, forces) = run_with(Some(&null), &input, "pair_null", &[]);
+    for (k, (a, b)) in e.iter().zip(&reference).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-10 * b.abs().max(1.0),
+            "energy {k}: {a} vs {b} with null PERTATOMPAIR rows"
+        );
+    }
+    let (f, f_ref) = (numbers(&forces), numbers(&ref_forces));
+    assert_eq!(f.len(), f_ref.len());
+    for (a, b) in f.iter().zip(&f_ref) {
+        assert!(
+            (a - b).abs() <= 1e-8,
+            "force {a} vs {b} with null PERTATOMPAIR rows"
+        );
+    }
+
+    let (shifted, _) = run_with(
+        Some(&null),
+        &input,
+        "pair_null_shifted",
+        &[
+            "@recipe_set",
+            "perturbation.atom_pair_kernel=gromosxx-shifted",
+        ],
+    );
+    assert!(
+        (shifted[8] - reference[8]).abs() > 1e-3,
+        "the shifted kernel left the Coulomb energy unchanged"
     );
 }

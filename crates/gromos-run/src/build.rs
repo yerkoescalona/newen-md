@@ -286,6 +286,7 @@ fn instantiate_forcefield(
         // λ, NLAM and the individual λ come with the topology (`prepare_system`)
         forcefield.global_alphlj = p.alpha_lj;
         forcefield.global_alphc = p.alpha_c;
+        forcefield.atom_pair_kernel = p.atom_pair_kernel;
     }
 
     Ok(ForcefieldBuilt {
@@ -729,6 +730,9 @@ pub fn build_sequence_from_imd(
     let (mut recipe, diagnostics) = RunRecipe::from_imd_with(imd, &options.passthrough)?;
     recipe.execution.parallel = options.parallel;
     recipe.inputs = inputs.clone();
+    for (key, value) in &options.recipe_overrides {
+        recipe.set(key, value)?;
+    }
     let mut built = build_sequence_from_recipe(&recipe, prepared)?;
     built.diagnostics = diagnostics;
     if let Some(partition) = options.pair_partition {

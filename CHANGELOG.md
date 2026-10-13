@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.56] (2026-10-13)
+
+**Corrected: `PERTATOMPAIR` pairs with a perturbed atom now use the intended kernel by default**
+(1.8). The gromosXX defect reproduced and flagged in 0.0.55 stays selectable and keeps its
+reference; a second reference from a patched native binary pins the correction. 80 reference
+systems pass.
+
+### Corrected
+
+- **The perturbed atom-pair kernel takes its arguments in their own slots.** gromosXX 247c95c4
+  calls `eds_pert_lj_crf_interaction` with its outputs shifted by one slot
+  (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200` against `perturbed_nonbonded_term.h:65-72`;
+  0.0.55, "Reproduced gromosXX defects"): for a normal or 1-4 state of a pair with a perturbed atom
+  the energies get the kernel's dH/dλ, the force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and
+  `coulomb_scaling = 0` removes the 1/r Coulomb term. The λ-grid (`PRECALCLAM`) calls a few
+  lines above pass the arguments correctly. gromos-rs now books, by default, the energies
+  `e_lj, e_crf`, the derivatives `de_lj, de_crf` and the force `f·r`, with Coulomb scaling 1 for
+  a normal state and the 1-4 scaling (`perturbed_nonbonded_innerloop.cc:2102`; 1, as for every
+  1-4 pair) for a 1-4 state. The λ-grid booking is unchanged.
+- Magnitude (`~/Development/gromos-divergences/REPORT.md` §2, on the three-pair aladip system of
+  `aladip_vacuum_fep_pairpert_precalc`): at frame 0 the defect books the pair energy wrong by
+  −151.99 kJ/mol and dH/dλ by +116.18 kJ/mol; the per-window ⟨dH/dλ⟩ error reaches
+  −28.8 kJ/mol; the dropped TI term integrates to −2.01 ± 0.08 kJ/mol (per pair −18.20, +16.38,
+  −0.19; n = 3 replicas, 41 windows); under NVE the booked force is not the gradient of the
+  booked energy (E_tot s.d. 6.21 vs 0.34 kJ/mol without the rows). An independent kernel
+  reproduces native to 6e-9 relative.
+
+### Added
+
+- `perturbation.atom_pair_kernel` in the recipe: `"intended"` (default) or `"gromosxx-shifted"`,
+  gromosXX's defect. No `.imd` block carries it: `read_imd` leaves the default, `imd_write`
+  writes nothing, the `.recipe.toml` echo shows it only when not the default. Python sees it in
+  `Recipe.perturbation` once set (`recipe.update(perturbation={"atom_pair_kernel": …})`).
+- `RunRecipe::set(key, value)` by dotted path, `RunOptions::recipe_overrides`, and
+  `md @recipe_set key=value` (repeatable) for recipe fields no `.imd` block carries. The
+  reference runners read an optional `[recipe_overrides]` table from `input.toml`.
+- Reference `aladip_vacuum_fep_pairpert_precalc_fixed`: the same run, expected output from native
+  gromosXX 247c95c4 + the D1 patch (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`: outputs in
+  their slots, `force = scalar·r`, `coulomb_scaling` the 1-4 scaling for the 1-4 calls and 1
+  otherwise), run with `"intended"`. `aladip_vacuum_fep_pairpert_precalc` runs with
+  `"gromosxx-shifted"` and pins the defect.
+
+### Verified
+
+- References: 80 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored.
+- New gates, as no unpatched oracle exists for the corrected default: at λ = 0 (A state normal
+  or 1-4) and λ = 1 (B state) the pair term equals the plain LJ+CRF kernel; its force is
+  −∂V/∂r and its dH/dλ is ∂V/∂λ to 1e-6 relative (central differences, λ ∈ {0.25, 0.5, 0.75},
+  NLAM 1 and 2, a 1-4 state with Coulomb scaling 0.5 included); `fep_null_perturbation` with
+  `PERTATOMPAIR` rows 4-10 (1-4/1-4) and 4-11 (normal/normal) on perturbed atoms with equal
+  states stays null under the intended kernel and is not null under `"gromosxx-shifted"`.
+- Every other reference's output is byte-identical to the previous binary but for the version
+  header; the two `pairpert_precalc` systems, run without their override, take the new default.
+
 ## [0.0.55] (2026-10-12)
 
 **Two defects found by step 2's gates, fixed as gromosXX does them, and one gromosXX defect

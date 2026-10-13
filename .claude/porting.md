@@ -108,15 +108,19 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   (`nonbonded.rf_cutoff`, `in_parameter.cc:4606`) and accepts RCRF ≠ RCUTL silently
   (`check_parameter.cc` has no rule); gromos-rs built them from RCUTL. Now from RCRF, silently,
   pinned by `aladip_solvated_rcrf`.
-- **PERTATOMPAIR argument shift** (A, reproduced for now; correction planned in a separate
-  commit). `perturbed_nonbonded_pair.cc:469, 677, 992, 1200` call `eds_pert_lj_crf_interaction`
-  with the outputs shifted by one slot against `perturbed_nonbonded_term.h:65-72`: for a pair
-  with a perturbed atom and a normal or 1-4 state type the energies receive the kernel's dH/dλ,
-  the force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and `eps = 0`, `coulomb_scaling = 0` drop the
-  1/r Coulomb term. Reproduced in `atom_pair_state` (`gromos-forces/src/nonbonded/perturbed.rs`),
-  pinned by `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`,
-  `OAI.Physics.Gromos.Divergences`): `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`,
-  `crfSoftEnergy_shift`.
+- **PERTATOMPAIR argument shift** (A; corrected in 0.0.56, the reference pins the defect under
+  `gromosxx-shifted`; patched oracle `tests/gromosXX_references/patches/D1_pair_kernel_args.patch`).
+  `perturbed_nonbonded_pair.cc:469, 677, 992, 1200` call `eds_pert_lj_crf_interaction` with the
+  outputs shifted by one slot against `perturbed_nonbonded_term.h:65-72`: for a pair with a
+  perturbed atom and a normal or 1-4 state type the energies receive the kernel's dH/dλ, the
+  force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and `eps = 0`, `coulomb_scaling = 0` drop the 1/r
+  Coulomb term. gromos-rs computes the intended kernel by default (outputs in their slots,
+  Coulomb scaling 1, the 1-4 scaling for 1-4 states), pinned by
+  `aladip_vacuum_fep_pairpert_precalc_fixed` (native 247c95c4 + D1 patch); the recipe's
+  `perturbation.atom_pair_kernel = "gromosxx-shifted"` reproduces the defect
+  (`atom_pair_state`, `gromos-forces/src/nonbonded/perturbed.rs`), pinned by
+  `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`, `OAI.Physics.Gromos.Divergences`):
+  `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`, `crfSoftEnergy_shift`.
 - **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
   SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
   it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated

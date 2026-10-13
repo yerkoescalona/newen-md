@@ -191,3 +191,34 @@ fn a_typo_in_a_recipe_field_is_an_error() {
     let err = RunRecipe::from_json(&json.to_string()).unwrap_err();
     assert!(err.to_string().contains("stepz"), "{err}");
 }
+
+/// `atom_pair_kernel` is not an `.imd` block: absent from the echo at its default, set by dotted
+/// path (`md @recipe_set`), round-tripped when set, and nothing in the `.imd`.
+#[test]
+fn atom_pair_kernel_is_set_by_path_and_echoed_only_when_not_the_default() {
+    use gromos_run::recipe::AtomPairKernel;
+    let mut r = RunRecipe::default();
+    assert_eq!(r.perturbation.atom_pair_kernel, AtomPairKernel::Intended);
+    assert!(!r.to_toml().unwrap().contains("atom_pair_kernel"));
+    let imd = r.to_imd_string(None);
+
+    r.set("perturbation.atom_pair_kernel", "gromosxx-shifted")
+        .unwrap();
+    assert_eq!(
+        r.perturbation.atom_pair_kernel,
+        AtomPairKernel::GromosxxShifted
+    );
+    let toml = r.to_toml().unwrap();
+    assert!(
+        toml.contains("atom_pair_kernel = \"gromosxx-shifted\""),
+        "{toml}"
+    );
+    assert_eq!(RunRecipe::from_toml(&toml).unwrap(), r);
+    assert_eq!(r.to_imd_string(None), imd);
+
+    assert!(r.set("perturbation.atom_pair_kernel", "shifted").is_err());
+    assert!(r.set("perturbation.atom_pair_kernl", "intended").is_err());
+    assert!(r.set("perturbaton.atom_pair_kernel", "intended").is_err());
+    r.set("control.steps", "7").unwrap();
+    assert_eq!(r.control.steps, 7);
+}

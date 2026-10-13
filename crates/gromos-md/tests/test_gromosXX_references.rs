@@ -56,6 +56,24 @@ fn toml_str(content: &str, key: &str) -> String {
     panic!("{key} not found in input.toml");
 }
 
+/// The `"key" = "value"` lines of the optional `[recipe_overrides]` table: recipe fields no
+/// `.imd` block carries, passed as `md @recipe_set key=value` (`RunRecipe::set`).
+fn recipe_overrides(content: &str) -> Vec<(String, String)> {
+    let mut lines = content.lines().map(str::trim);
+    if !lines.any(|l| l == "[recipe_overrides]") {
+        return Vec::new();
+    }
+    lines
+        .take_while(|l| !l.starts_with('['))
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            let (k, v) = l.split_once('=').expect("recipe_overrides: key = value");
+            let unquote = |s: &str| s.trim().trim_matches('"').to_string();
+            (unquote(k), unquote(v))
+        })
+        .collect()
+}
+
 fn toml_str_opt(content: &str, key: &str) -> Option<String> {
     let prefix = format!("{key} = ");
     for line in content.lines() {
@@ -417,6 +435,10 @@ fn run_reference(system: &str) {
     // Optional perturbation topology
     if let Some(pt) = toml_str_opt(&toml, "pttopo") {
         cmd.arg("@pttopo").arg(sys_dir.join(pt));
+    }
+
+    for (key, value) in recipe_overrides(&toml) {
+        cmd.arg("@recipe_set").arg(format!("{key}={value}"));
     }
 
     let t0 = std::time::Instant::now();
@@ -993,11 +1015,17 @@ ref_test!(
 );
 // PERTATOMPAIR rows with a perturbed atom, one per state type (excluded / normal / 1-4) in A and
 // in B: the ext energies of the filled state only, the other state's parameters set to 0. The
-// main energies carry gromosXX's argument-shift defect in the perturbed pair branches (see
-// `perturbed_atom_pair_interactions`).
+// main energies carry gromosXX's argument-shift defect in the perturbed pair branches, run with
+// `atom_pair_kernel = "gromosxx-shifted"` (see `perturbed_atom_pair_interactions`).
 ref_test!(
     aladip_vacuum_fep_pairpert_precalc,
     "aladip_vacuum_fep_pairpert_precalc"
+);
+// The same run against native gromosXX 247c95c4 with the argument shift patched
+// (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`): the intended kernel, gromos-rs's default.
+ref_test!(
+    aladip_vacuum_fep_pairpert_precalc_fixed,
+    "aladip_vacuum_fep_pairpert_precalc_fixed"
 );
 // Twin range with the pairlist every 5 steps and output every 2: gromosXX computes the long-range
 // perturbed pairs (and their ext energies) only on pairlist steps, the ext part only when that

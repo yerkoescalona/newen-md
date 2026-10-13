@@ -64,6 +64,13 @@ pub struct PerturbationPlan {
     /// `individual_lambdas`), as in gromosXX.
     #[serde(default)]
     pub individual_lambdas: bool,
+    /// `Perturbation::atom_pair_kernel`.
+    #[serde(default, skip_serializing_if = "is_intended")]
+    pub atom_pair_kernel: crate::recipe::AtomPairKernel,
+}
+
+fn is_intended(k: &crate::recipe::AtomPairKernel) -> bool {
+    *k == crate::recipe::AtomPairKernel::Intended
 }
 
 /// Everything `Forcefield` needs, resolved.
@@ -895,6 +902,7 @@ pub fn build_plan(
         alpha_lj: recipe.perturbation.alpha_lj,
         alpha_c: recipe.perturbation.alpha_c,
         individual_lambdas: individual_lambdas_on(recipe),
+        atom_pair_kernel: recipe.perturbation.atom_pair_kernel,
     });
 
     let is_minimization = recipe.is_minimization();
@@ -1528,6 +1536,7 @@ mod tests {
             alpha_lj: 0.5,
             alpha_c: 0.5,
             individual_lambdas: true,
+            atom_pair_kernel: Default::default(),
         });
         let err = validate_plan(&plan).unwrap_err().to_string();
         assert!(err.contains("individual λ"), "{err}");

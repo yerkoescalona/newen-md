@@ -107,6 +107,8 @@ fn print_usage() {
     eprintln!("  @version    Print version information");
     eprintln!("  @develop    Run untested development code");
     eprintln!("  @dump       Print the run recipe and algorithm plan (JSON) and exit");
+    eprintln!("  @recipe_set key=value  Set a recipe field no .imd block carries (repeatable),");
+    eprintln!("              e.g. perturbation.atom_pair_kernel=gromosxx-shifted");
     eprintln!();
     eprintln!("All simulation parameters (timestep, cutoffs, thermostat, etc.)");
     eprintln!("are specified in the @input file, following GROMOS conventions.");
@@ -150,6 +152,8 @@ struct MDArgs {
     develop: bool,
     /// `@dump`: print the run recipe and the algorithm plan (JSON) and exit without running.
     dump: bool,
+    /// `@recipe_set key=value`: recipe fields no `.imd` block carries, by dotted path.
+    recipe_overrides: Vec<(String, String)>,
 }
 
 fn parse_args(args: Vec<String>) -> Result<MDArgs, String> {
@@ -211,6 +215,15 @@ fn parse_args(args: Vec<String>) -> Result<MDArgs, String> {
             },
             "@develop" => {
                 md_args.develop = true;
+            },
+            "@recipe_set" => {
+                let kv = next_val!("@recipe_set");
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or_else(|| format!("@recipe_set expects key=value, got '{kv}'"))?;
+                md_args
+                    .recipe_overrides
+                    .push((k.trim().to_string(), v.trim().to_string()));
             },
             // Catch unrecognized
             _ if arg.starts_with('@') => {
@@ -661,6 +674,7 @@ fn main() {
         // device); it carries no physics, so it rides along instead of stopping the run.
         passthrough: PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]),
         pair_partition: mpi_partition,
+        recipe_overrides: md_args.recipe_overrides.clone(),
         ..RunOptions::default()
     };
     let built = match build_sequence_from_imd(&imd, &prepared, &inputs, &options) {

@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gromos_core::lambdas::InteractionLambda;
+pub use gromos_forces::nonbonded::AtomPairKernel;
 use gromos_io::imd::{
     ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PrecalcLamBlock, PressureParameters,
     TempBathParameters,
@@ -550,6 +551,15 @@ pub struct Perturbation {
     /// PRECALCLAM block: energies at `nr_lambdas` extra λ points (extended TI); `None` = absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precalclam: Option<PrecalcLam>,
+    /// The kernel of the normal and 1-4 states of `PERTATOMPAIR` pairs with a perturbed atom:
+    /// `"intended"` (default) or `"gromosxx-shifted"`, gromosXX 247c95c4's arguments shifted by
+    /// one slot (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200`; 1.8). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_intended")]
+    pub atom_pair_kernel: AtomPairKernel,
+}
+
+fn is_intended(k: &AtomPairKernel) -> bool {
+    *k == AtomPairKernel::Intended
 }
 
 /// The `PRECALCLAM` block: the energies of every perturbed interaction (and their λ
@@ -1080,6 +1090,7 @@ impl RunRecipe {
                     min_lambda: b.min_lambda,
                     max_lambda: b.max_lambda,
                 }),
+                atom_pair_kernel: AtomPairKernel::default(),
             },
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
@@ -1305,6 +1316,32 @@ impl RunRecipe {
 
     pub fn from_json(text: &str) -> Result<Self, RunError> {
         serde_json::from_str(text).map_err(|e| RunError::Serde(e.to_string()))
+    }
+
+    /// Set one field by its dotted path (`perturbation.atom_pair_kernel`), for the fields no
+    /// `.imd` block carries (`md @recipe_set`). `value` is read as JSON, or as a string when it
+    /// is not JSON; a path or value the recipe does not accept is an error.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), RunError> {
+        let err = |m: String| RunError::Recipe(format!("recipe field '{key}': {m}"));
+        let mut root = serde_json::to_value(&*self).map_err(|e| err(e.to_string()))?;
+        let mut slot = &mut root;
+        let mut parts = key.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let serde_json::Value::Object(table) = slot else {
+                return Err(err(format!("'{part}' is not inside a group")));
+            };
+            slot = if parts.peek().is_some() {
+                table
+                    .get_mut(part)
+                    .ok_or_else(|| err(format!("no group '{part}'")))?
+            } else {
+                table.entry(part).or_insert(serde_json::Value::Null)
+            };
+        }
+        *slot = serde_json::from_str(value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+        *self = serde_json::from_value(root).map_err(|e| err(e.to_string()))?;
+        Ok(())
     }
 
     // --- Factories: the same runs `ImdParameters::{nve,nvt,npt,steepest_descent}` build ---

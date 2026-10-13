@@ -14,6 +14,7 @@ Usage style mirrors OpenMM but with gromosXX naming conventions:
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -173,7 +174,28 @@ def _recipe_for(system_dir):
         for key in ("pttopo", "distrest", "posresspec", "refpos")
         if inputs.get(key)
     }
-    return Recipe.from_imd(str((system_dir / inputs["parameters"]).resolve())).with_inputs(**aux)
+    recipe = Recipe.from_imd(str((system_dir / inputs["parameters"]).resolve())).with_inputs(**aux)
+    return _apply_recipe_overrides(recipe, system_dir)
+
+
+def _apply_recipe_overrides(recipe, system_dir):
+    """The `[recipe_overrides]` of input.toml (dotted keys, e.g.
+    `"perturbation.atom_pair_kernel"`): recipe fields no `.imd` block carries, what the Rust
+    runner passes as `md @recipe_set key=value`. Only that table is parsed: not every
+    input.toml is valid TOML as a whole."""
+    section = re.search(
+        r"^\[recipe_overrides\]\n(.*?)(?=^\[|\Z)",
+        (system_dir / "input.toml").read_text(),
+        re.MULTILINE | re.DOTALL,
+    )
+    overrides = tomllib.loads(section.group(1)) if section else {}
+    for key, value in overrides.items():
+        group, *path = key.split(".")
+        patch = value
+        for part in reversed(path):
+            patch = {part: patch}
+        recipe = recipe.update(**{group: patch})
+    return recipe
 
 
 def _create_simulation(system_dir):
@@ -298,6 +320,7 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_shake_precalc",
     "aladip_vacuum_fep_distres_precalc",
     "aladip_vacuum_fep_pairpert_precalc",
+    "aladip_vacuum_fep_pairpert_precalc_fixed",
     "ch4_water_fep_precalc_twinrange",
     "aladip_solvated_epsrf0",
     "aladip_solvated_rcrf",
