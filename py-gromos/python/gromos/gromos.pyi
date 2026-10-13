@@ -783,6 +783,51 @@ def _make_top(
     *, build: list[str], param: str, seq: list[str], solv: str | None = None
 ) -> Topology: ...
 def _check_top(topology: Topology) -> tuple[list[str], list[str], str]: ...
+def _ext_ti_ana(argv: list[str], *, seed: int | None = None, write: bool = True) -> dict[str, Any]:
+    """`ext_ti_ana` in process: the predictions as arrays and the files written;
+    `gromos.analysis.ext_ti_ana` builds `argv` from keywords."""
+    ...
+
+def _bar(
+    files: list[str],
+    temperature: float,
+    *,
+    max_iterations: int = 500,
+    convergence: float = 1e-5,
+    bootstrap: int = 0,
+    seed: int | None = None,
+    printdist: str | None = None,
+    parity: str | None = None,
+) -> dict[str, Any]:
+    """`bar` in process on `ext_ti_ana @bar_data` files: per-interval and total ΔG, kJ/mol."""
+    ...
+
+def _ext_ti_merge(argv: list[str]) -> dict[str, Any]:
+    """`ext_ti_merge` in process: the merged ⟨∂H/∂λ⟩ curve and its integral."""
+    ...
+
+def _mbar(
+    u_kn: npt.NDArray[np.float64],
+    n_k: list[int],
+    temperature: float,
+    *,
+    max_iterations: int = 10000,
+    tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    """MBAR on potentials in kJ/mol: free energies and their errors, kJ/mol."""
+    ...
+
+def _ti_trapezoid(
+    files: list[str], lambdas: list[float] | None = None, skip: int = 0
+) -> dict[str, Any]:
+    """Plain multi-window TI over `.trg` files (trapezoid rule)."""
+    ...
+
+def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:
+    """`dGslv_pbsolv` in process: potentials and free energies of every solve, the table and
+    the log; `gromos.analysis.dgslv_pbsolv` builds `argv` from keywords."""
+    ...
+
 def rmsd(
     positions: npt.NDArray[np.float64],
     reference: npt.NDArray[np.float64],

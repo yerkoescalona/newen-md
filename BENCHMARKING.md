@@ -803,7 +803,8 @@ CPU first, then the GPU provider. Not started; the probe is kept in `bench/gpu_p
 `scripts/ti_ch4.py --steps 5000`: CH4 → dummy in 999 SPC (54a7, the vol. 7 tutorial system, the
 inputs proven bit-for-bit at λ = 0, 0.25, 0.5, 0.75, 1), eleven λ windows of 10 ps each, NVT 300 K,
 run by the native gromosXX and by `md` from the same `.imd` files, integrated with the project's
-`ext_ti_ana` (trapezoid over ⟨∂H/∂λ⟩, first 20 % of each window dropped). One run per window — the
+`ext_ti_ana` (trapezoid over ⟨∂H/∂λ⟩, first 20 % of each window dropped; since 1.8 that is
+`gromos_analysis::ti`, `--estimator ti`, and `ext_ti_ana` is the gromos++ program). One run per window — the
 per-window means differ by up to 25 kJ/mol at λ = 0.9 (independent 10 ps trajectories in the
 soft-core end-point region, ee 16–20 kJ/mol), so the ΔG agreement is statistical, not bit-for-bit;
 the bit-for-bit statement is the reference suite. Binary: `md` 0.0.33 (the fixes of 0.0.33/0.0.34 do

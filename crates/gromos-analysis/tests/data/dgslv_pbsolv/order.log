@@ -1,0 +1,271 @@
+# READ: schemeELEC LS
+# READ: probe_rad 0.12
+# READ: hydrogen_rad 0.05
+# READ: radscal 1
+# READ: epssolvent 66.6
+# READ: epsNPBC 66.6
+# READ: maxiter 40
+# READ: rminORsigma 0
+# READ: fftcub 4
+# READ: atomsTOcharge 
+# READ: mol 0 O
+# READ: mol 0 C
+# READ: gridspacing 0.13
+# Boxsize: 3.76706
+# Adapted gridspacing: 0.13
+# Calculated number of gridpoints PBC (x,y,z): 29 29 29
+# Calculated number of gridpoints NPBC (x,y,z): 60 60 60
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# READ: probe_iac 5
+# RADII: based on probe_iac 5
+# RADII: based on rmin
+# ************************************************** 
+# *** FD LS NPBC VAC *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 1 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 1
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.13
+# GPX 60
+# GPY 60
+# GPZ 60
+# epssolvent 1
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.26074 0.617898 1.47245
+# maxcoordinates of all atoms: -0.765526 1.07533 1.72477
+# GPX 60
+# GPY 60
+# GPZ 60
+# Calculating new gridstart
+# gridstart[0] -4.97813
+# gridstart[1] -3.11839
+# gridstart[2] -2.36639
+# gridcenter x,y,z = -1.01313 0.846614 1.59861
+# gridstart x,y,z = -4.97813 -3.11839 -2.36639
+# gridspacing 0.13
+# @chargegridtrilinear: znorm : 5.07692
+# Entering FDPoissonBoltzmann::DebyeHueckel ...
+# epsi4PI: 0.0795775
+# epss4PI: 0.0795775
+# @ ZNORM 39.6632
+# NO CONVERGENCE AFTER 40 iterations...
+# RESULTS MAY NOT BE CORRECT!
+# Iterations 40
+# anorm 0.0159267
+# acceptance * znorm 3.96632e-05
+# Exit: solveforpotential()
+# Average potential [kJ/mol] -4.24115
+# atom  1 charge -0.38 ele. pot. 2.21765
+# atom  2 charge 0.38 ele. pot. -210.257
+# DG RETURNED [kJ/mol]: -40.3702
+# ************************************************** 
+# *** FD LS NPBC EPSSOLV *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.13
+# GPX 60
+# GPY 60
+# GPZ 60
+# epssolvent 66.6
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.26074 0.617898 1.47245
+# maxcoordinates of all atoms: -0.765526 1.07533 1.72477
+# GPX 60
+# GPY 60
+# GPZ 60
+# Calculating new gridstart
+# gridstart[0] -4.97813
+# gridstart[1] -3.11839
+# gridstart[2] -2.36639
+# gridcenter x,y,z = -1.01313 0.846614 1.59861
+# gridstart x,y,z = -4.97813 -3.11839 -2.36639
+# gridspacing 0.13
+# @chargegridtrilinear: znorm : 5.07692
+# Entering FDPoissonBoltzmann::DebyeHueckel ...
+# epsi4PI: 0.0795775
+# epss4PI: 5.29986
+# @ ZNORM 39.6632
+# NO CONVERGENCE AFTER 40 iterations...
+# RESULTS MAY NOT BE CORRECT!
+# Iterations 40
+# anorm 0.027559
+# acceptance * znorm 3.96632e-05
+# Exit: solveforpotential()
+# Average potential [kJ/mol] -0.0727319
+# atom  1 charge -0.38 ele. pot. 0.384289
+# atom  2 charge 0.38 ele. pot. -164.797
+# DG RETURNED [kJ/mol]: -31.3845
+# DGRESULT NPBC 8.98568
+# ************************************************** 
+# *** FD LS PBC VAC *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 1 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 1
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.13
+# GPX 29
+# GPY 29
+# GPZ 29
+# epssolvent 1
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.26074 0.617898 1.47245
+# maxcoordinates of all atoms: -0.765526 1.07533 1.72477
+# GPX 29
+# GPY 29
+# GPZ 29
+# Calculating new gridstart
+# gridstart[0] -2.96313
+# gridstart[1] -1.10339
+# gridstart[2] -0.351389
+# gridcenter x,y,z = -1.01313 0.846614 1.59861
+# gridstart x,y,z = -2.96313 -1.10339 -0.351389
+# gridspacing 0.13
+# @@@@@@@@@@@@@@@ pbc-> subtract aver 
+# @chargegridtrilinear: znorm : 5.84565
+# epsi4PI: 0.0795775
+# epss4PI: 0.0795775
+# @ ZNORM 5.84565
+# iter anorm acceptance*znorm 39 3.27567e-06 5.84565e-06
+# CONVERGED AFTER 39 iterations...
+# Exit: solveforpotential()
+# Average potential [kJ/mol] -0.0520097
+# AVERAGE POTENTIAL SUBTRACTED [kJ/mol]: -0.0520097 -> -9.92031e-15
+# atom  1 charge -0.38 ele. pot. 11.4792
+# atom  2 charge 0.38 ele. pot. -236.088
+# DG RETURNED [kJ/mol]: -47.0377
+# ************************************************** 
+# *** FD LS PBC EPSSOLV *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.13
+# GPX 29
+# GPY 29
+# GPZ 29
+# epssolvent 66.6
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.26074 0.617898 1.47245
+# maxcoordinates of all atoms: -0.765526 1.07533 1.72477
+# GPX 29
+# GPY 29
+# GPZ 29
+# Calculating new gridstart
+# gridstart[0] -2.96313
+# gridstart[1] -1.10339
+# gridstart[2] -0.351389
+# gridcenter x,y,z = -1.01313 0.846614 1.59861
+# gridstart x,y,z = -2.96313 -1.10339 -0.351389
+# gridspacing 0.13
+# @@@@@@@@@@@@@@@ pbc-> subtract aver 
+# @chargegridtrilinear: znorm : 5.84565
+# epsi4PI: 0.0795775
+# epss4PI: 5.29986
+# @ ZNORM 5.84565
+# NO CONVERGENCE AFTER 40 iterations...
+# RESULTS MAY NOT BE CORRECT!
+# Iterations 40
+# anorm 1.25716e-05
+# acceptance * znorm 5.84565e-06
+# Exit: solveforpotential()
+# Average potential [kJ/mol] -0.0837691
+# AVERAGE POTENTIAL SUBTRACTED [kJ/mol]: -0.0837691 -> 5.90575e-16
+# atom  1 charge -0.38 ele. pot. 0.605167
+# atom  2 charge 0.38 ele. pot. -208.396
+# DG RETURNED [kJ/mol]: -39.7103
+# ************************************************** 
+# DGRESULT PBC 7.3274

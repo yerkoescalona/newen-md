@@ -751,8 +751,8 @@ pub struct EnergyTraj {
     data: HashMap<String, Vec<Vec<f64>>>,
     /// `size` bindings of the frame currently held, including the `matrix_` forms.
     sizes: HashMap<String, usize>,
-    /// The sizes of the first frame read: a later frame must repeat them.
-    first_sizes: HashMap<String, usize>,
+    /// The sizes of the first frame read, per file type: a later frame must repeat them.
+    first_sizes: HashMap<(String, String), usize>,
     constants: HashMap<String, f64>,
     variables: HashMap<String, Expr>,
     version: Option<String>,
@@ -1033,9 +1033,12 @@ impl EnergyTraj {
                             values.len()
                         ));
                     }
-                    match self.first_sizes.get(name) {
+                    // per file type: md++ writes `numaccelgroups` 1 in the .tre and 0 in the
+                    // .trg of the same run, and gromos++ never compares the two
+                    let key = (file_type.to_string(), name.clone());
+                    match self.first_sizes.get(&key) {
                         None => {
-                            self.first_sizes.insert(name.clone(), x);
+                            self.first_sizes.insert(key, x);
                         },
                         Some(&first) if first != x => {
                             return Err(format!(

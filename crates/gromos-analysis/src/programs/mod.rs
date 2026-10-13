@@ -22,7 +22,9 @@ pub mod trajectory;
 // Every program is reachable by its own name as well as through its category.
 pub use distribution::{bilayer_dist, bilayer_oparam};
 pub use energy::{ene_ana, ener};
-pub use free_energy::{bar, dfmult, dg_ener, eds_update_1, eds_update_2, ext_ti_ana, ext_ti_merge};
+pub use free_energy::{
+    bar, dfmult, dg_ener, dgslv_pbsolv, eds_update_1, eds_update_2, ext_ti_ana, ext_ti_merge, mbar,
+};
 pub use noe::{jepot, jval, nhoparam};
 pub use special::{dfgrid, gca, matrix_overlap};
 pub use structural::{atominfo, edyn, pocket, rmsd, rmsf};
@@ -46,10 +48,12 @@ pub static PROGRAMS: &[&Program] = &[
     &bar::PROGRAM,
     &dfmult::PROGRAM,
     &dg_ener::PROGRAM,
+    &dgslv_pbsolv::PROGRAM,
     &eds_update_1::PROGRAM,
     &eds_update_2::PROGRAM,
     &ext_ti_ana::PROGRAM,
     &ext_ti_merge::PROGRAM,
+    &mbar::PROGRAM,
     // Trajectory manipulation
     &frameout::PROGRAM,
     &mdf::PROGRAM,
