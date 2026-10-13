@@ -28,7 +28,8 @@ Berendsen barostat, COM removal.
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
 - **Perturbed nonbonded** ✓: soft-core LJ+CRF correction (`perturbed_pairlist_correction`), self-energy, excluded-pair, and 1-4 corrections; wired via `Forcefield`; `ch4_water_fep` reference test passes.
-- EDS / GaMD / FEP / REMD: **stubs only, untested** (P1.8)
+- EDS ✓ (1.8): `eds::Eds`, the reference Hamiltonian after the force field (FORMS 1-3,
+  reference-tested); GaMD / REMD: **stubs only, untested**
 
 ## Key files
 ```

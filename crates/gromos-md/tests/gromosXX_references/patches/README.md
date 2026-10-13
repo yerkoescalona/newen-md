@@ -9,7 +9,7 @@ oracle for every other reference.
 | patch | defect | pins |
 |---|---|---|
 | `D1_pair_kernel_args.patch` | `perturbed_nonbonded_pair.cc:469/677/992/1200` call `eds_pert_lj_crf_interaction` with the output slots shifted by one | `aladip_vacuum_fep_pairpert_precalc_fixed` |
-| `D2_eds_weights.patch` | `eds.cc` multi-s/pair-s: zero-seeded log-sum-exp, missing `− max`, skipped pairs, λ-derivative not booked | EDS references (to be registered with the EDS port) |
+| `D2_eds_weights.patch` | `eds.cc` multi-s/pair-s: zero-seeded log-sum-exp, missing `− max`, skipped pairs, λ-derivative not booked | `aladip_vacuum_eds_multis_fixed`, `aladip_vacuum_eds_pairs_fixed` |
 | `D4_bar_error.patch` | gromos++ `bar.cc:639` divides the Bennett error by d² again | `crates/gromos-analysis/tests/data/ext_ti_ana/chain_fixed/` |
 | `D5_ext_ti_ana_dlam.patch` | gromos++ `ext_ti_ana.cc:830` adds the dihedral derivative without dΛ/dλ | `…/ext_ti_ana/A2_fixed/` |
 | `D8_ext_ti_merge_loop.patch` | gromos++ `ext_ti_merge.cc:282` skips interior point N−2 of the error sum | `…/ext_ti_ana/chain_fixed/` |

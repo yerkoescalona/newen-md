@@ -590,6 +590,12 @@ impl PyRecipe {
     fn perturbation<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "perturbation")
     }
+    /// The `EDS` block as a dict (`enabled`, `form`, `num_states`, `s`, `pairs`, `eir`), or
+    /// `None` without one.
+    #[getter]
+    fn eds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.group(py, "eds")
+    }
     #[getter]
     fn outputs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "outputs")
@@ -756,7 +762,7 @@ impl PyRecipe {
         let specs = build_plan(
             &self.inner,
             &prepared.topology,
-            prepared.physical_constants.four_pi_eps_i,
+            &prepared.physical_constants,
         )
         .map_err(run_err)?;
         validate_plan(&specs).map_err(run_err)?;

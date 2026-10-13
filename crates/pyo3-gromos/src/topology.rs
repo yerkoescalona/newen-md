@@ -130,13 +130,14 @@ impl PyTopology {
         self.inner.solvate(nsm);
     }
 
-    /// Merge a GROMOS perturbation topology (`.ptp`) for free-energy runs (FEP/TI).
+    /// Merge a GROMOS perturbation topology (`.ptp`) for free-energy runs (FEP/TI) and EDS.
     ///
-    /// Exactly what the `md` binary does with `@pttopo` when `NTG != 0`: the perturbed
-    /// solute terms are stored and the bonds/angles/dihedrals they perturb are removed from
-    /// the regular solute. Call before `solvate()` and before building a `Simulation`; the
-    /// run's `InputParameters` must have `NTG != 0` (a perturbed topology with `NTG = 0`
-    /// is rejected at construction).
+    /// Exactly what the `md` binary does with `@pttopo`: the perturbed solute terms are stored
+    /// and the bonds/angles/dihedrals they perturb are removed from the regular solute, and an
+    /// `MPERTATOM` block's EDS end states are merged. Call before `solvate()` and before
+    /// building a `Simulation`; the run's `InputParameters` must have `NTG != 0` for the
+    /// perturbed terms and an `EDS` block with `EDS = 1` for the end states (a topology
+    /// carrying either without them is rejected at construction).
     ///
     /// Args:
     ///     pttopo_file: Path to the perturbation topology (.ptp)
@@ -149,6 +150,11 @@ impl PyTopology {
         })?;
         self.inner
             .apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
+        if let Some(m) = pt.eds {
+            self.inner
+                .apply_eds_perturbation(m.num_states, m.state_names, m.atoms)
+                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+        }
         Ok(())
     }
 

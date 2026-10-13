@@ -10,7 +10,7 @@
 //!
 //! The run itself is assembled by the `gromos-run` crate (`read_imd` → `RunRecipe` → plan →
 //! algorithms → `start`), the same path `py-gromos`'s `Simulation` takes; this binary owns the
-//! CLI, the output files and the out-of-band GAMD/EDS blocks. `@dump` prints the recipe and the
+//! CLI, the output files and the out-of-band GAMD block. `@dump` prints the recipe and the
 //! plan as JSON; the effective recipe is written next to the `.tre` as `<tre>.recipe.toml`.
 
 use gromos::{
@@ -23,7 +23,7 @@ use gromos::{
         free_energy::FreeEnergyWriter,
         topology::{build_topology, read_topology_file},
         trajectory::TrajectoryWriter,
-        EdsBlock, EdsStatsWriter, EdsVrWriter, GamdBlock, GamdBoostWriter, GamdStatsWriter,
+        GamdBlock, GamdBoostWriter, GamdStatsWriter,
     },
     math::{truncoct_triclinic_rotmat, Vec3},
     validation::validate_energy,
@@ -484,6 +484,10 @@ fn main() {
                  {} impropers, {} dihedrals, {} soft bonds, {} soft angles, {} soft impropers",
                 atoms, bonds, angles, impropers, dihedrals, soft_bonds, soft_angles, soft_impropers
             ),
+            PrepareNote::EdsLoaded { atoms, states } => println!(
+                "  EDS perturbation topology: {} atoms with {} end states",
+                atoms, states
+            ),
             PrepareNote::PerturbationIgnored { .. } => {
                 log::warn!("@pttopo provided but NTG=0 — perturbation topology ignored");
             },
@@ -560,24 +564,13 @@ fn main() {
         println!();
     }
 
-    // Parse input file for GAMD/EDS blocks
+    // Parse input file for the GAMD block
     let gamd_block = {
         log::debug!("Parsing input file for GAMD block: {}", md_args.input_file);
         match GamdBlock::parse_file(&md_args.input_file) {
             Ok(block) => block,
             Err(e) => {
                 log::warn!("Failed to parse GAMD block: {}", e);
-                None
-            },
-        }
-    };
-
-    let eds_block = {
-        log::debug!("Parsing input file for EDS block: {}", md_args.input_file);
-        match EdsBlock::parse_file(&md_args.input_file) {
-            Ok(block) => block,
-            Err(e) => {
-                log::warn!("Failed to parse EDS block: {}", e);
                 None
             },
         }
@@ -598,66 +591,11 @@ fn main() {
         println!();
     }
 
-    if let Some(ref block) = eds_block {
-        println!();
-        println!("EDS Parameters detected:");
-        println!("  Num states:   {}", block.num_states);
-        println!("  Form:         {:?}", block.form);
-        println!("  S values:     {:?}", block.s_values);
-        println!("  E offsets:    {:?}", block.e_offsets);
-        println!("  Temperature:  {:.1} K", block.temperature);
-        if block.search_enabled {
-            println!(
-                "  AEDS enabled: E_max={:.2}, E_min={:.2}",
-                block.e_max, block.e_min
-            );
-        }
-        println!();
-    }
-
-    // Check for conflicting modes
-    if gamd_block.is_some() && eds_block.is_some() {
-        log::error!("Cannot enable both GAMD and EDS simultaneously");
-        eprintln!("Error: Both GAMD and EDS blocks found in input file");
-        eprintln!("       These methods cannot be used together in the same simulation");
-        process::exit(1);
-    }
-
     // Create GAMD parameters if enabled
     let mut gamd_params = gamd_block.as_ref().map(|block| {
         log::info!("Creating GAMD parameters from input block");
         block.to_parameters()
     });
-
-    // Create EDS parameters if enabled (needs num_atoms)
-    let mut eds_params = if let Some(ref block) = eds_block {
-        log::info!("Creating EDS parameters from input block");
-        let num_atoms = prepared.topology.num_atoms();
-        if block.search_enabled {
-            match block.to_aeds_parameters(num_atoms) {
-                Ok(aeds) => Some(aeds),
-                Err(e) => {
-                    log::error!("Failed to create AEDS parameters: {}", e);
-                    eprintln!("Error: Failed to create AEDS parameters: {}", e);
-                    process::exit(1);
-                },
-            }
-        } else {
-            match block.to_parameters(num_atoms) {
-                Ok(eds) => {
-                    // Wrap in AEDS for uniform handling
-                    Some(gromos::eds::AEDSParameters::new(eds, 0.0, 0.0, false))
-                },
-                Err(e) => {
-                    log::error!("Failed to create EDS parameters: {}", e);
-                    eprintln!("Error: Failed to create EDS parameters: {}", e);
-                    process::exit(1);
-                },
-            }
-        }
-    } else {
-        None
-    };
 
     // === 4. Build the algorithm sequence (gromos-run: the one builder) ===
     println!("Setting up nonbonded interactions:");
@@ -667,12 +605,12 @@ fn main() {
     println!("  RF kappa:    {:.3} nm^-1", imd.appak);
     println!();
 
-    // The binary applies GAMD/EDS itself (out-of-band, after each step), so those blocks may
-    // pass through the recipe; anything else unmodelled is an error (3.9 A17).
+    // The binary applies GAMD itself (out-of-band, after each step), so that block may pass
+    // through the recipe; anything else unmodelled is an error (3.9 A17).
     let options = RunOptions {
         // INNERLOOP selects which inner-loop kernel gromosXX uses (special solvent loops, CUDA
         // device); it carries no physics, so it rides along instead of stopping the run.
-        passthrough: PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]),
+        passthrough: PassthroughPolicy::allow(["GAMD", "INNERLOOP"]),
         pair_partition: mpi_partition,
         recipe_overrides: md_args.recipe_overrides.clone(),
         ..RunOptions::default()
@@ -933,40 +871,6 @@ fn main() {
         None
     };
 
-    // Setup EDS writers if enabled
-    let mut eds_stats_writer = if writes_files && eds_params.is_some() {
-        let stats_file = "eds_stats.dat";
-        match EdsStatsWriter::new(stats_file, "GROMOS-RS EDS Statistics") {
-            Ok(mut w) => {
-                w.set_write_interval(10); // Write every 10 steps
-                println!("  EDS stats:    {}", stats_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create EDS stats file: {}", e);
-                None
-            },
-        }
-    } else {
-        None
-    };
-
-    let mut eds_vr_writer = if writes_files && eds_params.is_some() {
-        let vr_file = "eds_vr.dat";
-        match EdsVrWriter::new(vr_file, "GROMOS-RS EDS Reference Energy") {
-            Ok(w) => {
-                println!("  EDS V_R:      {}", vr_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create EDS V_R file: {}", e);
-                None
-            },
-        }
-    } else {
-        None
-    };
-
     // Setup free-energy trajectory writer (@trg) — only when FEP is active (NTG != 0)
     let mut free_energy_writer: Option<FreeEnergyWriter> = if writes_files && imd.ntg != 0 {
         let trg_path = md_args
@@ -1158,69 +1062,6 @@ fn main() {
             }
         }
 
-        // Apply EDS if enabled
-        if let Some(ref mut aeds) = eds_params {
-            let current_potential = conf.current().energies.potential_total;
-
-            // For EDS, we need to:
-            // 1. Update each state's energy (for simplicity, using current potential as state 0)
-            // 2. Calculate reference energy V_R
-            // 3. Apply EDS forces
-
-            // TODO: This is a simplified implementation
-            // Full EDS requires multiple state energies calculated simultaneously
-            // For now, we'll just set up the framework
-
-            let eds = &mut aeds.eds;
-
-            // Update state 0 with current potential
-            if eds.num_states > 0 {
-                eds.states[0].energy = current_potential;
-            }
-
-            // Calculate reference energy based on form
-            match eds.form {
-                gromos::eds::EDSForm::SingleS => eds.calculate_reference_energy_single_s(),
-                gromos::eds::EDSForm::MultiS => eds.calculate_reference_energy_multi_s(),
-                gromos::eds::EDSForm::PairS => {
-                    log::warn!("PairS EDS form not yet fully implemented");
-                    eds.calculate_reference_energy_single_s();
-                },
-            }
-
-            // Apply EDS forces (modifies configuration)
-            eds.apply_forces(&mut conf);
-
-            // Replace potential energy with reference energy
-            conf.current_mut().energies.potential_total = eds.reference_energy;
-
-            log::debug!(
-                "EDS applied: V_R={:.4}, original V={:.4}",
-                eds.reference_energy,
-                current_potential
-            );
-
-            // Update AEDS parameters if search enabled
-            if aeds.search_enabled {
-                // TODO: Implement AEDS parameter updates
-                log::debug!("AEDS search mode active");
-            }
-
-            // Write EDS statistics
-            if let Some(ref mut writer) = eds_stats_writer {
-                if let Err(e) = writer.write_frame(step, eds) {
-                    log::warn!("Failed to write EDS stats at step {}: {}", step, e);
-                }
-            }
-
-            // Write EDS reference energy
-            if let Some(ref mut writer) = eds_vr_writer {
-                if let Err(e) = writer.write_frame(step, time, eds.reference_energy) {
-                    log::warn!("Failed to write EDS V_R at step {}: {}", step, e);
-                }
-            }
-        }
-
         // Validate energy
         // GROMOS convention: after the algorithm sequence, energies are in old()
         // (Forcefield wrote to current(), exchange_state moved it to old(),
@@ -1307,6 +1148,13 @@ fn main() {
                 println!("Step {:6}  Time: {:8.3} ps  E_pot: {:18.10e}  E_kin: {:18.10e}  E_tot: {:18.10e}  T: {:6.1} K",
                     step, time, state.energies.potential_total, state.energies.kinetic_total,
                     state.energies.total(), temp);
+            }
+            // gromosXX prints the reference energy with the energies (`print_block.cc:507`)
+            if !state.energies.eds_vi.is_empty() {
+                println!(
+                    "{:<30}{:>15.4e}",
+                    "  EDS reference :", state.energies.eds_vr
+                );
             }
             log::debug!(
                 "  Bond: {:.10e}  LJ: {:.10e}  CRF: {:.10e}",
@@ -1477,25 +1325,6 @@ fn main() {
             eprintln!("Error finalizing GaMD boost file: {}", e);
         } else {
             log::debug!("GaMD boost file finalized");
-        }
-    }
-
-    // Finalize EDS writers if enabled
-    if let Some(ref mut writer) = eds_stats_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize EDS stats file: {}", e);
-            eprintln!("Error finalizing EDS stats file: {}", e);
-        } else {
-            log::debug!("EDS stats file finalized");
-        }
-    }
-
-    if let Some(ref mut writer) = eds_vr_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize EDS V_R file: {}", e);
-            eprintln!("Error finalizing EDS V_R file: {}", e);
-        } else {
-            log::debug!("EDS V_R file finalized");
         }
     }
 

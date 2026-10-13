@@ -1,0 +1,13 @@
+TITLE
+aladip: two EDS end states (state 2 changes the types and charges of CB, N and H)
+END
+MPERTATOM
+# NJLA NPTB
+    3    2
+# state names
+  stateA  stateB
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2
+   1  CB      14    0.000    11    1.000
+   4  N        5   -0.280    19    0.200
+  11  H       18    0.280    14    0.000
+END

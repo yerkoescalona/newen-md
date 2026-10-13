@@ -334,6 +334,7 @@ pub fn write_energyred_body<W: Write>(
     totals[23] = e.constraint_total;
     totals[24] = e.distanceres_total;
     totals[27] = e.posrest_total;
+    totals[34] = e.eds_vr;
     totals[39] = e.entropy_term;
     totals[46] = total + folded_total(&e.shift_extra_orig);
     totals[47] = total + folded_total(&e.shift_extra_phys);
@@ -410,11 +411,19 @@ pub fn write_energyred_body<W: Write>(
         )?;
     }
 
-    writeln!(w, "# eds\n# numstates\n0")?;
+    // gromosXX `out_configuration.cc:3182-3200`: per end state V_i, V_i − V_i^special,
+    // V_i^special, the AEDS offset (0 in plain EDS) and V_i plus the shifted-RF extras (none
+    // with the plain reaction field)
+    let n_states = e.eds_vi.len();
+    writeln!(w, "# eds\n# numstates\n{n_states}")?;
     writeln!(
         w,
         "           # total         nonbonded           special            offset        total_orig       total_phys"
     )?;
+    for (k, &v) in e.eds_vi.iter().enumerate() {
+        let special = at(&e.eds_vi_special, k);
+        row(w, &[v, v - special, special, 0.0, v, v])?;
+    }
     writeln!(w, "# gamd\n# numaccelgroups\n{n_accel_groups}")?;
     writeln!(
         w,
@@ -929,6 +938,39 @@ mod tests {
         assert!(String::from_utf8(out)
             .unwrap()
             .contains("# numaccelgroups\n0\n"));
+    }
+
+    /// gromosXX `out_configuration.cc:3182-3200`: the number of end states, then per state V_i,
+    /// its nonbonded and special parts, the offset (0 without AEDS) and V_i twice; V_R in slot 35.
+    #[test]
+    fn the_eds_section_lists_every_end_state() {
+        let mut e = Energy::new(1, 1);
+        assert!(String::from_utf8({
+            let mut out = Vec::new();
+            write_energyred_body(&mut out, &e, 1).unwrap();
+            out
+        })
+        .unwrap()
+        .contains("# eds\n# numstates\n0\n"));
+        e.resize_eds(2);
+        e.eds_vi = vec![15.5, -16.25];
+        e.eds_vi_special = vec![0.5, 0.0];
+        e.eds_vr = -26.0;
+        let mut out = Vec::new();
+        write_energyred_body(&mut out, &e, 1).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let rows: Vec<Vec<f64>> = text
+            .lines()
+            .skip_while(|l| l.trim() != "# numstates")
+            .skip(3)
+            .take(2)
+            .map(|l| l.split_whitespace().map(|x| x.parse().unwrap()).collect())
+            .collect();
+        assert!(text.contains("# numstates\n2\n"));
+        assert_eq!(rows[0], [15.5, 15.0, 0.5, 0.0, 15.5, 15.5]);
+        assert_eq!(rows[1], [-16.25, -16.25, 0.0, 0.0, -16.25, -16.25]);
+        let slot35: f64 = text.lines().nth(35).unwrap().trim().parse().unwrap();
+        assert_eq!(slot35, -26.0);
     }
 
     #[test]

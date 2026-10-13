@@ -3,7 +3,7 @@
 //! Every block the parser models is regenerated from `ImdParameters` fields in the positional
 //! GROMOS layout (comment line with the field names, then the values), in the block order the
 //! reference inputs use. Blocks the parser does **not** model but found in the file
-//! (`raw_blocks` entries such as GAMD, EDS, QMMM, …) are re-emitted verbatim after the modelled
+//! (`raw_blocks` entries such as GAMD, QMMM, …) are re-emitted verbatim after the modelled
 //! ones, so a read → write round trip loses nothing.
 //!
 //! Two rules learnt from feeding the output to the real gromosXX (3.9 A7):
@@ -51,6 +51,7 @@ pub const MODELLED_BLOCKS: &[&str] = &[
     "LAMBDAS",
     "PRECALCLAM",
     "ENERGYMIN",
+    "EDS",
 ];
 
 /// One data line: indented, values separated by two spaces.
@@ -334,6 +335,29 @@ pub fn write_imd(params: &ImdParameters, n_atoms: Option<usize>) -> String {
                 o,
                 vals![p.ntem, p.ncyc, p.dele, p.dx0, p.dxm, p.nmin, p.flim],
             );
+        });
+    }
+
+    if let Some(b) = &p.eds {
+        block(&mut out, "EDS", |o| {
+            o.push_str("#    EDS\n");
+            row(o, vals![i32::from(b.enabled)]);
+            o.push_str("#    FORM  NUMSTATES\n");
+            row(o, vals![b.form, b.num_states]);
+            if !b.enabled {
+                return;
+            }
+            if b.form == 3 {
+                o.push_str("#    i  j  S\n");
+                for pr in &b.pairs {
+                    row(o, vals![pr.i, pr.j, pr.s]);
+                }
+            } else {
+                o.push_str("#    S\n");
+                row(o, &b.s.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+            }
+            o.push_str("#    EIR\n");
+            row(o, &b.eir.iter().map(|v| v.to_string()).collect::<Vec<_>>());
         });
     }
 

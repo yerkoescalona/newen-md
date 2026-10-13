@@ -200,8 +200,9 @@ class Topology:
     def charges(self) -> npt.NDArray[np.float64]: ...
     def solvate(self, nsm: int) -> None: ...
     def apply_perturbation(self, pttopo_file: str) -> None:
-        """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs (what `md @pttopo`
-        does when NTG != 0). Call before solvate() and before building a Simulation."""
+        """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs and its MPERTATOM EDS
+        end states (what `md @pttopo` does with NTG != 0 / EDS = 1). Call before solvate() and
+        before building a Simulation."""
         ...
     def __repr__(self) -> str: ...
     def __len__(self) -> int: ...
@@ -294,6 +295,7 @@ _AlgorithmKind = Literal[
     "remove_com",
     "forcefield",
     "orchestrator",
+    "eds",
     "leap_frog_velocity",
     "thermostat",
     "leap_frog_position",
@@ -449,6 +451,11 @@ class Recipe:
     def minimisation(self) -> dict[str, Any]: ...
     @property
     def perturbation(self) -> dict[str, Any]: ...
+    @property
+    def eds(self) -> dict[str, Any] | None:
+        """The ``EDS`` block (``enabled``, ``form``, ``num_states``, ``s``, ``pairs``, ``eir``),
+        or ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``."""
+        ...
     @property
     def outputs(self) -> dict[str, Any]: ...
     @property
@@ -613,6 +620,16 @@ class Simulation:
     def potential_energy(self) -> float: ...
     @property
     def kinetic_energy(self) -> float: ...
+    @property
+    def eds_vr(self) -> float:
+        """EDS reference-state energy V_R (kJ/mol) at the last step (``.tre`` slot 35, part of
+        ``total_energy`` through the special energy); 0 without EDS."""
+        ...
+    @property
+    def eds_vi(self) -> list[float]:
+        """EDS end-state energies V_i (kJ/mol) at the last step, one per state; empty
+        without EDS."""
+        ...
     @property
     def dhdl(self) -> float:
         """dH/dλ (kJ/mol) at the last step — the TI integrand: the whole derivative (kinetic,

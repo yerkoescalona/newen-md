@@ -14,7 +14,7 @@
 
 use std::path::PathBuf;
 
-use gromos_core::Topology;
+use gromos_core::{units::PhysicalConstants, Topology};
 use serde::{Deserialize, Serialize};
 
 use crate::dof::{bath_dof, rottrans_dof};
@@ -71,6 +71,24 @@ pub struct PerturbationPlan {
 
 fn is_intended(k: &crate::recipe::AtomPairKernel) -> bool {
     *k == crate::recipe::AtomPairKernel::Intended
+}
+
+/// The EDS reference Hamiltonian, resolved (gromosXX `algorithm::EDS`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EdsPlan {
+    /// FORM: 1 single s, 2 one s per state pair, 3 one s per listed pair.
+    pub form: i32,
+    pub num_states: usize,
+    /// FORM 1: one value; FORM 2: N(N−1)/2 in pair order (0,1), (0,2) … (1,2) …
+    pub s: Vec<f64>,
+    /// FORM 3: the listed pairs, states 0-based.
+    pub pairs: Vec<(usize, usize, f64)>,
+    /// E_i^R per state (kJ/mol).
+    pub eir: Vec<f64>,
+    /// 1/(k_B T): T of the first MULTIBATH bath, k_B from the topology's PHYSICALCONSTANTS
+    /// (gromosXX `eds.cc:385-391`, `in_topology.cc:1407`).
+    pub beta: f64,
 }
 
 /// Everything `Forcefield` needs, resolved.
@@ -137,6 +155,8 @@ pub enum AlgorithmSpec {
     Orchestrator {
         terms: Vec<TermSpec>,
     },
+    /// Mix the EDS end states into the forces, right after the force field.
+    Eds(EdsPlan),
     /// Put every charge group back into the box (gromosXX `Lattice_Shift_Tracker`), once per step
     /// before the force field. Only for periodic boundaries.
     LatticeShift,
@@ -250,6 +270,7 @@ impl AlgorithmSpec {
         "remove_com",
         "forcefield",
         "orchestrator",
+        "eds",
         "leap_frog_velocity",
         "thermostat",
         "leap_frog_position",
@@ -270,6 +291,7 @@ impl AlgorithmSpec {
             AlgorithmSpec::RemoveCom { .. } => "remove_com",
             AlgorithmSpec::Forcefield(_) => "forcefield",
             AlgorithmSpec::Orchestrator { .. } => "orchestrator",
+            AlgorithmSpec::Eds(_) => "eds",
             AlgorithmSpec::LatticeShift => "lattice_shift",
             AlgorithmSpec::LeapFrogVelocity => "leap_frog_velocity",
             AlgorithmSpec::Thermostat { .. } => "thermostat",
@@ -319,6 +341,14 @@ impl AlgorithmSpec {
                 perturbation: None,
             }),
             AlgorithmSpec::Orchestrator { terms: Vec::new() },
+            AlgorithmSpec::Eds(EdsPlan {
+                form: 1,
+                num_states: 2,
+                s: vec![0.5],
+                pairs: Vec::new(),
+                eir: vec![0.0, 10.0],
+                beta: 1.0 / (gromos_core::units::kB * 300.0),
+            }),
             AlgorithmSpec::LeapFrogVelocity,
             AlgorithmSpec::Thermostat {
                 algorithm: ThermostatAlgorithm::Berendsen,
@@ -391,6 +421,22 @@ impl AlgorithmSpec {
             "orchestrator" => KindRules {
                 unique: true,
                 must_follow: Some("forcefield"),
+                ..NONE
+            },
+            // gromosXX `create_md_sequence.cc:134-141`: after the force field, before anything
+            // that uses the forces
+            "eds" => KindRules {
+                unique: true,
+                after: &["forcefield", "orchestrator"],
+                before: &[
+                    "leap_frog_velocity",
+                    "steepest_descent",
+                    "shake",
+                    "settle",
+                    "lincs",
+                    "rottrans",
+                ],
+                requires: &["forcefield"],
                 ..NONE
             },
             "leap_frog_velocity" => KindRules {
@@ -662,15 +708,156 @@ fn ntil_on(recipe: &RunRecipe) -> bool {
         .is_some_and(|l| l.enabled)
 }
 
-/// Whether the recipe carries the `md` binary's out-of-band `EDS` block in its accelerated
-/// form (SEARCH = 1, gromosXX's AEDS).
-fn aeds_passthrough(recipe: &RunRecipe) -> bool {
-    recipe.passthrough.get("EDS").is_some_and(|lines| {
-        let text = format!("EDS\n{}\nEND\n", lines.join("\n"));
-        gromos_io::input::eds_block::EdsBlock::parse(&mut text.as_bytes())
-            .ok()
-            .flatten()
-            .is_some_and(|b| b.search_enabled)
+/// Whether the recipe runs EDS (an `EDS` block with EDS = 1).
+pub(crate) fn eds_on(recipe: &RunRecipe) -> bool {
+    recipe.eds.as_ref().is_some_and(|e| e.enabled)
+}
+
+/// The EDS settings gromosXX refuses (`in_parameter.cc:3843-3961`, `check_parameter.cc:146-175`
+/// and the feature locks it leaves in place: unconstrained solvent, flexible SHAKE, triclinic
+/// and truncated-octahedral boxes, lattice sums, QM/MM) and the ones gromos-rs does not port
+/// (shifted reaction field, NLRELE = 4; the coarse-grained and virtual-atom variants need
+/// blocks the recipe does not model, refused as such). Checked again on a recipe built in
+/// memory, so the Python front-end meets the same rules as an `.imd` file.
+pub(crate) fn check_eds(recipe: &RunRecipe) -> Result<(), RunError> {
+    let Some(e) = recipe.eds.as_ref().filter(|e| e.enabled) else {
+        return Ok(());
+    };
+    let err = |m: String| Err(RunError::Recipe(format!("EDS: {m}")));
+    let n = e.num_states;
+    if n < 2 {
+        return err(format!("NUMSTATES = {n}: must be >= 2"));
+    }
+    match e.form {
+        1 if e.s.len() != 1 => return err(format!("FORM 1 needs one S, has {}", e.s.len())),
+        2 if e.s.len() != n * (n - 1) / 2 => {
+            return err(format!(
+                "FORM 2 with {n} states needs {} S values, has {}",
+                n * (n - 1) / 2,
+                e.s.len()
+            ))
+        },
+        3 if e.pairs.len() != n - 1 => {
+            return err(format!(
+                "FORM 3 with {n} states needs {} pairs, has {}",
+                n - 1,
+                e.pairs.len()
+            ))
+        },
+        1..=3 => {},
+        f => return err(format!("FORM = {f}: must be 1, 2 or 3")),
+    }
+    if let Some(s) =
+        e.s.iter()
+            .chain(e.pairs.iter().map(|p| &p.2))
+            .find(|&&s| s.is_nan() || s <= 0.0)
+    {
+        return err(format!("smoothness parameter S = {s}: must be > 0"));
+    }
+    // gromosXX does not check the pair states (it indexes with them, `eds.cc:635, 660`)
+    for &(i, j, _) in &e.pairs {
+        let ok = |k: i32| k >= 1 && k as usize <= n;
+        if !ok(i) || !ok(j) || i == j {
+            return err(format!(
+                "FORM 3 pair {i} {j}: the states must be two different numbers in 1..={n}"
+            ));
+        }
+    }
+    if e.eir.len() != n {
+        return err(format!("{n} states but {} EIR values", e.eir.len()));
+    }
+    let Some(t) = recipe
+        .ensemble
+        .thermostat
+        .as_ref()
+        .filter(|t| t.baths.iter().any(|b| b.tau != -1.0))
+    else {
+        return err(
+            "EDS requires temperature coupling (a MULTIBATH bath with TAU != -1; gromosXX also \
+             accepts stochastic dynamics, which gromos-rs does not implement)"
+                .to_string(),
+        );
+    };
+    if t.baths
+        .iter()
+        .any(|b| b.temperature != t.baths[0].temperature)
+    {
+        return err("all baths must have the same temperature".to_string());
+    }
+    if t.baths[0].temperature == 0.0 {
+        return err("baths must have non zero temperature with EDS".to_string());
+    }
+    if recipe.minimisation.method >= 2 {
+        return err(format!(
+            "NTEM = {}: EDS cannot run with conjugate gradients",
+            recipe.minimisation.method
+        ));
+    }
+    if recipe.constraints.solvent_algorithm.is_none() {
+        return err(
+            "the solvent must be constrained (CONSTRAINT NTCS = SHAKE, LINCS or SETTLE): \
+             gromosXX keeps unconstrained solvent locked with EDS, in vacuum too"
+                .to_string(),
+        );
+    }
+    if recipe.constraints.solute != SoluteConstraints::None
+        && recipe.constraints.solute_algorithm == Some(ConstraintAlgorithm::Settle)
+    {
+        return err("flexible SHAKE (NTCP = 3) cannot be combined with EDS".to_string());
+    }
+    if matches!(
+        recipe.boundary.kind,
+        BoundaryKind::Triclinic | BoundaryKind::TruncatedOctahedron
+    ) {
+        return err(
+            "only vacuum and rectangular boxes (NTB 0, 1): gromosXX keeps the triclinic and \
+             truncated-octahedral boxes locked with EDS"
+                .to_string(),
+        );
+    }
+    match recipe.forcefield.electrostatics.electrostatics {
+        2 | 3 => {
+            return err("lattice-sum electrostatics (NLRELE 2/3) cannot be combined".to_string())
+        },
+        4 => {
+            return err(
+                "the shifted reaction field (NLRELE = 4) has EDS kernels in gromosXX that \
+                 gromos-rs does not port"
+                    .to_string(),
+            )
+        },
+        _ => {},
+    }
+    if !recipe.forcefield.terms.is_empty() {
+        return err("QM/ML terms cannot be combined with EDS".to_string());
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return err("Gaussian accelerated MD (GAMD) cannot be combined with EDS".to_string());
+    }
+    Ok(())
+}
+
+/// The plan of an EDS run (`None` without EDS); `k_boltzmann` from the topology.
+fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
+    let e = recipe.eds.as_ref().filter(|e| e.enabled)?;
+    let temperature = recipe
+        .ensemble
+        .thermostat
+        .as_ref()?
+        .baths
+        .first()?
+        .temperature;
+    Some(EdsPlan {
+        form: e.form,
+        num_states: e.num_states,
+        s: e.s.clone(),
+        pairs: e
+            .pairs
+            .iter()
+            .map(|&(i, j, s)| (i as usize - 1, j as usize - 1, s))
+            .collect(),
+        eir: e.eir.clone(),
+        beta: 1.0 / (k_boltzmann * temperature),
     })
 }
 
@@ -698,9 +885,6 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
         }
         if recipe.passthrough.contains_key("GAMD") {
             return refuse("Gaussian accelerated MD (GAMD)");
-        }
-        if aeds_passthrough(recipe) {
-            return refuse("accelerated EDS (EDS with SEARCH = 1)");
         }
     }
     if let Some(pc) = p.precalclam.filter(|pc| pc.nr_lambdas > 0) {
@@ -788,7 +972,7 @@ fn check_precalclam(recipe: &RunRecipe, pc: &crate::recipe::PrecalcLam) -> Resul
     if recipe.passthrough.contains_key("GAMD") {
         return refuse("Gaussian accelerated MD (GAMD)");
     }
-    if recipe.passthrough.contains_key("EDS") {
+    if eds_on(recipe) {
         return refuse("EDS");
     }
     Ok(())
@@ -816,8 +1000,9 @@ pub(crate) fn check_plan_against_recipe(
 pub fn build_plan(
     recipe: &RunRecipe,
     topo: &Topology,
-    four_pi_eps_i: f64,
+    constants: &PhysicalConstants,
 ) -> Result<Vec<AlgorithmSpec>, RunError> {
+    let four_pi_eps_i = constants.four_pi_eps_i;
     let inputs = &recipe.inputs;
     let n_atoms = topo.num_atoms();
     let has_solvent = n_atoms > topo.num_solute_atoms();
@@ -898,6 +1083,8 @@ pub fn build_plan(
         None
     };
     check_perturbation(recipe)?;
+    check_eds(recipe)?;
+    let eds = eds_plan(recipe, constants.kB);
     let perturbation = (recipe.perturbation.enabled != 0).then_some(PerturbationPlan {
         alpha_lj: recipe.perturbation.alpha_lj,
         alpha_c: recipe.perturbation.alpha_c,
@@ -984,6 +1171,9 @@ pub fn build_plan(
                 terms: ff.terms.clone(),
             });
         }
+        if let Some(e) = eds.clone() {
+            plan.push(AlgorithmSpec::Eds(e));
+        }
         let m = &recipe.minimisation;
         plan.push(AlgorithmSpec::SteepestDescent {
             tolerance: m.tolerance,
@@ -1012,6 +1202,9 @@ pub fn build_plan(
             plan.push(AlgorithmSpec::Orchestrator {
                 terms: ff.terms.clone(),
             });
+        }
+        if let Some(e) = eds {
+            plan.push(AlgorithmSpec::Eds(e));
         }
         plan.push(AlgorithmSpec::LeapFrogVelocity);
         // with one bath the kinetic energy needs no mapping: only its total feeds the thermostat
@@ -1384,9 +1577,14 @@ mod tests {
         assert!(check_perturbation(&r).is_ok(), "NRLAM = 0 is off");
         r.perturbation.precalclam.as_mut().unwrap().nr_lambdas = 3;
         r.outputs.ntwg = 2;
-        r.passthrough.insert("EDS".to_string(), vec![]);
+        r.eds = Some(eds_recipe(1, 2));
         assert!(refusal(&r).contains("EDS"), "{}", refusal(&r));
-        r.passthrough.clear();
+        r.eds.as_mut().unwrap().enabled = false;
+        assert!(
+            check_perturbation(&r).is_ok(),
+            "an EDS block with EDS = 0 locks nothing"
+        );
+        r.eds = None;
         r.perturbation.enabled = 0;
         assert!(
             refusal(&r).contains("without perturbation"),
@@ -1476,31 +1674,193 @@ mod tests {
     }
 
     #[test]
-    fn individual_lambdas_refuse_gamd_and_aeds_but_not_eds() {
+    fn individual_lambdas_refuse_gamd_but_not_eds() {
         let mut r = perturbed_recipe(true);
         r.passthrough
             .insert("GAMD".into(), vec!["1 0 0".into(), "0 0 0".into()]);
         assert!(refusal(&r).contains("GAMD"), "{}", refusal(&r));
         r.passthrough.remove("GAMD");
-        // the md binary's EDS block: NUMSTATES FORM S / E offsets / TEMP / SEARCH E_MAX E_MIN
-        let eds = |search: &str| {
-            vec![
-                "2 1 0.5".to_string(),
-                "0.0 0.0".to_string(),
-                "300.0".to_string(),
-                format!("{search} 10.0 -10.0"),
-            ]
-        };
-        r.passthrough.insert("EDS".into(), eds("0"));
+        r.eds = Some(eds_recipe(1, 2));
         assert!(check_perturbation(&r).is_ok(), "plain EDS is unlocked");
-        r.passthrough.insert("EDS".into(), eds("1"));
-        assert!(refusal(&r).contains("accelerated EDS"), "{}", refusal(&r));
         // LAMBDAS off: nothing to lock
         let mut off = perturbed_recipe(false);
-        off.passthrough = r.passthrough.clone();
         off.passthrough
             .insert("GAMD".into(), vec!["1 0 0".into(), "0 0 0".into()]);
         assert!(check_perturbation(&off).is_ok());
+    }
+
+    // ── EDS refusals (gromosXX read_EDS, check_parameter.cc:146-175, feature locks) ─────
+
+    fn eds_recipe(form: i32, n: usize) -> crate::recipe::Eds {
+        crate::recipe::Eds {
+            enabled: true,
+            form,
+            num_states: n,
+            s: match form {
+                1 => vec![0.5],
+                2 => vec![0.3; n * (n - 1) / 2],
+                _ => Vec::new(),
+            },
+            pairs: if form == 3 {
+                (1..n as i32).map(|i| (i, i + 1, 0.2)).collect()
+            } else {
+                Vec::new()
+            },
+            eir: vec![0.0; n],
+        }
+    }
+
+    /// An EDS run gromosXX accepts: one coupled bath at 300 K, SHAKE on the solvent.
+    fn eds_run(form: i32, n: usize) -> RunRecipe {
+        use crate::recipe::{Bath, Thermostat};
+        let mut r = RunRecipe {
+            eds: Some(eds_recipe(form, n)),
+            ..Default::default()
+        };
+        r.ensemble.thermostat = Some(Thermostat {
+            algorithm: ThermostatAlgorithm::Berendsen,
+            baths: vec![Bath {
+                temperature: 300.0,
+                tau: 0.1,
+            }],
+            dof_sets: Vec::new(),
+        });
+        r.constraints.solvent_algorithm = Some(ConstraintAlgorithm::Shake);
+        r
+    }
+
+    fn eds_refusal(r: &RunRecipe) -> String {
+        check_eds(r).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn eds_accepts_the_three_forms() {
+        for (form, n) in [(1, 2), (1, 4), (2, 3), (3, 3)] {
+            check_eds(&eds_run(form, n)).unwrap();
+        }
+        let mut off = RunRecipe {
+            eds: Some(eds_recipe(1, 2)),
+            ..Default::default()
+        };
+        off.eds.as_mut().unwrap().enabled = false;
+        check_eds(&off).unwrap();
+    }
+
+    #[test]
+    fn eds_refuses_what_gromosxx_refuses() {
+        use crate::recipe::Bath;
+        let case = |f: &dyn Fn(&mut RunRecipe), what: &str| {
+            let mut r = eds_run(1, 2);
+            f(&mut r);
+            let e = eds_refusal(&r);
+            assert!(e.contains(what), "{what}: {e}");
+        };
+        case(&|r| r.ensemble.thermostat = None, "temperature coupling");
+        case(
+            &|r| {
+                for b in &mut r.ensemble.thermostat.as_mut().unwrap().baths {
+                    b.tau = -1.0;
+                }
+            },
+            "temperature coupling",
+        );
+        case(
+            &|r| {
+                r.ensemble.thermostat.as_mut().unwrap().baths.push(Bath {
+                    temperature: 310.0,
+                    tau: 0.1,
+                })
+            },
+            "same temperature",
+        );
+        case(
+            &|r| r.ensemble.thermostat.as_mut().unwrap().baths[0].temperature = 0.0,
+            "non zero temperature",
+        );
+        case(&|r| r.minimisation.method = 2, "conjugate gradients");
+        case(&|r| r.constraints.solvent_algorithm = None, "NTCS");
+        case(
+            &|r| {
+                r.constraints.solute = SoluteConstraints::AllBonds;
+                r.constraints.solute_algorithm = Some(ConstraintAlgorithm::Settle);
+            },
+            "flexible SHAKE",
+        );
+        case(
+            &|r| r.boundary.kind = BoundaryKind::TruncatedOctahedron,
+            "truncated-octahedral",
+        );
+        case(&|r| r.boundary.kind = BoundaryKind::Triclinic, "triclinic");
+        case(
+            &|r| r.forcefield.electrostatics.electrostatics = 2,
+            "lattice-sum",
+        );
+        case(
+            &|r| r.forcefield.electrostatics.electrostatics = 4,
+            "shifted reaction field",
+        );
+        case(
+            &|r| r.forcefield.terms = vec![xtb_term(Coupling::Delta)],
+            "QM/ML",
+        );
+        case(
+            &|r| {
+                r.passthrough.insert("GAMD".into(), vec![]);
+            },
+            "GAMD",
+        );
+        // the recipe's own consistency (a Python recipe never went through the .imd parser)
+        case(&|r| r.eds.as_mut().unwrap().s.clear(), "FORM 1 needs one S");
+        case(&|r| r.eds.as_mut().unwrap().s = vec![0.0], "must be > 0");
+        case(
+            &|r| {
+                r.eds.as_mut().unwrap().eir.pop();
+            },
+            "EIR",
+        );
+        case(&|r| r.eds.as_mut().unwrap().num_states = 1, "NUMSTATES = 1");
+        case(&|r| r.eds.as_mut().unwrap().form = 4, "FORM = 4");
+        let mut r = eds_run(2, 3);
+        r.eds.as_mut().unwrap().s.pop();
+        assert!(eds_refusal(&r).contains("needs 3 S"), "{}", eds_refusal(&r));
+        let mut r = eds_run(3, 3);
+        r.eds.as_mut().unwrap().pairs[1] = (2, 4, 0.1);
+        assert!(eds_refusal(&r).contains("pair 2 4"), "{}", eds_refusal(&r));
+        r.eds.as_mut().unwrap().pairs[1] = (2, 2, 0.1);
+        assert!(eds_refusal(&r).contains("pair 2 2"), "{}", eds_refusal(&r));
+        r.eds.as_mut().unwrap().pairs.pop();
+        assert!(
+            eds_refusal(&r).contains("needs 2 pairs"),
+            "{}",
+            eds_refusal(&r)
+        );
+    }
+
+    #[test]
+    fn eds_plan_resolves_beta_and_zero_based_pairs_and_sits_after_the_force_field() {
+        let mut r = eds_run(3, 3);
+        r.ensemble.thermostat.as_mut().unwrap().baths[0].temperature = 250.0;
+        let kb = 0.0083;
+        let e = eds_plan(&r, kb).unwrap();
+        assert_eq!(e.beta, 1.0 / (kb * 250.0));
+        assert_eq!(e.pairs, [(0, 1, 0.2), (1, 2, 0.2)]);
+        let ex = AlgorithmSpec::examples();
+        let pick = |kind: &str| ex.iter().find(|a| a.name() == kind).unwrap().clone();
+        let mut p = dynamics_plan();
+        p.insert(2, pick("eds"));
+        validate_plan(&p).unwrap();
+        let mut p = dynamics_plan();
+        p.insert(1, pick("eds"));
+        assert!(validate_plan(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("eds must come after"));
+        let mut p = dynamics_plan();
+        p.insert(3, pick("eds"));
+        assert!(validate_plan(&p)
+            .unwrap_err()
+            .to_string()
+            .contains("before leap_frog_velocity"));
     }
 
     #[test]

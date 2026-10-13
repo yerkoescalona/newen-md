@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_eds3"
+description = "aladip vacuum, EDS FORM 1 (single s 0.3) over three end states"
+level = 4
+isolates = "EDS single-s N=3: the running pairwise log-sum-exp fold in state order"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_eds3.in"
+pttopo = "../shared/aladip_eds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

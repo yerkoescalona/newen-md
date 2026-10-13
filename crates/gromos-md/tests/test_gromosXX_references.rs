@@ -460,6 +460,61 @@ fn run_reference(system: &str) {
     let expected = parse_energy_blocks(&sys_dir.join("expected/energies.tre"), "ENERGY03");
     let actual = parse_energy_blocks(&tre, "ENERGY03");
 
+    // A reference whose forces come from a defective gromosXX branch (EDS FORM 2/3 weights,
+    // patches/D2_eds_weights.patch): only what does not depend on those forces is compared —
+    // the end-state energies of frame 0 and, where gromosXX's V_R is right, slot 35.
+    if let Some(scope) = toml_str_opt(&toml, "compare") {
+        let with_vr = match scope.as_str() {
+            "frame0_eds_states" => false,
+            "frame0_eds_states_vr" => true,
+            other => panic!("{system}: unknown compare scope {other:?}"),
+        };
+        let section = |b: &EnergyBlock, name: &str| -> Vec<Vec<f64>> {
+            b.sections
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, rows)| rows.clone())
+                .unwrap_or_else(|| panic!("{system}: no `# {name}` section"))
+        };
+        let (e0, a0) = (&expected[0], &actual[0]);
+        let mut mismatches = Vec::new();
+        let (exp_eds, act_eds) = (section(e0, "eds"), section(a0, "eds"));
+        assert_eq!(exp_eds[0], act_eds[0], "{system}: number of end states");
+        assert_eq!(exp_eds.len(), act_eds.len(), "{system}: end-state rows");
+        for (r, (er, ar)) in exp_eds.iter().zip(&act_eds).enumerate().skip(1) {
+            for (c, (&e, &a)) in er.iter().zip(ar).enumerate() {
+                if (e - a).abs() > (e.abs() * ENERGY_REL_TOL).max(ENERGY_ABS_TOL) {
+                    mismatches.push(Mismatch {
+                        frame: 0,
+                        block: "ENERGY03",
+                        section: "eds".to_string(),
+                        row: r,
+                        col: c,
+                        expected: e,
+                        actual: a,
+                    });
+                }
+            }
+        }
+        if with_vr {
+            let (e, a) = (section(e0, "totals")[34][0], section(a0, "totals")[34][0]);
+            if (e - a).abs() > (e.abs() * ENERGY_REL_TOL).max(ENERGY_ABS_TOL) {
+                mismatches.push(Mismatch {
+                    frame: 0,
+                    block: "ENERGY03",
+                    section: "totals (slot 35, eds_vr)".to_string(),
+                    row: 34,
+                    col: 0,
+                    expected: e,
+                    actual: a,
+                });
+            }
+        }
+        report_mismatches(system, &mismatches);
+        let _ = fs::remove_dir_all(&out);
+        return;
+    }
+
     // Both engines run exactly NSTLIM steps and write one frame per step, so the counts must
     // match. (They did not until 0.0.42: our loop ran NSTLIM+1 steps, and this assertion used to
     // allow the extra frame — which is precisely why the step count went unnoticed.)
@@ -1034,6 +1089,29 @@ ref_test!(
     ch4_water_fep_precalc_twinrange,
     "ch4_water_fep_precalc_twinrange"
 );
+
+// ── EDS (1.8) ────────────────────────────────────────────────────────────────
+// Enveloping distribution sampling through the recipe: per-state nonbonded terms, the reference
+// Hamiltonian V_R and the mixed forces, whole-block. FORM 1 against the released gromosXX.
+ref_test!(aladip_vacuum_eds, "aladip_vacuum_eds");
+ref_test!(aladip_vacuum_eds3, "aladip_vacuum_eds3");
+ref_test!(aladip_eds_solv, "aladip_eds_solv");
+ref_test!(two_waters_eds, "two_waters_eds");
+// FORMS 2 and 3 against gromosXX with its force weights corrected
+// (`tests/gromosXX_references/patches/D2_eds_weights.patch`): the documented formulas.
+ref_test!(
+    aladip_vacuum_eds_multis_fixed,
+    "aladip_vacuum_eds_multis_fixed"
+);
+ref_test!(
+    aladip_vacuum_eds_pairs_fixed,
+    "aladip_vacuum_eds_pairs_fixed"
+);
+// The same FORMS against the released gromosXX, whose force weights are defective: only the
+// end-state energies of frame 0 (and, for FORM 3, V_R) — see the `compare` key of their
+// input.toml.
+ref_test!(aladip_vacuum_eds_multis, "aladip_vacuum_eds_multis");
+ref_test!(aladip_vacuum_eds_pairs, "aladip_vacuum_eds_pairs");
 
 // ── Energy minimization ──────────────────────────────────────────────────────
 // gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.

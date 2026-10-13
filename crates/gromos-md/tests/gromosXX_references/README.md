@@ -9,6 +9,9 @@ through `Simulation` so both front-ends are held to one oracle.
 precision and the trajectory within the stated tolerances — not when the binary exits 0.**
 
 Adding one: see `crates/gromos-md/.claude/CONTEXT.md` §"How to add a reference test".
+An optional `compare` key in `input.toml` (`frame0_eds_states`, `frame0_eds_states_vr`) restricts
+the comparison to frame 0's EDS end-state energies (and V_R), for references whose forces come
+from a defective gromosXX branch.
 `README-livecoms.md` covers the three systems that came from real LiveCoMS tutorial input.
 An optional `[recipe_overrides]` table in `input.toml` sets recipe fields no `.imd` block carries
 (`"perturbation.atom_pair_kernel" = "gromosxx-shifted"`); both runners apply it (`md @recipe_set
@@ -90,6 +93,14 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | aladip_multibath_swapped | 72 | `DOFSET 12 2 2  72 1 1`, baths at 300 K and 250 K: atoms map to baths by DOFSET range, not by bath number (gromosXX `in_bath`), dynamics included (1.8) | **PASS** |
 | 4   | aladip_solvated_npt_shake | 72 | Berendsen barostat (VIRIAL 2) with NTC 3 and solvent SHAKE: the constraint virial enters only the atomic virial; 20 steps, every `VOLUMEPRESSURE03` compared (1.8) | **PASS** |
 | 4   | aladip_multibath_rottrans | 72 | `aladip_multibath` + `ROTTRANS 1 12`: 3 COM and 3 IR degrees of freedom leave the solute bath, the system is centred on the solute (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds | 12 | EDS FORM 1 (s 0.5) over two end states of CB, N, H (`../shared/aladip_eds2.mpt`): per-state LJ+RF pairs, 1-4 and RF excluded/self terms, V_R (slot 35, special energy), the mixed forces and the `# eds` rows (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds3 | 12 | EDS FORM 1 over three end states (`../shared/aladip_eds3.mpt`): gromosXX's running pairwise log-sum-exp in state order (1.8) | **PASS** |
+| 4   | aladip_eds_solv | 72 | EDS FORM 1 in 20 SPC, two baths, NTC 3, twin range with NSNB 5: EDS-solvent pairs short and long range (long-range reused between pairlist steps), an EDS-EDS excluded pair (1,4) and 1-4 pair (9,11), the RF self term taken out with the topology charge (H11's state charges differ from it) (1.8) | **PASS** |
+| 4   | two_waters_eds | 3000 | LiveCoMS t_05 inputs (`2h2o.top`, `2h2o.cnf`, `two_waters.ptp`, softness columns ignored): EDS FORM 1 over four end states with dummy types across two solute waters, three energy groups (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds_multis_fixed | 12 | EDS FORM 2 (s per state pair) over three end states, expected output from native 247c95c4 + D2 patch (`patches/D2_eds_weights.patch`): V_R over all N(N−1)/2 pairs and the weights ∂V_R/∂V_i, gromos-rs's formulas (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds_pairs_fixed | 12 | EDS FORM 3 (pairs (1,2) 0.3, (2,3) 0.1), native + D2 patch: the documented weights (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds_multis | 12 | the FORM 2 run on the released gromosXX: only frame 0's end-state energies are compared — its force weights are defective (zero-seeded log-sum-exp, missing `− max`, pairs (0, j≥2) skipped, which also makes its V_R wrong for N ≥ 3), so its forces and trajectory are not those of its V_R (`compare` in `input.toml`) (1.8) | **PASS** |
+| 4   | aladip_vacuum_eds_pairs | 12 | the FORM 3 run on the released gromosXX: frame 0's end-state energies and V_R (right for any N); forces and trajectory not compared for the same reason (1.8) | **PASS** |
 
 **45 of 45 tests pass** (2026-08-30; nothing ignored). Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

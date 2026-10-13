@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_eds_solv"
+description = "aladip in 20 SPC, two baths, SHAKE (NTC=3), RF, twin range NSNB 5, EDS FORM 1 over two end states of CB, N, O9, H11"
+level = 4
+isolates = "EDS with solvent: EDS-solvent pairs short and long range, an EDS-EDS excluded pair (1,4) and 1-4 pair (9,11), the RF self-term subtraction (H11's state charges differ from its topology charge)"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_eds_solv.in"
+pttopo = "aladip_eds_solv.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

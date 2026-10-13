@@ -51,6 +51,9 @@ matching gromosXX to reference tolerances.
   instantiate → start` — the same calls `py-gromos`'s `Simulation` makes. `md @dump` prints recipe
   + plan; `<tre>.recipe.toml` is written next to the energies. `just lint` (G6) fails on any second
   builder or reader.
+- **EDS through the recipe (1.8, 0.0.57).** The `EDS` block is modelled (`RunRecipe::eds`, the
+  `eds` step after the force field); the out-of-band EDS path (`EdsBlock`, `eds_stats.dat`,
+  `eds_vr.dat`, the `eds` binary) is gone and only `GAMD` still passes through the recipe.
 
 ## Key files
 ```

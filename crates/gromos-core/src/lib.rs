@@ -61,7 +61,7 @@ pub use math::{BoundaryCondition, Mat3, Periodicity, Rectangular, Triclinic, Vac
 
 // Re-export configuration types
 pub use configuration::{
-    Box, BoxType, Configuration, Energy, PrecalcEnergies, State, StochasticVariables,
+    Box, BoxType, Configuration, EdsEndStates, Energy, PrecalcEnergies, State, StochasticVariables,
 };
 
 // Re-export the individual-λ table
@@ -69,8 +69,9 @@ pub use lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 
 // Re-export topology types
 pub use topology::{
-    LJParameters, PairInteraction, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
-    PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper, Topology,
+    EdsPerturbedAtom, EdsSolute, LJParameters, PairInteraction, PerturbedAngle, PerturbedAtom,
+    PerturbedAtomPair, PerturbedBond, PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond,
+    SoftImproper, Topology,
 };
 
 // Re-export pairlist types

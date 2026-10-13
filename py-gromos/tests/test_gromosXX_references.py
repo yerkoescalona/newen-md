@@ -324,7 +324,29 @@ REFERENCE_SYSTEMS = [
     "ch4_water_fep_precalc_twinrange",
     "aladip_solvated_epsrf0",
     "aladip_solvated_rcrf",
+    # EDS through the recipe (1.8): FORM 1 against the released gromosXX, FORMS 2/3 against
+    # gromosXX with its force weights corrected (patches/D2_eds_weights.patch)
+    "aladip_vacuum_eds",
+    "aladip_vacuum_eds3",
+    "aladip_eds_solv",
+    "two_waters_eds",
+    "aladip_vacuum_eds_multis_fixed",
+    "aladip_vacuum_eds_pairs_fixed",
 ]
+
+# EDS references compared end-state by end-state at frame 0 (`Simulation.eds_vi`,
+# `Simulation.eds_vr`): the whole-block ones above, and the released gromosXX's FORMS 2/3, whose
+# defective force weights leave only frame 0's end-state energies (and FORM 3's V_R) comparable.
+EDS_SYSTEMS = {
+    "aladip_vacuum_eds": True,
+    "aladip_vacuum_eds3": True,
+    "aladip_eds_solv": True,
+    "two_waters_eds": True,
+    "aladip_vacuum_eds_multis_fixed": True,
+    "aladip_vacuum_eds_pairs_fixed": True,
+    "aladip_vacuum_eds_multis": False,
+    "aladip_vacuum_eds_pairs": True,
+}
 
 # Systems with a known, pre-existing position-output mismatch that is not a
 # pyo3-binding gap: `aladip_trunc_oct`'s truncated-octahedron box means
@@ -431,6 +453,38 @@ def test_reference_energies(system_name):
                 )
             else:
                 assert abs(a - e) < 1e-10, f"{system_name} frame {i} {key}: {a} vs {e}"
+
+
+# ============================================================================
+# EDS end states — through Python Simulation API
+# ============================================================================
+
+
+def _parse_expected_eds_frame0(tre_path):
+    """Frame 0 of an EDS `.tre`: the V_i of the `# eds` rows and V_R (totals slot 35)."""
+    lines = tre_path.read_text().splitlines()
+    totals = lines.index("# totals")
+    vr = float(lines[totals + 35])
+    n_at = lines.index("# numstates")
+    n = int(lines[n_at + 1])
+    vi = [float(lines[n_at + 3 + k].split()[0]) for k in range(n)]
+    return vi, vr
+
+
+@pytest.mark.parametrize("system_name", sorted(EDS_SYSTEMS))
+def test_reference_eds_end_states(system_name):
+    """`Simulation.eds_vi` / `eds_vr` at frame 0 are gromosXX's `# eds` rows and slot 35."""
+    system_dir = REF_DIR / system_name
+    if not system_dir.exists():
+        pytest.skip(f"Reference system {system_name} not found")
+    vi_exp, vr_exp = _parse_expected_eds_frame0(system_dir / "expected" / "energies.tre")
+    sim = _create_simulation(system_dir)
+    assert len(sim.eds_vi) == len(vi_exp)
+    for a, e in zip(sim.eds_vi, vi_exp, strict=True):
+        assert abs(a - e) <= max(abs(e) * ENERGY_REL_TOL, 1e-10), f"{system_name}: {a} vs {e}"
+    if EDS_SYSTEMS[system_name]:
+        assert abs(sim.eds_vr - vr_exp) <= abs(vr_exp) * ENERGY_REL_TOL
+    assert _recipe_for(system_dir).eds["enabled"]
 
 
 # ============================================================================

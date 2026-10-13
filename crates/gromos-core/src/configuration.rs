@@ -213,6 +213,15 @@ pub struct Energy {
 
     /// PRECALCLAM (extended TI): the end-state energies on the λ grid; empty when off.
     pub precalc: PrecalcEnergies,
+
+    /// EDS reference-state energy V_R (gromosXX `eds_vr`; part of `special_total`, not of
+    /// `potential_total`). On the derivatives: Σ p_i dV_i/dλ.
+    pub eds_vr: f64,
+    /// EDS end-state energies V_i (gromosXX `eds_vi`; on the derivatives dV_i/dλ); empty
+    /// without EDS.
+    pub eds_vi: Vec<f64>,
+    /// The special-term part of each V_i (gromosXX `eds_vi_special`).
+    pub eds_vi_special: Vec<f64>,
 }
 
 /// The extended-TI part of an [`Energy`] record (gromosXX `A_lj_energy` … `AB_disfld`,
@@ -432,6 +441,9 @@ impl Energy {
             shift_extra_phys: Vec::new(),
             virial_total: 0.0,
             precalc: PrecalcEnergies::default(),
+            eds_vr: 0.0,
+            eds_vi: Vec::new(),
+            eds_vi_special: Vec::new(),
         };
         e.resize(num_energy_groups, num_temperature_groups);
         e
@@ -572,6 +584,19 @@ impl Energy {
         }
         self.precalc.zero_potential();
         self.precalc.zero_kinetic();
+        self.eds_vr = 0.0;
+        self.eds_vi.fill(0.0);
+        self.eds_vi_special.fill(0.0);
+    }
+
+    /// Size the EDS end-state arrays for `num_states` states (gromosXX
+    /// `Configuration::init`, `configuration.cc:403-419`), zeroed.
+    pub fn resize_eds(&mut self, num_states: usize) {
+        self.eds_vr = 0.0;
+        for v in [&mut self.eds_vi, &mut self.eds_vi_special] {
+            v.clear();
+            v.resize(num_states, 0.0);
+        }
     }
 }
 
@@ -692,6 +717,36 @@ pub struct Configuration {
     /// Stores how many times each atom crossed periodic boundaries
     /// Dimension: [n_atoms][3] for x, y, z shifts
     pub lattice_shifts: Vec<[i32; 3]>,
+
+    /// EDS end-state forces and virials of the current step (gromosXX `conf.special().eds`);
+    /// empty without EDS.
+    pub eds: EdsEndStates,
+}
+
+/// The state-dependent forces and virials of an EDS run, one entry per end state, written by
+/// the force field and mixed into the forces by the EDS algorithm (gromosXX
+/// `configuration::Configuration::special_struct::eds_struct`). Not double-buffered.
+#[derive(Debug, Clone, Default)]
+pub struct EdsEndStates {
+    /// `forces[s][i]`: the force on atom i from the terms of end state s.
+    pub forces: Vec<Vec<Vec3>>,
+    /// `virials[s][a][b] = Σ r_a f_b` of end state s (the convention of `ForceStorage::virial`).
+    pub virials: Vec<[[f64; 3]; 3]>,
+}
+
+impl EdsEndStates {
+    /// Size for `num_states` end states over `n_atoms` atoms, zeroed.
+    pub fn resize(&mut self, num_states: usize, n_atoms: usize) {
+        self.forces.clear();
+        self.forces.resize(num_states, vec![Vec3::ZERO; n_atoms]);
+        self.virials.clear();
+        self.virials.resize(num_states, [[0.0; 3]; 3]);
+    }
+
+    /// Number of end states (0 without EDS).
+    pub fn num_states(&self) -> usize {
+        self.forces.len()
+    }
 }
 
 impl Configuration {
@@ -702,6 +757,7 @@ impl Configuration {
             state2: State::new(n_atoms, num_temperature_groups, num_energy_groups),
             current_idx: 0,
             lattice_shifts: vec![[0, 0, 0]; n_atoms],
+            eds: EdsEndStates::default(),
         }
     }
 
@@ -743,6 +799,16 @@ impl Configuration {
         } else {
             &mut self.state1
         }
+    }
+
+    /// The current state and the EDS end states together (both borrowed mutably).
+    pub fn current_and_eds_mut(&mut self) -> (&mut State, &mut EdsEndStates) {
+        let state = if self.current_idx == 0 {
+            &mut self.state1
+        } else {
+            &mut self.state2
+        };
+        (state, &mut self.eds)
     }
 
     /// Exchange current and old states (zero-cost pointer swap)

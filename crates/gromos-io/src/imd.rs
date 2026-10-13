@@ -192,6 +192,8 @@ pub struct ImdParameters {
     pub lambdas: Option<LambdasBlock>,
     /// PRECALCLAM block (extended TI: energies at extra λ points); `None` = absent.
     pub precalclam: Option<PrecalcLamBlock>,
+    /// EDS block (enveloping distribution sampling); `None` = absent.
+    pub eds: Option<EdsBlock>,
 
     // ENERGYMIN block
     /// Energy minimization method (0=off, 1=steepest descent, 2=Fletcher-Reeves CG)
@@ -405,6 +407,7 @@ impl Default for ImdParameters {
             nonbonded_extra: NonbondedExtra::default(),
             lambdas: None,
             precalclam: None,
+            eds: None,
             raw_blocks: HashMap::new(),
         }
     }
@@ -546,6 +549,117 @@ pub fn parse_precalclam(lines: &[String]) -> Result<PrecalcLamBlock, IoError> {
             "MINLAM should be smaller than MAXLAM".to_string(),
         ));
     }
+    Ok(b)
+}
+
+/// One FORM 3 pair of an `EDS` block: end states `i` and `j` (1-based, as in the file) and
+/// their smoothness parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdsStatePair {
+    pub i: i32,
+    pub j: i32,
+    pub s: f64,
+}
+
+/// The `EDS` block (gromosXX `read_EDS`, `in_parameter.cc:3843-3961`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdsBlock {
+    /// EDS: 0 off, 1 on.
+    pub enabled: bool,
+    /// FORM: 1 one smoothness parameter, 2 one per state pair, 3 one per listed pair.
+    pub form: i32,
+    /// NUMSTATES (as read; gromosXX sets it to 0 when EDS is off).
+    pub num_states: usize,
+    /// S: one value (FORM 1) or N(N−1)/2 in upper-triangle row-major pair order (FORM 2).
+    pub s: Vec<f64>,
+    /// FORM 3: the N−1 rows `i j S`.
+    pub pairs: Vec<EdsStatePair>,
+    /// EIR: the energy offset of every state.
+    pub eir: Vec<f64>,
+}
+
+/// Parse the data lines of an `EDS` block as gromosXX does: a stream of tokens EDS, FORM,
+/// NUMSTATES (FORM in 1..3 and NUMSTATES ≥ 2 even with EDS = 0), then for EDS = 1 the S values
+/// of the form and NUMSTATES offsets EIR. Left-over tokens are an error (`get_final_messages`,
+/// which with EDS = 0 runs right after NUMSTATES).
+pub fn parse_eds(lines: &[String]) -> Result<EdsBlock, IoError> {
+    // gromosXX's `io::getline` drops everything after a `#` (blockinput.cc:37-62)
+    let lines: Vec<String> = lines
+        .iter()
+        .map(|l| l.split('#').next().unwrap_or_default().trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    fn int(t: &mut Tokens<'_>, name: &str) -> Result<i32, IoError> {
+        t.next_i32(name)?
+            .ok_or_else(|| IoError::ParseError(format!("missing {name}")))
+    }
+    fn real(t: &mut Tokens<'_>, name: &str) -> Result<f64, IoError> {
+        t.next_f64(name)?
+            .ok_or_else(|| IoError::ParseError(format!("missing {name}")))
+    }
+    let mut t = Tokens::new("EDS", &lines);
+    let err = IoError::ParseError;
+    let enabled = match int(&mut t, "EDS")? {
+        0 => false,
+        1 => true,
+        v => return Err(err(format!("EDS = {v}: must be 0 or 1"))),
+    };
+    let form = int(&mut t, "FORM")?;
+    if !(1..=3).contains(&form) {
+        return Err(err(format!("FORM = {form}: must be 1, 2 or 3")));
+    }
+    let n = int(&mut t, "NUMSTATES")?;
+    if n < 2 {
+        return Err(err(format!("NUMSTATES = {n}: must be >= 2")));
+    }
+    let n = n as usize;
+    let leftover = |t: &mut Tokens<'_>| match t.next_raw() {
+        Some(extra) => Err(IoError::ParseError(format!(
+            "Left-over parameters in EDS block (from {extra:?})"
+        ))),
+        None => Ok(()),
+    };
+    let mut b = EdsBlock {
+        enabled,
+        form,
+        num_states: n,
+        s: Vec::new(),
+        pairs: Vec::new(),
+        eir: Vec::new(),
+    };
+    if !enabled {
+        leftover(&mut t)?;
+        return Ok(b);
+    }
+    let positive = |v: f64, name: &str| {
+        if v > 0.0 {
+            Ok(v)
+        } else {
+            Err(IoError::ParseError(format!("{name} = {v}: must be > 0")))
+        }
+    };
+    match form {
+        1 => b.s.push(positive(real(&mut t, "S[0]")?, "S[0]")?),
+        2 => {
+            for k in 0..n * (n - 1) / 2 {
+                let name = format!("S[{k}]");
+                b.s.push(positive(real(&mut t, &name)?, &name)?);
+            }
+        },
+        _ => {
+            for k in 0..n - 1 {
+                let i = int(&mut t, &format!("i[{k}]"))?;
+                let j = int(&mut t, &format!("j[{k}]"))?;
+                let name = format!("S[{k}]");
+                let s = positive(real(&mut t, &name)?, &name)?;
+                b.pairs.push(EdsStatePair { i, j, s });
+            }
+        },
+    }
+    for k in 0..n {
+        b.eir.push(real(&mut t, &format!("EIR[{k}]"))?);
+    }
+    leftover(&mut t)?;
     Ok(b)
 }
 
@@ -1213,6 +1327,9 @@ fn parse_block(
         "PRECALCLAM" => {
             params.precalclam = Some(parse_precalclam(data_lines)?);
         },
+        "EDS" => {
+            params.eds = Some(parse_eds(data_lines)?);
+        },
         "PERTURBATION" => {
             let mut t = Tokens::new("PERTURBATION", data_lines);
             if let Some(v) = t.next_i32("NTG")? {
@@ -1869,6 +1986,72 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
         let path = write_tmp(content, "nre_order");
         let err = read_imd_file(&path).unwrap_err().to_string();
         assert!(err.contains("strictly increasing"), "{err}");
+    }
+
+    // ── EDS (gromosXX read_EDS, in_parameter.cc:3843-3961) ───────────────────────────────────
+
+    fn eds_block(body: &str) -> Result<Option<EdsBlock>, IoError> {
+        parse_imd_str(&format!("EDS\n{body}\nEND\n")).map(|p| p.eds)
+    }
+
+    #[test]
+    fn eds_parses_the_three_forms_and_round_trips() {
+        let one = eds_block("# EDS\n 1\n# FORM NUMSTATES\n 1 2\n# S\n 0.5\n# EIR\n 0.0 10.0")
+            .unwrap()
+            .unwrap();
+        assert!(one.enabled);
+        assert_eq!((one.form, one.num_states), (1, 2));
+        assert_eq!(
+            (one.s.clone(), one.eir.clone()),
+            (vec![0.5], vec![0.0, 10.0])
+        );
+        let multi = eds_block("1\n2 3\n0.3 0.2 0.1\n0 10 -5").unwrap().unwrap();
+        assert_eq!(multi.s, [0.3, 0.2, 0.1]);
+        // FORM 3: n−1 rows `i j S`, a token stream (one row may span lines)
+        let pairs = eds_block("1\n3 3\n1 2 0.3\n2\n3 0.1\n0 10 -5")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pairs.pairs,
+            [
+                EdsStatePair { i: 1, j: 2, s: 0.3 },
+                EdsStatePair { i: 2, j: 3, s: 0.1 }
+            ]
+        );
+        assert!(pairs.s.is_empty());
+        let off = eds_block("0\n1 2").unwrap().unwrap();
+        assert!(!off.enabled && off.eir.is_empty());
+        for b in [one, multi, pairs, off] {
+            let p = ImdParameters {
+                eds: Some(b.clone()),
+                ..Default::default()
+            };
+            let again = parse_imd_str(&crate::imd_write::write_imd(&p, None)).unwrap();
+            assert_eq!(again.eds, Some(b));
+        }
+        assert_eq!(parse_imd_str("TITLE\nx\nEND\n").unwrap().eds, None);
+    }
+
+    #[test]
+    fn eds_refuses_what_gromosxx_refuses() {
+        for (body, what) in [
+            // EDS = 0 stops after NUMSTATES: anything more is left over
+            ("0\n1 2\n0.5\n0 0", "Left-over"),
+            ("1\n1 2\n0.5\n0 0 7", "Left-over"),
+            ("2\n1 2\n0.5\n0 0", "EDS = 2"),
+            ("1\n4 2\n0.5\n0 0", "FORM = 4"),
+            ("0\n4 2", "FORM = 4"),
+            ("0\n1 1", "NUMSTATES = 1"),
+            ("1\n1 2\n0.0\n0 0", "S[0] = 0"),
+            // FORM 2 with three states needs three S: the stream takes the first EIR as S[2]
+            ("1\n2 3\n0.3 0.2\n0 10 -5", "S[2] = 0"),
+            ("1\n2 3\n0.3 0.2 0.1\n0 10", "missing EIR[2]"),
+            ("1\n3 3\n1 2 0.3\n0 10 -5", "S[1]"),
+            ("1\n1 2\nx\n0 0", "S[0] expects a number"),
+        ] {
+            let e = eds_block(body).unwrap_err().to_string();
+            assert!(e.contains(what) && e.contains("EDS"), "{body:?}: {e}");
+        }
     }
 
     // ── PRECALCLAM (gromosXX read_PRECALCLAM, in_parameter.cc:4478-4513) ───────────────────

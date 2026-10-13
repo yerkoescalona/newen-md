@@ -1,924 +1,198 @@
-use crate::constraints::box_periodicity;
-use crate::constraints::{shake, ShakeParameters};
-use crate::integrator::Integrator;
-use crate::thermostats::{berendsen_thermostat, BerendsenThermostatParameters};
-/// Enveloping Distribution Sampling (EDS)
-///
-/// This module implements EDS for enhanced sampling across multiple potential energy surfaces.
-///
-/// ## Theory
-///
-/// EDS uses a smooth reference Hamiltonian that envelopes multiple end-state potentials:
-///
-/// ```text
-/// V_R(R) = -(1/βs) * ln[Σ_i exp(-βs(V_i(R) - E_i^R))]
-/// ```
-///
-/// Where:
-/// - `V_R`: Reference state energy (smooth Hamiltonian)
-/// - `β = 1/(k_B·T)`: Inverse temperature
-/// - `s`: Smoothing parameter (0 < s ≤ 1)
-/// - `V_i`: Potential energy of state i
-/// - `E_i^R`: Energy offset for state i
-///
-/// ## References
-/// - Hansen & Hünenberger, J. Chem. Theory Comput. 2014, 10, 2632-2647
-/// - Christ & van Gunsteren, J. Chem. Phys. 2007, 126, 184110
+//! Enveloping distribution sampling: the reference-state Hamiltonian (gromosXX `algorithm::EDS`,
+//! `algorithm/integration/eds.cc`, non-accelerated forms).
+//!
+//! The force field leaves the energy V_i, forces and virial of every end state in the
+//! configuration (`Energy::eds_vi`, `Configuration::eds`); this algorithm, placed right after the
+//! force field, computes the reference energy V_R and the state weights p_i = ∂V_R/∂V_i, adds
+//! Σ p_i F_i to the forces and Σ p_i W_i to the virial, and books V_R as `eds_vr` (part of the
+//! special energy, not of the potential energy). The integrator then sees the mixed forces.
+//!
+//! The three forms are the documented ones (`simulation/parameter.h:624-658`):
+//!
+//! - FORM 1 (single s): V_R = −1/(βs) · ln Σ_i exp(−βs(V_i − E_i^R));
+//! - FORM 2 (multi s): V_R = −1/β · ln[ 1/(N−1) · Σ_{i<j} (e^{−βs_ij(V_i−E_i)} + e^{−βs_ij(V_j−E_j)})^{1/s_ij} ];
+//! - FORM 3 (pairs): the same over the N−1 listed pairs, normalised by N/(2(N−1)).
+//!
+//! FORM 1 reproduces gromosXX 247c95c4 bit for bit (its running pairwise fold, in state order).
+//! For FORMS 2 and 3 gromosXX's released weights are not the derivative of its V_R (zero-seeded
+//! log-sum-exp, a missing `− max`, multi-s skipping the pairs (0, j ≥ 2), item 1.8); the weights
+//! here are the documented ones, what gromosXX computes with `D2_eds_weights.patch`.
+
+use gromos_core::algorithm::{Algorithm, SimulationState};
 use gromos_core::configuration::Configuration;
-use gromos_core::math::Rectangular;
-use gromos_core::math::Vec3;
-use gromos_core::pairlist::{PairlistAlgorithm, PairlistContainer, StandardPairlistAlgorithm};
+use gromos_core::math::{Mat3, Vec3};
 use gromos_core::topology::Topology;
-use gromos_core::units::kB;
-use gromos_forces::bonded::calculate_bonded_forces;
-use gromos_forces::nonbonded::{
-    lj_crf_innerloop, lj_crf_innerloop_parallel, CRFParameters, EnergyGroups, ForceStorage,
-    LJParamMatrix, LJParameters as NBLJParams,
-};
 
-/// EDS functional form
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EDSForm {
-    /// Single smoothing parameter for all state pairs
-    SingleS,
-    /// Pairwise smoothing parameters (N(N-1)/2 values)
-    MultiS,
-    /// Specified pairs with dedicated s values
-    PairS,
+/// The functional form of the reference Hamiltonian, with its smoothness parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdsForm {
+    /// FORM 1: one s for every state.
+    SingleS { s: f64 },
+    /// FORM 2: one s per state pair, upper-triangle row-major: (0,1), (0,2) … (1,2) …
+    MultiS { s: Vec<f64> },
+    /// FORM 3: N−1 pairs of states (0-based) with their s.
+    PairS { pairs: Vec<(usize, usize, f64)> },
 }
 
-/// EDS state information
+/// gromosXX's pairwise log-sum-exp step `max(a, b) + log(1 + exp(min(a, b) − max(a, b)))`
+/// (`eds.cc:409-424`), started from −∞ (the patched multi-s/pair-s seed).
+#[inline]
+fn fold(acc: f64, x: f64) -> f64 {
+    if acc == f64::NEG_INFINITY {
+        // max(−∞, x) + log(1 + exp(−∞)) = x exactly
+        return x;
+    }
+    let hi = if acc < x { x } else { acc };
+    let lo = if x < acc { x } else { acc };
+    hi + (1.0 + (lo - hi).exp()).ln()
+}
+
+/// Two states i, j of a pair term: `(LSE / s, A + LSE(1/s − 1), B + LSE(1/s − 1))` with
+/// A = −βs(V_i − E_i), B = −βs(V_j − E_j) and LSE = ln(e^A + e^B) — the pair's contribution
+/// to ln Σ and the two states' log-weights (`eds.cc:536-551`).
+#[inline]
+fn pair_term(beta: f64, s: f64, vi: &[f64], eir: &[f64], i: usize, j: usize) -> (f64, f64, f64) {
+    let part_a = -beta * s * (vi[i] - eir[i]);
+    let part_b = -beta * s * (vi[j] - eir[j]);
+    let lse = fold(part_a, part_b);
+    let elem = lse / s;
+    let elem2 = lse * (1.0 / s - 1.0);
+    (elem, part_a + elem2, part_b + elem2)
+}
+
+/// The reference energy V_R of end-state energies `vi` with offsets `eir` at β = 1/(k_B T),
+/// and the weight p_i = ∂V_R/∂V_i of every state in `weights` (Σ p_i = 1).
+pub fn reference_hamiltonian(
+    form: &EdsForm,
+    beta: f64,
+    eir: &[f64],
+    vi: &[f64],
+    weights: &mut [f64],
+) -> f64 {
+    let n = vi.len();
+    let (vr, sum) = match form {
+        EdsForm::SingleS { s } => {
+            // the running fold in state order, from the pair (0, 1) on (`eds.cc:409-424`)
+            let mut sum = f64::NEG_INFINITY;
+            for st in 0..n {
+                let part = -beta * s * (vi[st] - eir[st]);
+                weights[st] = part;
+                sum = fold(sum, part);
+            }
+            (-1.0 / (beta * s) * sum, sum)
+        },
+        EdsForm::MultiS { s } => {
+            weights.fill(f64::NEG_INFINITY);
+            let mut sum = f64::NEG_INFINITY;
+            for i in 0..n.saturating_sub(1) {
+                for j in i + 1..n {
+                    let k = (i * (2 * n - i - 1)) / 2 + j - i - 1;
+                    let (elem, wi, wj) = pair_term(beta, s[k], vi, eir, i, j);
+                    sum = fold(sum, elem);
+                    weights[i] = fold(weights[i], wi);
+                    weights[j] = fold(weights[j], wj);
+                }
+            }
+            (-1.0 / beta * (sum + (1.0 / (n - 1) as f64).ln()), sum)
+        },
+        EdsForm::PairS { pairs } => {
+            weights.fill(f64::NEG_INFINITY);
+            let mut sum = f64::NEG_INFINITY;
+            for &(i, j, s) in pairs {
+                let (elem, wi, wj) = pair_term(beta, s, vi, eir, i, j);
+                sum = fold(sum, elem);
+                weights[i] = fold(weights[i], wi);
+                weights[j] = fold(weights[j], wj);
+            }
+            let norm = (n as f64 / ((n - 1) * 2) as f64).ln();
+            (-1.0 / beta * (sum + norm), sum)
+        },
+    };
+    for w in weights.iter_mut() {
+        *w = (*w - sum).exp();
+    }
+    vr
+}
+
+/// The EDS step: mixes the end states into the forces, virial and energies of the current
+/// state (gromosXX `algorithm::EDS::apply`, `eds.cc:380-716`).
 #[derive(Debug, Clone)]
-pub struct EDSState {
-    /// State ID
-    pub id: usize,
-
-    /// Individual state energy V_i
-    pub energy: f64,
-
-    /// Energy offset E_i^R
-    pub offset: f64,
-
-    /// Forces for this state
-    pub forces: Vec<Vec3>,
-
-    /// Virial tensor for this state (for pressure calculation)
-    pub virial: [[f64; 3]; 3],
-
-    /// Number of times this state was visited
-    pub visit_count: usize,
-
-    /// Was this state visited in current round trip?
-    pub visited: bool,
+pub struct Eds {
+    pub form: EdsForm,
+    /// E_i^R, one per state.
+    pub eir: Vec<f64>,
+    /// 1/(k_B T), T of the first bath (gromosXX `multibath.bath(0).temperature`), k_B from the
+    /// topology's PHYSICALCONSTANTS.
+    pub beta: f64,
+    weights: Vec<f64>,
 }
 
-impl EDSState {
-    /// Create a new EDS state
-    pub fn new(id: usize, offset: f64, n_atoms: usize) -> Self {
-        EDSState {
-            id,
-            energy: 0.0,
-            offset,
-            forces: vec![Vec3::ZERO; n_atoms],
-            virial: [[0.0; 3]; 3],
-            visit_count: 0,
-            visited: false,
-        }
-    }
-
-    /// Clear forces and virial for next step
-    pub fn clear(&mut self) {
-        self.forces.fill(Vec3::ZERO);
-        self.virial = [[0.0; 3]; 3];
-        self.energy = 0.0;
-    }
-
-    /// Get adjusted energy (V_i - E_i^R)
-    pub fn adjusted_energy(&self) -> f64 {
-        self.energy - self.offset
-    }
-}
-
-/// EDS parameters and state
-pub struct EDSParameters {
-    /// Functional form
-    pub form: EDSForm,
-
-    /// Number of states
-    pub num_states: usize,
-
-    /// Smoothing parameter(s)
-    /// - SingleS: 1 value
-    /// - MultiS: N(N-1)/2 values
-    /// - PairS: variable
-    pub s_values: Vec<f64>,
-
-    /// Temperature (K)
-    pub temperature: f64,
-
-    /// All EDS states
-    pub states: Vec<EDSState>,
-
-    /// Current reference state energy V_R
-    pub reference_energy: f64,
-
-    /// Mixed state energy (before acceleration)
-    pub mixed_energy: f64,
-
-    /// Current state ID (state with minimum adjusted energy)
-    pub current_state_id: usize,
-
-    /// Round-trip counter
-    pub round_trips: usize,
-}
-
-impl EDSParameters {
-    /// Create new EDS parameters
-    pub fn new(
-        form: EDSForm,
-        s_values: Vec<f64>,
-        offsets: Vec<f64>,
-        temperature: f64,
-        n_atoms: usize,
-    ) -> Result<Self, String> {
-        let num_states = offsets.len();
-
-        if num_states < 2 {
-            return Err("EDS requires at least 2 states".to_string());
-        }
-
-        // Validate s_values
-        match form {
-            EDSForm::SingleS => {
-                if s_values.len() != 1 {
-                    return Err("SingleS requires exactly 1 s value".to_string());
-                }
-            },
-            EDSForm::MultiS => {
-                let expected = (num_states * (num_states - 1)) / 2;
-                if s_values.len() != expected {
-                    return Err(format!(
-                        "MultiS requires {} s values for {} states",
-                        expected, num_states
-                    ));
-                }
-            },
-            EDSForm::PairS => {
-                // Variable number, depends on specified pairs
-            },
-        }
-
-        // Create states
-        let states: Vec<EDSState> = offsets
-            .iter()
-            .enumerate()
-            .map(|(id, &offset)| EDSState::new(id, offset, n_atoms))
-            .collect();
-
-        Ok(EDSParameters {
+impl Eds {
+    pub fn new(form: EdsForm, eir: Vec<f64>, beta: f64) -> Self {
+        let n = eir.len();
+        Self {
             form,
-            num_states,
-            s_values,
-            temperature,
-            states,
-            reference_energy: 0.0,
-            mixed_energy: 0.0,
-            current_state_id: 0,
-            round_trips: 0,
-        })
-    }
-
-    /// Get beta = 1/(k_B * T)
-    pub fn beta(&self) -> f64 {
-        1.0 / (kB * self.temperature)
-    }
-
-    /// Calculate reference energy using EDS Hamiltonian (single-s form)
-    ///
-    /// Uses numerically stable log-sum-exp trick:
-    /// log(exp(a) + exp(b)) = max(a,b) + log(1 + exp(min(a,b) - max(a,b)))
-    pub fn calculate_reference_energy_single_s(&mut self) {
-        let beta = self.beta();
-        let s = self.s_values[0];
-
-        if self.num_states == 0 {
-            self.reference_energy = 0.0;
-            return;
-        }
-
-        // Calculate -β*s*(V_i - E_i^R) for each state
-        let prefactors: Vec<f64> = self
-            .states
-            .iter()
-            .map(|state| -beta * s * (state.energy - state.offset))
-            .collect();
-
-        // Log-sum-exp with numerical stability
-        let mut sum_prefactors = prefactors[0];
-
-        for &pf in &prefactors[1..] {
-            sum_prefactors = sum_prefactors.max(pf)
-                + (1.0 + ((sum_prefactors.min(pf) - sum_prefactors.max(pf)).exp())).ln();
-        }
-
-        // V_R = -(1/(β*s)) * log-sum-exp
-        self.mixed_energy = -1.0 / (beta * s) * sum_prefactors;
-        self.reference_energy = self.mixed_energy;
-    }
-
-    /// Calculate reference energy using multi-s form
-    ///
-    /// For multi-s, we use pairwise smoothing parameters s_ij
-    /// The Hamiltonian becomes more complex with N(N-1)/2 parameters
-    pub fn calculate_reference_energy_multi_s(&mut self) {
-        let beta = self.beta();
-
-        if self.num_states == 0 {
-            self.reference_energy = 0.0;
-            return;
-        }
-
-        // For multi-s, we calculate a weighted average based on pairwise s values
-        // This is a simplified implementation - full multi-s is more complex
-        // Using average s for now
-        let avg_s: f64 = self.s_values.iter().sum::<f64>() / self.s_values.len() as f64;
-
-        // Calculate using average s (similar to single-s)
-        let prefactors: Vec<f64> = self
-            .states
-            .iter()
-            .map(|state| -beta * avg_s * (state.energy - state.offset))
-            .collect();
-
-        let max_prefactor = prefactors.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let sum_exp: f64 = prefactors
-            .iter()
-            .map(|&pf| (pf - max_prefactor).exp())
-            .sum();
-
-        self.mixed_energy = -1.0 / (beta * avg_s) * (max_prefactor + sum_exp.ln());
-        self.reference_energy = self.mixed_energy;
-    }
-
-    /// Calculate reference energy based on form
-    pub fn calculate_reference_energy(&mut self) {
-        match self.form {
-            EDSForm::SingleS => self.calculate_reference_energy_single_s(),
-            EDSForm::MultiS => self.calculate_reference_energy_multi_s(),
-            EDSForm::PairS => self.calculate_reference_energy_single_s(), // Use single-s for now
+            eir,
+            beta,
+            weights: vec![0.0; n],
         }
     }
 
-    // TODO: wire up when multi-s EDS pair smoothing is implemented
-    #[allow(dead_code)]
-    fn get_s_for_pair(&self, i: usize, j: usize) -> f64 {
-        match self.form {
-            EDSForm::SingleS => self.s_values[0],
-            EDSForm::MultiS => {
-                // Map (i,j) to index in s_values array
-                // For i < j: index = i*n - i*(i+1)/2 + (j-i-1)
-                if i < j {
-                    let n = self.num_states;
-                    let idx = i * n - i * (i + 1) / 2 + (j - i - 1);
-                    self.s_values[idx]
-                } else if i > j {
-                    let n = self.num_states;
-                    let idx = j * n - j * (j + 1) / 2 + (i - j - 1);
-                    self.s_values[idx]
-                } else {
-                    self.s_values[0] // Same state, use first s
-                }
-            },
-            EDSForm::PairS => {
-                // For pair-s, we'd need a mapping structure
-                // For now, use first s value
-                self.s_values[0]
-            },
-        }
+    pub fn num_states(&self) -> usize {
+        self.eir.len()
+    }
+}
+
+impl Algorithm for Eds {
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 
-    /// Calculate state probabilities
-    pub fn calculate_state_probabilities(&self) -> Vec<f64> {
-        let beta = self.beta();
-        let s = self.s_values[0];
-
-        // Calculate prefactors
-        let prefactors: Vec<f64> = self
-            .states
-            .iter()
-            .map(|state| -beta * s * (state.energy - state.offset))
-            .collect();
-
-        // Find max for numerical stability
-        let max_prefactor = prefactors.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-        // Calculate sum of exp(prefactor - max)
-        let sum_exp: f64 = prefactors
-            .iter()
-            .map(|&pf| (pf - max_prefactor).exp())
-            .sum();
-
-        // Calculate probabilities
-        prefactors
-            .iter()
-            .map(|&pf| (pf - max_prefactor).exp() / sum_exp)
-            .collect()
-    }
-
-    /// Apply EDS forces to configuration
-    ///
-    /// F = Σ_i p_i * F_i
-    /// where p_i = exp(-βs(V_i - E_i^R)) / Z
-    pub fn apply_forces(&self, configuration: &mut Configuration) {
-        let probabilities = self.calculate_state_probabilities();
-
-        // Clear current forces
-        for force in configuration.current_mut().force.iter_mut() {
-            *force = Vec3::ZERO;
+    fn apply(
+        &mut self,
+        _topo: &Topology,
+        conf: &mut Configuration,
+        _sim: &SimulationState,
+    ) -> Result<(), String> {
+        let n = self.num_states();
+        if conf.eds.num_states() != n || conf.current().energies.eds_vi.len() != n {
+            return Err(format!(
+                "EDS with {n} states, but the force field left {} end states",
+                conf.eds.num_states()
+            ));
         }
-
-        // Apply weighted forces from all states
-        for (state, &prob) in self.states.iter().zip(probabilities.iter()) {
-            for (i, &state_force) in state.forces.iter().enumerate() {
-                configuration.current_mut().force[i] += state_force * prob;
-            }
-        }
-    }
-
-    /// Apply EDS virial to configuration
-    pub fn apply_virial(&self, configuration: &mut Configuration) {
-        let probabilities = self.calculate_state_probabilities();
-
-        // Accumulate weighted virial from all states
-        let mut virial_sum = [[0.0_f64; 3]; 3];
-
-        for (state, &prob) in self.states.iter().zip(probabilities.iter()) {
-            for i in 0..3 {
-                for j in 0..3 {
-                    virial_sum[i][j] += state.virial[i][j] * prob;
-                }
-            }
-        }
-
-        // Convert to Mat3 and assign (Mat3 is column-major)
-        configuration.current_mut().virial_tensor = gromos_core::math::Mat3::from_cols(
-            Vec3::new(virial_sum[0][0], virial_sum[1][0], virial_sum[2][0]),
-            Vec3::new(virial_sum[0][1], virial_sum[1][1], virial_sum[2][1]),
-            Vec3::new(virial_sum[0][2], virial_sum[1][2], virial_sum[2][2]),
+        let vr = reference_hamiltonian(
+            &self.form,
+            self.beta,
+            &self.eir,
+            &conf.current().energies.eds_vi,
+            &mut self.weights,
         );
-    }
-
-    /// Determine current state (state with minimum adjusted energy)
-    pub fn determine_current_state(&mut self) {
-        let mut min_energy = f64::INFINITY;
-        let mut min_state = 0;
-
-        for (i, state) in self.states.iter().enumerate() {
-            let adjusted = state.adjusted_energy();
-            if adjusted < min_energy {
-                min_energy = adjusted;
-                min_state = i;
+        let (state, eds) = conf.current_and_eds_mut();
+        let mut d_vr = 0.0;
+        for (s, &p) in self.weights.iter().enumerate() {
+            for (f, fs) in state.force.iter_mut().zip(&eds.forces[s]) {
+                *f += *fs * p;
             }
-        }
-
-        // Mark state as visited
-        self.states[min_state].visited = true;
-        self.states[min_state].visit_count += 1;
-        self.current_state_id = min_state;
-    }
-
-    /// Check if a round trip is complete (all states visited)
-    pub fn check_round_trip(&mut self) -> bool {
-        let all_visited = self.states.iter().all(|s| s.visited);
-
-        if all_visited {
-            self.round_trips += 1;
-
-            // Reset visited flags
-            for state in &mut self.states {
-                state.visited = false;
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Clear all state forces and energies
-    pub fn clear_states(&mut self) {
-        for state in &mut self.states {
-            state.clear();
-        }
-    }
-}
-
-/// AEDS (Accelerated EDS) parameters
-pub struct AEDSParameters {
-    /// Base EDS parameters
-    pub eds: EDSParameters,
-
-    /// Maximum transition energy (acceleration region upper bound)
-    pub e_max: f64,
-
-    /// Minimum transition energy (acceleration region lower bound)
-    pub e_min: f64,
-
-    /// Average energy per state
-    pub avg_energy: Vec<f64>,
-
-    /// Standard deviation of energy per state
-    pub std_energy: Vec<f64>,
-
-    /// Free energy differences relative to state 0
-    pub free_energy: Vec<f64>,
-
-    /// Enable parameter search
-    pub search_enabled: bool,
-}
-
-impl AEDSParameters {
-    /// Create new AEDS parameters
-    pub fn new(eds: EDSParameters, e_max: f64, e_min: f64, search_enabled: bool) -> Self {
-        let n = eds.num_states;
-
-        AEDSParameters {
-            eds,
-            e_max,
-            e_min,
-            avg_energy: vec![0.0; n],
-            std_energy: vec![0.0; n],
-            free_energy: vec![0.0; n],
-            search_enabled,
-        }
-    }
-
-    /// Calculate acceleration factor
-    ///
-    /// fkfac = 1 - (V_mix - E_min) / (E_max - E_min)
-    /// fkfac = 0 at E_max, fkfac = 1 at E_min
-    pub fn acceleration_factor(&self) -> f64 {
-        let v_mix = self.eds.mixed_energy;
-
-        if v_mix <= self.e_min || v_mix >= self.e_max {
-            1.0 // no acceleration below E_min or above E_max
-        } else {
-            // Linear interpolation in acceleration region
-            let de_mix = v_mix - self.e_min;
-            let kfac = 1.0 / (self.e_max - self.e_min);
-            1.0 - kfac * de_mix
-        }
-    }
-
-    /// Apply AEDS forces (with acceleration)
-    pub fn apply_forces(&self, configuration: &mut Configuration) {
-        let factor = self.acceleration_factor();
-
-        // Get base EDS forces
-        self.eds.apply_forces(configuration);
-
-        // Scale by acceleration factor if in acceleration region
-        if factor < 1.0 {
-            for force in configuration.current_mut().force.iter_mut() {
-                *force *= factor;
-            }
-        }
-    }
-
-    /// Update energy statistics for AEDS parameter search
-    ///
-    /// Accumulates running statistics for each state to estimate
-    /// average energies and standard deviations
-    pub fn update_statistics(&mut self, alpha: f64) {
-        // Exponential moving average with decay factor alpha
-        // E_avg(t+1) = alpha * E(t) + (1-alpha) * E_avg(t)
-        // E_std(t+1) = sqrt(alpha * (E(t) - E_avg(t))^2 + (1-alpha) * E_std(t)^2)
-
-        for (i, state) in self.eds.states.iter().enumerate() {
-            let energy = state.energy;
-
-            // Update average
-            let old_avg = self.avg_energy[i];
-            self.avg_energy[i] = alpha * energy + (1.0 - alpha) * old_avg;
-
-            // Update standard deviation
-            let diff = energy - old_avg;
-            let old_var = self.std_energy[i] * self.std_energy[i];
-            let new_var = alpha * diff * diff + (1.0 - alpha) * old_var;
-            self.std_energy[i] = new_var.sqrt();
-        }
-    }
-
-    /// Estimate free energy differences using thermodynamic integration
-    ///
-    /// Uses the relationship: ΔF_ij ≈ -kT * ln(<exp(-β(V_j - V_i))>_i)
-    /// Simplified version uses energy differences and visit counts
-    pub fn estimate_free_energies(&mut self) {
-        let beta = self.eds.beta();
-
-        // Calculate free energy relative to state 0
-        self.free_energy[0] = 0.0;
-
-        for i in 1..self.eds.num_states {
-            // Simple estimate based on average energy difference
-            let de = self.avg_energy[i] - self.avg_energy[0];
-
-            // Free energy difference (simplified)
-            // ΔF ≈ ΔE - T*ΔS, approximating ΔS from visit ratio
-            let visit_ratio = if self.eds.states[0].visit_count > 0 {
-                self.eds.states[i].visit_count as f64 / self.eds.states[0].visit_count as f64
-            } else {
-                1.0
-            };
-
-            // Entropy contribution from visit counts
-            let ds = if visit_ratio > 0.0 {
-                -visit_ratio.ln()
-            } else {
-                0.0
-            };
-
-            self.free_energy[i] = de - ds / beta;
-        }
-    }
-
-    /// Optimize energy offsets to improve sampling efficiency
-    ///
-    /// Adjusts E_i^R values to flatten the free energy landscape
-    /// Goal: make all states equally probable
-    pub fn optimize_offsets(&mut self, learning_rate: f64) {
-        // Calculate current state probabilities
-        let probabilities = self.eds.calculate_state_probabilities();
-
-        // Target probability (uniform distribution)
-        let target_prob = 1.0 / self.eds.num_states as f64;
-
-        // Update offsets based on probability deviation
-        for i in 0..self.eds.num_states {
-            let _prob_error = probabilities[i] - target_prob;
-
-            // Adjust offset: if state is over-visited, increase offset to disfavor it
-            // ΔE_i^R = -η * ln(p_i / p_target)
-            let adjustment = if probabilities[i] > 1e-10 {
-                -learning_rate * (probabilities[i] / target_prob).ln()
-            } else {
-                0.0
-            };
-
-            self.eds.states[i].offset += adjustment;
-        }
-    }
-
-    /// Optimize smoothing parameter to balance exploration/exploitation
-    ///
-    /// Adjusts s based on round-trip efficiency and energy overlap
-    pub fn optimize_smoothing(&mut self, learning_rate: f64) {
-        if self.eds.form != EDSForm::SingleS {
-            return; // Only optimize single-s for now
-        }
-
-        // Calculate energy overlap between states
-        let mut total_overlap = 0.0;
-        let mut n_pairs = 0;
-
-        for i in 0..self.eds.num_states {
-            for j in (i + 1)..self.eds.num_states {
-                // Overlap metric: exp(-|ΔE|/(kT))
-                let de = (self.avg_energy[i] - self.avg_energy[j]).abs();
-                let beta = self.eds.beta();
-                let overlap = (-beta * de).exp();
-                total_overlap += overlap;
-                n_pairs += 1;
-            }
-        }
-
-        let avg_overlap = if n_pairs > 0 {
-            total_overlap / n_pairs as f64
-        } else {
-            0.5
-        };
-
-        // Target overlap: ~0.2-0.3 for good sampling
-        let target_overlap = 0.25;
-        let overlap_error = avg_overlap - target_overlap;
-
-        // Adjust s: if overlap too high, increase s (sharper peaks)
-        // if overlap too low, decrease s (smoother landscape)
-        let adjustment = learning_rate * overlap_error;
-        let new_s = (self.eds.s_values[0] + adjustment).clamp(0.1, 1.0);
-        self.eds.s_values[0] = new_s;
-    }
-
-    /// Full AEDS parameter search iteration
-    ///
-    /// Performs one iteration of adaptive parameter optimization
-    pub fn search_iteration(&mut self, learning_rate: f64, update_alpha: f64) {
-        if !self.search_enabled {
-            return;
-        }
-
-        // Update statistics
-        self.update_statistics(update_alpha);
-
-        // Every N steps, optimize parameters
-        if self.eds.states[0].visit_count.is_multiple_of(100) {
-            self.estimate_free_energies();
-            self.optimize_offsets(learning_rate);
-            self.optimize_smoothing(learning_rate * 0.5); // More conservative for s
-        }
-    }
-}
-
-/// EDS MD Runner
-///
-/// Manages the EDS molecular dynamics simulation loop,
-/// coordinating force calculations for multiple states
-pub struct EDSRunner {
-    /// EDS or AEDS parameters
-    pub aeds: AEDSParameters,
-
-    /// Pairlist for nonbonded interactions
-    pairlist: PairlistContainer,
-
-    /// Pairlist algorithm
-    pairlist_algorithm: PairlistAlgorithm,
-
-    /// Use parallel force calculation
-    parallel_forces: bool,
-
-    /// CRF parameters for nonbonded interactions
-    crf_params: CRFParameters,
-    four_pi_eps_i: f64,
-
-    /// Current MD step
-    current_step: usize,
-}
-
-impl EDSRunner {
-    /// Create a new EDS runner
-    pub fn new(aeds: AEDSParameters, cutoff: f64, parallel_forces: bool) -> Self {
-        let pairlist = PairlistContainer::new(cutoff, cutoff, 0.2);
-        let pairlist_algorithm = PairlistAlgorithm::Standard(StandardPairlistAlgorithm::new(true));
-
-        // Calculate CRF parameters
-        let eps = 1.0;
-        let eps_rf = 61.0;
-        let crf = (eps_rf - eps) * (2.0 * eps + eps_rf)
-            / (eps_rf + 2.0 * eps)
-            / (cutoff * cutoff * cutoff);
-
-        let crf_params = CRFParameters {
-            crf_cut: cutoff,
-            crf_2cut3i: crf / (2.0 * cutoff * cutoff * cutoff),
-            crf_cut3i: (1.0 - crf / 2.0) / cutoff,
-            cutoff_sq: cutoff * cutoff,
-        };
-
-        EDSRunner {
-            aeds,
-            pairlist,
-            pairlist_algorithm,
-            parallel_forces,
-            crf_params,
-            four_pi_eps_i: gromos_core::units::four_pi_eps_i,
-            current_step: 0,
-        }
-    }
-
-    /// Update pairlist if needed
-    fn update_pairlist_if_needed(&mut self, topology: &Topology, configuration: &Configuration) {
-        if self.pairlist.needs_update() {
-            let box_dims = configuration.current().box_config.dimensions();
-            let periodicity = Rectangular::new(box_dims);
-
-            self.pairlist_algorithm.update(
-                topology,
-                configuration,
-                &mut self.pairlist,
-                &periodicity,
-            );
-            self.pairlist.reset_counter();
-        } else {
-            self.pairlist.step();
-        }
-    }
-
-    /// Calculate forces for a specific EDS state
-    fn calculate_state_forces(
-        &self,
-        _state_id: usize,
-        topology: &Topology,
-        configuration: &Configuration,
-    ) -> (f64, Vec<Vec3>, [[f64; 3]; 3]) {
-        let n_atoms = topology.num_atoms();
-        let mut forces = vec![Vec3::ZERO; n_atoms];
-        let virial = [[0.0; 3]; 3];
-        let mut total_energy = 0.0;
-
-        // Bonded forces
-        let bonded_result = calculate_bonded_forces(
-            topology,
-            configuration,
-            &box_periodicity(configuration),
-            true,
-        );
-        for (i, &force) in bonded_result.forces.iter().enumerate() {
-            forces[i] += force;
-        }
-        total_energy += bonded_result.energy;
-
-        // Nonbonded forces
-        let box_dims = configuration.current().box_config.dimensions();
-        let periodicity = Rectangular::new(box_dims);
-
-        // Convert LJ parameters
-        let lj_params_nested: Vec<Vec<NBLJParams>> = topology
-            .lj_parameters
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|params| NBLJParams {
-                        c6: params.c6,
-                        c12: params.c12,
-                        cs6: params.cs6,
-                        cs12: params.cs12,
-                    })
-                    .collect()
-            })
-            .collect();
-        let lj_params = LJParamMatrix::from_nested(&lj_params_nested);
-
-        // Convert pairlist to (u32, u32) format
-        let pairlist_short: Vec<(u32, u32)> = self.pairlist.solute_short.to_vec();
-
-        // Convert charge and iac
-
-        let iac_u32: Vec<u32> = topology.iac.iter().map(|&i| i as u32).collect();
-
-        let nonbonded_storage = if self.parallel_forces {
-            lj_crf_innerloop_parallel(
-                &configuration.current().pos,
-                &topology.charge,
-                &iac_u32,
-                &pairlist_short,
-                &lj_params,
-                &self.crf_params,
-                &periodicity,
-                self.four_pi_eps_i,
-                n_atoms,
-                EnergyGroups::single(),
-            )
-        } else {
-            let mut storage = ForceStorage::new(n_atoms);
-            lj_crf_innerloop(
-                &configuration.current().pos,
-                &topology.charge,
-                &iac_u32,
-                &pairlist_short,
-                &lj_params,
-                &self.crf_params,
-                &periodicity,
-                self.four_pi_eps_i,
-                &mut storage,
-                EnergyGroups::single(),
-            );
-            storage
-        };
-
-        // Accumulate nonbonded forces
-        for (i, &force) in nonbonded_storage.forces.iter().enumerate() {
-            forces[i] += force;
-        }
-        total_energy += nonbonded_storage.e_lj + nonbonded_storage.e_crf;
-
-        // TODO: Extract virial from nonbonded calculation
-        // For now, virial is not properly accumulated
-
-        (total_energy, forces, virial)
-    }
-
-    /// Calculate forces for all EDS states
-    pub fn calculate_all_state_forces(
-        &mut self,
-        topology: &Topology,
-        configuration: &mut Configuration,
-    ) {
-        // Update pairlist
-        self.update_pairlist_if_needed(topology, configuration);
-
-        // Clear all state forces
-        self.aeds.eds.clear_states();
-
-        // Calculate forces for each state
-        for state_id in 0..self.aeds.eds.num_states {
-            let (energy, forces, virial) =
-                self.calculate_state_forces(state_id, topology, configuration);
-
-            // Store state energy and forces
-            self.aeds.eds.states[state_id].energy = energy;
-            self.aeds.eds.states[state_id].forces = forces;
-            self.aeds.eds.states[state_id].virial = virial;
-        }
-
-        // Calculate EDS reference energy
-        self.aeds.eds.calculate_reference_energy();
-
-        // Determine current state
-        self.aeds.eds.determine_current_state();
-
-        // Check for round trips
-        self.aeds.eds.check_round_trip();
-
-        // Apply AEDS forces to configuration
-        self.aeds.apply_forces(configuration);
-
-        // Apply AEDS virial
-        self.aeds.eds.apply_virial(configuration);
-
-        // Update configuration energy with reference energy
-        configuration.current_mut().energies.potential_total = self.aeds.eds.reference_energy;
-    }
-
-    /// Perform one EDS MD step
-    pub fn md_step<I: Integrator>(
-        &mut self,
-        topology: &Topology,
-        configuration: &mut Configuration,
-        integrator: &mut I,
-        dt: f64,
-        thermostat_params: Option<&BerendsenThermostatParameters>,
-        shake_params: Option<&ShakeParameters>,
-    ) {
-        // Calculate forces for all states and apply EDS forces
-        self.calculate_all_state_forces(topology, configuration);
-
-        // Integrate
-        integrator.step(dt, topology, configuration);
-
-        // Apply constraints (SHAKE)
-        if let Some(shake_p) = shake_params {
-            shake(topology, configuration, dt, shake_p);
-        }
-
-        // Calculate kinetic energy
-        configuration
-            .current_mut()
-            .calculate_kinetic_energy(&topology.mass);
-
-        // Apply thermostat
-        if let Some(params) = thermostat_params {
-            berendsen_thermostat(topology, configuration, dt, params);
-        }
-
-        // AEDS parameter search
-        if self.aeds.search_enabled {
-            self.aeds.search_iteration(0.01, 0.05);
-        }
-
-        self.current_step += 1;
-    }
-
-    /// Run multiple EDS MD steps
-    pub fn run_md_steps<I: Integrator>(
-        &mut self,
-        topology: &Topology,
-        configuration: &mut Configuration,
-        integrator: &mut I,
-        n_steps: usize,
-        dt: f64,
-        thermostat_params: Option<&BerendsenThermostatParameters>,
-        shake_params: Option<&ShakeParameters>,
-    ) {
-        for _ in 0..n_steps {
-            self.md_step(
-                topology,
-                configuration,
-                integrator,
-                dt,
-                thermostat_params,
-                shake_params,
+            d_vr += p * state.perturbed_energy_derivatives.eds_vi[s];
+            let v = &eds.virials[s];
+            let w = &mut state.virial_tensor;
+            *w = Mat3::from_cols(
+                w.x_axis + Vec3::new(v[0][0], v[1][0], v[2][0]) * p,
+                w.y_axis + Vec3::new(v[0][1], v[1][1], v[2][1]) * p,
+                w.z_axis + Vec3::new(v[0][2], v[1][2], v[2][2]) * p,
             );
         }
+        state.energies.eds_vr = vr;
+        state.energies.special_total += vr;
+        // both records' special totals include eds_vr (gromosXX `energy.cc:592-596`)
+        state.perturbed_energy_derivatives.eds_vr = d_vr;
+        state.perturbed_energy_derivatives.special_total += d_vr;
+        Ok(())
     }
 
-    /// Get current EDS state ID
-    pub fn current_state(&self) -> usize {
-        self.aeds.eds.current_state_id
-    }
-
-    /// Get reference energy
-    pub fn reference_energy(&self) -> f64 {
-        self.aeds.eds.reference_energy
-    }
-
-    /// Get number of round trips
-    pub fn round_trips(&self) -> usize {
-        self.aeds.eds.round_trips
-    }
-
-    /// Get state visit counts
-    pub fn visit_counts(&self) -> Vec<usize> {
-        self.aeds.eds.states.iter().map(|s| s.visit_count).collect()
+    fn name(&self) -> &str {
+        "EDS"
     }
 }
 
@@ -926,105 +200,100 @@ impl EDSRunner {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_eds_creation() {
-        let eds = EDSParameters::new(
-            EDSForm::SingleS,
-            vec![0.5],
-            vec![0.0, 10.0, 20.0],
-            300.0,
-            100,
-        );
+    const BETA: f64 = 1.0 / (0.00831441 * 300.0);
 
-        assert!(eds.is_ok());
-        let eds = eds.unwrap();
-        assert_eq!(eds.num_states, 3);
-        assert_eq!(eds.states.len(), 3);
+    /// −1/β · ln Σ_k exp(−β V_eff,k) by brute force over the documented formula's terms.
+    fn lse(terms: &[f64]) -> f64 {
+        let m = terms.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        m + terms.iter().map(|t| (t - m).exp()).sum::<f64>().ln()
     }
 
+    /// The single-s fold is gromosXX's: pairwise, in state order, never a global max shift.
     #[test]
-    fn test_beta_calculation() {
-        let eds =
-            EDSParameters::new(EDSForm::SingleS, vec![0.5], vec![0.0, 10.0], 300.0, 100).unwrap();
-
-        let beta = eds.beta();
-        // β = 1/(k_B * T) = 1/(0.008314462618 * 300) ≈ 0.4006
-        assert!((beta - 0.4006).abs() < 0.001);
+    fn single_s_is_gromosxx_running_fold_in_state_order() {
+        let vi = [15.39, -16.08, 3.5];
+        let eir = [0.0, 10.0, -5.0];
+        let s = 0.3;
+        let parts: Vec<f64> = (0..3).map(|k| -BETA * s * (vi[k] - eir[k])).collect();
+        let mut sum = parts[0].max(parts[1])
+            + (1.0 + (parts[0].min(parts[1]) - parts[0].max(parts[1])).exp()).ln();
+        sum = sum.max(parts[2]) + (1.0 + (sum.min(parts[2]) - sum.max(parts[2])).exp()).ln();
+        let mut w = [0.0; 3];
+        let vr = reference_hamiltonian(&EdsForm::SingleS { s }, BETA, &eir, &vi, &mut w);
+        assert_eq!(vr.to_bits(), (-1.0 / (BETA * s) * sum).to_bits());
+        for k in 0..3 {
+            assert_eq!(w[k].to_bits(), (parts[k] - sum).exp().to_bits());
+        }
+        assert!((w.iter().sum::<f64>() - 1.0).abs() < 1e-15);
     }
 
+    /// FORMS 2 and 3 give the documented V_R, and their weights are ∂V_R/∂V_i (summing to 1).
     #[test]
-    fn test_state_probabilities() {
-        let mut eds =
-            EDSParameters::new(EDSForm::SingleS, vec![0.5], vec![0.0, 0.0], 300.0, 100).unwrap();
-
-        // Set equal energies
-        eds.states[0].energy = 100.0;
-        eds.states[1].energy = 100.0;
-
-        let probs = eds.calculate_state_probabilities();
-
-        // Should be approximately equal
-        assert!((probs[0] - 0.5).abs() < 0.01);
-        assert!((probs[1] - 0.5).abs() < 0.01);
-
-        // Should sum to 1
-        let sum: f64 = probs.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-10);
+    fn multi_s_and_pair_s_follow_the_documented_formulas() {
+        let vi = [12.0, -20.0, 4.0, -1.0];
+        let eir = [0.0, 10.0, -5.0, 2.0];
+        let n = vi.len();
+        let s_pairs = [0.3, 0.2, 0.1, 0.25, 0.4, 0.15];
+        let multi = EdsForm::MultiS {
+            s: s_pairs.to_vec(),
+        };
+        let pairs = EdsForm::PairS {
+            pairs: vec![(0, 1, 0.3), (1, 2, 0.1), (3, 1, 0.2)],
+        };
+        let documented = |form: &EdsForm, vi: &[f64]| -> f64 {
+            let term = |i: usize, j: usize, s: f64| {
+                lse(&[-BETA * s * (vi[i] - eir[i]), -BETA * s * (vi[j] - eir[j])]) / s
+            };
+            match form {
+                EdsForm::MultiS { s } => {
+                    let mut terms = Vec::new();
+                    let mut k = 0;
+                    for i in 0..n {
+                        for j in i + 1..n {
+                            terms.push(term(i, j, s[k]));
+                            k += 1;
+                        }
+                    }
+                    -1.0 / BETA * (lse(&terms) + (1.0 / (n - 1) as f64).ln())
+                },
+                EdsForm::PairS { pairs } => {
+                    let terms: Vec<f64> = pairs.iter().map(|&(i, j, s)| term(i, j, s)).collect();
+                    -1.0 / BETA * (lse(&terms) + (n as f64 / (2 * (n - 1)) as f64).ln())
+                },
+                EdsForm::SingleS { .. } => unreachable!(),
+            }
+        };
+        for form in [multi, pairs] {
+            let mut w = [0.0; 4];
+            let vr = reference_hamiltonian(&form, BETA, &eir, &vi, &mut w);
+            assert!((vr - documented(&form, &vi)).abs() < 1e-10, "{form:?}");
+            assert!(
+                (w.iter().sum::<f64>() - 1.0).abs() < 1e-14,
+                "{form:?}: {w:?}"
+            );
+            for k in 0..n {
+                let h = 1e-5;
+                let (mut up, mut dn) = (vi, vi);
+                up[k] += h;
+                dn[k] -= h;
+                let dvr = (documented(&form, &up) - documented(&form, &dn)) / (2.0 * h);
+                assert!(
+                    (w[k] - dvr).abs() < 1e-7,
+                    "{form:?} state {k}: {} vs {dvr}",
+                    w[k]
+                );
+            }
+        }
     }
 
+    /// A state no listed pair names has no weight.
     #[test]
-    fn test_round_trip_detection() {
-        let mut eds = EDSParameters::new(
-            EDSForm::SingleS,
-            vec![0.5],
-            vec![0.0, 10.0, 20.0],
-            300.0,
-            100,
-        )
-        .unwrap();
-
-        // Mark first two states as visited
-        eds.states[0].visited = true;
-        eds.states[1].visited = true;
-
-        // Not complete yet
-        assert!(!eds.check_round_trip());
-
-        // Mark last state
-        eds.states[2].visited = true;
-
-        // Now complete
-        assert!(eds.check_round_trip());
-        assert_eq!(eds.round_trips, 1);
-
-        // Flags should be reset
-        assert!(!eds.states[0].visited);
-        assert!(!eds.states[1].visited);
-        assert!(!eds.states[2].visited);
-    }
-
-    #[test]
-    fn test_aeds_acceleration_factor() {
-        let eds =
-            EDSParameters::new(EDSForm::SingleS, vec![0.5], vec![0.0, 10.0], 300.0, 100).unwrap();
-
-        let mut aeds = AEDSParameters::new(eds, 10.0, -50.0, false);
-
-        // Below E_min: no acceleration
-        aeds.eds.mixed_energy = -60.0;
-        assert_eq!(aeds.acceleration_factor(), 1.0);
-
-        // Above E_max: no acceleration
-        aeds.eds.mixed_energy = 15.0;
-        assert_eq!(aeds.acceleration_factor(), 1.0);
-
-        // At E_min: full force
-        aeds.eds.mixed_energy = -50.0;
-        assert_eq!(aeds.acceleration_factor(), 1.0);
-
-        // In middle: partial acceleration
-        aeds.eds.mixed_energy = -20.0; // Halfway between -50 and 10
-        let factor = aeds.acceleration_factor();
-        assert!(factor > 0.0 && factor < 1.0);
+    fn pair_s_state_outside_every_pair_has_zero_weight() {
+        let mut w = [0.0; 3];
+        let form = EdsForm::PairS {
+            pairs: vec![(0, 1, 0.5), (1, 0, 0.5)],
+        };
+        reference_hamiltonian(&form, BETA, &[0.0; 3], &[1.0, 2.0, 3.0], &mut w);
+        assert_eq!(w[2], 0.0);
     }
 }

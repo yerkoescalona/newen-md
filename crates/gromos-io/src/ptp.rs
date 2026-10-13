@@ -10,6 +10,7 @@
 //! - `PERTBONDANGLE`  / `PERTBONDANGLEH`   — perturbed angle types
 //! - `PERTIMPROPERDIH` / `PERTIMPROPERDIHH` — perturbed improper dihedral types
 //! - `PERTPROPERDIH`  / `PERTPROPERDIHH`   — perturbed proper dihedral types
+//! - `MPERTATOM`      — the end states of an EDS run (type and charge of each atom per state)
 //!
 //! The soft-variant blocks (PERTBONDSOFT, PERTANGLESOFT, PERTIMPROPERDIHSOFT) are
 //! skipped for now — they describe bonds/angles/impropers that are absent in one
@@ -20,8 +21,8 @@ use std::fs;
 use std::path::Path;
 
 use gromos_core::topology::{
-    PairInteraction, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
-    PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper,
+    EdsPerturbedAtom, PairInteraction, PerturbedAngle, PerturbedAtom, PerturbedAtomPair,
+    PerturbedBond, PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper,
 };
 
 use crate::IoError;
@@ -35,6 +36,99 @@ pub struct PerturbedTopology {
     pub is_perturbed: Vec<bool>,
     /// n_solute_atoms from the PERTATOMPARAM header (used to size is_perturbed)
     pub n_atoms_hint: usize,
+    /// The `MPERTATOM` block (EDS end states), if the file has one.
+    pub eds: Option<EdsPerturbation>,
+    /// The names of every block in the file except `TITLE`, sorted.
+    pub blocks: Vec<String>,
+}
+
+/// An `MPERTATOM` block (gromosXX `in_perturbation.cc:1625-1801`): the type and charge of each
+/// listed atom in every EDS end state, in file order (the order decides which of two EDS atoms
+/// owns their excluded or 1-4 pair, `Topology::apply_eds_perturbation`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdsPerturbation {
+    /// NPTB, the number of end states.
+    pub num_states: usize,
+    /// The end-state names.
+    pub state_names: Vec<String>,
+    /// One per atom line, 0-indexed seq and types, partner lists empty.
+    pub atoms: Vec<EdsPerturbedAtom>,
+}
+
+/// Parse the data lines of an `MPERTATOM` block: `NJLA NPTB`, NPTB state names, then NJLA
+/// rows `seq name IAC[0] CG[0] … IAC[NPTB-1] CG[NPTB-1]` (1-based seq and IAC). Anything after
+/// the last charge (the softness columns some files carry) is ignored, as gromosXX does.
+pub fn parse_mpertatom(lines: &[String]) -> Result<EdsPerturbation, IoError> {
+    let err = |m: String| IoError::ParseError(format!("MPERTATOM: {m}"));
+    let mut it = lines.iter();
+    let header = it
+        .next()
+        .ok_or_else(|| err("missing the NJLA NPTB line".to_string()))?;
+    let h = tokenize(header);
+    let (Some(njla), Some(nptb)) = (
+        h.first().and_then(|v| v.parse::<usize>().ok()),
+        h.get(1).and_then(|v| v.parse::<usize>().ok()),
+    ) else {
+        return Err(err(format!("bad line (NJLA NPTB): {header:?}")));
+    };
+    let names_line = it
+        .next()
+        .ok_or_else(|| err("missing the state-name line".to_string()))?;
+    let state_names: Vec<String> = tokenize(names_line).iter().map(|s| s.to_string()).collect();
+    if state_names.len() < nptb {
+        return Err(err(format!(
+            "{nptb} states but {} state names: {names_line:?}",
+            state_names.len()
+        )));
+    }
+    let state_names = state_names[..nptb].to_vec();
+    let mut atoms = Vec::with_capacity(njla);
+    for line in it {
+        let v = tokenize(line);
+        if v.len() < 2 + 2 * nptb {
+            return Err(err(format!(
+                "bad line (seq name IAC CG per state): {line:?}"
+            )));
+        }
+        let seq = v[0]
+            .parse::<usize>()
+            .ok()
+            .filter(|&s| s >= 1)
+            .ok_or_else(|| err(format!("atom sequence number wrong: {line:?}")))?;
+        let mut iac = Vec::with_capacity(nptb);
+        let mut charge = Vec::with_capacity(nptb);
+        for s in 0..nptb {
+            let t = v[2 + 2 * s]
+                .parse::<usize>()
+                .ok()
+                .filter(|&t| t >= 1)
+                .ok_or_else(|| err(format!("IAC must be a positive integer: {line:?}")))?;
+            iac.push(t - 1);
+            charge.push(
+                v[3 + 2 * s]
+                    .parse::<f64>()
+                    .map_err(|_| err(format!("bad charge: {line:?}")))?,
+            );
+        }
+        atoms.push(EdsPerturbedAtom {
+            seq: seq - 1,
+            iac,
+            charge,
+            exclusions: Vec::new(),
+            one_four_pairs: Vec::new(),
+        });
+    }
+    if atoms.len() != njla {
+        return Err(err(format!(
+            "wrong number of perturbed atoms: NJLA = {njla}, {} rows",
+            atoms.len()
+        )));
+    }
+    Ok(EdsPerturbation {
+        num_states: nptb,
+        state_names,
+        atoms,
+    })
 }
 
 /// Read a GROMOS perturbation topology file (`.pttopo`).
@@ -48,7 +142,16 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
     // Split into named blocks: block_name → Vec<non-comment lines>
     let blocks = parse_blocks(&content);
 
-    let mut result = PerturbedTopology::default();
+    let mut names: Vec<String> = blocks.keys().cloned().collect();
+    names.sort();
+    let mut result = PerturbedTopology {
+        eds: blocks
+            .get("MPERTATOM")
+            .map(|lines| parse_mpertatom(lines))
+            .transpose()?,
+        blocks: names,
+        ..Default::default()
+    };
     let ps = &mut result.perturbed_solute;
 
     // ── PERTATOMPAIR ─────────────────────────────────────────────────────────
@@ -410,9 +513,11 @@ fn parse_blocks(content: &str) -> HashMap<String, Vec<String>> {
             continue;
         }
 
-        // Block header: starts with uppercase letter, contains only alnum/underscore, no spaces.
+        // Block header: outside a block (a TITLE line or a one-word state-name line is data),
+        // starts with uppercase letter, contains only alnum/underscore, no spaces.
         // This distinguishes "PERTATOMPARAM" (header) from "3" (count line, no uppercase start).
-        let is_header = !trimmed.contains(' ')
+        let is_header = current.is_none()
+            && !trimmed.contains(' ')
             && trimmed.starts_with(|c: char| c.is_ascii_uppercase())
             && trimmed
                 .chars()
@@ -753,6 +858,45 @@ END
             ps.angles.iter().map(|a| (a.i, a.j, a.k)).collect();
         assert_eq!(angles, vec![(2, 3, 4), (0, 1, 2)]);
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn mpertatom_reads_states_and_ignores_trailing_columns() {
+        // the LiveCoMS t_05 layout: tabs, upper-case state names, softness columns at the end
+        let content = "TITLE\nEDS\nEND\nMPERTATOM\n 2  3\n# names\n   STATEA\tSTATEB   STATEC\n\
+            1  OW\t5  -0.82   22  0.0   5 -0.82   1.00  1.00\n\
+            3  HW2 21  0.41   22  0.0  21  0.41\nEND\n";
+        let path =
+            std::env::temp_dir().join(format!("gromos_ptp_mpert_{}.tmp", std::process::id()));
+        std::fs::write(&path, content).unwrap();
+        let pt = read_pttopo(&path).expect("read_pttopo");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(pt.blocks, ["MPERTATOM"]);
+        assert!(pt.perturbed_solute.is_empty());
+        let eds = pt.eds.expect("MPERTATOM");
+        assert_eq!(eds.num_states, 3);
+        assert_eq!(eds.state_names, ["STATEA", "STATEB", "STATEC"]);
+        assert_eq!(eds.atoms.len(), 2);
+        assert_eq!(eds.atoms[0].seq, 0);
+        assert_eq!(eds.atoms[0].iac, [4, 21, 4]);
+        assert_eq!(eds.atoms[0].charge, [-0.82, 0.0, -0.82]);
+        assert_eq!(eds.atoms[1].seq, 2);
+        assert_eq!(eds.atoms[1].iac, [20, 21, 20]);
+    }
+
+    #[test]
+    fn mpertatom_errors_name_the_problem() {
+        let parse = |body: &str| {
+            let lines: Vec<String> = body.lines().map(str::to_string).collect();
+            parse_mpertatom(&lines).unwrap_err().to_string()
+        };
+        // NJLA says 2, one row
+        assert!(parse("2 2\nA B\n1 CB 14 0.0 11 1.0").contains("wrong number"));
+        // a row with too few columns for NPTB states
+        assert!(parse("1 2\nA B\n1 CB 14 0.0 11").contains("bad line"));
+        assert!(parse("x 2\nA B\n").contains("NJLA NPTB"));
+        assert!(parse("1 2\nA B\n1 CB 0 0.0 11 1.0").contains("IAC"));
+        assert!(parse("1 2\nA\n").contains("state names"));
     }
 
     #[test]

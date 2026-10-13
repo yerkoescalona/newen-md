@@ -60,7 +60,7 @@ pub struct RunOptions {
     /// caller installs the reduction on the built `Forcefield`. `None`: single process.
     pub pair_partition: Option<(usize, usize)>,
     /// Unmodelled `.imd` blocks this caller accepts as passthrough (3.9 A17). The
-    /// binary allows `GAMD`/`EDS` because it applies them itself; the Python binding allows none.
+    /// binary allows `GAMD` because it applies it itself; the Python binding allows none.
     pub passthrough: crate::recipe::PassthroughPolicy,
     /// Recipe fields no `.imd` block carries, set by dotted path after `from_imd`
     /// ([`RunRecipe::set`](crate::RunRecipe::set); `md @recipe_set key=value`).

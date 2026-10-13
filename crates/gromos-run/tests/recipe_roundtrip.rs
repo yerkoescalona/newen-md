@@ -47,9 +47,9 @@ fn every_reference_input_round_trips_through_the_recipe() {
             );
             continue;
         }
-        // GAMD and EDS are applied by the binary, not the recipe, and INNERLOOP selects a kernel:
-        // the same passthrough policy the binary uses.
-        let policy = PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]);
+        // GAMD is applied by the binary, not the recipe, and INNERLOOP selects a kernel: the
+        // same passthrough policy the binary uses.
+        let policy = PassthroughPolicy::allow(["GAMD", "INNERLOOP"]);
         let (recipe, diag) = RunRecipe::from_imd_with(&imd, &policy)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(recipe.version, RECIPE_VERSION);
@@ -155,6 +155,23 @@ fn unmodelled_blocks_are_refused_unless_allowed() {
         .any(|n| n.contains("GAMD block passed through")));
     // …and it comes back out in the .imd text.
     assert!(recipe.to_imd_string(None).contains("GAMD\n1 2 3\nEND"));
+}
+
+/// AEDS and REPLICA_EDS act together with the modelled EDS block: refused by name whatever the
+/// passthrough policy.
+#[test]
+fn accelerated_and_replica_eds_are_refused_even_when_allowed() {
+    for block in ["AEDS", "REPLICA_EDS"] {
+        let text = format!("SYSTEM\n  1 0\nEND\n{block}\n  1 1 2\nEND\n");
+        let imd = parse_imd_str(&text).unwrap();
+        let err = RunRecipe::from_imd_with(&imd, &PassthroughPolicy::allow([block]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(block) && err.contains("not implemented"),
+            "{err}"
+        );
+    }
 }
 
 #[test]

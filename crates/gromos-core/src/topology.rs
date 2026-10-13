@@ -258,6 +258,43 @@ pub struct PerturbedAtomPair {
     pub b_type: PairInteraction,
 }
 
+/// One atom of an EDS multi-state solute (`MPERTATOM`, gromosXX `EDS_Perturbed_Atom`): its
+/// atom type and charge in every end state, and the excluded and 1-4 partners whose
+/// state-dependent terms it owns. `iac`/`charge` are indexed by state; `topo.iac`/`topo.charge`
+/// keep the atom's topology values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdsPerturbedAtom {
+    /// 0-based atom index.
+    pub seq: usize,
+    /// Integer atom code per end state (0-indexed).
+    pub iac: Vec<usize>,
+    /// Partial charge per end state.
+    pub charge: Vec<f64>,
+    /// Excluded partners (sorted): their reaction-field term is computed per state for this
+    /// atom and nowhere else ([`Topology::apply_eds_perturbation`]).
+    pub exclusions: Vec<usize>,
+    /// 1-4 partners (sorted), likewise per state.
+    pub one_four_pairs: Vec<usize>,
+}
+
+/// The EDS multi-state solute (`MPERTATOM` block of the perturbation topology).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EdsSolute {
+    /// Number of end states (`NPTB`, the `EDS` block's NUMSTATES).
+    pub num_states: usize,
+    /// The end-state names of the block's second line.
+    pub state_names: Vec<String>,
+    /// The EDS atoms in ascending `seq` (gromosXX keeps them in a `std::map`).
+    pub atoms: Vec<EdsPerturbedAtom>,
+}
+
+impl EdsSolute {
+    /// No EDS atom.
+    pub fn is_empty(&self) -> bool {
+        self.atoms.is_empty()
+    }
+}
+
 /// Perturbed bond (for FEP calculations)
 #[derive(Debug, Clone, Copy)]
 pub struct PerturbedBond {
@@ -683,6 +720,8 @@ pub struct Topology {
     pub solute: Solute,
     /// FEP dual-topology perturbed terms (atoms, bonds, angles, dihedrals).
     pub perturbed_solute: PerturbedSolute,
+    /// EDS end states of the solute atoms listed in `MPERTATOM` (empty without EDS).
+    pub eds_solute: EdsSolute,
 
     // Per-atom properties (flat arrays for all atoms)
     /// Integer atom codes (atom types).
@@ -704,8 +743,10 @@ pub struct Topology {
     pub exclusions: Vec<Exclusions>,
     /// 1-4 atom pairs (receive special LJ/CRF scaling).
     pub one_four_pairs: Vec<Vec<usize>>,
-    /// The `PERTATOMPAIR` pairs, per atom, sorted and symmetric: in neither list above, but
-    /// kept off the pairlist (gromosXX adds them to `all_exclusion`). Empty without such pairs.
+    /// Pairs in neither list above but kept off the pairlist (gromosXX's `all_exclusion` is
+    /// built before the perturbation topology is read), per atom, sorted and symmetric: the
+    /// `PERTATOMPAIR` pairs and the excluded and 1-4 pairs `MPERTATOM` hands to an EDS atom.
+    /// Empty without such pairs.
     pub atom_pair_exclusions: Vec<Vec<usize>>,
 
     // Chargegroups
@@ -796,6 +837,7 @@ impl Topology {
         Self {
             solute: Solute::new(),
             perturbed_solute: PerturbedSolute::new(),
+            eds_solute: EdsSolute::default(),
             iac: Vec::new(),
             mass: Vec::new(),
             inverse_mass: Vec::new(),
@@ -1419,6 +1461,89 @@ impl Topology {
             .retain(|d| !pd.contains(&(d.i, d.j, d.k, d.l)));
     }
 
+    /// Merge the EDS end states of an `MPERTATOM` block, as gromosXX's `In_Perturbation` does
+    /// (`in_perturbation.cc:1757-1777`). `atoms` come in file order with empty partner lists.
+    ///
+    /// Each atom takes over its remaining excluded and 1-4 partners: they leave
+    /// `exclusions`/`one_four_pairs` (so the standard reaction-field and 1-4 loops no longer
+    /// see the pair) and stay off the pairlist through `atom_pair_exclusions` (gromosXX's
+    /// `all_exclusion` is not updated). A pair of two EDS atoms belongs to the one listed
+    /// first. The atoms are stored in ascending `seq`, the order gromosXX's map visits them.
+    ///
+    /// Call after `build_topology()` (and `apply_perturbation`) and before `solvate()`.
+    pub fn apply_eds_perturbation(
+        &mut self,
+        num_states: usize,
+        state_names: Vec<String>,
+        atoms: Vec<EdsPerturbedAtom>,
+    ) -> Result<(), String> {
+        let n_solute = self.num_solute_atoms();
+        let n_types = self.lj_parameters.len();
+        let mut seen = vec![false; n_solute];
+        for a in &atoms {
+            if a.seq >= n_solute {
+                return Err(format!(
+                    "MPERTATOM: atom sequence number {} is not a solute atom (the solute has {n_solute})",
+                    a.seq + 1
+                ));
+            }
+            if std::mem::replace(&mut seen[a.seq], true) {
+                return Err(format!("MPERTATOM: atom {} listed twice", a.seq + 1));
+            }
+            if a.iac.len() != num_states || a.charge.len() != num_states {
+                return Err(format!(
+                    "MPERTATOM: atom {} has {} types and {} charges for {num_states} states",
+                    a.seq + 1,
+                    a.iac.len(),
+                    a.charge.len()
+                ));
+            }
+            if let Some(&t) = a.iac.iter().find(|&&t| t >= n_types) {
+                return Err(format!(
+                    "MPERTATOM: atom {} has atom type {} but the topology has {n_types}",
+                    a.seq + 1,
+                    t + 1
+                ));
+            }
+        }
+        let mut atoms = atoms;
+        for atom in &mut atoms {
+            let e = atom.seq;
+            for (lists, owned) in [
+                (&mut self.exclusions, &mut atom.exclusions),
+                (&mut self.one_four_pairs, &mut atom.one_four_pairs),
+            ] {
+                let Some(list) = lists.get_mut(e) else {
+                    continue;
+                };
+                *owned = std::mem::take(list);
+                for &j in owned.iter() {
+                    if let Some(l) = lists.get_mut(j) {
+                        l.retain(|&x| x != e);
+                    }
+                }
+            }
+            for &j in atom.exclusions.iter().chain(&atom.one_four_pairs) {
+                for (a, b) in [(e, j), (j, e)] {
+                    if self.atom_pair_exclusions.len() <= a {
+                        self.atom_pair_exclusions.resize(a + 1, Vec::new());
+                    }
+                    let l = &mut self.atom_pair_exclusions[a];
+                    if let Err(pos) = l.binary_search(&b) {
+                        l.insert(pos, b);
+                    }
+                }
+            }
+        }
+        atoms.sort_by_key(|a| a.seq);
+        self.eds_solute = EdsSolute {
+            num_states,
+            state_names,
+            atoms,
+        };
+        Ok(())
+    }
+
     /// Expand solvent molecules (GROMOS: topo.solvate(0, nsm))
     ///
     /// Uses the solvent template stored on the topology to create `nsm` copies.
@@ -1595,6 +1720,103 @@ mod tests {
         }
         assert_eq!(topo.num_solute_atoms(), 2);
         assert_eq!(topo.num_atoms(), 2);
+    }
+
+    /// Five solute atoms with symmetric exclusion and 1-4 lists and two atom types.
+    fn five_atoms() -> Topology {
+        let mut topo = Topology::new();
+        for i in 0..5 {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: format!("A{}", i + 1),
+                residue_nr: 1,
+                residue_name: "RES".into(),
+                iac: 0,
+                mass: 12.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        topo.lj_parameters = vec![vec![LJParameters::new(0.0, 0.0); 2]; 2];
+        // excluded: (0,1) (0,2) (1,2) (2,3); 1-4: (0,3) (1,4)
+        topo.exclusions = vec![vec![1, 2], vec![0, 2], vec![0, 1, 3], vec![2], vec![]];
+        topo.one_four_pairs = vec![vec![3], vec![4], vec![], vec![0], vec![1]];
+        topo
+    }
+
+    fn eds_atom(seq: usize) -> EdsPerturbedAtom {
+        EdsPerturbedAtom {
+            seq,
+            iac: vec![0, 1],
+            charge: vec![0.1, -0.1],
+            exclusions: Vec::new(),
+            one_four_pairs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn eds_atoms_take_their_excluded_and_one_four_pairs() {
+        let mut topo = five_atoms();
+        // atom 3 (seq 2) is listed before atom 1 (seq 0)
+        topo.apply_eds_perturbation(
+            2,
+            vec!["A".into(), "B".into()],
+            vec![eds_atom(2), eds_atom(0)],
+        )
+        .unwrap();
+        let eds = &topo.eds_solute;
+        assert_eq!(eds.atoms.iter().map(|a| a.seq).collect::<Vec<_>>(), [0, 2]);
+        // atom 2 (listed first) owns all of its partners, the EDS-EDS pair (0,2) included
+        assert_eq!(eds.atoms[1].exclusions, [0, 1, 3]);
+        assert_eq!(eds.atoms[1].one_four_pairs, Vec::<usize>::new());
+        // atom 0 keeps what atom 2 left: (0,1) excluded, (0,3) 1-4
+        assert_eq!(eds.atoms[0].exclusions, [1]);
+        assert_eq!(eds.atoms[0].one_four_pairs, [3]);
+        // the standard lists no longer hold any pair of an EDS atom, and stay symmetric
+        assert_eq!(
+            topo.exclusions,
+            vec![vec![], vec![], vec![], vec![], vec![]]
+        );
+        assert_eq!(
+            topo.one_four_pairs,
+            vec![vec![], vec![4], vec![], vec![], vec![1]]
+        );
+        // but the pairlist keeps every one of them out (gromosXX `all_exclusion`)
+        for (i, j) in [(0, 1), (0, 2), (1, 2), (2, 3), (0, 3), (1, 4)] {
+            assert!(
+                topo.is_excluded_or_14(i, j) && topo.is_excluded_or_14(j, i),
+                "({i},{j})"
+            );
+        }
+        assert!(!topo.is_excluded_or_14(0, 4));
+    }
+
+    #[test]
+    fn the_first_listed_eds_atom_owns_an_eds_eds_pair() {
+        let mut topo = five_atoms();
+        topo.apply_eds_perturbation(2, vec![], vec![eds_atom(0), eds_atom(2)])
+            .unwrap();
+        let eds = &topo.eds_solute;
+        assert_eq!(eds.atoms[0].exclusions, [1, 2]);
+        assert_eq!(eds.atoms[1].exclusions, [1, 3]);
+    }
+
+    #[test]
+    fn mpertatom_rows_are_checked_against_the_topology() {
+        let err = |atoms: Vec<EdsPerturbedAtom>| {
+            five_atoms()
+                .apply_eds_perturbation(2, vec![], atoms)
+                .unwrap_err()
+        };
+        assert!(err(vec![eds_atom(5)]).contains("not a solute atom"));
+        assert!(err(vec![eds_atom(1), eds_atom(1)]).contains("listed twice"));
+        let mut a = eds_atom(1);
+        a.iac = vec![0, 2];
+        assert!(err(vec![a]).contains("atom type 3"));
+        let mut a = eds_atom(1);
+        a.charge.pop();
+        assert!(err(vec![a]).contains("for 2 states"));
     }
 
     #[test]

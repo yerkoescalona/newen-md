@@ -414,6 +414,31 @@ pub fn instantiate(
     let mut distance_restraints = (0, 0);
     // the constraint algorithms add their virial only for the atomic virial
     let mut atomic_virial = false;
+    // the force field computes end states exactly when the topology has EDS atoms; only the
+    // EDS algorithm uses them
+    let eds_states = plan.iter().find_map(|a| match a {
+        AlgorithmSpec::Eds(e) => Some(e.num_states),
+        _ => None,
+    });
+    match (eds_states, topo.eds_solute.is_empty()) {
+        (Some(n), false) if n != topo.eds_solute.num_states => {
+            return Err(RunError::InvalidPlan(format!(
+                "the EDS step mixes {n} states, the topology's MPERTATOM block has {}",
+                topo.eds_solute.num_states
+            )))
+        },
+        (Some(_), true) => {
+            return Err(RunError::InvalidPlan(
+                "an EDS step without EDS atoms (no MPERTATOM in the topology)".to_string(),
+            ))
+        },
+        (None, false) => {
+            return Err(RunError::InvalidPlan(
+                "the topology has EDS atoms (MPERTATOM) but the plan has no EDS step".to_string(),
+            ))
+        },
+        _ => {},
+    }
 
     for spec in plan {
         match spec {
@@ -430,6 +455,19 @@ pub fn instantiate(
             },
             AlgorithmSpec::Orchestrator { terms } => {
                 seq.push(instantiate_orchestrator(terms, topo, periodicity)?);
+            },
+            AlgorithmSpec::Eds(e) => {
+                use gromos_integrators::eds::{Eds, EdsForm};
+                let form = match e.form {
+                    1 => EdsForm::SingleS {
+                        s: e.s.first().copied().unwrap_or(1.0),
+                    },
+                    2 => EdsForm::MultiS { s: e.s.clone() },
+                    _ => EdsForm::PairS {
+                        pairs: e.pairs.clone(),
+                    },
+                };
+                seq.push(Box::new(Eds::new(form, e.eir.clone(), e.beta)));
             },
             AlgorithmSpec::LatticeShift => seq.push(Box::new(LatticeShift::new())),
             AlgorithmSpec::LeapFrogVelocity => seq.push(Box::new(LeapFrogVelocity::new())),
@@ -678,7 +716,7 @@ pub fn build_sequence_from_recipe(
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
     let topo = &prepared.topology;
-    let plan = build_plan(recipe, topo, prepared.physical_constants.four_pi_eps_i)?;
+    let plan = build_plan(recipe, topo, &prepared.physical_constants)?;
     validate_plan(&plan)?;
     let periodicity = periodicity_of(prepared);
     let inst = instantiate(&plan, topo, &prepared.configuration, &periodicity)?;
@@ -701,6 +739,7 @@ pub fn build_sequence_from_plan(
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
     crate::plan::check_perturbation(recipe)?;
+    crate::plan::check_eds(recipe)?;
     crate::plan::check_plan_against_recipe(recipe, &plan)?;
     validate_plan(&plan)?;
     let periodicity = periodicity_of(prepared);
@@ -855,7 +894,7 @@ mod tests {
     }
 
     /// `.imd` blocks the test-only legacy builder never modelled.
-    const LEGACY_UNMODELLED_BLOCKS: [&str; 2] = ["LAMBDAS", "PRECALCLAM"];
+    const LEGACY_UNMODELLED_BLOCKS: [&str; 3] = ["LAMBDAS", "PRECALCLAM", "EDS"];
 
     #[test]
     fn plan_matches_legacy_builder_bit_for_bit() {
@@ -868,9 +907,9 @@ mod tests {
         dirs.sort();
         assert!(dirs.len() >= 40);
         // The same passthrough policy the binary uses: blocks that carry no physics for the
-        // recipe (GAMD and EDS are applied by the binary itself, INNERLOOP selects a kernel).
+        // recipe (GAMD is applied by the binary itself, INNERLOOP selects a kernel).
         let options = RunOptions {
-            passthrough: crate::recipe::PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]),
+            passthrough: crate::recipe::PassthroughPolicy::allow(["GAMD", "INNERLOOP"]),
             ..RunOptions::default()
         };
         let mut compared = 0;
@@ -899,8 +938,8 @@ mod tests {
             if loaded.imd.rcrf != loaded.imd.rcutl {
                 continue;
             }
-            // Nor did it model individual λ (LAMBDAS) or extended TI (PRECALCLAM): an input
-            // carrying either has no legacy counterpart either.
+            // Nor did it model individual λ (LAMBDAS), extended TI (PRECALCLAM) or EDS: an input
+            // carrying any of them has no legacy counterpart either.
             let unmodelled: Vec<&str> = LEGACY_UNMODELLED_BLOCKS
                 .iter()
                 .copied()
@@ -1056,12 +1095,7 @@ mod tests {
         let prepared = (loaded.prepare)();
         let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
         recipe.inputs = loaded.inputs.clone();
-        let plan = build_plan(
-            &recipe,
-            &prepared.topology,
-            prepared.physical_constants.four_pi_eps_i,
-        )
-        .unwrap();
+        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
         assert!(build_sequence_from_plan(&recipe, plan.clone(), &prepared).is_ok());
         let mut slow_growth = recipe.clone();
         slow_growth.perturbation.dlamt = 0.01;

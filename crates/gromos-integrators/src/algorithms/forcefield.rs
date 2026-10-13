@@ -18,15 +18,17 @@ use gromos_forces::bonded::{
     BondedPrecalc, TermLambda,
 };
 use gromos_forces::nonbonded::{
+    eds_one_four_interactions, eds_pair_interactions, eds_rf_excluded_interactions,
     lj_crf_innerloop, lj_crf_innerloop_cg_grouped, lj_crf_innerloop_cg_grouped_novirial,
     lj_crf_innerloop_cg_grouped_parallel, lj_crf_innerloop_cg_grouped_parallel_novirial,
     lj_crf_innerloop_novirial, lj_crf_innerloop_parallel, lj_crf_innerloop_parallel_novirial,
     one_four_interaction_loop, perturbed_atom_pair_interactions, perturbed_excluded_correction,
     perturbed_one_four_correction, perturbed_pairlist_correction, perturbed_self_energy_correction,
     rf_excluded_interactions, solvent_innerloop, solvent_innerloop_novirial,
-    solvent_innerloop_parallel, solvent_innerloop_parallel_novirial, AtomPairKernel, CGPairGroup,
-    CRFParameters, EnergyGroups, ForceStorage, GroupEnergies, LJParamMatrix, LJParameters,
-    PertAtomInfo, PertNBCorrection, PerturbedLambdaParams, PrecalcNonbonded,
+    solvent_innerloop_parallel, solvent_innerloop_parallel_novirial, split_eds_pairs,
+    AtomPairKernel, CGPairGroup, CRFParameters, EdsAtoms, EdsStorage, EnergyGroups, ForceStorage,
+    GroupEnergies, LJParamMatrix, LJParameters, PertAtomInfo, PertNBCorrection,
+    PerturbedLambdaParams, PrecalcNonbonded,
 };
 use gromos_forces::restraints::{
     DisresPrecalc, DistanceRestraints, PerturbedDistanceRestraints, PositionRestraints,
@@ -182,6 +184,57 @@ pub struct Forcefield {
     /// reused until the next, as gromosXX's `m_longrange_storage` is
     /// (`perturbed_nonbonded_set.cc:87-96, 280-300`).
     longrange_perturbed: [LongRangePerturbed; 2],
+    /// The EDS end-state terms (`None` without EDS atoms in the topology).
+    eds: Option<EdsNonbonded>,
+    /// Scratch for the molecular-virial correction of every EDS end state.
+    eds_virial_correction: Vec<[[f64; 3]; 3]>,
+}
+
+/// The EDS part of the force field: the atoms with end states, their pairlist pairs and the
+/// per-state storages, allocated once. Every rank of an MPI run computes all of it (no
+/// reduction): the EDS pairs are taken off the pairlist before it is partitioned.
+struct EdsNonbonded {
+    atoms: EdsAtoms,
+    /// The pairs of `solute_short` / `solute_long` with an EDS atom, the EDS atom first.
+    short_pairs: Vec<(u32, u32)>,
+    long_pairs: Vec<(u32, u32)>,
+    /// Whether the pairlist held now has had its EDS pairs taken out.
+    routed: bool,
+    short: EdsStorage,
+    /// The long-range pairs: on a twin-range run recomputed on pairlist steps only and reused
+    /// in between, as gromosXX's `m_longrange_storage` (`perturbed_nonbonded_set.cc:87-96`).
+    long: EdsStorage,
+    /// The 1-4 and reaction-field excluded and self terms.
+    local: EdsStorage,
+}
+
+impl EdsNonbonded {
+    fn new(atoms: EdsAtoms, n_atoms: usize) -> Self {
+        let n = atoms.num_states;
+        Self {
+            atoms,
+            short_pairs: Vec::new(),
+            long_pairs: Vec::new(),
+            routed: false,
+            short: EdsStorage::new(n, n_atoms),
+            long: EdsStorage::new(n, n_atoms),
+            local: EdsStorage::new(n, n_atoms),
+        }
+    }
+
+    /// Take the pairs with an EDS atom out of the solute pairlists (solute–solute and
+    /// solute–solvent; the solvent lists hold none).
+    fn route(&mut self, pairlist: &mut PairlistContainer) {
+        self.short_pairs.clear();
+        self.long_pairs.clear();
+        split_eds_pairs(
+            &mut pairlist.solute_short,
+            &self.atoms,
+            &mut self.short_pairs,
+        );
+        split_eds_pairs(&mut pairlist.solute_long, &self.atoms, &mut self.long_pairs);
+        self.routed = true;
+    }
 }
 
 /// One long-range pairlist's cached perturbed correction (see `Forcefield::longrange_perturbed`).
@@ -256,6 +309,8 @@ impl Forcefield {
             bonded_precalc: BondedPrecalc::default(),
             disres_precalc: DisresPrecalc::default(),
             longrange_perturbed: Default::default(),
+            eds: None,
+            eds_virial_correction: Vec::new(),
         }
     }
 
@@ -338,6 +393,8 @@ impl Forcefield {
         self.iac_u32 = topo.iac.iter().map(|&i| i as u32).collect();
         self.longrange_forces = vec![Vec3::ZERO; n];
         self.pert_info = Self::build_pert_info(topo, self.global_alphlj, self.global_alphc);
+        self.eds = EdsAtoms::from_topology(topo, n).map(|atoms| EdsNonbonded::new(atoms, n));
+        self.eds_virial_correction = vec![[[0.0; 3]; 3]; topo.eds_solute.num_states];
         for lr in &mut self.longrange_perturbed {
             *lr = LongRangePerturbed {
                 correction: None,
@@ -459,6 +516,15 @@ impl Algorithm for Forcefield {
         }
 
         // --- 1. Update pairlist if needed ---
+        // EDS: the pairs with an EDS atom leave the pairlist for the end-state kernel, on the
+        // initial pairlist (generated before the first `apply`) and after every update, before
+        // any MPI partition.
+        if let Some(eds) = self.eds.as_mut() {
+            if !eds.routed {
+                eds.route(&mut self.pairlist);
+                self.cg_groups_built = false;
+            }
+        }
         // The initial pairlist was generated before the first `apply`: reduce it to this
         // rank's share once (later updates are reduced right after the update below).
         if let (Some((rank, size)), false) = (self.pair_partition, self.partition_applied) {
@@ -478,6 +544,9 @@ impl Algorithm for Forcefield {
             let t_pl = self.timing_enabled.then(std::time::Instant::now);
             self.pairlist_algorithm
                 .update(topo, conf, &mut self.pairlist, &self.periodicity);
+            if let Some(eds) = self.eds.as_mut() {
+                eds.route(&mut self.pairlist);
+            }
             if let Some((rank, size)) = self.pair_partition {
                 for list in [
                     &mut self.pairlist.solute_short,
@@ -1468,6 +1537,80 @@ impl Algorithm for Forcefield {
                 (0.0, 0.0, 0.0)
             };
 
+        // --- 3c. EDS end states (gromosXX `Perturbed_Nonbonded_Set`, the EDS cases): the
+        // pairlist pairs (the long-range ones on pairlist steps of a twin-range run), then the
+        // 1-4 and the reaction-field excluded and self terms of every EDS atom.
+        if let Some(eds) = self.eds.as_mut() {
+            let pos = &conf.current().pos;
+            let lists: [(&[(u32, u32)], &mut EdsStorage, bool); 2] = [
+                (&eds.short_pairs, &mut eds.short, true),
+                (
+                    &eds.long_pairs,
+                    &mut eds.long,
+                    !self.twin_range_active || longrange_recomputed,
+                ),
+            ];
+            for (pairs, out, recompute) in lists {
+                if !recompute {
+                    continue;
+                }
+                out.clear();
+                if need_virial {
+                    eds_pair_interactions::<_, true>(
+                        pairs,
+                        pos,
+                        &eds.atoms,
+                        &self.charges,
+                        &self.iac_u32,
+                        &self.lj_params,
+                        &self.crf_params,
+                        &self.periodicity,
+                        self.four_pi_eps_i,
+                        out,
+                    );
+                } else {
+                    eds_pair_interactions::<_, false>(
+                        pairs,
+                        pos,
+                        &eds.atoms,
+                        &self.charges,
+                        &self.iac_u32,
+                        &self.lj_params,
+                        &self.crf_params,
+                        &self.periodicity,
+                        self.four_pi_eps_i,
+                        out,
+                    );
+                }
+            }
+            eds.local.clear();
+            eds_one_four_interactions(
+                pos,
+                &eds.atoms,
+                &self.charges,
+                &self.iac_u32,
+                &self.lj_params,
+                &self.crf_params,
+                &self.periodicity,
+                self.four_pi_eps_i,
+                1.0, // the Coulomb scaling of the standard 1-4 term
+                &mut eds.local,
+            );
+            if self.rf_excluded {
+                eds_rf_excluded_interactions(
+                    pos,
+                    &eds.atoms,
+                    &self.charges,
+                    &self.crf_params,
+                    &self.periodicity,
+                    self.four_pi_eps_i,
+                    &mut eds.local,
+                    &mut self.local_storage,
+                    egroups,
+                );
+            }
+        }
+
         // --- 4. Assemble forces and energies ---
         // Sum the pair terms across MPI ranks (identity without a reducer), then add the terms
         // every rank computed in full.
@@ -1654,8 +1797,49 @@ impl Algorithm for Forcefield {
             );
         }
 
+        // --- 4a. EDS end states into the configuration: (1-4 + RF) + (short + long), the order
+        // gromosXX sums them (`perturbed_nonbonded_set.cc:270-376`). The special part and the
+        // λ derivatives are zero: no EDS distance restraints, no EDS–perturbed pairs.
+        if let Some(eds) = self.eds.as_ref() {
+            let n_states = eds.atoms.num_states;
+            let (state, ends) = conf.current_and_eds_mut();
+            if ends.num_states() != n_states || ends.forces[0].len() != n_atoms {
+                ends.resize(n_states, n_atoms);
+            }
+            for e in [&mut state.energies, &mut state.perturbed_energy_derivatives] {
+                if e.eds_vi.len() != n_states {
+                    e.resize_eds(n_states);
+                }
+            }
+            for s in 0..n_states {
+                let (local, short, long) = (
+                    eds.local.state_forces(s),
+                    eds.short.state_forces(s),
+                    eds.long.state_forces(s),
+                );
+                for (i, f) in ends.forces[s].iter_mut().enumerate() {
+                    *f = local[i] + (short[i] + long[i]);
+                }
+                let v = &mut ends.virials[s];
+                for a in 0..3 {
+                    for b in 0..3 {
+                        v[a][b] = eds.local.virial[s][a][b]
+                            + (eds.short.virial[s][a][b] + eds.long.virial[s][a][b]);
+                    }
+                }
+                state.energies.eds_vi[s] =
+                    eds.local.energy[s] + (eds.short.energy[s] + eds.long.energy[s]);
+                state.energies.eds_vi_special[s] = 0.0;
+                state.perturbed_energy_derivatives.eds_vi[s] = 0.0;
+                state.perturbed_energy_derivatives.eds_vi_special[s] = 0.0;
+            }
+        }
+
         // --- 4b. Position restraints (special interaction) ---
-        if !self.position_restraints.restraints.is_empty() {
+        // `special_total` is assigned every step (the EDS step adds V_R to it)
+        if self.position_restraints.restraints.is_empty() {
+            conf.current_mut().energies.special_total = 0.0;
+        } else {
             let e_posres = if egroups.is_grouped() {
                 self.restraint_groups.fill(0.0);
                 let e = self.position_restraints.calculate_all_grouped(
@@ -1765,7 +1949,12 @@ impl Algorithm for Forcefield {
         // --- 5. atomic_to_molecular_virial: correct virial from atomic to molecular ---
         // GROMOS: last interaction in forcefield, subtracts intramolecular virial contributions
         if self.virial_type == VirialType::Molecular && !topo.pressure_groups.is_empty() {
-            apply_molecular_virial_correction(topo, conf, &self.periodicity);
+            apply_molecular_virial_correction(
+                topo,
+                conf,
+                &self.periodicity,
+                &mut self.eds_virial_correction,
+            );
         }
 
         Ok(())
@@ -1955,14 +2144,21 @@ fn compute_molecular_ke_tensor(
 ///   corrP(b, a) += force(a) * r(b)
 /// Finally: virial -= corrP
 ///
-/// Operates on conf.current() (GROMOS convention).
+/// Operates on conf.current() (GROMOS convention). The EDS end-state virials get the same
+/// correction from their own forces (`prepare_virial.cc:177-255`); `corr_states` is scratch
+/// with one entry per end state.
 fn apply_molecular_virial_correction(
     topo: &Topology,
     conf: &mut Configuration,
     periodicity: &Periodicity,
+    corr_states: &mut [[[f64; 3]; 3]],
 ) {
     let pos = &conf.current().pos;
     let force = &conf.current().force;
+    let end_forces = &conf.eds.forces;
+    for c in corr_states.iter_mut() {
+        *c = [[0.0; 3]; 3];
+    }
 
     let mut corr = [[0.0f64; 3]; 3];
 
@@ -2004,6 +2200,14 @@ fn apply_molecular_virial_correction(
                     corr[b][a] += fv[a] * rv[b];
                 }
             }
+            for (c, fs) in corr_states.iter_mut().zip(end_forces) {
+                let fv = [fs[i].x, fs[i].y, fs[i].z];
+                for a in 0..3 {
+                    for b in 0..3 {
+                        c[b][a] += fv[a] * rv[b];
+                    }
+                }
+            }
         }
     }
 
@@ -2013,12 +2217,19 @@ fn apply_molecular_virial_correction(
         Vec3::new(corr[0][1], corr[1][1], corr[2][1]),
         Vec3::new(corr[0][2], corr[1][2], corr[2][2]),
     );
-    let state = conf.current_mut();
+    let (state, ends) = conf.current_and_eds_mut();
     state.virial_tensor = Mat3::from_cols(
         state.virial_tensor.x_axis - corr_mat.x_axis,
         state.virial_tensor.y_axis - corr_mat.y_axis,
         state.virial_tensor.z_axis - corr_mat.z_axis,
     );
+    for (v, c) in ends.virials.iter_mut().zip(corr_states.iter()) {
+        for a in 0..3 {
+            for b in 0..3 {
+                v[a][b] -= c[a][b];
+            }
+        }
+    }
 }
 
 #[cfg(test)]

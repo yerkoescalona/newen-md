@@ -56,6 +56,13 @@ impl From<CoordinateData> for Coordinates {
 pub enum PrepareNote {
     /// A perturbation topology was given but `NTG=0`: ignored, as gromosXX does.
     PerturbationIgnored { path: PathBuf },
+    /// The EDS end states of a perturbation topology's `MPERTATOM` block were merged.
+    EdsLoaded {
+        /// number of EDS atoms
+        atoms: usize,
+        /// number of end states
+        states: usize,
+    },
     /// A perturbation topology was merged (`NTG != 0`).
     PerturbationLoaded {
         atoms: usize,
@@ -124,28 +131,67 @@ pub fn prepare_system(
 ) -> Result<Prepared, RunError> {
     let mut notes = Vec::new();
 
-    // 1. Perturbation topology (FEP), only when NTG != 0 — gromosXX ignores it otherwise.
+    // 1. Perturbation topology: its PERT* blocks when NTG != 0 (FEP), its MPERTATOM block with
+    //    EDS on (gromosXX ignores the file with neither, and requires it for EDS).
+    let eds = imd.eds.as_ref().filter(|e| e.enabled);
+    if eds.is_some() && inputs.pttopo.is_none() && topology.eds_solute.is_empty() {
+        return Err(RunError::MissingInput {
+            flag: "pttopo",
+            reason: "EDS = 1 (the end states come from its MPERTATOM block)".to_string(),
+        });
+    }
     if let Some(path) = &inputs.pttopo {
-        if imd.ntg != 0 {
+        if imd.ntg != 0 || eds.is_some() {
             let pt = read_pttopo(path).map_err(|e| RunError::Io {
                 what: format!("perturbation topology '{}'", path.display()),
                 source: e,
             })?;
-            topology.apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
-            let p = &topology.perturbed_solute;
-            notes.push(PrepareNote::PerturbationLoaded {
-                atoms: p.atoms.len(),
-                bonds: p.bonds.len(),
-                angles: p.angles.len(),
-                impropers: p.improper_dihedrals.len(),
-                dihedrals: p.proper_dihedrals.len(),
-                soft_bonds: p.soft_bonds.len(),
-                soft_angles: p.soft_angles.len(),
-                soft_impropers: p.soft_impropers.len(),
-            });
+            check_eds_perturbation(eds, &pt, imd.ntg != 0)?;
+            if imd.ntg != 0 {
+                topology.apply_perturbation(pt.perturbed_solute.clone(), pt.is_perturbed.clone());
+                let p = &topology.perturbed_solute;
+                notes.push(PrepareNote::PerturbationLoaded {
+                    atoms: p.atoms.len(),
+                    bonds: p.bonds.len(),
+                    angles: p.angles.len(),
+                    impropers: p.improper_dihedrals.len(),
+                    dihedrals: p.proper_dihedrals.len(),
+                    soft_bonds: p.soft_bonds.len(),
+                    soft_angles: p.soft_angles.len(),
+                    soft_impropers: p.soft_impropers.len(),
+                });
+            }
+            // (the object path may have merged it already: `Topology.apply_perturbation`)
+            let merged = !topology.eds_solute.is_empty();
+            if let Some(m) = pt.eds.as_ref().filter(|_| eds.is_some() && !merged) {
+                topology
+                    .apply_eds_perturbation(m.num_states, m.state_names.clone(), m.atoms.clone())
+                    .map_err(RunError::Inconsistent)?;
+                notes.push(PrepareNote::EdsLoaded {
+                    atoms: m.atoms.len(),
+                    states: m.num_states,
+                });
+            }
         } else {
             notes.push(PrepareNote::PerturbationIgnored { path: path.clone() });
         }
+    }
+    match (eds, topology.eds_solute.is_empty()) {
+        (Some(e), false) if e.num_states != topology.eds_solute.num_states => {
+            return Err(RunError::Inconsistent(format!(
+                "Number of perturbed states given in perturbation topology ({}) and input file \
+                 ({}) do not match",
+                topology.eds_solute.num_states, e.num_states
+            )))
+        },
+        (None, false) => {
+            return Err(RunError::Inconsistent(
+                "the topology carries EDS end states (MPERTATOM) but the input has no EDS \
+                 block with EDS = 1"
+                    .to_string(),
+            ))
+        },
+        _ => {},
     }
     if imd.ntg == 0 && !topology.perturbed_solute.atoms.is_empty() {
         // Only reachable from the object path (`Topology.apply_perturbation` in Python): the
@@ -336,6 +382,15 @@ pub fn prepare_system(
             .precalc
             .resize(pc.nr_lambdas, n_groups);
     }
+    if !topology.eds_solute.is_empty() {
+        // gromosXX `Configuration::init` (`configuration.cc:403-419`): the end states in both
+        // records and the end-state forces and virials
+        let n = topology.eds_solute.num_states;
+        let state = conf.current_mut();
+        state.energies.resize_eds(n);
+        state.perturbed_energy_derivatives.resize_eds(n);
+        conf.eds.resize(n, n_atoms);
+    }
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)
@@ -365,6 +420,73 @@ pub fn prepare_system(
         truncoct_box,
         notes,
     })
+}
+
+/// Whether the `MPERTATOM` block of a perturbation topology can be merged (gromosXX
+/// `in_perturbation.cc`): required with EDS on, which also forbids the PERT* blocks of a run without perturbation
+/// ("block X not supported for eds!", `:1805-1820`) and needs NPTB = NUMSTATES (`:1650`);
+/// refused without EDS (gromosXX reads it anyway and finds NPTB ≠ 0 states). Atoms perturbed
+/// in both ways, and perturbed atom pairs of an EDS atom, are refused: the EDS–perturbed pair
+/// kernels (`perturbed_nonbonded_innerloop.cc` cases 2-5) are not ported.
+fn check_eds_perturbation(
+    eds: Option<&gromos_io::imd::EdsBlock>,
+    pt: &gromos_io::ptp::PerturbedTopology,
+    perturbed: bool,
+) -> Result<(), RunError> {
+    let err = |m: String| Err(RunError::Inconsistent(m));
+    let Some(e) = eds else {
+        if pt.eds.is_some() {
+            return err(
+                "the perturbation topology has an MPERTATOM block (EDS end states) but the \
+                 input has no EDS block with EDS = 1"
+                    .to_string(),
+            );
+        }
+        return Ok(());
+    };
+    let Some(m) = &pt.eds else {
+        return err(
+            "EDS = 1 but the perturbation topology has no MPERTATOM block (the end states)"
+                .to_string(),
+        );
+    };
+    if m.num_states != e.num_states {
+        return err(format!(
+            "Number of perturbed states given in perturbation topology ({}) and input file ({}) \
+             do not match",
+            m.num_states, e.num_states
+        ));
+    }
+    if !perturbed {
+        if let Some(b) = pt.blocks.iter().find(|b| b.as_str() != "MPERTATOM") {
+            return err(format!(
+                "block {b} not supported for eds! (the perturbation topology of an EDS run \
+                 without PERTURBATION NTG = 1 holds MPERTATOM only)"
+            ));
+        }
+    } else {
+        let eds_atom = |i: usize| m.atoms.iter().any(|a| a.seq == i);
+        if !pt.perturbed_solute.atoms.is_empty() {
+            return err(
+                "EDS with perturbed atoms (PERTATOMPARAM): the EDS–perturbed pair kernels are \
+                 not ported"
+                    .to_string(),
+            );
+        }
+        if let Some(p) = pt
+            .perturbed_solute
+            .atom_pairs
+            .iter()
+            .find(|p| eds_atom(p.i) || eds_atom(p.j))
+        {
+            return err(format!(
+                "PERTATOMPAIR {}-{} involves an EDS atom: not supported",
+                p.i + 1,
+                p.j + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Partition the atoms into energy groups from the `FORCE` block's NRE (1-based last atom of
@@ -733,6 +855,120 @@ mod tests {
         .err()
         .expect("refused");
         assert!(err.to_string().contains("bond 4-5"), "{err}");
+    }
+
+    /// An EDS run of the vacuum aladip with `pttopo` (in `shared/`, or a file written here).
+    fn eds_prepare(
+        ntg: i32,
+        n_states: usize,
+        pttopo: Option<PathBuf>,
+    ) -> Result<Prepared, RunError> {
+        let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+        let constants = parsed.physical_constants;
+        let coords: Coordinates =
+            read_coordinates(shared().join("../aladip_vacuum/aladip_vacuum.conf"))
+                .unwrap()
+                .into();
+        let imd = ImdParameters {
+            ntg,
+            eds: Some(gromos_io::imd::EdsBlock {
+                enabled: true,
+                form: 1,
+                num_states: n_states,
+                s: vec![0.5],
+                pairs: Vec::new(),
+                eir: vec![0.0; n_states],
+            }),
+            ..Default::default()
+        };
+        let inputs = RunInputs {
+            pttopo,
+            ..Default::default()
+        };
+        prepare_system(&imd, build_topology(parsed), constants, coords, &inputs)
+    }
+
+    fn tmp_ptp(tag: &str, text: &str) -> PathBuf {
+        let p =
+            std::env::temp_dir().join(format!("gromos_prepare_{tag}_{}.ptp", std::process::id()));
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    #[test]
+    fn eds_merges_mpertatom_and_sizes_the_end_states() {
+        let p = eds_prepare(0, 2, Some(shared().join("aladip_eds2.mpt"))).unwrap();
+        let eds = &p.topology.eds_solute;
+        assert_eq!(eds.num_states, 2);
+        assert_eq!(
+            eds.atoms.iter().map(|a| a.seq).collect::<Vec<_>>(),
+            [0, 3, 10]
+        );
+        // CB (1) owns its excluded partners 2, 3 and N (4), an EDS atom listed after it
+        assert!(eds.atoms[0].exclusions.contains(&3));
+        assert!(!eds.atoms[1].exclusions.contains(&0));
+        assert!(p.topology.exclusions[0].is_empty() && p.topology.is_excluded_or_14(0, 3));
+        let c = &p.configuration;
+        assert_eq!(c.current().energies.eds_vi.len(), 2);
+        assert_eq!(c.old().perturbed_energy_derivatives.eds_vi.len(), 2);
+        assert_eq!(c.eds.num_states(), 2);
+        assert!(p.notes.iter().any(|n| matches!(
+            n,
+            PrepareNote::EdsLoaded {
+                atoms: 3,
+                states: 2
+            }
+        )));
+    }
+
+    #[test]
+    fn eds_refuses_inconsistent_perturbation_topologies() {
+        let err = |r: Result<Prepared, RunError>| r.err().expect("refused").to_string();
+        // no @pttopo
+        let e = err(eds_prepare(0, 2, None));
+        assert!(e.contains("pttopo"), "{e}");
+        // NPTB ≠ NUMSTATES
+        let e = err(eds_prepare(0, 3, Some(shared().join("aladip_eds2.mpt"))));
+        assert!(e.contains("do not match"), "{e}");
+        // no MPERTATOM
+        let e = err(eds_prepare(1, 2, Some(shared().join("aladip.pttopo"))));
+        assert!(e.contains("no MPERTATOM"), "{e}");
+        // PERT* blocks without perturbation
+        let mpert = std::fs::read_to_string(shared().join("aladip_eds2.mpt")).unwrap();
+        let bonded = "PERTBONDSTRETCH\n1\n2 4 26 20\nEND\n";
+        let path = tmp_ptp("pertblock", &format!("{mpert}{bonded}"));
+        let e = err(eds_prepare(0, 2, Some(path.clone())));
+        assert!(e.contains("PERTBONDSTRETCH not supported for eds"), "{e}");
+        // …which a perturbed run reads
+        assert!(eds_prepare(1, 2, Some(path.clone())).is_ok());
+        std::fs::remove_file(path).ok();
+        // perturbed atoms and EDS atoms in one run
+        let atom = "PERTATOMPARAM\n1\n7 1 C 12 12.011 0.38 12 12.011 0.38 0.5 0.5\nEND\n";
+        let path = tmp_ptp("pertatom", &format!("{mpert}{atom}"));
+        let e = err(eds_prepare(1, 2, Some(path.clone())));
+        assert!(e.contains("PERTATOMPARAM"), "{e}");
+        std::fs::remove_file(path).ok();
+        // MPERTATOM without EDS
+        let mut imd = perturbed(1, 1);
+        imd.nsm = 0;
+        let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+        let constants = parsed.physical_constants;
+        let coords: Coordinates =
+            read_coordinates(shared().join("../aladip_vacuum/aladip_vacuum.conf"))
+                .unwrap()
+                .into();
+        let inputs = RunInputs {
+            pttopo: Some(shared().join("aladip_eds2.mpt")),
+            ..Default::default()
+        };
+        let e = err(prepare_system(
+            &imd,
+            build_topology(parsed),
+            constants,
+            coords,
+            &inputs,
+        ));
+        assert!(e.contains("MPERTATOM") && e.contains("no EDS block"), "{e}");
     }
 
     #[test]

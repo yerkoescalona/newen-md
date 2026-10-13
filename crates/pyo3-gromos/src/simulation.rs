@@ -662,6 +662,20 @@ impl PySimulation {
         Ok(d)
     }
 
+    /// EDS reference-state energy V_R (kJ/mol) at the last step (`.tre` slot 35, part of
+    /// `total_energy` through the special energy, not of `potential_energy`); 0 without EDS.
+    #[getter]
+    fn eds_vr(&self) -> f64 {
+        self.configuration.old().energies.eds_vr
+    }
+
+    /// EDS end-state energies V_i (kJ/mol) at the last step, one per state (the `.tre`'s
+    /// `# eds` rows); empty without EDS.
+    #[getter]
+    fn eds_vi(&self) -> Vec<f64> {
+        self.configuration.old().energies.eds_vi.clone()
+    }
+
     /// Kinetic energy (kJ/mol).
     #[getter]
     fn kinetic_energy(&self) -> f64 {

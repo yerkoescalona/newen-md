@@ -5,6 +5,102 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.57] (unreleased)
+
+**EDS through the recipe** (1.8): an `EDS` block and an `MPERTATOM` perturbation topology run
+through the one builder and reproduce gromosXX's end-state energies, reference Hamiltonian, mixed
+forces and `.tre`; the binary-only EDS code is gone. Eight new references; 88 pass.
+
+### Added
+
+- **`EDS` block, modelled** (`gromos_io::imd::EdsBlock`, `RunRecipe::eds`, Python
+  `Recipe.eds`): gromosXX's token stream (`in_parameter.cc:3843-3961`) — EDS, FORM, NUMSTATES
+  (FORM 1-3 and NUMSTATES ≥ 2 even with EDS = 0), the S of the form (one; N(N−1)/2 in pair
+  order; N−1 rows `i j S`), EIR; left-over tokens are an error, EDS = 0 included. `imd_write`
+  writes it, so it round-trips.
+- **`MPERTATOM`** (`gromos_io::ptp::parse_mpertatom`, `gromos_core::EdsSolute`): `NJLA NPTB`,
+  the state names, per atom `seq name IAC CG` per state (trailing softness columns ignored, as
+  gromosXX does). `prepare_system` requires `@pttopo` with EDS on, checks NPTB = NUMSTATES, refuses
+  PERT* blocks in an EDS run without perturbation ("block X not supported for eds!") and an
+  `MPERTATOM` without EDS, and hands each EDS atom its excluded and 1-4 pairs
+  (`Topology::apply_eds_perturbation`, `in_perturbation.cc:1757-1777`) while they stay off the
+  pairlist. Python's `Topology.apply_perturbation` merges it too.
+- **End-state nonbonded terms** (`gromos-forces/src/nonbonded/eds.rs`): pairs with an EDS atom
+  leave the solute pairlists after every update (the EDS atom first, `insert_pair`) and are
+  computed once per state with the state's type and charge (cases 0 and 1 of
+  `perturbed_nonbonded_innerloop.cc:84-165`), into per-state forces, virials and energies
+  allocated once; the long-range ones on pairlist steps only; the 1-4 pairs with cs6/cs12; with
+  NSLFEXCL the RF self term (topology charge taken out of the standard total, `½·e_rf(q_s²)`
+  per state) and the excluded pairs per state; the molecular-virial correction per state. The
+  standard kernels are untouched; every MPI rank computes the EDS terms in full.
+- **The EDS step** (`gromos_integrators::eds::Eds`, plan kind `eds`, right after the force
+  field): β = 1/(k_B T) with T of the first bath and k_B from PHYSICALCONSTANTS, V_R, the weights
+  p_i, F += Σ p_i F_i, W += Σ p_i W_i, `eds_vr` = Σ p_i ∂V_i/∂λ on the derivatives; V_R is
+  booked in `Energy::eds_vr` and the special energy, not the potential.
+- **Output**: `ENERGY03` slot 35 and the `# eds` section with one row per state (V_i, its
+  nonbonded and special parts, offset 0, V_i twice), the same in `FREEENERDERIVS03`; an
+  `EDS reference` line on the step printout. Python: `Simulation.eds_vr`, `Simulation.eds_vi`.
+- Refusals, each with a unit test: no coupled bath (every TAU = −1), baths at different or zero
+  temperature, NTEM 2/3, unconstrained solvent (NTCS 0, vacuum included), flexible SHAKE,
+  triclinic or truncated-octahedral box, lattice sums, NLRELE 4 (shifted RF, not ported), QM/ML
+  terms, GAMD, PRECALCLAM, EDS with perturbed atoms (the EDS–perturbed kernels are not ported),
+  FORM 3 pair states outside 1..N, MPERTATOM IAC 0; AEDS and REPLICA_EDS by name whatever the
+  passthrough policy.
+- References: `aladip_vacuum_eds` (FORM 1, N = 2), `aladip_vacuum_eds3` (N = 3),
+  `aladip_eds_solv` (20 SPC, two baths, NTC 3, twin range NSNB 5, an EDS–EDS excluded and 1-4
+  pair, the self-term subtraction), `two_waters_eds` (LiveCoMS t_05, four states, dummy types,
+  three energy groups) — native gromosXX, whole-block; `aladip_vacuum_eds_multis_fixed`,
+  `aladip_vacuum_eds_pairs_fixed` — native + `patches/D2_eds_weights.patch`, whole-block;
+  `aladip_vacuum_eds_multis`, `aladip_vacuum_eds_pairs` — released gromosXX, frame 0's end-state
+  energies (and FORM 3's V_R) only (`compare` in `input.toml`), as its forces are defective.
+
+### Corrected (gromosXX defect not reproduced)
+
+- **EDS FORM 2 and 3 weights follow the documented formulas** (`parameter.h:624-658`), what
+  native + D2 computes: the released `eds.cc` seeds the log-prefactors with 0 (`:518, 620`),
+  drops the first update's `− max` (`:550-551, 647-648`), skips the multi-s pairs (0, j ≥ 2)
+  (`:557`, V_R wrong for N ≥ 3) and never books Σ p_i ∂V_i/∂λ (`:603-604, 704-705`). No
+  switch reproduces it (decided in 1.8; the patch documents it). F = −∇V_R for all three forms
+  (`gromos-run/tests/eds_forces.rs`: 5 atoms × 3 axes, Richardson over δ = 1e-4 and 1e-5 nm,
+  max deviation 3.5e-8 / 5.4e-7 / 1.3e-7 kJ mol⁻¹ nm⁻¹ for FORMS 1/2/3, every state weighted
+  ≥ 5 %).
+
+### Removed
+
+- The `eds` binary, the EDS path of `md` (`EdsBlock` parsing, the after-step application,
+  `eds_stats.dat`/`eds_vr.dat`), `gromos-io` `input/eds_block.rs` and `output/eds_stats.rs`,
+  `gromos-analysis`'s `eds_ana` (its input files no longer exist; the GROMOS chain is
+  `ene_ana → dfmult`), and the old `gromos-integrators` `eds` module (`EDSRunner`,
+  `EDSParameters`, the undriven AEDS search). `md` passes only `GAMD` (and `INNERLOOP`) through.
+
+### Reproduced gromosXX quirks
+
+- An EDS atom's excluded and 1-4 pairs leave the standard lists but not the pairlist
+  exclusions; the first-listed of two EDS atoms owns their pair; the RF self term is booked with
+  the topology charge and taken back out of `crf_energy[g][g]`; the 1-4 and RF-excluded end-state
+  virials count for every virial type, the pairs' only with a virial; the single-s log-sum-exp
+  is a running pairwise fold in state order (`eds.cc:409-424`). See `.claude/porting.md`.
+
+### Changed
+
+- `build_plan` takes the topology's `PhysicalConstants` (k_B for EDS), not `four_pi_eps_i`.
+- The `.ptp` reader takes a block header only outside a block (a one-word `TITLE` line was read
+  as a block).
+- The force field assigns `special_total` every step (0 without position restraints).
+
+### Verified
+
+- References: 88 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 3 passed. The six whole-block EDS systems agree with gromosXX to the
+  last printed digit (energies within 4e-15 kJ/mol, forces within 2e-9 kJ mol⁻¹ nm⁻¹).
+- gromos++ `ene_ana @prop eds_vr e1 e2` → `dfmult @temp 300` on `aladip_eds_solv` gives the same
+  numbers from gromosXX's `.tre` and ours (DF_1_R 9.0898900, DF_2_1 11.696755, DF_2_R 20.786645
+  kJ/mol).
+- Every non-EDS reference's output is byte-identical to the 0.0.56 binary (81 systems).
+- Timing against the 0.0.56 binary (n = 5, interleaved, one thread, mean ± s.d.):
+  `ch4_water_fep_l025` 500 steps 11.436 ± 0.022 s vs 11.492 ± 0.069 s, `water_216_box` 10000
+  steps 6.446 ± 0.038 s vs 6.490 ± 0.194 s — unchanged.
+
 ## [0.0.56] (2026-10-13)
 
 **Corrected: `PERTATOMPAIR` pairs with a perturbed atom now use the intended kernel by default**

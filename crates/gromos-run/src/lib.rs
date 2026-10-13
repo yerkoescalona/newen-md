@@ -62,6 +62,6 @@ pub use constraints::ConstraintSelection;
 pub use dof::{total_dof, BathDof};
 pub use error::RunError;
 pub use inputs::{ParallelPolicy, RunInputs, RunOptions};
-pub use plan::{build_plan, plan_from_json, plan_to_json, validate_plan, AlgorithmSpec};
+pub use plan::{build_plan, plan_from_json, plan_to_json, validate_plan, AlgorithmSpec, EdsPlan};
 pub use prepare::{prepare_system, Coordinates, PrepareNote, Prepared};
-pub use recipe::{Diagnostics, PassthroughPolicy, RunRecipe, TermSpec, RECIPE_VERSION};
+pub use recipe::{Diagnostics, Eds, PassthroughPolicy, RunRecipe, TermSpec, RECIPE_VERSION};

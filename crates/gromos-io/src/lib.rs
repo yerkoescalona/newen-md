@@ -55,12 +55,12 @@ pub use free_energy::{
 };
 pub use g96::{write_por, write_rpr};
 pub use imd::{
-    parse_imd_str, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PrecalcLamBlock,
-    PressureParameters, TempBathParameters,
+    parse_imd_str, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
+    PrecalcLamBlock, PressureParameters, TempBathParameters,
 };
 pub use imd_write::{write_imd, write_imd_file};
-pub use input::{EdsBlock, GamdBlock, ReplicaBlock};
-pub use output::{EdsStatsWriter, EdsVrWriter, GamdBoostWriter, GamdStatsWriter};
+pub use input::{GamdBlock, ReplicaBlock};
+pub use output::{GamdBoostWriter, GamdStatsWriter};
 pub use pdb::write_pdb_positions;
 pub use ptp::{read_pttopo, PerturbedTopology, PtpWriter};
 pub use trajectory::TrajectoryWriter;

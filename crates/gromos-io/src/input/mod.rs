@@ -1,4 +1,3 @@
-pub mod eds_block;
 /// Input file parsers for GROMOS .imd format
 ///
 /// This module contains parsers for various input file blocks
@@ -6,6 +5,5 @@ pub mod eds_block;
 pub mod gamd_block;
 pub mod replica_block;
 
-pub use eds_block::EdsBlock;
 pub use gamd_block::GamdBlock;
 pub use replica_block::ReplicaBlock;

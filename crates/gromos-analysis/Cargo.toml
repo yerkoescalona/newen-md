@@ -224,10 +224,6 @@ name = "rep_ana"
 path = "src/bin/free_energy/rep_ana.rs"
 
 [[bin]]
-name = "eds_ana"
-path = "src/bin/free_energy/eds_ana.rs"
-
-[[bin]]
 name = "gamd_ana"
 path = "src/bin/free_energy/gamd_ana.rs"
 

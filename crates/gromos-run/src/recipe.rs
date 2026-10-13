@@ -13,16 +13,17 @@
 //!   bath, no COM removal, no pressure coupling …) — never a "default" value smuggled in; the
 //! parameter defaults in `gromos-io` were aligned to that (3.9 A18).
 //!
-//! Blocks the recipe does not model (GAMD, EDS, QMMM, …) are refused unless the caller lists
-//! them in a [`PassthroughPolicy`]; allowed ones ride along verbatim in `passthrough`.
+//! Blocks the recipe does not model (GAMD, QMMM, …) are refused unless the caller lists
+//! them in a [`PassthroughPolicy`]; allowed ones ride along verbatim in `passthrough`. AEDS and
+//! REPLICA_EDS are refused whatever the policy: they act together with the modelled EDS block.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use gromos_core::lambdas::InteractionLambda;
 pub use gromos_forces::nonbonded::AtomPairKernel;
 use gromos_io::imd::{
-    ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra, PrecalcLamBlock, PressureParameters,
-    TempBathParameters,
+    EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
+    PrecalcLamBlock, PressureParameters, TempBathParameters,
 };
 use gromos_io::imd_write::{write_imd, MODELLED_BLOCKS};
 use serde::{Deserialize, Serialize};
@@ -690,6 +691,56 @@ impl Lambdas {
     }
 }
 
+/// The `EDS` block: enveloping distribution sampling over `num_states` end states, whose types
+/// and charges come from the perturbation topology's `MPERTATOM` block (gromosXX `read_EDS`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Eds {
+    /// EDS = 1 (`false`: the block is present and off).
+    pub enabled: bool,
+    /// FORM: 1 one smoothness parameter, 2 one per state pair, 3 one per listed pair.
+    pub form: i32,
+    /// NUMSTATES
+    pub num_states: usize,
+    /// S: FORM 1 one value, FORM 2 N(N−1)/2 in pair order (1,2), (1,3) … (2,3) …
+    #[serde(default)]
+    pub s: Vec<f64>,
+    /// FORM 3: N−1 rows `(i, j, s)`, states 1-based as in the file.
+    #[serde(default)]
+    pub pairs: Vec<(i32, i32, f64)>,
+    /// EIR: the energy offset of every state (kJ/mol).
+    #[serde(default)]
+    pub eir: Vec<f64>,
+}
+
+impl Eds {
+    fn from_block(b: &EdsBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            form: b.form,
+            num_states: b.num_states,
+            s: b.s.clone(),
+            pairs: b.pairs.iter().map(|p| (p.i, p.j, p.s)).collect(),
+            eir: b.eir.clone(),
+        }
+    }
+
+    fn to_block(&self) -> EdsBlock {
+        EdsBlock {
+            enabled: self.enabled,
+            form: self.form,
+            num_states: self.num_states,
+            s: self.s.clone(),
+            pairs: self
+                .pairs
+                .iter()
+                .map(|&(i, j, s)| EdsStatePair { i, j, s })
+                .collect(),
+            eir: self.eir.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Outputs {
@@ -734,6 +785,9 @@ pub struct RunRecipe {
     pub ensemble: Ensemble,
     pub minimisation: Minimisation,
     pub perturbation: Perturbation,
+    /// EDS block; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eds: Option<Eds>,
     pub outputs: Outputs,
     pub execution: Execution,
     /// Auxiliary input files (perturbation topology, restraint specifications) — part of the run
@@ -880,6 +934,23 @@ impl RunRecipe {
         for (name, lines) in &imd.raw_blocks {
             if MODELLED_BLOCKS.contains(&name.as_str()) {
                 continue;
+            }
+            // refused whatever the policy: both drive the EDS machinery (gromosXX refuses AEDS
+            // together with EDS = 1, `in_parameter.cc:4029-4041`)
+            match name.as_str() {
+                "AEDS" => {
+                    return Err(RunError::Recipe(
+                        "AEDS block: accelerated EDS is not implemented (plain EDS is the EDS \
+                         block; gromosXX refuses AEDS together with EDS = 1)"
+                            .to_string(),
+                    ))
+                },
+                "REPLICA_EDS" => {
+                    return Err(RunError::Recipe(
+                        "REPLICA_EDS block: replica-exchange EDS is not implemented".to_string(),
+                    ))
+                },
+                _ => {},
             }
             if !policy.allowed.contains(name) {
                 return Err(RunError::UnknownBlock {
@@ -1092,6 +1163,7 @@ impl RunRecipe {
                 }),
                 atom_pair_kernel: AtomPairKernel::default(),
             },
+            eds: imd.eds.as_ref().map(Eds::from_block),
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
                 ntwse: imd.ntwse,
@@ -1249,6 +1321,7 @@ impl RunRecipe {
                 min_lambda: p.min_lambda,
                 max_lambda: p.max_lambda,
             }),
+            eds: r.eds.as_ref().map(Eds::to_block),
             ntem: r.minimisation.method,
             nmin: r.minimisation.min_steps,
             dele: r.minimisation.tolerance,

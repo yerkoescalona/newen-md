@@ -1,5 +1,6 @@
 //! Nonbonded interactions: Lennard-Jones and Coulomb (CRF)
 
+pub mod eds;
 pub mod embedding;
 pub mod excluded;
 pub mod innerloops;
@@ -12,6 +13,10 @@ mod qm_subprocess;
 pub mod schnet;
 pub mod xtb;
 
+pub use eds::{
+    eds_one_four_interactions, eds_pair_interactions, eds_rf_excluded_interactions,
+    split_eds_pairs, EdsAtoms, EdsStorage,
+};
 pub use embedding::ElectrostaticEmbedding;
 pub use excluded::*;
 pub use innerloops::*;

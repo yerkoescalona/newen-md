@@ -121,6 +121,34 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   (`atom_pair_state`, `gromos-forces/src/nonbonded/perturbed.rs`), pinned by
   `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`, `OAI.Physics.Gromos.Divergences`):
   `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`, `crfSoftEnergy_shift`.
+- **EDS multi-s / pair-s weights** (A; corrected without a reproducing mode, decided in 1.8:
+  the released branch's forces are not the gradient of any energy it reports, and the patch
+  reproduces it). gromosXX 247c95c4 seeds the per-state log-prefactors with 0 instead of −∞
+  (`eds.cc:518, 620`), drops the `− max` of the first-pair update (`:550-551, 647-648`: a + ln 2
+  for a ≥ 0), multi-s never visits the pairs (0, j ≥ 2) (`:557`, so its V_R is wrong for N ≥ 3)
+  and neither form books Σ p_i ∂V_i/∂λ (`:603-604, 704-705`). gromos-rs implements the documented
+  formulas (`parameter.h:624-658`; `reference_hamiltonian`, `gromos-integrators/src/eds.rs`),
+  what native + `patches/D2_eds_weights.patch` computes, pinned by
+  `aladip_vacuum_eds_multis_fixed`/`_pairs_fixed`; the released binary pins only the end-state
+  energies (and FORM 3's V_R) at frame 0 (`aladip_vacuum_eds_multis`/`_pairs`), and
+  `gromos-run/tests/eds_forces.rs` checks F = −∇V_R for all three forms. FORM 1 is gromosXX's,
+  bit for bit, including its running pairwise log-sum-exp in state order (`eds.cc:409-424`).
+- **EDS end-state bookkeeping** (B), reproduced (`gromos-forces/src/nonbonded/eds.rs`,
+  `Topology::apply_eds_perturbation`): `MPERTATOM` moves an EDS atom's excluded and 1-4 pairs off
+  the standard lists, the first-listed atom owning an EDS–EDS pair, but they stay off the
+  pairlist — `all_exclusion` was built before (`in_perturbation.cc:1757-1777`,
+  `in_topology.cc:2111`); the standard RF self term books the topology charge and the EDS loop
+  takes it back out of `crf_energy[g][g]` (`perturbed_nonbonded_innerloop.cc:3264-3293`); the
+  end-state virials of the 1-4 and RF-excluded terms are kept for every virial type, the pairs'
+  only with a virial (`perturbed_nonbonded_set.cc:306-318, 367-376`); the long-range EDS pairs
+  of a twin-range run are computed on pairlist steps only. Pinned by the four FORM 1 EDS
+  references.
+- **EDS inputs gromosXX does not check** (refused): FORM 3 pair states outside 1..N
+  (`eds.cc:635, 660` index with them), an `MPERTATOM` IAC of 0 (unsigned, wraps;
+  `in_perturbation.cc:1721-1727`). Not ported, refused by name: the EDS–perturbed pair kernels
+  (cases 2-5, so EDS with `PERTATOMPARAM`), the shifted reaction field (NLRELE 4), AEDS,
+  REPLICA_EDS; SD and the coarse-grained and virtual-atom variants need blocks the recipe does
+  not model.
 - **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
   SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
   it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated
