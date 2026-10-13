@@ -21,6 +21,8 @@ pub struct ShakeAlgorithm {
     /// Whether SHAKE should also constrain the solvent (false when NTCS selects
     /// a different solvent algorithm, e.g. SETTLE/LINCS)
     pub include_solvent: bool,
+    /// The run computes the atomic virial (`VIRIAL 1`): only then does SHAKE add its virial.
+    pub atomic_virial: bool,
     /// Precomputed constraint data and reusable buffers (initialized in init())
     buffers: Option<ShakeBuffers>,
 }
@@ -32,6 +34,7 @@ impl ShakeAlgorithm {
             shake_initial_positions: false,
             shake_initial_velocities: false,
             include_solvent: true,
+            atomic_virial: false,
             buffers: None,
         }
     }
@@ -87,7 +90,15 @@ impl Algorithm for ShakeAlgorithm {
     ) -> Result<(), String> {
         let result = if let Some(ref mut buffers) = self.buffers {
             let precalc = topo.precalc_lambdas.filter(|p| p.active(sim.step));
-            shake_buffered(topo, conf, sim.dt, &self.params, buffers, precalc)
+            shake_buffered(
+                topo,
+                conf,
+                sim.dt,
+                &self.params,
+                buffers,
+                precalc,
+                self.atomic_virial,
+            )
         } else {
             // Fallback if init() wasn't called (shouldn't happen in normal flow)
             shake(topo, conf, sim.dt, &self.params)

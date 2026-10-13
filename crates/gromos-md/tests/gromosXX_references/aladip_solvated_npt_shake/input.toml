@@ -1,0 +1,22 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_solvated_npt_shake"
+description = "Aladip + 20 SPC, NTC 3 + solvent SHAKE under a Berendsen barostat (VIRIAL 2)"
+level = 5
+isolates = "PRESSURESCALE with SHAKE: constraint virial only for the atomic virial; VOLUMEPRESSURE03"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_solvated_npt_shake.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

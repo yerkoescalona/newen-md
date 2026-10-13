@@ -15,25 +15,41 @@ use gromos_integrators::algorithms::{in_bath, BathRange};
 
 use crate::ConstraintSelection;
 
+/// The degrees of freedom of one temperature bath, as gromosXX's `bath_struct` keeps them.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BathDof {
+    /// All of the bath's kinetic degrees of freedom (`dof`): what the thermostat couples to.
+    pub dof: f64,
+    /// Centre-of-mass translation (`com_dof`).
+    pub com: f64,
+    /// Internal and rotational (`ir_dof`).
+    pub ir: f64,
+}
+
 /// Degrees of freedom per temperature bath, as gromosXX's
 /// `Multibath::calculate_degrees_of_freedom` counts them:
 ///
 /// * every DOFSET range contributes `3 × (number of temperature groups starting in it)` to the
 ///   COM bath and the remaining `3 × (atoms in the range)` minus that to the IR bath;
 /// * constraints are subtracted from the bath that owns their atoms;
-/// * NDFMIN is spread over the baths in proportion to their degrees of freedom.
+/// * roto-translational constraints (`rottrans`) take 3 from the COM and 3 from the IR degrees
+///   of freedom of atom 1's baths (`topology.cc:1370-1402`);
+/// * NDFMIN is spread over the baths in proportion to their degrees of freedom, from `dof`
+///   only (`multibath.cc:139-149`).
 ///
-/// With one bath over the whole system this is exactly [`total_dof`].
-pub fn bath_dof(
+/// With one bath over the whole system `dof` is exactly [`total_dof`] less [`rottrans_dof`].
+pub fn bath_dofs(
     topo: &Topology,
     sel: &ConstraintSelection,
     ntc: NtcMode,
     ndfmin: i32,
     n_baths: usize,
     ranges: &[BathRange],
-) -> Vec<f64> {
+    rottrans: bool,
+) -> Vec<BathDof> {
     let n_atoms = topo.num_atoms();
-    let mut dof = vec![0.0; n_baths];
+    let mut com = vec![0.0; n_baths];
+    let mut ir = vec![0.0; n_baths];
     let mut last: i64 = -1;
     for r in ranges {
         let group_starts = topo
@@ -43,8 +59,8 @@ pub fn bath_dof(
             .filter(|&first| first as i64 > last && first <= r.last_atom)
             .count();
         let atoms_in_range = r.last_atom as i64 - last;
-        dof[r.com_bath] += 3.0 * group_starts as f64;
-        dof[r.ir_bath] += 3.0 * atoms_in_range as f64 - 3.0 * group_starts as f64;
+        com[r.com_bath] += 3.0 * group_starts as f64;
+        ir[r.ir_bath] += 3.0 * atoms_in_range as f64 - 3.0 * group_starts as f64;
         last = r.last_atom as i64;
     }
     // constraints go to the IR bath of their atoms, half to each end
@@ -52,8 +68,8 @@ pub fn bath_dof(
     let ir_bath = |atom: usize| in_bath(ranges, atom).1;
     if sel.solute_constrained() {
         for (i, j) in ShakeBuffers::new(topo, ntc, false).solute_constraint_pairs() {
-            dof[ir_bath(i)] -= 0.5;
-            dof[ir_bath(j)] -= 0.5;
+            ir[ir_bath(i)] -= 0.5;
+            ir[ir_bath(j)] -= 0.5;
         }
     }
     if sel.solvent_constrained() {
@@ -63,18 +79,58 @@ pub fn bath_dof(
         for m in 0..topo.num_solvent_molecules() {
             let first = n_solute + m * atoms_per_molecule;
             if first < n_atoms {
-                dof[ir_bath(first)] -= per_molecule as f64;
+                ir[ir_bath(first)] -= per_molecule as f64;
             }
         }
     }
+    if rottrans && topo.num_solute_atoms() > 0 {
+        let (com_bath, ir_bath) = in_bath(ranges, 0);
+        com[com_bath] -= 3.0;
+        ir[ir_bath] -= 3.0;
+    }
+    let mut baths: Vec<BathDof> = com
+        .iter()
+        .zip(&ir)
+        .map(|(&com, &ir)| BathDof {
+            dof: com + ir,
+            com,
+            ir,
+        })
+        .collect();
     // NDFMIN in proportion to each bath's degrees of freedom (gromosXX's "Martin Stroet edit")
-    let total: f64 = dof.iter().sum();
+    let total: f64 = baths.iter().map(|b| b.dof).sum();
     if ndfmin != 0 && total > 0.0 {
-        for d in dof.iter_mut() {
-            *d -= ndfmin as f64 * (*d / total);
+        for b in baths.iter_mut() {
+            b.dof -= ndfmin as f64 * (b.dof / total);
         }
     }
-    dof
+    baths
+}
+
+/// [`bath_dofs`]' total degrees of freedom per bath.
+pub fn bath_dof(
+    topo: &Topology,
+    sel: &ConstraintSelection,
+    ntc: NtcMode,
+    ndfmin: i32,
+    n_baths: usize,
+    ranges: &[BathRange],
+    rottrans: bool,
+) -> Vec<f64> {
+    bath_dofs(topo, sel, ntc, ndfmin, n_baths, ranges, rottrans)
+        .iter()
+        .map(|b| b.dof)
+        .collect()
+}
+
+/// The degrees of freedom roto-translational constraints remove from a single bath: 3 COM and
+/// 3 internal-rotational when there is a solute (`topology.cc:1370-1402`).
+pub fn rottrans_dof(topo: &Topology, rottrans: bool) -> f64 {
+    if rottrans && topo.num_solute_atoms() > 0 {
+        6.0
+    } else {
+        0.0
+    }
 }
 
 /// Total kinetic degrees of freedom of the system.

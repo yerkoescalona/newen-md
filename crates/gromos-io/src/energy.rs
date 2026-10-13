@@ -208,14 +208,17 @@ impl EnergyFrame {
         }
     }
 
-    /// What the `VOLUMEPRESSURE03` block of this frame prints.
+    /// What the `VOLUMEPRESSURE03` block of this frame prints: one bath at the frame's
+    /// temperature (no COM/IR split, scaling 1) and the scalar pressure on the diagonal of the
+    /// pressure tensor.
     pub fn volume_pressure(&self) -> VolumePressure {
+        let p = self.pressure;
         VolumePressure {
             mass: self.mass,
-            temperature: self.temperature,
+            baths: vec![[self.temperature, 0.0, 0.0, 1.0]],
             volume: self.volume,
-            pressure: self.pressure,
             box_vectors: self.box_vectors,
+            pressure_tensor: [[p, 0.0, 0.0], [0.0, p, 0.0], [0.0, 0.0, p]],
             virial_tensor: self.virial_tensor,
             kinetic_tensor: self.kinetic_tensor,
         }
@@ -248,17 +251,21 @@ impl EnergyFrame {
     }
 }
 
-/// What a `VOLUMEPRESSURE03` block prints: the system's mass, its temperature (one row per
-/// bath, the same value), the volume and box, the pressure, and the virial and molecular
-/// kinetic-energy tensors (`[a][b]`).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// What a `VOLUMEPRESSURE03` block prints (gromosXX `_print_volumepressurered_helper`,
+/// `out_configuration.cc:3270-3346`): the system's mass, per bath its temperatures, the volume
+/// and box, then the pressure, virial and kinetic-energy tensors (`[a][b]`), each preceded by
+/// its trace / 3.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct VolumePressure {
     pub mass: f64,
-    pub temperature: f64,
+    /// One row per bath: total, centre-of-mass and internal-rotational temperature and the
+    /// thermostat's scaling factor.
+    pub baths: Vec<[f64; 4]>,
     pub volume: f64,
-    pub pressure: f64,
     /// Box vectors K, L, M as rows.
     pub box_vectors: [[f64; 3]; 3],
+    pub pressure_tensor: [[f64; 3]; 3],
+    /// The virial as written, −½·Σ r⊗f.
     pub virial_tensor: [[f64; 3]; 3],
     pub kinetic_tensor: [[f64; 3]; 3],
 }
@@ -493,7 +500,10 @@ impl EnergyWriter {
     /// Append one frame: `TIMESTEP`, `ENERGY03` and `VOLUMEPRESSURE03` blocks.
     pub fn write_frame(&mut self, frame: &EnergyFrame) -> Result<(), IoError> {
         let energy = frame.to_energy(self.n_baths, self.n_groups);
-        self.write_energy(frame.step, frame.time, &energy, &frame.volume_pressure())
+        let mut vp = frame.volume_pressure();
+        let bath = vp.baths[0];
+        vp.baths.resize(self.n_baths, bath);
+        self.write_energy(frame.step, frame.time, &energy, &vp)
     }
 
     /// Append one frame of the engine: a `TIMESTEP` block, the `ENERGY03` block printed from
@@ -521,9 +531,10 @@ impl EnergyWriter {
         writeln!(w, "# mass")?;
         writeln!(w, "{}", num(vp.mass))?;
         writeln!(w, "# temperature")?;
+        // the layout's bath count (the `NUM_BATHS` of the header); missing rows are zero
         writeln!(w, "{nb}")?;
-        for _ in 0..nb {
-            writeln!(w, "{}", row(&[vp.temperature, 0.0, 0.0, 1.0]))?;
+        for i in 0..nb {
+            writeln!(w, "{}", row(&vp.baths.get(i).copied().unwrap_or([0.0; 4])))?;
         }
         writeln!(w, "# volume")?;
         writeln!(w, "{}", num(vp.volume))?;
@@ -531,11 +542,12 @@ impl EnergyWriter {
             writeln!(w, "{}", row(r))?;
         }
         writeln!(w, "# pressure")?;
-        writeln!(w, "{}", num(vp.pressure))?;
-        writeln!(w, "{}", num(0.0))?;
-        writeln!(w, "{}", num(0.0))?;
-        for _ in 0..3 {
-            writeln!(w, "{}", row(&[0.0; 3]))?;
+        let third_trace = |m: &[[f64; 3]; 3]| (m[0][0] + m[1][1] + m[2][2]) / 3.0;
+        writeln!(w, "{}", num(third_trace(&vp.pressure_tensor)))?;
+        writeln!(w, "{}", num(third_trace(&vp.virial_tensor)))?;
+        writeln!(w, "{}", num(third_trace(&vp.kinetic_tensor)))?;
+        for r in &vp.pressure_tensor {
+            writeln!(w, "{}", row(r))?;
         }
         for r in &vp.virial_tensor {
             writeln!(w, "{}", row(r))?;

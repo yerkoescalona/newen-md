@@ -59,7 +59,7 @@ pub use build::{
 };
 pub use bundle::{load_bundle, read_imd, write_bundle, RunBundle};
 pub use constraints::ConstraintSelection;
-pub use dof::total_dof;
+pub use dof::{total_dof, BathDof};
 pub use error::RunError;
 pub use inputs::{ParallelPolicy, RunInputs, RunOptions};
 pub use plan::{build_plan, plan_from_json, plan_to_json, validate_plan, AlgorithmSpec};

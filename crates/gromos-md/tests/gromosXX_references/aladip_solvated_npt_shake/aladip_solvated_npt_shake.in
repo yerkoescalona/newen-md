@@ -1,0 +1,103 @@
+TITLE
+Alanine dipeptide + 20 SPC: all-bond SHAKE and SHAKE'd solvent under a Berendsen barostat
+(molecular virial, 1 bar); the constraint virial must not enter the molecular virial
+END
+SYSTEM
+#      NPM      NSM 
+         1       20
+END
+INITIALISE
+#  NTIVEL  NTISHK  NTINHT  NTINHB
+        0       0       0       0
+#  NTISHI  NTIRTC  NTICOM
+        1       0       1
+#  NTISTI
+        0
+#      IG   TEMPI
+   210185     0.0
+END
+STEP
+#   NSTLIM         T        DT
+        20       0.0     0.002
+END
+BOUNDCOND
+#      NTB    NDFMIN
+         1         0
+END
+MULTIBATH
+    weak-coupling
+#   NBATHS
+    1
+#   TEMP0  TAU
+    298.15 -1.0
+#   DOFSET
+    1
+#   LAST   COM-BATH  IR-BATH
+    72     1         1
+END
+COMTRANSROT
+#     NSCM
+       10
+END
+PRINTOUT
+#     NTPR      NTPP
+        10         0
+END
+WRITETRAJ
+#     NTWX     NTWSE      NTWV      NTWF      NTWE      NTWG      NTWB
+         1         0         0         1         1         0         0
+END
+CONSTRAINT
+#       NTC
+        3
+#       NTCP
+        shake
+#       NTCP0(1)
+        0.0001
+#       NTCS
+        shake
+#       NTCS0(1)
+        0.0001
+END
+FORCE
+#      NTF array
+# bonds    angles    imp.     dihe     charge nonbonded
+# H        H         H        H
+     1        1         1        1     1  1
+# NEGR    NRE(1)    NRE(2)    ...      NRE(NEGR)
+     2     12      72
+END
+PAIRLIST
+#       ALGORITHM       NSNB    RCUTP   RCUTL   SIZE    TYPE
+        standard        5       0.8     1.4     auto    chargegroup
+END
+NONBONDED
+#   NLRELE
+         1
+#    APPAK      RCRF     EPSRF  NSLFEXCL
+       0.0       1.4      62.0         1
+#   NSHAPE    ASHAPE    NA2CLC     TOLA2    EPSLS
+        -1       1.4         2    0.1E-9      0.0
+#      NKX       NKY       NKZ       NK2
+        10        10        10      100.0
+#      NGX       NGY       NGZ    NASORD    NFDORD    NALIAS    NSPORD
+        32        32        32         3         2         3         4
+#   NQEVAL    FACCUR    NRDGRD    NWRGDR
+    100000       1.6         0         0
+#    NLRLJ    SLVDNS
+         0      33.3
+END
+POSITIONRES
+#   NTPOR  NTPORB  NTPORS    CPOR
+        0       0       0   0.0
+END
+PRESSURESCALE
+#   COUPLE  SCALE   COMP        TAUP    VIRIAL
+    scale   iso     4.575E-4    0.5     molecular
+#   SEMI (semianisotropic couplings: X, Y, Z)
+    0 0 0
+#   reference pressure
+    0.06102     0.00000     0.00000
+    0.00000     0.06102     0.00000
+    0.00000     0.00000     0.06102
+END

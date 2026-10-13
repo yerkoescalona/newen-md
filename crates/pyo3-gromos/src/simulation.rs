@@ -686,13 +686,11 @@ impl PySimulation {
         self.configuration.old().box_config.volume()
     }
 
-    /// Current instantaneous pressure (bar): `P = (2*KE - virial) / (3*V)`.
+    /// Current instantaneous pressure (kJ mol⁻¹ nm⁻³): trace / 3 of the pressure tensor
+    /// `2/V·(E_kin + ½·Σ r⊗f)`, the number the barostat couples to and gromosXX writes.
     ///
-    /// The virial term is only populated by `PressureCalculation` in the
-    /// algorithm sequence — automatic for NPT (`Recipe.npt(...)`), absent for NVE/NVT.
-    /// Without it this returns the *kinetic-only* term (`2*KE / (3*V)`, not zero) — a
-    /// physically incomplete, misleadingly large number, not "no pressure to report".
-    /// Only trust this getter under NPT.
+    /// The tensor is only computed by `PressureCalculation` in the algorithm sequence —
+    /// automatic for NPT (`Recipe.npt(...)`), absent for NVE/NVT, where this is 0.
     #[getter]
     fn pressure(&self) -> f64 {
         self.configuration.old().pressure()

@@ -28,11 +28,11 @@ use gromos_forces::{
 };
 use gromos_integrators::{
     algorithms::{
-        BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat, BerendsenThermostatParams,
-        EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition, LeapFrogVelocity,
-        LincsAlgorithm, NoseHooverThermostat, PressureCalculation, RemoveCOMMotion,
-        RottransConstraints, SettleAlgorithm, ShakeAlgorithm, SteepestDescentAlgorithm,
-        TemperatureCalculation, VirialType,
+        BathRange, BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat,
+        BerendsenThermostatParams, EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition,
+        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, PressureCalculation,
+        RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
+        SteepestDescentAlgorithm, TemperatureCalculation, VirialType,
     },
     constraints::ShakeParameters,
 };
@@ -42,6 +42,7 @@ use gromos_io::{
     posres::{build_posres_entries, read_posresspec, read_refpos},
 };
 
+use crate::dof::{bath_dofs, rottrans_dof, BathDof};
 use crate::plan::{
     build_plan, validate_plan, AlgorithmSpec, DistanceRestraintsPlan, ForcefieldPlan,
     PositionRestraintsPlan,
@@ -89,6 +90,10 @@ pub struct BuildSummary {
     /// Kinetic degrees of freedom (see [`crate::total_dof`]); what the thermostat couples to
     /// and what the temperature must be reported with.
     pub total_dof: f64,
+    /// The temperature baths the run reports (`VOLUMEPRESSURE03`): their total, COM and
+    /// internal-rotational degrees of freedom. One bath over the whole system without a
+    /// multi-bath thermostat, as gromosXX's default `Multibath`.
+    pub baths: Vec<BathDof>,
 }
 
 /// The result of `instantiate`: the sequence plus the counts the caller may report.
@@ -406,6 +411,8 @@ pub fn instantiate(
     let mut initial_pairs = 0;
     let mut position_restraints = 0;
     let mut distance_restraints = (0, 0);
+    // the constraint algorithms add their virial only for the atomic virial
+    let mut atomic_virial = false;
 
     for spec in plan {
         match spec {
@@ -413,6 +420,7 @@ pub fn instantiate(
                 seq.push(Box::new(RemoveCOMMotion::new(*initial, *every)));
             },
             AlgorithmSpec::Forcefield(ff) => {
+                atomic_virial = ff.virial == VirialKind::Atomic;
                 let built = instantiate_forcefield(ff, topo, conf, periodicity)?;
                 initial_pairs = built.initial_pairs;
                 position_restraints = built.position_restraints;
@@ -495,9 +503,14 @@ pub fn instantiate(
                 alg.include_solvent = *include_solvent;
                 alg.shake_initial_positions = *initial_positions;
                 alg.shake_initial_velocities = *initial_velocities;
+                alg.atomic_virial = atomic_virial;
                 seq.push(Box::new(alg));
             },
-            AlgorithmSpec::Settle => seq.push(Box::new(SettleAlgorithm::new())),
+            AlgorithmSpec::Settle => {
+                let mut alg = SettleAlgorithm::new();
+                alg.atomic_virial = atomic_virial;
+                seq.push(Box::new(alg))
+            },
             AlgorithmSpec::Lincs {
                 solute,
                 order_solute,
@@ -566,6 +579,24 @@ fn summarize(
         ConstraintAlgorithm::code(c.solvent_algorithm),
         has_solvent,
     );
+    let ntc_mode = ConstraintSelection::ntc_mode_of(c.solute.ntc());
+    let rottrans = c.rottrans_last.is_some();
+    let (n_baths, ranges) = plan
+        .iter()
+        .find_map(|spec| match spec {
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } if !ranges.is_empty() => {
+                Some((*n_baths, ranges.clone()))
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            let whole = BathRange {
+                last_atom: topo.num_atoms().saturating_sub(1),
+                com_bath: 0,
+                ir_bath: 0,
+            };
+            (1, vec![whole])
+        });
     let mut summary = BuildSummary {
         is_minimization: recipe.is_minimization(),
         constraints: sel,
@@ -577,11 +608,16 @@ fn summarize(
         distance_restraints: inst.distance_restraints,
         initial_pairs: inst.initial_pairs,
         parallel_nonbonded: false,
-        total_dof: total_dof(
+        total_dof: total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin)
+            - rottrans_dof(topo, rottrans),
+        baths: bath_dofs(
             topo,
             &sel,
-            ConstraintSelection::ntc_mode_of(c.solute.ntc()),
+            ntc_mode,
             recipe.boundary.ndfmin,
+            n_baths,
+            &ranges,
+            rottrans,
         ),
     };
     for spec in plan {

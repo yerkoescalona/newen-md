@@ -68,6 +68,11 @@ pub struct NoseHooverThermostat {
 }
 
 impl NoseHooverThermostat {
+    /// The scaling factor of every bath at the last step (gromosXX `bath_struct::scale`).
+    pub fn scales(&self) -> &[f64] {
+        &self.scale
+    }
+
     /// Create a single-bath Nosé-Hoover thermostat with chain length 1.
     ///
     /// The bath covers all atoms `[0, n_atoms)`.
@@ -248,6 +253,10 @@ impl Algorithm for NoseHooverThermostat {
 
     fn name(&self) -> &str {
         "NoseHoover_Thermostat"
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 

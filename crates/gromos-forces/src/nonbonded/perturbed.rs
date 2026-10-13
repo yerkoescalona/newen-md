@@ -347,9 +347,10 @@ pub fn perturbed_lj_crf_interaction_scaled(
 
 /// gromosXX `lj_crf_soft_interaction_ext` (`perturbed_nonbonded_term.cc:614-716`): the A- and
 /// B-state LJ and RF energies of a perturbed pair at λ = `lam`, unweighted, with softness
-/// `λ_soft = lam` (no NLAM, no individual λ) and their soft-core derivatives in gromosXX's sign
-/// convention `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ` (item 1.8). `r2` is the squared distance; the
-/// Coulomb scaling is 1, as at every gromosXX call site (the 1-4 one included).
+/// `λ_soft = lam` (no NLAM, no individual λ) and their soft-core derivatives with
+/// `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ` (extended TI, JCTC 2016, 12, 4476, Eqs. 9/12; item 1.8).
+/// `r2` is the squared distance; the Coulomb scaling is 1, as at every gromosXX call site (the
+/// 1-4 one included).
 ///
 /// Returns `([A_e_lj, B_e_lj, A_e_crf, B_e_crf], [A_de_lj, B_de_lj, A_de_crf, B_de_crf])`.
 #[inline]
@@ -559,8 +560,23 @@ pub struct PertNBCorrection {
     pub dhdl_lj: f64,
     /// The CRF part of `dhdl`.
     pub dhdl_crf: f64,
-    /// Virial `r ⊗ f` of the pairs (filled by the atom-pair term only).
+    /// Virial `r ⊗ f` of the pairs at the current λ (atom pairs, 1-4, excluded pairs); from
+    /// [`perturbed_pairlist_correction`] the virial of the force change `f(λ) − f_A`.
     pub virial: [[f64; 3]; 3],
+    /// Virial `r ⊗ f_A` of the state-A forces the regular 1-4 and excluded-pair loops already
+    /// put into the nonbonded storage for these pairs (1-4 and excluded corrections only).
+    pub virial_a: [[f64; 3]; 3],
+}
+
+/// `m[a][b] += r(a)·f(b)`.
+#[inline]
+fn add_outer(m: &mut [[f64; 3]; 3], r: Vec3, f: Vec3) {
+    let (rv, fv) = ([r.x, r.y, r.z], [f.x, f.y, f.z]);
+    for (x, row) in m.iter_mut().enumerate() {
+        for (y, v) in row.iter_mut().enumerate() {
+            *v += rv[x] * fv[y];
+        }
+    }
 }
 
 impl PertNBCorrection {
@@ -573,6 +589,7 @@ impl PertNBCorrection {
             dhdl_lj: 0.0,
             dhdl_crf: 0.0,
             virial: [[0.0; 3]; 3],
+            virial_a: [[0.0; 3]; 3],
         }
     }
 }
@@ -718,6 +735,7 @@ fn pairlist_correction_impl<BC: BoundaryCondition, const GROUPS: bool, const PRE
         let df = r * (f_p - f_a);
         out.forces[i] += df;
         out.forces[j] -= df;
+        add_outer(&mut out.virial, r, df);
         out.delta_e_lj += e_lj_p - e_lj_a;
         out.delta_e_crf += e_crf_p - e_crf_a;
         out.dhdl += de_lj + de_crf;
@@ -945,6 +963,8 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             let df = r * (f_p - f_a);
             out.forces[i] += df;
             out.forces[j] -= df;
+            add_outer(&mut out.virial, r, r * f_p);
+            add_outer(&mut out.virial_a, r, r * f_a);
             out.delta_e_crf += e_crf_p - e_crf_a;
             out.dhdl += de_crf;
             out.dhdl_crf += de_crf;
@@ -1089,6 +1109,8 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             let df = r * (f_p - (f_lj_a + f_crf_a));
             out.forces[i] += df;
             out.forces[j] -= df;
+            add_outer(&mut out.virial, r, r * f_p);
+            add_outer(&mut out.virial_a, r, r * (f_lj_a + f_crf_a));
             out.delta_e_lj += e_lj_p - e_lj_a;
             out.delta_e_crf += e_crf_p - e_crf_a;
             out.dhdl += de_lj + de_crf;
@@ -1304,13 +1326,13 @@ fn atom_pair_state(
                     four_pi_eps_i,
                 );
             }
-            // gromosXX defect, reproduced (1.8): pair.cc:469-474 (and :677, :992, :1200) still
-            // passes the outputs of an older `eds_pert_lj_crf_interaction(…, f1, f6, f12, e_lj,
-            // e_crf, de_lj, de_crf)`. Against today's signature (`…, force, e_lj, e_crf, de_lj,
-            // de_crf, eps, coulomb_scaling`, perturbed_nonbonded_term.h:65-72) the zero `X_de_lj`
-            // and `X_de_crf` become `eps` and `coulomb_scaling` = 0 (no 1/r Coulomb), the state's
-            // force is (force + e_lj + e_crf)·r, its energies are the kernel's dH/dλ and its
-            // dH/dλ stays 0.
+            // gromosXX defect, reproduced deliberately (1.8): perturbed_nonbonded_pair.cc:469,
+            // 677, 992, 1200 pass the outputs of an older `eds_pert_lj_crf_interaction(…, f1,
+            // f6, f12, e_lj, e_crf, de_lj, de_crf)`, shifted by one slot against today's
+            // signature (`…, force, e_lj, e_crf, de_lj, de_crf, eps, coulomb_scaling`,
+            // perturbed_nonbonded_term.h:65-72): the zero `X_de_lj` and `X_de_crf` become `eps`
+            // and `coulomb_scaling` = 0 (no 1/r Coulomb), the state's force is
+            // (force + e_lj + e_crf)·r, its energies are the kernel's dH/dλ and its dH/dλ is 0.
             let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
                 r,
                 a_lj.0,

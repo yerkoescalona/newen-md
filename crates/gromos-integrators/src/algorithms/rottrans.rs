@@ -73,21 +73,34 @@ impl Algorithm for RottransConstraints {
                 "ROTTRANS: atoms 1..{last} have no mass, so they cannot be constrained"
             ));
         }
-        // gromosXX's `_init` computes the centre of mass of the chain-gathered group and
-        // subtracts it from both states, but its `ROTTRANSREFPOS` output shows the reference it
-        // actually stores is the boxed positions *un*-shifted (checked against md++ 2023-04-15 on
-        // the LiveCoMS tutorial-2 system: our shifted reference differed from its stored one by
-        // exactly that centre of mass). The oracle wins: the group is not re-centred here, which
-        // changes nothing physically — a rigid translation of the whole system — but does decide
-        // which positions the constraint measures rotations against.
+        // gromosXX `_init` (`rottrans.cc:201-232`): the whole system, both states, is shifted by
+        // the centre of mass of the chain-gathered group and put back into the box, so the
+        // reference is centred (its `ROTTRANSREFPOS` and trajectory, `aladip_multibath_rottrans`).
+        // Uncentred, the rotational correction λ_rot × r moves the group's centre of mass.
         let pbc = box_periodicity(conf);
+        let (cgs, n_solute_cgs) = (&topo.chargegroups, topo.num_solute_chargegroups);
+        put_chargegroups_into_box(&mut conf.current_mut().pos, cgs, n_solute_cgs, &pbc);
+        let com = {
+            let pos = &conf.current().pos;
+            let mut prev = pos[0];
+            let mut sum = Vec3::ZERO;
+            for (i, &x) in pos[..last].iter().enumerate() {
+                let p = pbc.nearest_image(x, prev);
+                sum += (p + prev) * topo.mass[i];
+                prev += p;
+            }
+            sum / total_mass
+        };
         for state in [true, false] {
             let pos = if state {
                 &mut conf.current_mut().pos
             } else {
                 &mut conf.old_mut().pos
             };
-            put_chargegroups_into_box(pos, &topo.chargegroups, topo.num_solute_chargegroups, &pbc);
+            for x in pos.iter_mut() {
+                *x -= com;
+            }
+            put_chargegroups_into_box(pos, cgs, n_solute_cgs, &pbc);
         }
 
         self.reference = conf.current().pos[..last].to_vec();

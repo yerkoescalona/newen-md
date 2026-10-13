@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use gromos_core::Topology;
 use serde::{Deserialize, Serialize};
 
-use crate::dof::bath_dof;
+use crate::dof::{bath_dof, rottrans_dof};
 use crate::recipe::{
     BoundaryKind, ConstraintAlgorithm, Coupling, SoluteConstraints, ThermostatAlgorithm,
 };
@@ -533,6 +533,7 @@ fn thermostat_baths(
     ntc_mode: NtcMode,
     ndfmin: i32,
     total: f64,
+    rottrans: bool,
 ) -> Result<(Vec<ThermostatBath>, Vec<BathRange>), RunError> {
     let n_baths = t.baths.len();
     let last_atom = topo.num_atoms().saturating_sub(1);
@@ -624,7 +625,7 @@ fn thermostat_baths(
             )));
         }
     }
-    let dof = bath_dof(topo, sel, ntc_mode, ndfmin, n_baths, &ranges);
+    let dof = bath_dof(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
     let baths = t
         .baths
         .iter()
@@ -821,7 +822,9 @@ pub fn build_plan(
         has_solvent,
     );
     let ntc_mode = ConstraintSelection::ntc_mode_of(c.solute.ntc());
-    let dof = total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin);
+    let rottrans = recipe.constraints.rottrans_last.is_some();
+    let dof =
+        total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin) - rottrans_dof(topo, rottrans);
 
     let ff = &recipe.forcefield;
     let position_restraints = if ff.restraints.position.mode > 0 {
@@ -1009,8 +1012,15 @@ pub fn build_plan(
             ranges: Vec::new(),
         };
         if let Some(t) = &recipe.ensemble.thermostat {
-            let (baths, ranges) =
-                thermostat_baths(t, topo, &sel, ntc_mode, recipe.boundary.ndfmin, dof)?;
+            let (baths, ranges) = thermostat_baths(
+                t,
+                topo,
+                &sel,
+                ntc_mode,
+                recipe.boundary.ndfmin,
+                dof,
+                rottrans,
+            )?;
             if baths.len() > 1 {
                 kinetic = AlgorithmSpec::TemperatureCalculation {
                     n_baths: baths.len(),

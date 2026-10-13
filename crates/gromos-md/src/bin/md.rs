@@ -29,8 +29,8 @@ use gromos::{
     validation::validate_energy,
 };
 use gromos_run::{
-    build_sequence_from_imd, plan_to_json, prepare_system, start, Built, PassthroughPolicy,
-    PrepareNote, Prepared, RunError, RunInputs, RunOptions,
+    build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
+    PassthroughPolicy, PrepareNote, Prepared, RunError, RunInputs, RunOptions,
 };
 use std::env;
 use std::path::PathBuf;
@@ -236,32 +236,66 @@ fn parse_args(args: Vec<String>) -> Result<MDArgs, String> {
     Ok(md_args)
 }
 
-/// The `VOLUMEPRESSURE03` block of a `.tre` frame from the current state: mass, temperature,
-/// volume, box, pressure, virial and kinetic tensors.
+/// The `VOLUMEPRESSURE03` block of a `.tre` frame from the current state, as gromosXX's
+/// `_print_volumepressurered_helper` (`out_configuration.cc:3270-3346`): mass; per bath the total,
+/// COM and internal-rotational temperature from its kinetic energies and degrees of freedom
+/// (0 for a bath without any) and the thermostat's scaling factor (`scales`, 0 without a
+/// thermostat, gromosXX's initial `bath_struct::scale`); volume and box; the pressure tensor,
+/// the virial −½·Σ r⊗f and the kinetic-energy tensor.
 fn volume_pressure(
     state: &gromos_core::State,
     topo: &gromos_core::Topology,
-    temp: f64,
+    baths: &[BathDof],
+    scales: &[f64],
+    k_boltzmann: f64,
 ) -> VolumePressure {
+    let e = &state.energies;
+    let t = |ekin: Option<&f64>, dof: f64| match ekin {
+        Some(&ekin) if dof != 0.0 => 2.0 * ekin / k_boltzmann / dof,
+        _ => 0.0,
+    };
     let mut vp = VolumePressure {
         mass: topo.mass.iter().sum(),
-        temperature: temp,
+        baths: baths
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                [
+                    t(e.kinetic_energy.get(i), b.dof),
+                    t(e.com_kinetic_energy.get(i), b.com),
+                    t(e.ir_kinetic_energy.get(i), b.ir),
+                    scales.get(i).copied().unwrap_or(0.0),
+                ]
+            })
+            .collect(),
         volume: state.box_config.volume(),
-        pressure: state.pressure(),
         ..Default::default()
     };
     let m = &state.box_config.vectors;
+    let pres = &state.pressure_tensor;
     let vir = &state.virial_tensor;
     let kin = &state.kinetic_energy_tensor;
     for a in 0..3 {
         for b in 0..3 {
             // column i of a gromos-core `Mat3` is GROMOS's row i (see `math.rs`)
             vp.box_vectors[a][b] = m.col(a)[b];
-            vp.virial_tensor[a][b] = vir.col(b)[a];
+            vp.pressure_tensor[a][b] = pres.col(b)[a];
+            vp.virial_tensor[a][b] = -0.5 * vir.col(b)[a];
             vp.kinetic_tensor[a][b] = kin.col(b)[a];
         }
     }
     vp
+}
+
+/// The scaling factor of every bath at the last step, from the run's thermostat (none without).
+fn thermostat_scales(seq: &mut gromos::algorithm::AlgorithmSequence) -> Vec<f64> {
+    use gromos_integrators::algorithms::{BerendsenThermostat, NoseHooverThermostat};
+    if let Some(t) = seq.find_mut::<BerendsenThermostat>() {
+        return t.scales().to_vec();
+    }
+    seq.find_mut::<NoseHooverThermostat>()
+        .map(|t| t.scales().to_vec())
+        .unwrap_or_default()
 }
 
 fn main() {
@@ -369,6 +403,7 @@ fn main() {
     // Physical constants from the topology PHYSICALCONSTANTS block override the
     // Forcefield defaults — same as gromosXX. Carried through `prepare_system`.
     let physical_constants = topo_data.physical_constants;
+    let k_boltzmann = physical_constants.kB;
     log::info!(
         "Physical constants from topo: four_pi_eps_i={}, kB={}",
         physical_constants.four_pi_eps_i,
@@ -763,7 +798,6 @@ fn main() {
         );
         println!();
     }
-    let constraints_enabled = summary.constraints.any();
     let temperature = summary
         .thermostat
         .as_ref()
@@ -833,8 +867,11 @@ fn main() {
     };
 
     // Setup force trajectory writer (if @trf given)
+    // gromosXX writes CONSFORCERED when SHAKE constrains the solute (NTC > 1) or the solvent
+    // (`out_configuration.cc:290-291`, `in_parameter.cc:391-395`)
+    let shake_forces = (imd.ntc > 1 && imd.ntcp == 1) || imd.ntcs == 1;
     let mut force_writer = if let Some(ref trf_file) = md_args.trf_file {
-        match ForceWriter::new(trf_file, "GROMOS-RS MD forces", true) {
+        match ForceWriter::new(trf_file, "GROMOS-RS MD forces", shake_forces) {
             Ok(w) => {
                 println!("  Force output:  {}", trf_file);
                 Some(w)
@@ -1175,8 +1212,11 @@ fn main() {
         // (Forcefield wrote to current(), exchange_state moved it to old(),
         //  Temperature_Calculation and Energy_Calculation also write to old())
         let state = conf.old();
-        let n_dof = topo.inverse_mass.len() * 3;
-        let temp = state.temperature(n_dof);
+        let temp = if summary.total_dof > 0.0 {
+            2.0 * state.energies.kinetic_total / k_boltzmann / summary.total_dof
+        } else {
+            0.0
+        };
         let ene_validation = validate_energy(
             state.energies.kinetic_total,
             state.energies.potential_total,
@@ -1232,7 +1272,8 @@ fn main() {
             }
             if let Some(ew) = ene_writer.as_mut() {
                 let last = step.saturating_sub(1);
-                let vp = volume_pressure(conf.old(), &topo, temp);
+                let scales = thermostat_scales(&mut md_sequence);
+                let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
                 let e = ew.write_energy(last, last as f64 * dt, &conf.old().energies, &vp);
                 if let Err(e) = e {
                     eprintln!("Error writing final energy frame: {}", e);
@@ -1295,7 +1336,8 @@ fn main() {
         // Write energies — on gromosXX's schedule: steps 0 … NSTLIM−1 (the state after the
         // last step is in the final configuration, not in the energy trajectory).
         if let (true, Some(ew)) = (due(step, nstener) && step < n_steps, &mut ene_writer) {
-            let vp = volume_pressure(conf.old(), &topo, temp);
+            let scales = thermostat_scales(&mut md_sequence);
+            let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
             if let Err(e) = ew.write_energy(step, time, &conf.old().energies, &vp) {
                 eprintln!("Error writing energy: {}", e);
             }
@@ -1316,7 +1358,7 @@ fn main() {
         if let Some(ref mut fw) = force_writer {
             if due(step, nstxout) {
                 let forces = &conf.old().force;
-                let constraint_forces = if constraints_enabled {
+                let constraint_forces = if shake_forces {
                     Some(conf.old().constraint_force.as_slice())
                 } else {
                     None

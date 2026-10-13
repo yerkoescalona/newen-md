@@ -287,6 +287,9 @@ REFERENCE_SYSTEMS = [
     # Energy groups across the solute, DOFSET ranges not in bath order (1.8)
     "aladip_harmonic_covalent_groups",
     "aladip_multibath_swapped",
+    # Barostat with SHAKE (constraint virial) and ROTTRANS degrees of freedom (1.8)
+    "aladip_solvated_npt_shake",
+    "aladip_multibath_rottrans",
     # Extended TI (PRECALCLAM) and the reaction-field constant from RCRF / EPSRF = 0 (1.8)
     "ch4_water_fep_precalc",
     "meoh_water_fep_precalc",

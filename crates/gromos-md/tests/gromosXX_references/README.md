@@ -84,6 +84,8 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | aladip_solvated_em_posres_groups | 72 | SD EM + position restraints with three energy groups (1-4, 5-12, water): restraint energy booked per group of the restrained atom (1.8) | **PASS** |
 | 4   | aladip_harmonic_covalent_groups | 72 | `COVALENTFORM` harmonic bonds/angles with three energy groups (1-4, 5-12, water): bonded energies booked by first atom across solute groups (1.8) | **PASS** |
 | 4   | aladip_multibath_swapped | 72 | `DOFSET 12 2 2  72 1 1`, baths at 300 K and 250 K: atoms map to baths by DOFSET range, not by bath number (gromosXX `in_bath`), dynamics included (1.8) | **PASS** |
+| 4   | aladip_solvated_npt_shake | 72 | Berendsen barostat (VIRIAL 2) with NTC 3 and solvent SHAKE: the constraint virial enters only the atomic virial; 20 steps, every `VOLUMEPRESSURE03` compared (1.8) | **PASS** |
+| 4   | aladip_multibath_rottrans | 72 | `aladip_multibath` + `ROTTRANS 1 12`: 3 COM and 3 IR degrees of freedom leave the solute bath, the system is centred on the solute (1.8) | **PASS** |
 
 **45 of 45 tests pass** (2026-08-30; nothing ignored). Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

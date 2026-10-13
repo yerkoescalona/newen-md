@@ -1,9 +1,9 @@
 //! End-to-end integration tests against GROMOS double-precision references.
 //!
 //! Runs the `md` binary on each reference system (10 steps) and compares its output with the
-//! native gromosXX's: every value of every `ENERGY03` block of the `.tre` and, where the system
-//! has a reference `.trg`, of every `FREEENERDERIVS03` block; forces, trajectory and final
-//! configuration.
+//! native gromosXX's: every value of every `ENERGY03` and `VOLUMEPRESSURE03` block of the `.tre`
+//! and, where the system has a reference `.trg`, of every `FREEENERDERIVS03` block; forces
+//! (free and constraint), trajectory and final configuration.
 //!
 //! Reference data: `tests/gromosXX_references/{system}/expected/`
 //! Systems matching GROMOS are active; known mismatches are `#[ignore]`.
@@ -79,11 +79,21 @@ fn toml_str_opt(content: &str, key: &str) -> Option<String> {
 // pair), `# special` (one row per group), then `# eds`, `# gamd`, `# precalclam` (each a count
 // and rows) and `# ABdih`. Every value is compared; count lines exactly.
 
-/// Sections whose first line is an integer count.
-const COUNTED_SECTIONS: [&str; 5] = ["baths", "bonded", "eds", "gamd", "precalclam"];
+/// Sections whose first line is an integer count (`# temperature`: the number of baths, then
+/// per bath total, COM and internal-rotational temperature and the scaling factor).
+const COUNTED_SECTIONS: [&str; 6] = [
+    "baths",
+    "bonded",
+    "eds",
+    "gamd",
+    "precalclam",
+    "temperature",
+];
 /// Comment words that open a section; any other comment line (column headers, `# numstates`)
-/// stays in the current one.
-const SECTIONS: [&str; 10] = [
+/// stays in the current one. The last four are `VOLUMEPRESSURE03`'s (gromosXX
+/// `_print_volumepressurered_helper`): `# pressure` holds the pressure, virial and kinetic
+/// energy (trace / 3) and then the pressure, virial and kinetic-energy tensors.
+const SECTIONS: [&str; 14] = [
     "lambda",
     "totals",
     "baths",
@@ -94,6 +104,10 @@ const SECTIONS: [&str; 10] = [
     "gamd",
     "precalclam",
     "ABdih",
+    "mass",
+    "temperature",
+    "volume",
+    "pressure",
 ];
 
 /// One energy block: its time (from the preceding `TIMESTEP`) and its sections in file order,
@@ -284,12 +298,12 @@ fn report_mismatches(system: &str, mismatches: &[Mismatch]) {
 /// One frame of per-atom forces: Vec of (fx, fy, fz) for each atom.
 type ForceFrame = Vec<[f64; 3]>;
 
-// ─── Parser: FREEFORCERED blocks from .trf files ────────────────────────────
+// ─── Parser: FREEFORCERED / CONSFORCERED blocks from .trf files ─────────────
 //
-// Both GROMOS and gromos-rs write FREEFORCERED blocks with 3 floats per line.
+// Both GROMOS and gromos-rs write these blocks with 3 floats per line.
 // Lines starting with '#' are comments (atom count markers).
 
-fn parse_trf(path: &Path) -> Vec<ForceFrame> {
+fn parse_trf(path: &Path, block: &str) -> Vec<ForceFrame> {
     let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut frames = Vec::new();
     let mut in_block = false;
@@ -297,7 +311,7 @@ fn parse_trf(path: &Path) -> Vec<ForceFrame> {
 
     for line in content.lines() {
         let t = line.trim();
-        if t == "FREEFORCERED" {
+        if t == block {
             in_block = true;
             current_frame.clear();
             continue;
@@ -439,6 +453,24 @@ fn run_reference(system: &str) {
     for (i, (exp, act)) in expected.iter().zip(&actual).enumerate() {
         compare_energy_block(i, "ENERGY03", exp, act, ENERGY_REL_TOL, &mut mismatches);
     }
+    let expected_vp =
+        parse_energy_blocks(&sys_dir.join("expected/energies.tre"), "VOLUMEPRESSURE03");
+    let actual_vp = parse_energy_blocks(&tre, "VOLUMEPRESSURE03");
+    assert_eq!(
+        actual_vp.len(),
+        expected_vp.len(),
+        "{system}: VOLUMEPRESSURE03 frame count differs from gromosXX"
+    );
+    for (i, (exp, act)) in expected_vp.iter().zip(&actual_vp).enumerate() {
+        compare_energy_block(
+            i,
+            "VOLUMEPRESSURE03",
+            exp,
+            act,
+            ENERGY_REL_TOL,
+            &mut mismatches,
+        );
+    }
     if let Some(fe_path) = toml_str_opt(&toml, "free_energy") {
         let expected_trg = sys_dir.join(fe_path);
         if expected_trg.exists() {
@@ -486,11 +518,22 @@ fn run_reference(system: &str) {
     }
     report_mismatches(system, &mismatches);
 
-    // Compare forces if reference .trf exists
+    // Compare forces if reference .trf exists: the free forces, and the constraint forces
+    // gromosXX writes when SHAKE runs
     let expected_trf = sys_dir.join("expected/forces.trf");
-    if expected_trf.exists() && trf.exists() {
-        let exp_forces = parse_trf(&expected_trf);
-        let act_forces = parse_trf(&trf);
+    for block in ["FREEFORCERED", "CONSFORCERED"] {
+        if !(expected_trf.exists() && trf.exists()) {
+            break;
+        }
+        let exp_forces = parse_trf(&expected_trf, block);
+        let act_forces = parse_trf(&trf, block);
+        if exp_forces.is_empty() != act_forces.is_empty() {
+            panic!(
+                "{system}: {block} written by gromosXX: {}, by md: {}",
+                !exp_forces.is_empty(),
+                !act_forces.is_empty()
+            );
+        }
 
         let n_compare = exp_forces.len().min(act_forces.len());
         for (frame_idx, (ef, af)) in exp_forces.iter().zip(&act_forces).enumerate() {
@@ -505,23 +548,23 @@ fn run_reference(system: &str) {
                 assert_force_close(
                     a[0],
                     e[0],
-                    &format!("{system}[{frame_idx}] atom {atom_idx} fx"),
+                    &format!("{system}[{frame_idx}] {block} atom {atom_idx} fx"),
                 );
                 assert_force_close(
                     a[1],
                     e[1],
-                    &format!("{system}[{frame_idx}] atom {atom_idx} fy"),
+                    &format!("{system}[{frame_idx}] {block} atom {atom_idx} fy"),
                 );
                 assert_force_close(
                     a[2],
                     e[2],
-                    &format!("{system}[{frame_idx}] atom {atom_idx} fz"),
+                    &format!("{system}[{frame_idx}] {block} atom {atom_idx} fz"),
                 );
             }
         }
         if n_compare == 0 && !exp_forces.is_empty() {
             panic!(
-                "{system}: expected {} force frames but got none",
+                "{system}: expected {} {block} frames but got none",
                 exp_forces.len()
             );
         }
@@ -848,6 +891,9 @@ ref_test!(water_216_nvt, "water_216_nvt");
 ref_test!(water_216_nvt_nosehoover, "water_216_nvt_nosehoover");
 ref_test!(water_216_nvt_nhc_chain, "water_216_nvt_nhc_chain");
 ref_test!(water_216_npt, "water_216_npt");
+// Berendsen barostat (VIRIAL 2) with all-bond and solvent SHAKE: the constraint virial enters
+// only the atomic virial (gromosXX `shake.h:380`).
+ref_test!(aladip_solvated_npt_shake, "aladip_solvated_npt_shake");
 
 // ── Alanine dipeptide ────────────────────────────────────────────────────────
 ref_test!(aladip_vacuum, "aladip_vacuum");
@@ -985,6 +1031,9 @@ ref_test!(aladip_wrapped, "aladip_wrapped");
 ref_test!(aladip_harmonic_covalent, "aladip_harmonic_covalent");
 // DOFSET `12 2 2  72 1 1`: the bath numbers do not ascend with the atoms (gromosXX `in_bath`).
 ref_test!(aladip_multibath_swapped, "aladip_multibath_swapped");
+// ROTTRANS on the solute of the two-bath system: 3 COM and 3 internal-rotational degrees of
+// freedom leave the solute's baths (gromosXX `topology.cc:1370-1402`).
+ref_test!(aladip_multibath_rottrans, "aladip_multibath_rottrans");
 // Three energy groups: harmonic bonds/angles and dihedrals booked by first atom across groups.
 ref_test!(
     aladip_harmonic_covalent_groups,

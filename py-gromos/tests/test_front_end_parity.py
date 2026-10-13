@@ -187,7 +187,6 @@ def test_plan_front_end_parity(system_name):
 # ---------------------------------------------------------------------------------------------
 UNCOVERED_KINDS: dict[str, str] = {
     "orchestrator": "needs a Term (xtb/schnet); no gromosXX reference has one — 3.9 step 5",
-    "rottrans": "no gromosXX reference system has a ROTTRANS block yet — 1.5c",
 }
 
 PYI = Path(__file__).resolve().parents[1] / "python" / "gromos" / "gromos.pyi"

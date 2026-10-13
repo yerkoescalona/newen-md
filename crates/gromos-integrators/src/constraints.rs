@@ -341,7 +341,7 @@ pub fn shake(
     params: &ShakeParameters,
 ) -> ConstraintResult {
     let mut buffers = ShakeBuffers::new(topo, params.ntc, true);
-    shake_buffered(topo, conf, dt, params, &mut buffers, None)
+    shake_buffered(topo, conf, dt, params, &mut buffers, None, false)
 }
 
 /// Apply SHAKE using precomputed buffers (zero per-step allocations).
@@ -352,6 +352,10 @@ pub fn shake(
 /// `precalc`: the PRECALCLAM grid when this step is one it is evaluated on — every perturbed
 /// constraint correction then adds to the `AB_bond` derivatives at each λ_k
 /// (`perturbed_shake.cc:229-259`; energies get nothing, gromosXX's own caveat).
+///
+/// `atomic_virial`: the run computes the atomic virial (`VIRIAL 1`). gromosXX adds the constraint
+/// virial only then, and never in vacuum (`shake.h:380`, `perturbed_shake.cc:209`, dispatched by
+/// `SPLIT_VIRIAL_BOUNDARY`, `template_split.h:58-79`).
 pub fn shake_buffered(
     topo: &Topology,
     conf: &mut Configuration,
@@ -359,8 +363,25 @@ pub fn shake_buffered(
     params: &ShakeParameters,
     buffers: &mut ShakeBuffers,
     precalc: Option<PrecalcLambdas>,
+    atomic_virial: bool,
 ) -> ConstraintResult {
     let pbc = box_periodicity(conf);
+    if atomic_virial && !matches!(pbc, Periodicity::Vacuum(_)) {
+        shake_buffered_impl::<true>(topo, conf, dt, params, buffers, precalc, pbc)
+    } else {
+        shake_buffered_impl::<false>(topo, conf, dt, params, buffers, precalc, pbc)
+    }
+}
+
+fn shake_buffered_impl<const VIRIAL: bool>(
+    topo: &Topology,
+    conf: &mut Configuration,
+    dt: f64,
+    params: &ShakeParameters,
+    buffers: &mut ShakeBuffers,
+    precalc: Option<PrecalcLambdas>,
+    pbc: Periodicity,
+) -> ConstraintResult {
     if buffers.is_empty() {
         return ConstraintResult {
             converged: true,
@@ -403,7 +424,7 @@ pub fn shake_buffered(
                 topo.individual_lambdas
                     .get(InteractionLambda::Bond, c.group, c.group);
             let r0 = (1.0 - lam) * c.r0_a + lam * c.r0_b;
-            if let Some((lambda, sp, dist2)) = shake_one_constraint_full(
+            if let Some((lambda, sp, dist2)) = shake_one_constraint_full::<VIRIAL>(
                 conf,
                 topo,
                 &pbc,
@@ -447,7 +468,7 @@ pub fn shake_buffered(
                 continue;
             }
 
-            if shake_one_constraint_full(
+            if shake_one_constraint_full::<VIRIAL>(
                 conf,
                 topo,
                 &pbc,
@@ -470,7 +491,7 @@ pub fn shake_buffered(
                 continue;
             }
 
-            if shake_one_constraint_full(
+            if shake_one_constraint_full::<VIRIAL>(
                 conf,
                 topo,
                 &pbc,
@@ -492,18 +513,9 @@ pub fn shake_buffered(
         buffers.skip_next.iter_mut().for_each(|s| *s = true);
     }
 
-    // Finalize constraint forces: scale by 1/dt²
-    for c in &buffers.perturbed_constraints {
-        conf.old_mut().constraint_force[c.i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[c.j] *= 1.0 / dt2;
-    }
-    for &(i, j, _) in &buffers.solute_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
-    }
-    for &(i, j, _) in &buffers.solvent_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
+    // Constraint forces: 1/dt² once per atom (`shake.h:529` solute, `:653` solvent)
+    for &atom in &buffers.constrained_atoms {
+        conf.old_mut().constraint_force[atom] *= 1.0 / dt2;
     }
 
     // Velocity correction
@@ -545,10 +557,10 @@ pub fn shake_buffered(
 
 /// Apply SHAKE to a single distance constraint with full GROMOS features.
 /// Returns `None` if already converged, else the Lagrange multiplier it applied.
-/// Accumulates constraint force (pre-1/dt² scaling) and virial tensor.
+/// Accumulates constraint force (pre-1/dt² scaling) and, with `VIRIAL`, the virial tensor.
 #[inline]
 #[allow(clippy::too_many_arguments)] // one constraint's worth of state, as in gromosXX
-fn shake_one_constraint_full(
+fn shake_one_constraint_full<const VIRIAL: bool>(
     conf: &mut Configuration,
     topo: &Topology,
     pbc: &Periodicity,
@@ -596,17 +608,19 @@ fn shake_one_constraint_full(
     conf.old_mut().constraint_force[j] -= cons_force;
 
     // Virial tensor contribution (GROMOS: virial_tensor(a,aa) += ref_r(a) * ref_r(aa) * lambda / dt2)
-    let lambda_over_dt2 = lambda / dt2;
-    let vt = &mut conf.old_mut().virial_tensor;
-    vt.x_axis.x += ref_r.x * ref_r.x * lambda_over_dt2;
-    vt.x_axis.y += ref_r.x * ref_r.y * lambda_over_dt2;
-    vt.x_axis.z += ref_r.x * ref_r.z * lambda_over_dt2;
-    vt.y_axis.x += ref_r.y * ref_r.x * lambda_over_dt2;
-    vt.y_axis.y += ref_r.y * ref_r.y * lambda_over_dt2;
-    vt.y_axis.z += ref_r.y * ref_r.z * lambda_over_dt2;
-    vt.z_axis.x += ref_r.z * ref_r.x * lambda_over_dt2;
-    vt.z_axis.y += ref_r.z * ref_r.y * lambda_over_dt2;
-    vt.z_axis.z += ref_r.z * ref_r.z * lambda_over_dt2;
+    if VIRIAL {
+        let lambda_over_dt2 = lambda / dt2;
+        let vt = &mut conf.old_mut().virial_tensor;
+        vt.x_axis.x += ref_r.x * ref_r.x * lambda_over_dt2;
+        vt.x_axis.y += ref_r.x * ref_r.y * lambda_over_dt2;
+        vt.x_axis.z += ref_r.x * ref_r.z * lambda_over_dt2;
+        vt.y_axis.x += ref_r.y * ref_r.x * lambda_over_dt2;
+        vt.y_axis.y += ref_r.y * ref_r.y * lambda_over_dt2;
+        vt.y_axis.z += ref_r.y * ref_r.z * lambda_over_dt2;
+        vt.z_axis.x += ref_r.z * ref_r.x * lambda_over_dt2;
+        vt.z_axis.y += ref_r.z * ref_r.y * lambda_over_dt2;
+        vt.z_axis.z += ref_r.z * ref_r.z * lambda_over_dt2;
+    }
 
     // Update positions
     let correction = ref_r * lambda;
@@ -718,7 +732,15 @@ pub fn m_shake(
 /// Assumptions (checked by the caller / `SettleAlgorithm::init`):
 /// - Exactly one solvent, water-like with 3 atoms and equal H masses
 /// - 3 distance constraints with the two O-H lengths equal
-pub fn settle(topo: &Topology, conf: &mut Configuration, dt: f64) -> ConstraintResult {
+///
+/// `atomic_virial`: add the constraint virial, which gromosXX does only for `VIRIAL 1`
+/// (`settle.cc:397`).
+pub fn settle(
+    topo: &Topology,
+    conf: &mut Configuration,
+    dt: f64,
+    atomic_virial: bool,
+) -> ConstraintResult {
     let n_solute = topo.num_solute_atoms();
     let num_atoms = topo.num_atoms();
 
@@ -899,7 +921,7 @@ pub fn settle(topo: &Topology, conf: &mut Configuration, dt: f64) -> ConstraintR
         // atomic virial contribution (settle.cc:397-411)
         // GROMOS: virial_tensor(row, col) += Σ_k pos_old[k](row) * cons_force[k](col);
         // Mat3 is column-major (mat.col(col)[row]), see forcefield.rs virial transfer.
-        {
+        if atomic_virial {
             let p = [
                 [pos_old[0].x, pos_old[0].y, pos_old[0].z],
                 [pos_old[1].x, pos_old[1].y, pos_old[1].z],
@@ -2038,7 +2060,7 @@ mod tests {
         conf.current_mut().pos[2] = conf.old().pos[2] + Vec3::new(0.0008, -0.0011, 0.0003);
 
         let dt = 0.002;
-        let result = settle(&topo, &mut conf, dt);
+        let result = settle(&topo, &mut conf, dt, true);
         assert!(
             result.converged,
             "SETTLE failed to find a valid analytical solution"

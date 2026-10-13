@@ -39,7 +39,12 @@ after.** The test is what converts un-audited surface into oracle-covered surfac
    The gromosXX developers annotate their own defects and uncertainties. Two minutes here catches the
    issues they already knew about.
 2. **Classify every suspicious thing you find** into one of three buckets, and treat each differently:
-   - **(A) Genuine bug** → do *not* port it; note it so a future reader knows it was deliberate.
+   - **(A) Genuine bug** → reproduce it first, pinned by a native reference and flagged (CHANGELOG
+     "Reproduced gromosXX defects", an entry below, a code comment with file:line), so the divergence
+     is demonstrated bit-for-bit; correct it in a later, separate commit that keeps the reference as
+     documentation of the bug and gates the correction some other way. Where the defect is
+     mathematical, state it as a theorem in the `math` repository (`OAI.Physics.Gromos.Divergences`).
+     Never port one silently, and never skip straight to the correction.
    - **(B) Intentional GROMOS quirk** → reproduce it *exactly* and **document it as a deliberate
      decision** (in the style of CHANGELOG's "BONDANGLETYPE intentionally unsupported" entries), so it
      is never later mistaken for a porting mistake.
@@ -76,14 +81,21 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   (λ_k) energies are filled only when that pairlist step is also an NTWG step, and are zero on
   the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96, 280-300`).
   Reproduced (`Forcefield::longrange_perturbed`), pinned by `ch4_water_fep_precalc_twinrange`.
-- **PRECALCLAM current-λ leaks** (B). The grid uses the raw λ_k everywhere (no NLAM exponent,
-  no `LAMBDAS` polynomial, no L′; softness = λ_k), except: the kinetic term's `slam` (the
-  current mass λ), the improper's ζ wrapped around the current-λ q0 and not re-wrapped,
-  perturbed SHAKE adding to the `AB_bond` derivatives only, the 1-4 ext call taking no Coulomb
-  scaling, and the RF self ext term carrying no self-term correction. All reproduced.
-- **PRECALCLAM derivative signs** (B). The derivative record holds `A_de = +∂A/∂λ` but
-  `B_de = −∂B/∂λ` for the nonbonded A/B energies (`perturbed_nonbonded_term.cc:614-716`).
-  Reproduced; not "fixed".
+- **PRECALCLAM grid in μ** (convention of the published method: de Ruiter & Oostenbrink, JCTC
+  2016, 12, 4476, p. 7 and Eqs. 17/19; not a quirk). The grid is in the individual μ_k (no NLAM
+  exponent, no `LAMBDAS` polynomial, no L′; softness = μ_k), so `ext_ti_ana` can apply any
+  parameterisation afterwards; the kinetic term keeps the simulated mass μ (`slam`) because
+  momenta are conserved (`temperature_calculation.cc:200-224` ↔
+  `gromos-integrators/src/algorithms/temperature.rs:220-250`). Reproduced.
+- **PRECALCLAM current-λ leaks** (B). Inside the μ grid: the improper's ζ wrapped around the
+  current-λ q0 and not re-wrapped, perturbed SHAKE adding to the `AB_bond` derivatives only, the
+  1-4 ext call taking no Coulomb scaling, and the RF self ext term carrying no self-term
+  correction. All reproduced.
+- **PRECALCLAM derivative signs** (convention of the published method: JCTC 2016 Eqs. 9/12; not a
+  quirk). The derivative record holds `A_de = +∂A/∂λ` but `B_de = −∂B/∂λ` for the nonbonded A/B
+  energies, the B-state softness derivative being taken in `1 − μ`
+  (`perturbed_nonbonded_term.cc:614-716` ↔ `lj_crf_soft_interaction_ext`,
+  `gromos-forces/src/nonbonded/perturbed.rs:348-357`). Reproduced.
 - **PRECALCLAM bond mixing** (B). The grid mixes `(1 − λ_k)·b0_A + λ_k·b0_B`
   (`perturbed_quartic_bond_interaction.cc:173-196` and the other bond forms), the main term
   `r0_A + L·Δr0`. Both forms kept, so the main term stays bit-identical to earlier versions and
@@ -96,6 +108,48 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   (`nonbonded.rf_cutoff`, `in_parameter.cc:4606`) and accepts RCRF ≠ RCUTL silently
   (`check_parameter.cc` has no rule); gromos-rs built them from RCUTL. Now from RCRF, silently,
   pinned by `aladip_solvated_rcrf`.
+- **PERTATOMPAIR argument shift** (A, reproduced for now; correction planned in a separate
+  commit). `perturbed_nonbonded_pair.cc:469, 677, 992, 1200` call `eds_pert_lj_crf_interaction`
+  with the outputs shifted by one slot against `perturbed_nonbonded_term.h:65-72`: for a pair
+  with a perturbed atom and a normal or 1-4 state type the energies receive the kernel's dH/dλ,
+  the force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and `eps = 0`, `coulomb_scaling = 0` drop the
+  1/r Coulomb term. Reproduced in `atom_pair_state` (`gromos-forces/src/nonbonded/perturbed.rs`),
+  pinned by `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`,
+  `OAI.Physics.Gromos.Divergences`): `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`,
+  `crfSoftEnergy_shift`.
+- **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
+  SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
+  it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated
+  on `atomic_virial` (`shake_buffered`, `settle` in `gromos-integrators/src/constraints.rs`),
+  pinned by `aladip_solvated_npt_shake`. Lean: `intragroup_pair_virial_zero`,
+  `constraint_virial_pressure_shift`.
+- **ROTTRANS degrees of freedom** (C, ours, reconciled). gromosXX removes 3 COM and 3 internal
+  dof from atom 1's baths (`topology.cc:1370-1400`); gromos-rs did not. Now in `bath_dofs`
+  (`gromos-run/src/dof.rs`), pinned by `aladip_multibath_rottrans`.
+- **Per-bath temperature rows** (C, ours, reconciled). gromosXX's `VOLUMEPRESSURE03` prints
+  `T_total`/`T_com`/`T_ir`/`scale` per bath (`out_configuration.cc:3270-3346`); gromos-rs printed
+  the system temperature on every row. Now per bath (`volume_pressure` in
+  `gromos-md/src/bin/md.rs`, written by `gromos-io/src/energy.rs`), compared whole-block by the
+  reference test.
+- **Virial booking quirks** (B), reproduced in the force-field `apply`
+  (`gromos-integrators/src/algorithms/forcefield.rs`), `calculate_bonded_forces`
+  (`gromos-forces/src/bonded/mod.rs`) and `settle` (`gromos-integrators/src/constraints.rs`),
+  pinned by `VOLUMEPRESSURE03`:
+  - bonded and perturbed bonded virial added under every virial type, the gate commented out
+    (`quartic_bond_interaction.cc:93`, `perturbed_quartic_bond_interaction.cc:125`);
+  - perturbed 1-4, RF-excluded and atom-pair virials unconditional
+    (`perturbed_nonbonded_innerloop.cc:2247-2250, 3941-3946`, `perturbed_nonbonded_pair.cc:1559-1561`),
+    plain pairs gated (`nonbonded_set.cc:428-430`);
+  - SETTLE gated on the atomic virial with no vacuum split (`settle.cc:397`); LINCS adds no
+    constraint virial.
+- **Thermostat output quirks** (B), reproduced: `NDFMIN` not subtracted from the COM/IR dof
+  (`multibath.cc:139-149`; `bath_dofs`, `gromos-run/src/dof.rs`); a bath's `scale` printed 0
+  without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
+  printed unrotated while the trace uses the rotated tensor (`out_configuration.cc:3331-3344`);
+  the last two in `volume_pressure` (`gromos-md/src/bin/md.rs`).
+- **Not ported, no reference**: position-restraint and distance/dihedral-restraint virials
+  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
+  dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).
 
 ## In one line
 

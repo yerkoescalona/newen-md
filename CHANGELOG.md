@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.55] (2026-10-12)
+
+**Two defects found by step 2's gates, fixed as gromosXX does them, and one gromosXX defect
+reproduced and flagged** (1.8). The reference test now compares `VOLUMEPRESSURE03` and
+`CONSFORCERED` whole-block; two new native references, and the ignored
+`aladip_vacuum_fep_pairpert_precalc` now passes; 79 reference systems pass.
+
+### Fixed
+
+- **`PERTATOMPAIR` pairs with a perturbed atom.** The interaction types are read raw (0 excluded,
+  1 normal, 2 1-4) as `in_perturbation.cc` does; gromos-rs subtracted one and underflowed on 0.
+  Every pair now leaves the exclusion and 1-4 lists at prepare time and is computed once, per
+  state, in the atom-pair term with the A/B types, charges and soft core
+  (`perturbed_nonbonded_pair.cc:179-298`); its r⊗f goes to the virial and its λ-grid energies to
+  `PRECALCLAM`. `pt_top` mapped the B type off by one (type 1 added an exclusion, type 2 nothing);
+  it now matches gromos++ `PtTopology.cc:151-170`. Pinned by `aladip_vacuum_fep_pairpert_precalc`
+  (no longer ignored: pairs 4-10 1-4/excluded, 1-11 normal/1-4 with both atoms perturbed, 4-7
+  excluded/normal); 77 references whole-block at this point. The eleven aladip references that
+  carry the old 7-10 pair change only in the `.tre` virial (now r⊗f, as gromosXX) and one 1e-34
+  bath value.
+- **The constraint virial is added only for the atomic virial** (`shake.h:380`, `settle.cc:397`);
+  SHAKE and SETTLE added it under every virial type. Under the molecular virial the barostat saw
+  −1500 instead of +28 kJ mol⁻¹ nm⁻³ and shrank the LiveCoMS `t_02` box by 0.09 % per step.
+  Lean: `intragroup_pair_virial_zero`, `constraint_virial_pressure_shift`
+  (`math`, `OAI.Physics.Gromos.Divergences`). With it, as gromosXX:
+  - roto-translational constraints remove 3 COM and 3 internal degrees of freedom from atom 1's
+    baths (`topology.cc:1370-1400`), and the `ROTTRANS` reference is centred on the
+    chain-gathered COM;
+  - the `.tre` writes per-bath `T_total`/`T_com`/`T_ir`/`scale` and gromosXX's
+    `VOLUMEPRESSURE03` layout;
+  - one pressure, trace/3, for the barostat and the output;
+  - `CONSFORCERED` is scaled by 1/dt² once per atom;
+  - the perturbed bonded, 1-4, RF-excluded and atom-pair terms contribute their virial.
+
+  Nothing pinned this: `water_216_npt` runs no SHAKE and the test compared `ENERGY03` only. It now
+  compares the whole `VOLUMEPRESSURE03` block and `CONSFORCERED`, under which the previous binary
+  fails 22 systems; two new references, `aladip_solvated_npt_shake` and
+  `aladip_multibath_rottrans`.
+
+### Changed
+
+- `Simulation.pressure` (Python) returns trace(P)/3, the number the barostat couples to and
+  gromosXX writes, and is 0 under NVT/NVE (it returned the kinetic term alone).
+- `PERTATOMPAIR` interaction codes other than 0/1/2 are a parse error (gromosXX silently zeroes
+  the state).
+
+### Reproduced gromosXX defects (flagged, to be corrected in a later version)
+
+- **`eds_pert_lj_crf_interaction` called with its outputs shifted by one slot**
+  (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200` against `perturbed_nonbonded_term.h:65-72`).
+  For a `PERTATOMPAIR` pair with a perturbed atom and a normal or 1-4 state type, the state's
+  energies receive the kernel's dH/dλ, its force is `(f + e_lj + e_crf)·r`, its dH/dλ is 0, and
+  `eps = 0` and `coulomb_scaling = 0` are fed into the kernel, so its 1/r Coulomb term vanishes.
+  Reproduced in `atom_pair_state` (`gromos-forces/src/nonbonded/perturbed.rs`), pinned by
+  `aladip_vacuum_fep_pairpert_precalc`. Lean: `shiftedPairForce_eq_pairForce_iff`,
+  `shifted_ti_shortfall`, `crfSoftEnergy_shift` (`math`, `OAI.Physics.Gromos.Divergences`).
+- Reproduced quirks, now pinned by `VOLUMEPRESSURE03`:
+  - the bonded and perturbed bonded virial is added under every virial type, the gate commented
+    out (`quartic_bond_interaction.cc:93`, `perturbed_quartic_bond_interaction.cc:125`);
+  - the perturbed 1-4, RF-excluded and atom-pair virials are unconditional
+    (`perturbed_nonbonded_innerloop.cc:2247-2250, 3941-3946`, `perturbed_nonbonded_pair.cc:1559-1561`),
+    while plain pairs are gated (`nonbonded_set.cc:428-430`);
+  - SETTLE is gated on the atomic virial with no vacuum split (`settle.cc:397`); LINCS adds no
+    constraint virial;
+  - `NDFMIN` is not subtracted from the COM/IR dof (`multibath.cc:139-149`);
+  - a bath's `scale` is printed 0 without a thermostat (`multibath.h:48`,
+    `berendsen_thermostat.cc:134`);
+  - the kinetic-tensor rows are printed unrotated while the trace uses the rotated tensor
+    (`out_configuration.cc:3331-3344`).
+- Not ported (no reference): the position-restraint and distance/dihedral-restraint virials
+  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
+  dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).
+
+### Verified
+
+- References: 79 passed, 1 ignored (`aladip_gamd`), whole-block, `VOLUMEPRESSURE03` and
+  `CONSFORCERED` included; check suite, `fep_null_perturbation` and 563 unit tests green.
+- `ENERGY03`, forces, trajectories and final configurations are byte-identical to the previous
+  binary on every old reference.
+- LiveCoMS `t_02` over 500 steps matches native gromosXX to |ΔV|/V 3e-10 and 2e-5 K per bath.
+
 ## [0.0.54] (2026-10-12)
 
 **Extended TI (`PRECALCLAM`): the energies of every perturbed interaction and their λ derivatives
@@ -74,10 +155,13 @@ Without `PRECALCLAM` nothing changes beyond noise. 81 λ points on every step co
 ### Deliberate differences from gromosXX
 
 - `NRLAM = 1` is refused: gromosXX divides by `NRLAM − 1` and every λ_k is NaN.
+- Conventions of the method (de Ruiter & Oostenbrink, JCTC 2016, 12, 4476; not divergences):
+  - the derivative record's signs, `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ`: the B-state softness
+    derivative is taken in `1 − μ` (Eqs. 9, 12; `perturbed_nonbonded_term.cc:614-716`);
+  - the grid is in the individual μ, not λ, so `LAMBDAS` and `NLAM` are applied afterwards by
+    `ext_ti_ana` (p. 7, Eqs. 10–13); `AB_kinetic` keeps the simulated mass μ, `slam`, as momenta
+    are conserved (Eqs. 17, 19; `temperature_calculation.cc:200-224`).
 - Reproduced quirks (`.claude/porting.md`):
-  - the derivative record's sign convention, `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ`;
-  - the λ grid ignores the `LAMBDAS` polynomials and `NLAM`, except `slam` (the current mass λ)
-    in `AB_kinetic`;
   - the long-range ext energies are refreshed only on pairlist steps that are also output steps,
     and are zero on the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96,
     280-300`);
@@ -1933,7 +2017,7 @@ Code comments, tests and older entries above cite work by a stable id (`1.5`, `2
 | `1.5b` | Real-input compatibility | ✓ 0.0.42–0.0.46 |
 | `1.5c` | Tutorial 2 opened | ✓ 0.0.48 |
 | `1.7` | FEP / TI | ✓ complete for fixed λ |
-| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); steps 3–7 open |
+| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); 0.0.55 fixes (PERTATOMPAIR, constraint virial); steps 3–7 open |
 | `2.0` | Instancing model, phases 1–2e | ✓ |
 | `2.1` | Atom selection | ✓ complete |
 | `2.2` | Shared analysis infra | ✓ complete |

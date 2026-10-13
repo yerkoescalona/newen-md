@@ -55,6 +55,11 @@ impl BerendsenThermostat {
         }
     }
 
+    /// The scaling factor of every bath at the last step (gromosXX `bath_struct::scale`).
+    pub fn scales(&self) -> &[f64] {
+        &self.scale
+    }
+
     /// Create a new Berendsen thermostat with a single bath covering all atoms.
     pub fn new_single_bath(temperature: f64, tau: f64, dof: f64, n_atoms: usize) -> Self {
         Self {
@@ -160,6 +165,10 @@ impl Algorithm for BerendsenThermostat {
 
     fn name(&self) -> &str {
         "Berendsen_Thermostat"
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 

@@ -231,6 +231,7 @@ pub(crate) fn calculate_perturbed_bond_forces_grouped<const GROUPS: bool>(
         }
         result.forces[bond.i] += f_i;
         result.forces[bond.j] -= f_i;
+        result.add_virial(&[(v, f_i)]);
 
         // dE/dλ = ¼·λ_d·[K_d·Δ² - 4·K·b_d·r0·Δ]
         let de_dl = 0.25 * lambda_derivative * (k_d * delta * delta - 4.0 * k * b_d * r0 * delta);
@@ -330,6 +331,7 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
         result.forces[angle.i] += f_i;
         result.forces[angle.j] += f_j;
         result.forces[angle.k] += f_k;
+        result.add_virial(&[(rij, f_i), (rkj, f_k)]);
 
         // dE/dλ = ½·λ_d·[K_d·d² - 2·K·cd_d·d]
         let de_dl = 0.5 * lambda_derivative * (k_d * d_cos * d_cos - 2.0 * k * cd_d * d_cos);
@@ -458,6 +460,8 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
         result.forces[imp.j] += f_j;
         result.forces[imp.k] += f_k;
         result.forces[imp.l] += f_l;
+        let r_lj = pbc.nearest_image(conf.current().pos[imp.l], conf.current().pos[imp.j]);
+        result.add_virial(&[(r_ij, f_i), (r_kj, f_k), (r_lj, f_l)]);
 
         // dE/dλ = ½·λ_d·[-2·K·q_d·Δ + K_d·Δ²]
         let de_dl = 0.5 * lambda_derivative * (-2.0 * k * q_d * d_zeta + k_d * d_zeta * d_zeta);
@@ -577,6 +581,12 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
         result.forces[dih.j] += f_ja * w_a + f_jb * w_b;
         result.forces[dih.k] += f_ka * w_a + f_kb * w_b;
         result.forces[dih.l] += f_la * w_a + f_lb * w_b;
+        let r_lj = pbc.nearest_image(conf.current().pos[dih.l], conf.current().pos[dih.j]);
+        result.add_virial(&[
+            (r_ij, f_ia * w_a + f_ib * w_b),
+            (r_kj, f_ka * w_a + f_kb * w_b),
+            (r_lj, f_la * w_a + f_lb * w_b),
+        ]);
 
         let de_term = lambda_derivative * (e_b - e_a);
         result.lambda_derivative += de_term;
@@ -676,6 +686,7 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
         }
         result.forces[sb.i] += f_i;
         result.forces[sb.j] -= f_i;
+        result.add_virial(&[(v, f_i)]);
 
         // dE/dλ (GROMOS `e_lambda` formula)
         let st1 = 1.0 + alpha * diff2;
@@ -781,6 +792,7 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
         result.forces[sa.i] += f_i;
         result.forces[sa.j] += f_j;
         result.forces[sa.k] += f_k;
+        result.add_virial(&[(rij, f_i), (rkj, f_k)]);
 
         let st1 = 1.0 + alpha * diff2;
         let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * cos_diff;
@@ -915,6 +927,8 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
         result.forces[si.j] += f_j;
         result.forces[si.k] += f_k;
         result.forces[si.l] += f_l;
+        let r_lj = pbc.nearest_image(conf.current().pos[si.l], conf.current().pos[si.j]);
+        result.add_virial(&[(r_ij, f_i), (r_kj, f_k), (r_lj, f_l)]);
 
         let st1 = 1.0 + alpha * diff2;
         let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * q_diff;

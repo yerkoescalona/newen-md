@@ -669,15 +669,12 @@ impl State {
         2.0 * self.energies.kinetic_total / (crate::units::kB * num_degrees_of_freedom as f64)
     }
 
-    /// Calculate pressure from virial
-    ///
-    /// P = (2*KE - Virial) / (3*V)
+    /// The pressure, trace / 3 of `pressure_tensor`: what the barostat couples to and what
+    /// gromosXX writes (`out_configuration.cc:3322-3323`). Zero unless the run computes it
+    /// (pressure coupling).
     pub fn pressure(&self) -> f64 {
-        let volume = self.box_config.volume();
-        let virial_trace =
-            self.virial_tensor.x_axis.x + self.virial_tensor.y_axis.y + self.virial_tensor.z_axis.z;
-
-        (2.0 * self.energies.kinetic_total - virial_trace) / (3.0 * volume)
+        let p = &self.pressure_tensor;
+        (p.x_axis.x + p.y_axis.y + p.z_axis.z) / 3.0
     }
 }
 

@@ -570,6 +570,10 @@ impl Algorithm for Forcefield {
         self.nonbonded_storage.clear();
         self.local_storage.clear();
         let need_virial = self.virial_type != VirialType::None;
+        // The perturbed 1-4, excluded and PERTATOMPAIR pairs add their virial for every virial
+        // type (`perturbed_nonbonded_innerloop.cc:2247-2250, 3941-3946`,
+        // `perturbed_nonbonded_pair.cc:1559-1561`)
+        let mut perturbed_pair_virial = [[0.0; 3]; 3];
 
         // Short-range solute interactions
         let t_solute = self.timing_enabled.then(std::time::Instant::now);
@@ -1227,6 +1231,7 @@ impl Algorithm for Forcefield {
                 for i in 0..n_atoms {
                     self.nonbonded_storage.forces[i] += corr_pl.forces[i];
                 }
+                add_virial(&mut self.nonbonded_storage.virial, &corr_pl.virial, 1.0);
 
                 // 3b-1b: same correction for ALL remaining pairlists that may contain
                 // perturbed pairs. Solute-solvent long-range pairs are in solute_long. With a
@@ -1271,6 +1276,7 @@ impl Algorithm for Forcefield {
                             for i in 0..n_atoms {
                                 s.forces[i] += corr.forces[i];
                             }
+                            add_virial(&mut s.virial, &corr.virial, 1.0);
                         }
                         s.groups.merge(&lr.groups);
                         s.precalc.merge(&lr.precalc);
@@ -1301,6 +1307,7 @@ impl Algorithm for Forcefield {
                     for i in 0..n_atoms {
                         self.nonbonded_storage.forces[i] += corr.forces[i];
                     }
+                    add_virial(&mut self.nonbonded_storage.virial, &corr.virial, 1.0);
                 }
                 log::debug!(
                     "  Pert corr solute_short: ({} pairs, Δe_lj={:.6e}, Δe_crf={:.6e})",
@@ -1360,6 +1367,8 @@ impl Algorithm for Forcefield {
                     for i in 0..n_atoms {
                         self.local_storage.forces[i] += corr_ex.forces[i];
                     }
+                    add_virial(&mut self.local_storage.virial, &corr_ex.virial_a, -1.0);
+                    add_virial(&mut perturbed_pair_virial, &corr_ex.virial, 1.0);
                 }
 
                 // 3b-4: 1-4 correction (separate accumulator)
@@ -1395,6 +1404,8 @@ impl Algorithm for Forcefield {
                     for i in 0..n_atoms {
                         self.local_storage.forces[i] += corr14.forces[i];
                     }
+                    add_virial(&mut self.local_storage.virial, &corr14.virial_a, -1.0);
+                    add_virial(&mut perturbed_pair_virial, &corr14.virial, 1.0);
                 }
 
                 // 3b-5: the PERTATOMPAIR pairs, computed here only (they are off the pairlist
@@ -1426,11 +1437,7 @@ impl Algorithm for Forcefield {
                     for i in 0..n_atoms {
                         self.local_storage.forces[i] += corr_ap.forces[i];
                     }
-                    for (dst, src) in self.local_storage.virial.iter_mut().zip(&corr_ap.virial) {
-                        for (d, s) in dst.iter_mut().zip(src) {
-                            *d += *s;
-                        }
-                    }
+                    add_virial(&mut perturbed_pair_virial, &corr_ap.virial, 1.0);
                     log::debug!(
                         "  AtomPair: e_lj={:.6e} e_crf={:.6e}",
                         corr_ap.delta_e_lj,
@@ -1590,9 +1597,20 @@ impl Algorithm for Forcefield {
             }
 
             // Transfer virial tensor to configuration (nonbonded + bonded)
-            // GROMOS convention: virial[a][b] = Σ r[a] * force[b]
-            let vir = &self.nonbonded_storage.virial;
-            let bvir = &bonded_result.virial;
+            // GROMOS convention: virial[a][b] = Σ r[a] * force[b]. The bonded terms add their
+            // atomic virial for every virial type (gate commented out, e.g.
+            // `quartic_bond_interaction.cc:93`); the nonbonded set only with a virial
+            // (`nonbonded_set.cc:428-430`).
+            let vir = if need_virial {
+                self.nonbonded_storage.virial
+            } else {
+                [[0.0; 3]; 3]
+            };
+            let mut bvir = bonded_result.virial;
+            let perturbed_virial = perturbed_bonded.as_ref().map(|p| &p.virial);
+            for extra in perturbed_virial.into_iter().chain([&perturbed_pair_virial]) {
+                add_virial(&mut bvir, extra, 1.0);
+            }
             state.virial_tensor = Mat3::from_cols(
                 Vec3::new(
                     vir[0][0] + bvir[0][0],
@@ -1856,6 +1874,14 @@ fn build_cg_groups_serial(topo: &Topology, pairs: &[(u32, u32)], offset: u32) ->
 }
 
 // === Virial helper functions (GROMOS: prepare_virial.cc) ===
+
+/// `dst += sign · src`, element by element.
+#[inline]
+fn add_virial(dst: &mut [[f64; 3]; 3], src: &[[f64; 3]; 3], sign: f64) {
+    for (d, s) in dst.iter_mut().flatten().zip(src.iter().flatten()) {
+        *d += sign * s;
+    }
+}
 
 /// Compute atomic kinetic energy tensor: KE_ij = 0.5 * Σ_k m_k * v_k_i * v_k_j
 /// Uses conf.current().vel (GROMOS convention: computed before force calc)

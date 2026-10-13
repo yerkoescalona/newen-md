@@ -51,6 +51,8 @@ pub struct ForceEnergyLambda {
     pub energy: f64,
     pub forces: Vec<Vec3>,
     pub lambda_derivative: f64,
+    /// virial[a][b] = Σ r[a] * f[b], as [`ForceEnergy::virial`].
+    pub virial: [[f64; 3]; 3],
     /// `energy` split by term kind, so the perturbed contributions land in the same `.tre`
     /// columns as their unperturbed counterparts (bond/angle/improper/dihedral) — gromosXX
     /// books them there; soft bonds/angles/impropers count as their kind.
@@ -139,6 +141,7 @@ impl ForceEnergyLambda {
             energy: 0.0,
             forces: vec![Vec3::ZERO; num_atoms],
             lambda_derivative: 0.0,
+            virial: [[0.0; 3]; 3],
             bond_energy: 0.0,
             angle_energy: 0.0,
             improper_energy: 0.0,
@@ -163,6 +166,23 @@ impl ForceEnergyLambda {
         self.dihedral_dhdl += other.dihedral_dhdl;
         for i in 0..self.forces.len().min(other.forces.len()) {
             self.forces[i] += other.forces[i];
+        }
+        for a in 0..3 {
+            for b in 0..3 {
+                self.virial[a][b] += other.virial[a][b];
+            }
+        }
+    }
+
+    /// Add one term's atomic virial `Σ_k r_k(a)·f_k(b)`; gromosXX adds it for every virial type
+    /// (the `V == atomic_virial` gate is commented out in the perturbed bonded terms, e.g.
+    /// `perturbed_quartic_bond_interaction.cc:125`).
+    #[inline]
+    pub(crate) fn add_virial(&mut self, terms: &[(Vec3, Vec3)]) {
+        for a in 0..3 {
+            for b in 0..3 {
+                self.virial[a][b] += terms.iter().map(|(r, f)| r[a] * f[b]).sum::<f64>();
+            }
         }
     }
 }
