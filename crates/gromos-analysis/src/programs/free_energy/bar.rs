@@ -10,7 +10,7 @@
 //! Deliberate differences from gromos++ (item 1.8):
 //! - The analytical error. gromos++ 9cd9f6b3 divides each side's relative variance by an extra
 //!   (ln⟨f⟩)² (`bar.cc:639`; dfmult has no such factor, `dfmult.cc:212-217`). Corrected by
-//!   default since 0.0.56; `@parity gromospp` ([`Parity::GromosppReleased`]) reproduces the
+//!   default since 0.0.57;`@parity gromospp` ([`Parity::GromosppReleased`]) reproduces the
 //!   defect. The oracle of the corrected output is gromos++ 9cd9f6b3 patched with
 //!   `D4_bar_error.patch` (`crates/gromos-md/tests/gromosXX_references/patches/`), that of the
 //!   reproduced one the released build. [`Interval::error_corrected`] is the corrected error in

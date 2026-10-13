@@ -11,7 +11,7 @@
 //!
 //! Deliberate differences from gromos++ (item 1.8):
 //! - The error of the integral. gromos++ 9cd9f6b3's sum skips the point N−2
-//!   (`ext_ti_merge.cc:282`, `i < N-2`). Corrected by default since 0.0.56; `@parity gromospp`
+//!   (`ext_ti_merge.cc:282`, `i < N-2`). Corrected by default since 0.0.57; `@parity gromospp`
 //!   ([`Parity::GromosppReleased`]) reproduces the defect. The oracle of the corrected output is
 //!   gromos++ 9cd9f6b3 patched with `D8_ext_ti_merge_loop.patch`
 //!   (`crates/gromos-md/tests/gromosXX_references/patches/`), that of the reproduced one the

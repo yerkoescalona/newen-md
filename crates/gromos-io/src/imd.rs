@@ -2158,9 +2158,11 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
             .precalclam()
             .unwrap()
             .is_none());
+        // the range checks already fire in parse_imd_str; a missing MAXLAM only in precalclam()
         for bad in ["11 0.7 0.2", "11 0 1.5", "-1 0 1", "11 0"] {
-            let p = parse_imd_str(&format!("PRECALCLAM\n{bad}\nEND\n")).unwrap();
-            assert!(p.precalclam().is_err(), "{bad}");
+            let r =
+                parse_imd_str(&format!("PRECALCLAM\n{bad}\nEND\n")).and_then(|p| p.precalclam());
+            assert!(r.is_err(), "{bad}");
         }
     }
 

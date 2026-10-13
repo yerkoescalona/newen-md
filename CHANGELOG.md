@@ -5,13 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
-## [0.0.57] (unreleased)
+## [0.0.57] (2026-10-13)
 
-**EDS through the recipe** (1.8): an `EDS` block and an `MPERTATOM` perturbation topology run
-through the one builder and reproduce gromosXX's end-state energies, reference Hamiltonian, mixed
-forces and `.tre`; the binary-only EDS code is gone. Eight new references; 88 pass.
+**EDS through the recipe, the extended-TI analysis chain, `dGslv_pbsolv`** (1.8): an `EDS` block
+and an `MPERTATOM` perturbation topology run through the one builder and reproduce gromosXX's
+end-state energies, reference Hamiltonian, mixed forces and `.tre`; the binary-only EDS code is
+gone. Eight new references; 88 pass. `ext_ti_ana`, `bar` and `ext_ti_merge` are ported from
+gromos++ with an `mbar` beside them, `dGslv_pbsolv` is ported, and the three estimators print
+corrected values by default (`@parity gromospp` reproduces the release).
 
-### Added
+### Added (1.8 step 6 — EDS)
 
 - **`EDS` block, modelled** (`gromos_io::imd::EdsBlock`, `RunRecipe::eds`, Python
   `Recipe.eds`): gromosXX's token stream (`in_parameter.cc:3843-3961`) — EDS, FORM, NUMSTATES
@@ -88,6 +91,110 @@ forces and `.tre`; the binary-only EDS code is gone. Eight new references; 88 pa
   as a block).
 - The force field assigns `special_total` every step (0 without position restraints).
 
+### Added (1.8 step 3 — extended-TI analysis)
+
+- **`ext_ti_ana`, `bar`, `ext_ti_merge`**, the gromos++ programs, as library functions
+  (`gromos_analysis::programs::free_energy::{ext_ti_ana, bar, ext_ti_merge}`) and Python
+  `gromos.analysis.ext_ti_ana`, `bar`, `ext_ti_merge`. `ext_ti_ana` reads gromosXX's
+  `PRECALCLAM`/`FREEPRECALCLAM` and `ABDIH`/`FREEABDIH` blocks and predicts ⟨∂H/∂λ⟩ at other λ
+  and λ-dependences (`predicted_l*.dat`, `@bar_data`, `@dHdl_data`); `bar` is Bennett's
+  acceptance ratio over its `bar_data` files; `ext_ti_merge` merges the predictions and
+  integrates. With `@parity gromospp` all three are byte-identical to gromos++ 9cd9f6b3 on the
+  oracle cases (A1–A4 on the engine references, the five-window CH4 chain; the A5 inputs are
+  refused): `gromospp_references` 28 passed.
+- **`mbar`** (no gromos++ counterpart; binary, `programs::free_energy::mbar`,
+  `gromos.analysis.mbar`): MBAR over the `@bar_data` files of K windows. On the five CH4 windows
+  ΔG(0 → 1) = −46.74103 ± 1.88419 kJ/mol, all ten pairs within 0.01 kJ/mol of pymbar 4.0.3
+  (`tests/data/mbar/`); with two states it gives `bar`'s ΔG to 1e-6.
+- `scripts/ti_ch4.py --estimator ti|bar|mbar` runs the CH4 windows and analyses them through
+  `gromos.analysis`.
+
+### Deliberate differences from gromos++ (`ext_ti_ana`, `bar`)
+
+- `@imd` goes through gromos-rs's IMD reader: `LAMBDAS` rows by name as well as by number, and
+  NTLI 10/11 mapped as gromosXX does (distancefield/dihedralres; gromos++'s type table swaps
+  them, `ext_ti_ana.cc:404` used at `:1371-1385`, and its mk_script reader ignores named rows
+  and reads the rows with NTIL off). mk_script's diagnostics on stdout are not reproduced.
+- The `PRECALCLAM` columns follow the trajectory's layout: with 12 columns (md++ 2023-04-15,
+  `out_configuration.cc:3230-3260`) disres/dihres/disfld are columns 8/10/11 (gromos++ reads 9
+  and 10, `ext_ti_ana.cc:781-782`); with 11 they are 8/9/10.
+- With `@pmin` > 0 the `@bar_data`/`@dHdl_data` values are stored at the λ they name
+  (`ext_ti_ana.cc:513, 865`); `@dHdl_data` writes its rows without `@bar_data` too (`:1025`).
+- Values gromos++ leaves undefined (a parameter neither in `@imd` nor given, `@pmax` past the
+  grid, a grid of one λ, `@bar_data` outside `@pmin`/`@pmax`) are errors; `@cpus` other than 1
+  is refused (one thread; gromos++ without OpenMP refuses it too); the bootstrap seed can be
+  injected (library; gromos++ takes `time(NULL)`); an `@slj_scrf_file` whose last `END` has no
+  newline is read.
+
+### Added (1.8 step 4b — `dGslv_pbsolv`)
+
+- **`dGslv_pbsolv`**, the gromos++ program (`@topo @pbc @coord @pqr @atoms @atomsTOcharge
+  @schemeELEC @epsSOLV @epsRF @epsNPBC @rcut @gridspacing @nogridpoints @coordinates @NPBCsize
+  @increasegrid @cubesFFT @maxiter @probeIAC @probeRAD @HRAD @radscal @rminORsigma @verbose`), as a
+  library function (`gromos_analysis::programs::dgslv_pbsolv`) over a new `gromos_analysis::pb`
+  module: the finite-difference Poisson–Boltzmann solver (ICCG under PBC and NPBC, Debye–Hückel
+  boundary, dielectric maps from van der Waals radii) and the FFT Poisson solver (lattice-sum and
+  reaction-field boundary conditions, Hat charge shaping, the iterative cavity solver with its
+  vacuum fields) on `rustfft` with FFTW's sign and scaling conventions. On four LS cases and two
+  RF cases stdout and the whole `@verbose` log are byte-identical to gromos++ (FFT-derived
+  numbers within 1e-7, because `rustfft` picks its kernels at run time). About 5× faster than the
+  C++ on 16 cores (1.31 ± 0.01 s against 7.15 ± 0.04 s on the RF case, n = 5 and 3), and still
+  byte-identical on one thread.
+- `gromos.analysis.dgslv_pbsolv(...)` returns the per-atom potentials and the dG of every solve,
+  and the correction the program documents but does not compute (`CB/NPBC[FD] − LS/PBC[FD]`, plus
+  `LS/PBC[FFT] − RF/PBC[FFT]` under RF).
+- The gromos++ `dGslv_pbsolv` in the `BUILD` tree is a stub: the source tests `HAVE_LIBFFTW3`
+  before including `config.h` and line 109 is a deliberate syntax error. The oracle was a patched
+  copy linked against the built library; the recipe is in
+  `crates/gromos-analysis/tests/data/dgslv_pbsolv/README.md`.
+
+### Deliberate differences from gromos++ (`dGslv_pbsolv`)
+
+- Reproduced: the `×FPEPSI ÷FPEPSI` round trip of the PBC mean removal; `@radH` refused as unknown
+  and `@HRAD` accepted and ignored; the grid spacing not adapted to the box; `epsRF` in the
+  vacuum field but `εs` in the tensors; the `fixed`/3-decimal log format from the first FFT
+  gridcheck line on; the ICCG-PBC backward-wrap ε index; the unwrapped `+1` interpolation corners;
+  centring on all solute atoms while shifting only `@atoms`.
+- Not reproduced: `@epsRF 1` (gromos++ solves it and then aborts on an empty vector) is refused;
+  missing `@gridspacing` (division by zero), `@increasegrid` with fewer than three values (reads
+  neighbouring keys), solvent atoms in `@atoms` (undefined behaviour), grids of 100 points or
+  fewer (out-of-bounds read) and grid indices outside the allocation are refused; PQR mode returns
+  success instead of calling `exit(1)`.
+
+### Corrected: bar/ext_ti_merge/ext_ti_ana defaults
+
+- **`bar`, `ext_ti_merge` and `ext_ti_ana` now print the corrected values by default** (1.8). The
+  ports reproduced three gromos++ 9cd9f6b3 defects for parity; each is now corrected unless the
+  program is given `@parity gromospp` (library: `programs::free_energy::Parity`, default
+  `Corrected`, `GromosppReleased` reproduces the release; Python: `parity="gromospp"` on
+  `gromos.analysis.bar`, `ext_ti_merge`, `ext_ti_ana`):
+  - `bar` divided the Bennett error by (ln⟨f⟩)² a second time (`bar.cc:639`). On the five-window
+    CH4 chain the total error goes from 3.76986 to 3.56370 kJ/mol (windows 2.56637, 2.41098,
+    1.23029, 0.54694 → 2.11698, 2.40196, 1.49959, 0.44748); ΔG, the overlap integrals and
+    `@printdist` are unchanged.
+  - `ext_ti_merge` left the point N−2 out of the error of the integral (`ext_ti_merge.cc:282`,
+    `i < N-2`). On the chain: 2.248844 → 2.302129 (the integral, −51.651947, is unchanged).
+  - `ext_ti_ana` added the dihedral ∂H/∂λ without dΛ_dih/dλ (`ext_ti_ana.cc:830`), exact only for
+    a linear `@lamdih`. With Λ_dih = λ² (case A2) the prediction at λ = 0.1 goes from 86.364646
+    to 25.269276 kJ/mol; λ = 0.5 (factor 1) and every linear dependence are unchanged.
+  `Interval::error_corrected`, `BarResult::error_total_corrected` and
+  `Merged::integral_error_corrected` stay: the corrected values in both modes, equal to the
+  printed ones by default.
+- **Oracle**: gromos++ 9cd9f6b3 built with `D4_bar_error.patch`, `D5_ext_ti_ana_dlam.patch` and
+  `D8_ext_ti_merge_loop.patch` (`crates/gromos-md/tests/gromosXX_references/patches/`). Its
+  outputs are the new fixtures `tests/data/ext_ti_ana/chain_fixed/` and `A2_fixed/` (with their
+  provenance READMEs), compared byte for byte with gromos-rs's default output
+  (`ext_ti_ana_bar_ext_ti_merge_chain_matches_patched_gromospp`,
+  `ext_ti_ana_matches_patched_gromospp_a2_fixed`). The A1–A4 and `chain` cases now run with
+  `@parity gromospp` and still match the released gromos++ byte for byte. An unknown `@parity`
+  value is refused before any file is read.
+- `scripts/ti_ch4.py --estimator bar` reports the corrected BAR error without a change; the
+  Python tests compare the default output with `chain_fixed/` and `parity="gromospp"` with
+  `chain/`.
+- Gates: `cargo test --release -p gromos-analysis` (gromospp_references 28 passed, two new;
+  mbar_reference 3 passed), `cargo clippy -p gromos-analysis -p pyo3-gromos --tests` no warnings,
+  `pytest` 532 passed / 55 skipped, stubtest clean, G6/G11 lint gates clean.
+
 ### Verified
 
 - References: 88 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
@@ -100,6 +207,18 @@ forces and `.tre`; the binary-only EDS code is gone. Eight new references; 88 pa
 - Timing against the 0.0.56 binary (n = 5, interleaved, one thread, mean ± s.d.):
   `ch4_water_fep_l025` 500 steps 11.436 ± 0.022 s vs 11.492 ± 0.069 s, `water_216_box` 10000
   steps 6.446 ± 0.038 s vs 6.490 ± 0.194 s — unchanged.
+- The whole extended-TI chain on the engine's own files: gromos-rs `md` on the five CH4 window
+  inputs (`tests/data/ext_ti_ana/windows/ch4_l*.in`), then `ext_ti_ana` (default mode, the chain
+  test's arguments) → `bar` → `ext_ti_merge`, gives output byte-identical to the same chain on
+  gromosXX's `.tre`/`.trg` of those windows: all 21 files and both stdouts, so the largest
+  difference in the predicted curves is 0 at the printed 6 decimals, and the merged ΔG is
+  −51.651947 ± 2.302129 kJ/mol (TI) and −41.21067 ± 3.56370 kJ/mol (BAR) from both engines. The
+  inputs themselves: every `.trg` number equal as printed, `.tre` within 1e-9 kJ/mol (1.2e-10
+  relative, the last printed digit).
+- Merged tree (EDS with steps 3 and 4b and the estimator correction): `gromos-analysis`
+  gromospp_references 28, mbar_reference 3, library_parity 4, lib 36 passed; core, io, run,
+  forces, integrators and tools green; clippy only the two known doc-list warnings; `pytest`
+  681 passed / 66 skipped; stubtest clean; G6/G11 lint gates clean.
 
 ## [0.0.56] (2026-10-13)
 
@@ -2167,7 +2286,7 @@ Code comments, tests and older entries above cite work by a stable id (`1.5`, `2
 | `1.5b` | Real-input compatibility | ✓ 0.0.42–0.0.46 |
 | `1.5c` | Tutorial 2 opened | ✓ 0.0.48 |
 | `1.7` | FEP / TI | ✓ complete for fixed λ |
-| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); 0.0.55 fixes (PERTATOMPAIR, constraint virial); steps 3–7 open |
+| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); 0.0.55 fixes (PERTATOMPAIR, constraint virial); 0.0.56 PERTATOMPAIR kernel corrected; step 3 ✓, 4b ✓, 6 ✓ 0.0.57 (extended-TI analysis and mbar, dGslv_pbsolv, EDS); steps 5, 7 open; 6b (λ-EDS) and 8 (AEDS) planned |
 | `2.0` | Instancing model, phases 1–2e | ✓ |
 | `2.1` | Atom selection | ✓ complete |
 | `2.2` | Shared analysis infra | ✓ complete |

@@ -13,7 +13,7 @@
 //! Deliberate differences from gromos++ (item 1.8):
 //! - The dihedral term of the predicted ∂H/∂λ. gromos++ 9cd9f6b3 adds `FREEABDIH` without the
 //!   factor dΛ_dih/dλ every other term carries (`ext_ti_ana.cc:830`), exact only for a linear
-//!   `@lamdih`. Corrected by default since 0.0.56; `@parity gromospp`
+//!   `@lamdih`. Corrected by default since 0.0.57; `@parity gromospp`
 //!   ([`Parity::GromosppReleased`]) reproduces the defect. The oracle of the corrected output is
 //!   gromos++ 9cd9f6b3 patched with `D5_ext_ti_ana_dlam.patch`
 //!   (`crates/gromos-md/tests/gromosXX_references/patches/`), that of the reproduced one the
