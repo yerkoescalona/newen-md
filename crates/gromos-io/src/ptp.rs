@@ -5,7 +5,7 @@
 //!
 //! Key blocks parsed by the reader:
 //! - `PERTATOMPARAM`  — per-atom IAC, mass, charge for states A and B; soft-core alphas
-//! - `PERTATOMPAIR`   — special LJ between two perturbed atoms (excluded from pairlist)
+//! - `PERTATOMPAIR`   — atom pairs whose interaction type (excluded / normal / 1-4) is perturbed
 //! - `PERTBONDSTRETCH` / `PERTBONDSTRETCHH` — perturbed bond types
 //! - `PERTBONDANGLE`  / `PERTBONDANGLEH`   — perturbed angle types
 //! - `PERTIMPROPERDIH` / `PERTIMPROPERDIHH` — perturbed improper dihedral types
@@ -20,8 +20,8 @@ use std::fs;
 use std::path::Path;
 
 use gromos_core::topology::{
-    PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond, PerturbedDihedral,
-    PerturbedSolute, SoftAngle, SoftBond, SoftImproper,
+    PairInteraction, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
+    PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper,
 };
 
 use crate::IoError;
@@ -64,17 +64,19 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
                 }
                 let i = parse_usize(v[0])? - 1; // 1-indexed in file → 0-indexed
                 let j = parse_usize(v[1])? - 1;
-                // Interaction type: 1-indexed in file → 0-indexed (file 1→0: full LJ, file 2→1: 1-4 LJ)
-                let a_type = parse_usize(v[2])? - 1;
-                // b_type=0 in file is a sentinel: "atom pair absent in state B" → None
-                let b_type = {
-                    let raw = parse_usize(v[3])?;
-                    if raw == 0 {
-                        None
-                    } else {
-                        Some(raw - 1)
-                    }
+                // Interaction types as in the file: 0 excluded, 1 normal, 2 1-4
+                let pair_type = |s: &str| {
+                    s.parse::<i64>()
+                        .ok()
+                        .and_then(PairInteraction::from_code)
+                        .ok_or_else(|| {
+                            IoError::ParseError(format!(
+                                "PERTATOMPAIR: interaction type must be 0, 1 or 2, got {s}"
+                            ))
+                        })
                 };
+                let a_type = pair_type(v[2])?;
+                let b_type = pair_type(v[3])?;
                 let (i, j) = if i <= j { (i, j) } else { (j, i) };
                 ps.atom_pairs.push(PerturbedAtomPair {
                     i,
@@ -664,6 +666,55 @@ END
             "crf_soft must be read from column 10 (ACRF)"
         );
         std::fs::remove_file(path).ok();
+    }
+
+    /// PERTATOMPAIR interaction types are read as they are (0 excluded, 1 normal, 2 1-4), the
+    /// atoms ordered i < j; any other type is an error.
+    #[test]
+    fn pertatompair_types_are_read_raw() {
+        let content = "\
+TITLE
+pairs
+END
+PERTATOMPAIR
+   3
+    7   10    2    0
+   11    1    0    2
+    4    7    1    1
+END
+";
+        // own file names: `write_tmp`'s single path races with the other tests
+        let tmp = |tag: &str, content: &str| {
+            let p = std::env::temp_dir()
+                .join(format!("gromos_ptp_pairs_{tag}_{}.tmp", std::process::id()));
+            std::fs::write(&p, content).unwrap();
+            p
+        };
+        let path = tmp("ok", content);
+        let pt = read_pttopo(&path).expect("read_pttopo");
+        std::fs::remove_file(path).ok();
+        let pairs: Vec<_> = pt
+            .perturbed_solute
+            .atom_pairs
+            .iter()
+            .map(|p| (p.i, p.j, p.a_type, p.b_type))
+            .collect();
+        use PairInteraction::{Excluded, Normal, OneFour};
+        assert_eq!(
+            pairs,
+            vec![
+                (6, 9, OneFour, Excluded),
+                (0, 10, Excluded, OneFour),
+                (3, 6, Normal, Normal),
+            ]
+        );
+
+        let bad = tmp(
+            "bad",
+            "TITLE\nbad\nEND\nPERTATOMPAIR\n   1\n    1    2    3    0\nEND\n",
+        );
+        assert!(read_pttopo(&bad).is_err(), "type 3 must be rejected");
+        std::fs::remove_file(bad).ok();
     }
 
     #[test]

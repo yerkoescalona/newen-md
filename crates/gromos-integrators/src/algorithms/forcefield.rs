@@ -21,7 +21,7 @@ use gromos_forces::nonbonded::{
     lj_crf_innerloop, lj_crf_innerloop_cg_grouped, lj_crf_innerloop_cg_grouped_novirial,
     lj_crf_innerloop_cg_grouped_parallel, lj_crf_innerloop_cg_grouped_parallel_novirial,
     lj_crf_innerloop_novirial, lj_crf_innerloop_parallel, lj_crf_innerloop_parallel_novirial,
-    one_four_interaction_loop, perturbed_atom_pair_correction, perturbed_excluded_correction,
+    one_four_interaction_loop, perturbed_atom_pair_interactions, perturbed_excluded_correction,
     perturbed_one_four_correction, perturbed_pairlist_correction, perturbed_self_energy_correction,
     rf_excluded_interactions, solvent_innerloop, solvent_innerloop_novirial,
     solvent_innerloop_parallel, solvent_innerloop_parallel_novirial, CGPairGroup, CRFParameters,
@@ -1173,8 +1173,9 @@ impl Algorithm for Forcefield {
         //   perturbed_self_energy_correction → corrects RF self for perturbed atoms
         //   perturbed_excluded_correction    → corrects RF excluded pairs for perturbed atoms
         //   perturbed_one_four_correction    → corrects 1-4 for perturbed atoms
+        // and then the PERTATOMPAIR pairs (gromosXX perturbed_pair_outerloop).
         // A `.ptp` may carry only PERTATOMPAIR entries (no perturbed atom): the atom-pair
-        // correction must still run (`pert_info` is then all `None`, which every other
+        // term must still run (`pert_info` is then all `None`, which every other
         // correction treats as "nothing to do").
         let has_perturbed_atoms =
             !self.pert_info.is_empty() && self.pert_info.iter().any(|x| x.is_some());
@@ -1396,13 +1397,14 @@ impl Algorithm for Forcefield {
                     }
                 }
 
-                // 3b-5: PERTATOMPAIR correction (special pair types replacing 1-4 LJ)
+                // 3b-5: the PERTATOMPAIR pairs, computed here only (they are off the pairlist
+                // and out of the exclusion and 1-4 lists)
                 if !topo.perturbed_solute.atom_pairs.is_empty() {
                     let mut corr_ap = PertNBCorrection::new(n_atoms);
-                    perturbed_atom_pair_correction(
+                    perturbed_atom_pair_interactions(
                         &topo.perturbed_solute.atom_pairs,
-                        &topo.one_four_pairs,
                         &conf.current().pos,
+                        &self.pert_info,
                         &self.charges,
                         &self.iac_u32,
                         &self.lj_params,
@@ -1424,8 +1426,13 @@ impl Algorithm for Forcefield {
                     for i in 0..n_atoms {
                         self.local_storage.forces[i] += corr_ap.forces[i];
                     }
+                    for (dst, src) in self.local_storage.virial.iter_mut().zip(&corr_ap.virial) {
+                        for (d, s) in dst.iter_mut().zip(src) {
+                            *d += *s;
+                        }
+                    }
                     log::debug!(
-                        "  AtomPair corr: Δe_lj={:.6e} Δe_crf={:.6e}",
+                        "  AtomPair: e_lj={:.6e} e_crf={:.6e}",
                         corr_ap.delta_e_lj,
                         corr_ap.delta_e_crf
                     );

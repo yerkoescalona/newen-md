@@ -214,31 +214,48 @@ pub struct PerturbedAtom {
     pub crf_soft: f64,
 }
 
-/// Perturbed atom pair — special LJ interaction between two perturbed atoms
-/// (PERTATOMPAIR block). These pairs are excluded from the regular pairlist
-/// and handled with their own A/B LJ types.
+/// How a perturbed atom pair interacts in one state (`PERTATOMPAIR` columns `i(A)`, `i(B)`).
 ///
-/// **INVARIANT: all index fields are 0-indexed.** GROMOS files store `A_type`
-/// and `B_type` as 1-indexed integers; `gromos-io/ptp.rs` subtracts 1 at the
-/// parse boundary.  Never store a raw file value here.
+/// The file values are read as they are, as gromosXX does (`in_perturbation.cc:1186`,
+/// `perturbed_nonbonded_pair.cc:328`): `0` excluded, `1` normal, `2` 1-4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairInteraction {
+    /// File `0`: excluded — only the reaction-field term of an excluded pair (with NSLFEXCL).
+    Excluded,
+    /// File `1`: a normal pair — LJ with c6/c12 and the full reaction field.
+    Normal,
+    /// File `2`: a 1-4 pair — LJ with cs6/cs12 and the full reaction field.
+    OneFour,
+}
+
+impl PairInteraction {
+    /// The interaction type of a `PERTATOMPAIR` file value; `None` for anything but 0, 1, 2.
+    pub fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Excluded),
+            1 => Some(Self::Normal),
+            2 => Some(Self::OneFour),
+            _ => None,
+        }
+    }
+}
+
+/// Perturbed atom pair (`PERTATOMPAIR` block): a pair whose interaction type differs between
+/// states A and B. Like gromosXX (`in_perturbation.cc:1207-1224`),
+/// [`Topology::apply_perturbation`] takes such a pair out of the exclusion and 1-4 lists and
+/// keeps it off the pairlist, so the perturbed atom-pair term is the only place it is computed.
 ///
-/// `B_type` is `Option` because the file value `0` is a sentinel meaning "the
-/// atom pair disappears in state B" (no interaction).  The parse boundary maps
-/// file 0 → `None` and file N → `Some(N-1)`.
-///
-/// Interaction type encoding (same for A and B):
-///   `0` (file 1) → normal full LJ (c6/c12)
-///   `1` (file 2) → 1-4 LJ (cs6/cs12)
+/// Atom indices are 0-indexed (the file's are 1-indexed).
 #[derive(Debug, Clone, Copy)]
 pub struct PerturbedAtomPair {
     /// First atom index (0-indexed, always i < j).
     pub i: usize,
     /// Second atom index (0-indexed).
     pub j: usize,
-    /// State A interaction type (0-indexed; 0 = full LJ, 1 = 1-4 LJ).
-    pub a_type: usize,
-    /// State B interaction type (0-indexed); `None` means the pair disappears in state B.
-    pub b_type: Option<usize>,
+    /// State A interaction type.
+    pub a_type: PairInteraction,
+    /// State B interaction type.
+    pub b_type: PairInteraction,
 }
 
 /// Perturbed bond (for FEP calculations)
@@ -687,6 +704,9 @@ pub struct Topology {
     pub exclusions: Vec<Exclusions>,
     /// 1-4 atom pairs (receive special LJ/CRF scaling).
     pub one_four_pairs: Vec<Vec<usize>>,
+    /// The `PERTATOMPAIR` pairs, per atom, sorted and symmetric: in neither list above, but
+    /// kept off the pairlist (gromosXX adds them to `all_exclusion`). Empty without such pairs.
+    pub atom_pair_exclusions: Vec<Vec<usize>>,
 
     // Chargegroups
     /// All charge groups in the system (solute first, then solvent).
@@ -782,6 +802,7 @@ impl Topology {
             charge: Vec::new(),
             exclusions: Vec::new(),
             one_four_pairs: Vec::new(),
+            atom_pair_exclusions: Vec::new(),
             chargegroups: Vec::new(),
             atom_to_chargegroup: Vec::new(),
             num_solute_chargegroups: 0,
@@ -915,7 +936,7 @@ impl Topology {
         exclusion_list_contains(&self.exclusions[i], j)
     }
 
-    /// Check if atoms i and j are excluded OR are a 1-4 pair.
+    /// Check if atoms i and j are excluded, a 1-4 pair or a `PERTATOMPAIR` pair.
     /// Used for pairlist exclusion (GROMOS: all_exclusion).
     #[inline]
     pub fn is_excluded_or_14(&self, i: usize, j: usize) -> bool {
@@ -924,6 +945,10 @@ impl Topology {
         // every rebuild — which is why the second lookup was worth removing.
         exclusion_list_contains(&self.exclusions[i], j)
             || (!self.one_four_pairs.is_empty() && self.one_four_pairs[i].contains(&j))
+            || self
+                .atom_pair_exclusions
+                .get(i)
+                .is_some_and(|l| l.contains(&j))
     }
 
     /// Get chargegroup index for atom i
@@ -1283,9 +1308,11 @@ impl Topology {
     /// `NTG != 0`: the perturbed solute terms are stored in `perturbed_solute`, and the bonds,
     /// angles, improper and proper dihedrals they perturb are removed from the regular solute
     /// so the two sets stay disjoint. `is_perturbed` is resized to the solute atom count.
+    /// Each `PERTATOMPAIR` pair leaves the exclusion and 1-4 lists and goes to
+    /// `atom_pair_exclusions` (gromosXX `in_perturbation.cc:1207-1224`).
     ///
     /// Call after `build_topology()` and before `solvate()`; applying twice replaces the
-    /// previous perturbation's terms but cannot restore bonds already removed.
+    /// previous perturbation's terms but cannot restore bonds or exclusions already removed.
     pub fn apply_perturbation(
         &mut self,
         perturbed_solute: PerturbedSolute,
@@ -1297,6 +1324,24 @@ impl Topology {
         is_perturbed.resize(n, false);
         self.is_perturbed = is_perturbed;
         self.perturbed_solute = perturbed_solute;
+
+        for ap in &self.perturbed_solute.atom_pairs {
+            for (a, b) in [(ap.i, ap.j), (ap.j, ap.i)] {
+                if let Some(l) = self.exclusions.get_mut(a) {
+                    l.retain(|&x| x != b);
+                }
+                if let Some(l) = self.one_four_pairs.get_mut(a) {
+                    l.retain(|&x| x != b);
+                }
+                if self.atom_pair_exclusions.len() <= a {
+                    self.atom_pair_exclusions.resize(a + 1, Vec::new());
+                }
+                let l = &mut self.atom_pair_exclusions[a];
+                if let Err(pos) = l.binary_search(&b) {
+                    l.insert(pos, b);
+                }
+            }
+        }
 
         let bondh: HashSet<(usize, usize)> = self.moltypes[0]
             .bonds
@@ -1643,6 +1688,47 @@ mod tests {
 
         // 0-2 should be excluded (1-3 neighbors)
         assert!(topo.is_excluded(0, 2));
+    }
+
+    /// A PERTATOMPAIR pair leaves the exclusion and 1-4 lists but stays off the pairlist,
+    /// whatever it was in the topology (gromosXX `in_perturbation.cc:1207-1224`).
+    #[test]
+    fn perturbed_atom_pairs_leave_exclusion_and_one_four_lists() {
+        let mut topo = Topology::new();
+        for i in 0..4 {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: format!("A{}", i + 1),
+                residue_nr: 1,
+                residue_name: "TEST".to_string(),
+                iac: 0,
+                mass: 1.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        topo.resize_atom_arrays();
+        topo.exclusions = vec![vec![1, 2], vec![0, 2], vec![0, 1], vec![]];
+        topo.one_four_pairs = vec![vec![3], vec![], vec![], vec![0]];
+        let mut ps = PerturbedSolute::new();
+        for (i, j) in [(0, 2), (0, 3), (1, 3)] {
+            ps.atom_pairs.push(PerturbedAtomPair {
+                i,
+                j,
+                a_type: PairInteraction::Normal,
+                b_type: PairInteraction::Excluded,
+            });
+        }
+        topo.apply_perturbation(ps, vec![false; 4]);
+
+        assert_eq!(topo.exclusions, vec![vec![1], vec![0, 2], vec![1], vec![]]);
+        assert!(topo.one_four_pairs.iter().all(Vec::is_empty));
+        for (i, j) in [(0, 2), (0, 3), (1, 3), (0, 1)] {
+            assert!(topo.is_excluded_or_14(i, j), "({i}, {j}) on the pairlist");
+            assert!(topo.is_excluded_or_14(j, i), "({j}, {i}) on the pairlist");
+        }
+        assert!(!topo.is_excluded_or_14(2, 3));
     }
 
     #[test]

@@ -294,6 +294,7 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_lambdas_precalc",
     "aladip_vacuum_fep_shake_precalc",
     "aladip_vacuum_fep_distres_precalc",
+    "aladip_vacuum_fep_pairpert_precalc",
     "ch4_water_fep_precalc_twinrange",
     "aladip_solvated_epsrf0",
     "aladip_solvated_rcrf",

@@ -8,6 +8,7 @@
 //! implemented). `@npt` other than 1 (multiple perturbations) is not supported.
 
 use crate::programs::io_err;
+use gromos_core::topology::PairInteraction;
 use gromos_io::args::{Arguments, Program, Status};
 use gromos_io::ptp::read_pttopo;
 use gromos_io::topology::{read_topology_file, write_parsed_topology};
@@ -86,9 +87,9 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
         excl.retain(|&x| x != j);
         one4.retain(|&x| x != j);
         match p.b_type {
-            None | Some(0) => excl.push(j),
-            Some(2) => one4.push(j),
-            _ => {},
+            PairInteraction::Excluded => excl.push(j),
+            PairInteraction::OneFour => one4.push(j),
+            PairInteraction::Normal => {},
         }
         excl.sort();
         one4.sort();

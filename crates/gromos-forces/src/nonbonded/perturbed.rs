@@ -2,10 +2,12 @@
 
 use super::innerloops::with_groups;
 use super::lj_crf_interaction;
-use super::{CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix, PrecalcNonbonded};
+use super::{
+    CRFParameters, EnergyGroups, GroupEnergies, LJParamMatrix, LJParameters, PrecalcNonbonded,
+};
 use gromos_core::lambdas::{IndividualLambdas, InteractionLambda};
 use gromos_core::math::{BoundaryCondition, Vec3};
-use gromos_core::topology::PerturbedAtomPair;
+use gromos_core::topology::{PairInteraction, PerturbedAtomPair};
 
 /// Lambda-dependent parameters for perturbed nonbonded interactions
 ///
@@ -50,10 +52,6 @@ pub struct PerturbedLambdaParams {
 
     /// Lambda exponent (n)
     pub lambda_exp: i32,
-
-    /// The cell's Lennard-Jones and reaction-field individual λ are equal (`L_lj == L_crf`):
-    /// the perturbed atom-pair force then keeps its per-kind form.
-    pub lj_crf_equal: bool,
 }
 
 impl PerturbedLambdaParams {
@@ -102,7 +100,6 @@ impl PerturbedLambdaParams {
             b_crfs_lambda2: crfs_lambda * crfs_lambda,
 
             lambda_exp: n,
-            lj_crf_equal: lj_lambda == crf_lambda,
         }
     }
 
@@ -176,6 +173,41 @@ pub fn perturbed_lj_crf_interaction(
     crf: &CRFParameters,
     four_pi_eps_i: f64,
 ) -> (f64, f64, f64, f64, f64) {
+    perturbed_lj_crf_interaction_scaled(
+        r,
+        a_c6,
+        a_c12,
+        b_c6,
+        b_c12,
+        a_q,
+        b_q,
+        alpha_lj,
+        alpha_crf,
+        lambda_params,
+        crf,
+        four_pi_eps_i,
+        1.0,
+    )
+}
+
+/// [`perturbed_lj_crf_interaction`] with gromosXX's `coulomb_scaling` on the `1/r` Coulomb
+/// part (`perturbed_nonbonded_term.cc:387-510`); a scaling of 1 gives the same bits.
+#[inline]
+pub fn perturbed_lj_crf_interaction_scaled(
+    r: Vec3,
+    a_c6: f64,
+    a_c12: f64,
+    b_c6: f64,
+    b_c12: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    lambda_params: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    coulomb_scaling: f64,
+) -> (f64, f64, f64, f64, f64) {
     let r2 = r.length_squared();
 
     // Early exit for zero distance
@@ -244,9 +276,10 @@ pub fn perturbed_lj_crf_interaction(
 
     // ===== FORCE CALCULATION =====
     // CRF force
-    let mut force = (lambda_params.a_crf_lambda_n * a_q * (a_dist3isoft + a_crf_cut3i)
-        + lambda_params.b_crf_lambda_n * b_q * (b_dist3isoft + b_crf_cut3i))
-        * four_pi_eps_i;
+    let mut force =
+        (lambda_params.a_crf_lambda_n * a_q * (coulomb_scaling * a_dist3isoft + a_crf_cut3i)
+            + lambda_params.b_crf_lambda_n * b_q * (coulomb_scaling * b_dist3isoft + b_crf_cut3i))
+            * four_pi_eps_i;
 
     // LJ attractive force: -6 * C6 / r⁸
     force += -6.0
@@ -265,8 +298,8 @@ pub fn perturbed_lj_crf_interaction(
     let b_e_lj = (b_c12 * b_dist6isoft - b_c6) * b_dist6isoft;
 
     let crf_cut = crf.crf_cut; // (1 - crf/2) / cutoff  [was wrongly crf_cut3i before]
-    let a_e_crf = a_q * (a_distisoft - a_crf_2cut3i * r2 - crf_cut);
-    let b_e_crf = b_q * (b_distisoft - b_crf_2cut3i * r2 - crf_cut);
+    let a_e_crf = a_q * (coulomb_scaling * a_distisoft - a_crf_2cut3i * r2 - crf_cut);
+    let b_e_crf = b_q * (coulomb_scaling * b_distisoft - b_crf_2cut3i * r2 - crf_cut);
 
     // Total energy: E = (1-λ)^n * E_A + λ^n * E_B
     let e_lj = lambda_params.a_lj_lambda_n * a_e_lj + lambda_params.b_lj_lambda_n * b_e_lj;
@@ -296,11 +329,11 @@ pub fn perturbed_lj_crf_interaction(
     let de_crf = -(lambda_params.a_crf_lambda_n
         * a_q
         * lambda_params.b_crfs_lambda
-        * (a_dist3isoft - a_crf_pert * r2)
+        * (coulomb_scaling * a_dist3isoft - a_crf_pert * r2)
         - lambda_params.b_crf_lambda_n
             * b_q
             * lambda_params.a_crfs_lambda
-            * (b_dist3isoft - b_crf_pert * r2))
+            * (coulomb_scaling * b_dist3isoft - b_crf_pert * r2))
         * four_pi_eps_i
         * alpha_crf
         + (lambda_params.lambda_exp as f64)
@@ -513,7 +546,8 @@ pub struct PertAtomInfo {
     pub alpha_crf: f64,
 }
 
-/// Delta result applied on top of the state-A result already in `nonbonded_storage`.
+/// Delta result applied on top of the state-A result already in `nonbonded_storage` — or, from
+/// [`perturbed_atom_pair_interactions`], the pairs' whole contribution.
 pub struct PertNBCorrection {
     pub forces: Vec<Vec3>,
     pub delta_e_lj: f64,
@@ -525,6 +559,8 @@ pub struct PertNBCorrection {
     pub dhdl_lj: f64,
     /// The CRF part of `dhdl`.
     pub dhdl_crf: f64,
+    /// Virial `r ⊗ f` of the pairs (filled by the atom-pair term only).
+    pub virial: [[f64; 3]; 3],
 }
 
 impl PertNBCorrection {
@@ -536,6 +572,7 @@ impl PertNBCorrection {
             dhdl: 0.0,
             dhdl_lj: 0.0,
             dhdl_crf: 0.0,
+            virial: [[0.0; 3]; 3],
         }
     }
 }
@@ -1077,33 +1114,62 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     }
 }
 
-/// Correct PERTATOMPAIR interactions (GROMOS `perturbed_nonbonded_pair`).
+/// gromosXX `rf_soft_interaction` (`perturbed_nonbonded_term.cc:718-765`) without the self-term
+/// correction: the soft reaction-field term of an excluded perturbed pair at the current λ.
+/// `r2` is the squared distance.
 ///
-/// GROMOS removes PERTATOMPAIR entries from regular exclusion/1-4 lists and
-/// computes them via a dedicated perturbed pair loop.  `a_type` and `b_type`
-/// encode the *interaction type* — NOT an IAC index — **already 0-indexed**
-/// (converted at the ptp.rs parse boundary):
+/// Returns `(force, e_rf, de_rf)`, the force a scalar along the pair vector.
+#[inline]
+pub fn rf_soft_interaction(
+    r2: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_crf: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+) -> (f64, f64, f64) {
+    let cut2 = crf.cutoff_sq;
+    let a_cut2soft = cut2 + alpha_crf * lp.b_crfs_lambda2;
+    let b_cut2soft = cut2 + alpha_crf * lp.a_crfs_lambda2;
+    // crf/2 / sqrt(cut2soft³), with crf/2 = crf_2cut3i·cut³ as in `perturbed_lj_crf_interaction`
+    let cut3 = cut2 * cut2.sqrt();
+    let a_crf_2cut3i = crf.crf_2cut3i * cut3 / (a_cut2soft * a_cut2soft * a_cut2soft).sqrt();
+    let b_crf_2cut3i = crf.crf_2cut3i * cut3 / (b_cut2soft * b_cut2soft * b_cut2soft).sqrt();
+    let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
+    let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
+
+    let force = (lp.a_crf_lambda_n * a_q * 2.0 * a_crf_2cut3i
+        + lp.b_crf_lambda_n * b_q * 2.0 * b_crf_2cut3i)
+        * four_pi_eps_i;
+    let a_e_rf = a_q * (-a_crf_2cut3i * r2 - crf.crf_cut);
+    let b_e_rf = b_q * (-b_crf_2cut3i * r2 - crf.crf_cut);
+    let e_rf = (lp.a_crf_lambda_n * a_e_rf + lp.b_crf_lambda_n * b_e_rf) * four_pi_eps_i;
+    let de_rf = ((lp.a_crf_lambda_n * a_q * lp.b_crfs_lambda * a_crf_pert
+        - lp.b_crf_lambda_n * b_q * lp.a_crfs_lambda * b_crf_pert)
+        * r2
+        * alpha_crf
+        + (lp.b_crf_lambda_n_1 * b_e_rf - lp.a_crf_lambda_n_1 * a_e_rf) * lp.lambda_exp as f64)
+        * four_pi_eps_i;
+    (force, e_rf, de_rf)
+}
+
+/// The `PERTATOMPAIR` pairs (gromosXX `Perturbed_Nonbonded_Pair`,
+/// `perturbed_nonbonded_pair.cc:118-1612`). [`Topology::apply_perturbation`] took them out of
+/// the exclusion and 1-4 lists and off the pairlist, so this is the only place they are
+/// computed: each state by its own interaction type (excluded, normal, 1-4), with the A/B
+/// parameters of perturbed atoms and soft-core, or λ-scaled plain terms when neither atom is
+/// perturbed, then summed `A + B`.
 ///
-///   `a_type = 0` (file 1) → normal full LJ with c6/c12
-///   `a_type = 1` (file 2) → 1-4 LJ with cs6/cs12
-///   `b_type = None`       → atom pair absent in state B (file sentinel 0)
+/// The force, the energies and the dH/dλ go to `out`; with more than one energy group also to
+/// cell `[eg(i)][eg(j)]` of `sink` (`:1583-1611`); with `precalc` the pair's ext energies at
+/// every λ_k (`:343-365, 410-420, 479-525, 600-612, 685-731, 803-815` and the B mirrors).
 ///
-/// The pair always uses the atoms' REGULAR iac indices for the LJ look-up.
-///
-/// The correction:
-///   Δe_lj  = (1-λ)^n * lj_a(c6/c12 or cs6/cs12) − lj_1-4_reg(cs6/cs12)
-///   Δe_crf = (1-λ)^n * crf(q_i * q_j) − 1.0 * crf(q_i * q_j)
-///           = −λ^n * crf_reg  (same charges both states, only λ-weighting changes)
-///
-/// With more than one energy group each pair also goes to cell `[eg(i)][eg(j)]` of `sink`
-/// (gromosXX `perturbed_nonbonded_pair.cc:1583-1611`). With `precalc`, the unscaled energy of
-/// each state goes to every λ_k (the pair's atoms are unperturbed: `:410-420, 600-612, 803-815`
-/// and their B mirrors) — the A state's LJ and RF, the B state's LJ and RF, or for an excluded B
-/// state its RF term.
-pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
+/// [`Topology::apply_perturbation`]: gromos_core::Topology::apply_perturbation
+pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
     atom_pairs: &[PerturbedAtomPair],
-    one_four_pairs: &[Vec<usize>],
     pos: &[Vec3],
+    pert: &[Option<PertAtomInfo>],
     charges: &[f64],
     iac: &[u32],
     lj: &LJParamMatrix,
@@ -1119,10 +1185,10 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
 ) {
     let mut none = PrecalcNonbonded::default();
     let pc = precalc.unwrap_or(&mut none);
-    with_groups!(egroups, G => atom_pair_correction_impl::<BC, G>(
+    with_groups!(egroups, G => atom_pair_impl::<BC, G>(
         atom_pairs,
-        one_four_pairs,
         pos,
+        pert,
         charges,
         iac,
         lj,
@@ -1138,10 +1204,156 @@ pub fn perturbed_atom_pair_correction<BC: BoundaryCondition>(
     ))
 }
 
-fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
+/// The parameters of one end state of a perturbed atom pair.
+struct PairState {
+    kind: PairInteraction,
+    /// state B (else A)
+    b: bool,
+    lj: LJParameters,
+    q: f64,
+}
+
+/// One end state of a `PERTATOMPAIR` pair — the body of gromosXX's `switch (A_type)` /
+/// `switch (B_type)` for `lj_crf_func` (`perturbed_nonbonded_pair.cc:328-868`, `:875-1414`).
+/// Returns `[force, e_lj, e_crf, de_lj, de_crf]`, the force a scalar along `r`, already
+/// λ-weighted.
+#[inline]
+fn atom_pair_state(
+    s: &PairState,
+    perturbed: bool,
+    r: Vec3,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    rf_excluded: bool,
+    cell: usize,
+    precalc: &mut PrecalcNonbonded,
+) -> [f64; 5] {
+    let r2 = r.length_squared();
+    let n = lp.lambda_exp as f64;
+    // λ weight of the state, its derivative with gromosXX's sign (−n(1−λ)^(n−1), +nλ^(n−1)),
+    // and the state's column of the ext record
+    let (lj_n, crf_n, lj_d, crf_d) = if s.b {
+        (
+            lp.b_lj_lambda_n,
+            lp.b_crf_lambda_n,
+            n * lp.b_lj_lambda_n_1,
+            n * lp.b_crf_lambda_n_1,
+        )
+    } else {
+        (
+            lp.a_lj_lambda_n,
+            lp.a_crf_lambda_n,
+            -n * lp.a_lj_lambda_n_1,
+            -n * lp.a_crf_lambda_n_1,
+        )
+    };
+    let ext = |e_lj: f64, e_crf: f64| {
+        if s.b {
+            [0.0, e_lj, 0.0, e_crf]
+        } else {
+            [e_lj, 0.0, e_crf, 0.0]
+        }
+    };
+    let (a_q, b_q) = if s.b { (0.0, s.q) } else { (s.q, 0.0) };
+
+    match (s.kind, perturbed) {
+        (PairInteraction::Excluded, _) if !rf_excluded => [0.0; 5],
+        (PairInteraction::Excluded, true) => {
+            // pair.cc:338-365, 882-909
+            let (f, e_crf, de_crf) =
+                rf_soft_interaction(r2, a_q, b_q, alpha_crf, lp, crf, four_pi_eps_i);
+            if precalc.is_active() {
+                precalc.add_rf_ext(cell, r2, a_q, b_q, alpha_crf, 1.0, crf, four_pi_eps_i);
+            }
+            [f, 0.0, e_crf, 0.0, de_crf]
+        },
+        (PairInteraction::Excluded, false) => {
+            // pair.cc:402-420, 931-948: gromosXX `rf_interaction`, scaled here
+            let qe = s.q * four_pi_eps_i;
+            let f = qe * crf.crf_cut3i;
+            let e_crf = qe * (-crf.crf_2cut3i * r2 - crf.crf_cut);
+            if precalc.is_active() {
+                precalc.add_constant(cell, ext(0.0, e_crf));
+            }
+            [crf_n * f, 0.0, crf_n * e_crf, 0.0, crf_d * e_crf]
+        },
+        (kind, true) => {
+            // pair.cc:463-525, 670-731, 986-1047, 1194-1253
+            let (c6, c12) = match kind {
+                PairInteraction::OneFour => (s.lj.cs6, s.lj.cs12),
+                _ => (s.lj.c6, s.lj.c12),
+            };
+            let (a_lj, b_lj) = if s.b {
+                ((0.0, 0.0), (c6, c12))
+            } else {
+                ((c6, c12), (0.0, 0.0))
+            };
+            if precalc.is_active() {
+                precalc.add_lj_crf_ext(
+                    cell,
+                    r2,
+                    (a_lj.0, a_lj.1, b_lj.0, b_lj.1),
+                    a_q,
+                    b_q,
+                    alpha_lj,
+                    alpha_crf,
+                    crf,
+                    four_pi_eps_i,
+                );
+            }
+            // gromosXX defect, reproduced (1.8): pair.cc:469-474 (and :677, :992, :1200) still
+            // passes the outputs of an older `eds_pert_lj_crf_interaction(…, f1, f6, f12, e_lj,
+            // e_crf, de_lj, de_crf)`. Against today's signature (`…, force, e_lj, e_crf, de_lj,
+            // de_crf, eps, coulomb_scaling`, perturbed_nonbonded_term.h:65-72) the zero `X_de_lj`
+            // and `X_de_crf` become `eps` and `coulomb_scaling` = 0 (no 1/r Coulomb), the state's
+            // force is (force + e_lj + e_crf)·r, its energies are the kernel's dH/dλ and its
+            // dH/dλ stays 0.
+            let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
+                r,
+                a_lj.0,
+                a_lj.1,
+                b_lj.0,
+                b_lj.1,
+                a_q,
+                b_q,
+                alpha_lj,
+                alpha_crf,
+                lp,
+                crf,
+                four_pi_eps_i,
+                0.0,
+            );
+            [f + e_lj + e_crf, de_lj, de_crf, 0.0, 0.0]
+        },
+        (kind, false) => {
+            // pair.cc:582-612, 788-815, 1105-1131, 1319-1345
+            let (c6, c12) = match kind {
+                PairInteraction::OneFour => (s.lj.cs6, s.lj.cs12),
+                _ => (s.lj.c6, s.lj.c12),
+            };
+            let (f, e_lj, e_crf) = lj_crf_interaction(r, c6, c12, s.q * four_pi_eps_i, crf);
+            if precalc.is_active() {
+                precalc.add_constant(cell, ext(e_lj, e_crf));
+            }
+            // both parts of the force take the LJ λ (pair.cc:592, 798, 1115, 1329)
+            [
+                lj_n * f,
+                lj_n * e_lj,
+                crf_n * e_crf,
+                lj_d * e_lj,
+                crf_d * e_crf,
+            ]
+        },
+    }
+}
+
+fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool>(
     atom_pairs: &[PerturbedAtomPair],
-    one_four_pairs: &[Vec<usize>],
     pos: &[Vec3],
+    pert: &[Option<PertAtomInfo>],
     charges: &[f64],
     iac: &[u32],
     lj: &LJParamMatrix,
@@ -1158,112 +1370,79 @@ fn atom_pair_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
     for ap in atom_pairs {
         let (i, j) = (ap.i, ap.j);
         let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, j);
-        let n_exp = lp.lambda_exp as f64;
+        let pi = pert.get(i).and_then(Option::as_ref);
+        let pj = pert.get(j).and_then(Option::as_ref);
 
-        // Only handle pairs that are in the regular 1-4 list (the typical case)
-        let in_14 = one_four_pairs.get(i).is_some_and(|l| l.contains(&j))
-            || one_four_pairs.get(j).is_some_and(|l| l.contains(&i));
-        if !in_14 {
-            continue;
-        }
+        // pair.cc:179-298
+        let a_iac_i = pi.map_or(iac[i] as usize, |p| p.a_iac);
+        let a_iac_j = pj.map_or(iac[j] as usize, |p| p.a_iac);
+        let b_iac_i = pi.map_or(iac[i] as usize, |p| p.b_iac);
+        let b_iac_j = pj.map_or(iac[j] as usize, |p| p.b_iac);
+        let a_q = pi.map_or(charges[i], |p| p.a_charge) * pj.map_or(charges[j], |p| p.a_charge);
+        let b_q = pi.map_or(charges[i], |p| p.b_charge) * pj.map_or(charges[j], |p| p.b_charge);
+        let (alpha_lj, alpha_crf) = match (pi, pj) {
+            (Some(pi), Some(pj)) => (
+                (pi.alpha_lj + pj.alpha_lj) / 2.0,
+                (pi.alpha_crf + pj.alpha_crf) / 2.0,
+            ),
+            (Some(p), None) | (None, Some(p)) => (p.alpha_lj, p.alpha_crf),
+            (None, None) => (0.0, 0.0),
+        };
+        let perturbed = pi.is_some() || pj.is_some();
 
         let r = bc.nearest_image(pos[i], pos[j]);
-        let r2 = r.length_squared();
-        if r2 < 1e-10 {
-            continue;
-        }
-        let inv_r2 = 1.0 / r2;
-        let inv_r6 = inv_r2 * inv_r2 * inv_r2;
-        let inv_r = inv_r2.sqrt();
-
-        let lj_ij = lj.get(iac[i] as usize, iac[j] as usize);
-
-        // State-A 1-4 that the regular loop already computed (cs6/cs12)
-        let e_lj_reg = (lj_ij.cs12 * inv_r6 - lj_ij.cs6) * inv_r6;
-        let f_lj_reg = (12.0 * lj_ij.cs12 * inv_r6 - 6.0 * lj_ij.cs6) * inv_r6 * inv_r2;
-
-        let q_prod = charges[i] * charges[j] * four_pi_eps_i;
-        let e_crf_reg = q_prod * (inv_r - crf.crf_2cut3i * r2 - crf.crf_cut);
-        let f_crf_reg = q_prod * (inv_r * inv_r2 + crf.crf_cut3i);
-
-        // a_type/b_type are 0-indexed (converted at ptp.rs parse boundary).
-        // 0 = full LJ (c6/c12), 1+ = 1-4 LJ (cs6/cs12)
-        let lj_pair = |type_idx: usize| -> (f64, f64) {
-            match type_idx {
-                0 => (
-                    (lj_ij.c12 * inv_r6 - lj_ij.c6) * inv_r6,
-                    (12.0 * lj_ij.c12 * inv_r6 - 6.0 * lj_ij.c6) * inv_r6 * inv_r2,
-                ),
-                _ => (
-                    (lj_ij.cs12 * inv_r6 - lj_ij.cs6) * inv_r6,
-                    (12.0 * lj_ij.cs12 * inv_r6 - 6.0 * lj_ij.cs6) * inv_r6 * inv_r2,
-                ),
-            }
-        };
-        let (e_lj_a, f_lj_a) = lj_pair(ap.a_type);
-        // CRF state A: same formula as regular 1-4 (same charges, same function)
-        let e_crf_a = e_crf_reg;
-        let f_crf_a = f_crf_reg;
-
-        // b_type=None means atom pair disappears in state B → contributes 0
-        let (e_lj_b, f_lj_b) = ap.b_type.map_or((0.0, 0.0), lj_pair);
-        // An "excluded" state (file type 0) still carries the reaction-field term of an excluded
-        // pair (gromosXX `rf_soft_interaction(r, 0, B_q, …)` in `perturbed_nonbonded_pair.cc`,
-        // under `if (rf_excluded)` — NSLFEXCL): no 1/r, but the −crf_2cut3i·r² − crf_cut part
-        // and its force.
-        let (e_crf_excl, f_crf_excl) = if rf_excluded {
-            (
-                q_prod * (-crf.crf_2cut3i * r2 - crf.crf_cut),
-                q_prod * crf.crf_cut3i,
+        let state = |s: PairState, precalc: &mut PrecalcNonbonded| {
+            atom_pair_state(
+                &s,
+                perturbed,
+                r,
+                alpha_lj,
+                alpha_crf,
+                lp,
+                crf,
+                four_pi_eps_i,
+                rf_excluded,
+                k,
+                precalc,
             )
-        } else {
-            (0.0, 0.0)
         };
-        let e_crf_b = ap.b_type.map_or(e_crf_excl, |_| e_crf_reg);
-        let f_crf_b = ap.b_type.map_or(f_crf_excl, |_| f_crf_reg);
-        if precalc.is_active() {
-            precalc.add_constant(k, [e_lj_a, e_lj_b, e_crf_a, e_crf_b]);
+        let a = state(
+            PairState {
+                kind: ap.a_type,
+                b: false,
+                lj: lj.get(a_iac_i, a_iac_j),
+                q: a_q,
+            },
+            precalc,
+        );
+        let b = state(
+            PairState {
+                kind: ap.b_type,
+                b: true,
+                lj: lj.get(b_iac_i, b_iac_j),
+                q: b_q,
+            },
+            precalc,
+        );
+        // pair.cc:1532-1539
+        let [f, e_lj, e_crf, de_lj, de_crf] = std::array::from_fn(|c| b[c] + a[c]);
+
+        let fv = r * f;
+        out.forces[i] += fv;
+        out.forces[j] -= fv;
+        let (rv, fa) = ([r.x, r.y, r.z], [fv.x, fv.y, fv.z]);
+        for (x, row) in out.virial.iter_mut().enumerate() {
+            for (y, v) in row.iter_mut().enumerate() {
+                *v += rv[x] * fa[y];
+            }
         }
-
-        let e_lj_pert = lp.a_lj_lambda_n * e_lj_a + lp.b_lj_lambda_n * e_lj_b;
-        let e_crf_pert = lp.a_crf_lambda_n * e_crf_a + lp.b_crf_lambda_n * e_crf_b;
-
-        let de_lj = n_exp * (lp.b_lj_lambda_n_1 * e_lj_b - lp.a_lj_lambda_n_1 * e_lj_a);
-        let de_crf = n_exp * (lp.b_crf_lambda_n_1 * e_crf_b - lp.a_crf_lambda_n_1 * e_crf_a);
-
-        let df = if lp.lj_crf_equal {
-            let f_lj_pert = lp.a_lj_lambda_n * f_lj_a + lp.b_lj_lambda_n * f_lj_b;
-            let f_crf_pert = lp.a_crf_lambda_n * f_crf_a + lp.b_crf_lambda_n * f_crf_b;
-            r * ((f_lj_pert - f_lj_reg) + (f_crf_pert - f_crf_reg))
-        } else {
-            // gromosXX scales a state's combined LJ + RF force by that state's *LJ* λ factor (the
-            // RF λ only for an excluded state, `perturbed_nonbonded_pair.cc:405, 592, 798, 935,
-            // 1115, 1329`), so with individual λ that differ for LJ and CRF the force is not the
-            // derivative of the energy — gromosXX reports this as a critical message after the
-            // run (`:309-312`) but computes it; reproduced. With equal λ both forms are the same
-            // force; the branch above keeps its rounding.
-            let f_a = lp.a_lj_lambda_n * (f_lj_a + f_crf_a);
-            let f_b = match ap.b_type {
-                Some(_) => lp.b_lj_lambda_n * (f_lj_b + f_crf_b),
-                None => lp.b_crf_lambda_n * f_crf_b,
-            };
-            r * ((f_b + f_a) - (f_lj_reg + f_crf_reg))
-        };
-        out.forces[i] += df;
-        out.forces[j] -= df;
-        out.delta_e_lj += e_lj_pert - e_lj_reg;
-        out.delta_e_crf += e_crf_pert - e_crf_reg;
+        out.delta_e_lj += e_lj;
+        out.delta_e_crf += e_crf;
         out.dhdl += de_lj + de_crf;
         out.dhdl_lj += de_lj;
         out.dhdl_crf += de_crf;
         if GROUPS {
-            sink.book(
-                k,
-                e_lj_pert - e_lj_reg,
-                e_crf_pert - e_crf_reg,
-                de_lj,
-                de_crf,
-            );
+            sink.book(k, e_lj, e_crf, de_lj, de_crf);
         }
     }
 }

@@ -69,7 +69,7 @@ pub use lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 
 // Re-export topology types
 pub use topology::{
-    LJParameters, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
+    LJParameters, PairInteraction, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
     PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper, Topology,
 };
 
