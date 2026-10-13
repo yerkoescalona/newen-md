@@ -76,10 +76,26 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   (λ_k) energies are filled only when that pairlist step is also an NTWG step, and are zero on
   the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96, 280-300`).
   Reproduced (`Forcefield::longrange_perturbed`), pinned by `ch4_water_fep_precalc_twinrange`.
-- **PRECALCLAM current-λ leaks** (B). The grid uses the raw λ_k everywhere, except: the kinetic
-  term's `slam` (the current mass λ), the improper's ζ wrapped around the current-λ q0 and not
-  re-wrapped, perturbed SHAKE adding to the `AB_bond` derivatives only, the 1-4 ext call taking
-  no Coulomb scaling, and the RF self ext term carrying no self-term correction. All reproduced.
+- **PRECALCLAM current-λ leaks** (B). The grid uses the raw λ_k everywhere (no NLAM exponent,
+  no `LAMBDAS` polynomial, no L′; softness = λ_k), except: the kinetic term's `slam` (the
+  current mass λ), the improper's ζ wrapped around the current-λ q0 and not re-wrapped,
+  perturbed SHAKE adding to the `AB_bond` derivatives only, the 1-4 ext call taking no Coulomb
+  scaling, and the RF self ext term carrying no self-term correction. All reproduced.
+- **PRECALCLAM derivative signs** (B). The derivative record holds `A_de = +∂A/∂λ` but
+  `B_de = −∂B/∂λ` for the nonbonded A/B energies (`perturbed_nonbonded_term.cc:614-716`).
+  Reproduced; not "fixed".
+- **PRECALCLAM bond mixing** (B). The grid mixes `(1 − λ_k)·b0_A + λ_k·b0_B`
+  (`perturbed_quartic_bond_interaction.cc:173-196` and the other bond forms), the main term
+  `r0_A + L·Δr0`. Both forms kept, so the main term stays bit-identical to earlier versions and
+  the grid to gromosXX.
+- **Reaction field at EPSRF = 0** (C, reconciled). gromosXX sets `crf = −1` (conducting
+  boundary; `nonbonded_term.cc:58-71`, `perturbed_nonbonded_term.cc:51-61`); gromos-rs used the
+  ε formula. Now `crf = −1` in every kernel (`CRFParameters::new`), pinned by
+  `aladip_solvated_epsrf0`.
+- **Reaction field from RCRF** (C, reconciled). gromosXX builds every RF constant from RCRF
+  (`nonbonded.rf_cutoff`, `in_parameter.cc:4606`) and accepts RCRF ≠ RCUTL silently
+  (`check_parameter.cc` has no rule); gromos-rs built them from RCUTL. Now from RCRF, silently,
+  pinned by `aladip_solvated_rcrf`.
 
 ## In one line
 

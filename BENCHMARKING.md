@@ -830,3 +830,27 @@ not touch a zero-charge, atom-1, equal-mass perturbation).
 
 Wall time (this machine, 1 thread for gromosXX, `execution.parallel = auto` for `md`): gromosXX
 ≈ 40 s per window (25.8 s / 1000 steps), `md` ≈ 12 s per window (5.8 s / 1000 steps).
+
+## 9. Free-energy features, cost (1.8)
+
+`scripts/bench_engines.py`, one thread (`taskset -c 0`), 500 steps, engines interleaved per
+repeat, n = 5, mean ± sample std (n−1), internal wall time (initialisation excluded). gromosXX
+is the plain serial build (`--engines rust,plain`). Machine: governor `powersave` (the script
+warns), load ≈ 1.
+
+**1.8 step 2 (0.0.54, PRECALCLAM), 2026-10-12.** Step-1 binary = 0.0.53 (`--rust-md`).
+
+| system | engine | n | mean ± std | gromosXX / gromos-rs |
+|---|---|--:|--:|--:|
+| `ch4_water_fep_l025`, outputs off | gromos-rs 0.0.53 | 5 | 11.332 ± 0.106 s | — |
+| `ch4_water_fep_l025`, outputs off | gromos-rs 0.0.54 | 5 | 11.302 ± 0.081 s | — |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | gromos-rs 0.0.54 | 5 | 11.308 ± 0.062 s | |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | gromosXX | 5 | 11.929 ± 0.021 s | **1.055 ± 0.006** |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | gromos-rs 0.0.54 | 5 | 12.150 ± 0.054 s | |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | gromosXX | 5 | 13.136 ± 0.024 s | **1.081 ± 0.005** |
+
+Without the block, 0.0.54 / 0.0.53 = 0.997 ± 0.012: no change beyond noise. The worst case
+(81 λ points, energies every step) costs gromos-rs 7.4 % ± 0.7 % and gromosXX 10.1 % ± 0.3 %
+over the same run without the block, so the ratio moves from 1.055 to 1.081. The precalc system
+is a scratch copy of the reference with NRLAM 11 → 81; both `.tre` files carry 500
+`# precalclam` frames.

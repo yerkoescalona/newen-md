@@ -945,6 +945,13 @@ ref_test!(
     aladip_vacuum_fep_distres_precalc,
     "aladip_vacuum_fep_distres_precalc"
 );
+// PERTATOMPAIR rows with a perturbed atom, one per state type (excluded / normal / 1-4) in A and
+// in B: the ext energies of the filled state only, the other state's parameters set to 0.
+ref_test!(
+    ignore: aladip_vacuum_fep_pairpert_precalc,
+    "aladip_vacuum_fep_pairpert_precalc",
+    "PERTATOMPAIR with perturbed atoms, A type 0 and pairs off the 1-4 list are not ported: the main energies differ already at step 0 (1.8)"
+);
 // Twin range with the pairlist every 5 steps and output every 2: gromosXX computes the long-range
 // perturbed pairs (and their ext energies) only on pairlist steps, the ext part only when that
 // step is also an output step, and reuses both until the next update.

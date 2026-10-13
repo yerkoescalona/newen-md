@@ -737,6 +737,16 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
 /// express. NRLAM = 1 is refused: gromosXX divides by NRLAM − 1 and computes NaN.
 fn check_precalclam(recipe: &RunRecipe, pc: &crate::recipe::PrecalcLam) -> Result<(), RunError> {
     let err = |m: String| Err(RunError::Recipe(m));
+    // The IMD parser's range checks (`parse_precalclam`, gromosXX `in_parameter.cc:4478-4513`),
+    // repeated for recipes not built from an IMD file; NRLAM >= 0 is the type's.
+    for (name, v) in [("MINLAM", pc.min_lambda), ("MAXLAM", pc.max_lambda)] {
+        if !(0.0..=1.0).contains(&v) {
+            return err(format!("PRECALCLAM {name} = {v}: must be >= 0 and <= 1"));
+        }
+    }
+    if pc.min_lambda >= pc.max_lambda {
+        return err("PRECALCLAM: MINLAM should be smaller than MAXLAM".to_string());
+    }
     if recipe.perturbation.enabled == 0 {
         return err("PRECALCLAM cannot be on without perturbation (NTG = 0)".to_string());
     }
@@ -1362,6 +1372,30 @@ mod tests {
         r.perturbation.enabled = 0;
         assert!(
             refusal(&r).contains("without perturbation"),
+            "{}",
+            refusal(&r)
+        );
+    }
+
+    #[test]
+    fn precalclam_range_is_checked_on_a_recipe() {
+        use crate::recipe::PrecalcLam;
+        let mut r = perturbed_recipe(false);
+        r.outputs.energy_every = 2;
+        r.outputs.ntwg = 2;
+        r.perturbation.precalclam = Some(PrecalcLam {
+            nr_lambdas: 5,
+            min_lambda: 0.0,
+            max_lambda: 1.5,
+        });
+        assert!(refusal(&r).contains("MAXLAM = 1.5"), "{}", refusal(&r));
+        r.perturbation.precalclam = Some(PrecalcLam {
+            nr_lambdas: 5,
+            min_lambda: 0.6,
+            max_lambda: 0.4,
+        });
+        assert!(
+            refusal(&r).contains("smaller than MAXLAM"),
             "{}",
             refusal(&r)
         );

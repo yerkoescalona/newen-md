@@ -74,6 +74,7 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | ch4_water_fep_precalc | 2998 | `PRECALCLAM 11 0 1` (extended TI): the A/B LJ energies and derivatives at eleven λ points in the `# precalclam` rows of the `.tre` and `.trg`, AB_kinetic of the perturbed atom (1.8) | **PASS** |
 | 4   | meoh_water_fep_precalc | 2862 | the same for charged perturbed atoms: the CRF pair, RF self and RF exclusion ext terms (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_precalc | 12 | AB_bond/AB_angle/AB_improper (regular and soft-core), AB_kinetic, the ABdih row and the PERTATOMPAIR's constant A/B energies at every λ point (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_pairpert_precalc | 12 | `../shared/aladip_pairpert.pttopo`: PERTATOMPAIR rows 4-10 (normal/excluded), 1-11 (excluded/1-4), 4-7 (1-4/normal) with perturbed atoms, next to the unperturbed 7-10: main energies and the ext rows of the filled state (1.8) | **FAIL** (ignored: perturbed-atom PERTATOMPAIR not ported) |
 | 4   | aladip_vacuum_fep_lambdas_precalc | 12 | `LAMBDAS` on and `PRECALCLAM 6 0.2 0.7`: the grid ignores the individual-λ polynomials, except the current mass λ in AB_kinetic (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_shake_precalc | 12 | perturbed SHAKE (NTC = 3) with PRECALCLAM: its contribution to the AB_bond derivatives only (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_distres_precalc | 12 | perturbed distance restraints with PRECALCLAM: AB_disres energies and derivatives (1.8) | **PASS** |

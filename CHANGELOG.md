@@ -5,6 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.54] (2026-10-12)
+
+**Extended TI (`PRECALCLAM`): the energies of every perturbed interaction and their λ derivatives
+at `NRLAM` extra λ points, written as gromosXX writes them; and the reaction field built as
+gromosXX builds it at `EPSRF = 0` and from `RCRF`** (1.8 step 2). Nine new references generated
+by native gromosXX pin it: 76 reference systems pass, whole-block.
+
+### Added
+
+- **`PRECALCLAM NRLAM MINLAM MAXLAM`** (`in_parameter.cc:4478-4513`, `check_parameter.cc:261-266`):
+  gromosXX's range checks, perturbation on and `NTWE = NTWG > 0` required; refused with lattice
+  sum, the conjugate-gradient minimiser, QM/ML terms, GAMD and EDS, as gromosXX does. Allowed
+  with `LAMBDAS`, perturbed SHAKE and perturbed distance restraints. `Recipe.perturbation.precalclam`
+  (`{nr_lambdas, min_lambda, max_lambda}`, a dict in Python, `None` when absent); `imd_write`
+  emits the block.
+- On every NTWG step the grid fills, per λ_k, `A/B_lj` and `A/B_crf` per energy-group pair (pairs,
+  RF self and exclusions, perturbed 1-4, perturbed atom pairs), `AB_kinetic`, `AB_bond`,
+  `AB_angle`, `AB_improper`, `AB_disres`, and the `A_dihedral`/`B_dihedral` scalars; folded and
+  summed in `calculate_totals`' order (`energy.cc:397-423`), not part of the potential total.
+  `AB_angres`, `AB_dihres`, `AB_disfld` stay 0 (those restraints are not modelled).
+- The `.tre` and `.trg` carry `# precalclam` (`# nr_lambdas`, N, the 12 columns) and `# ABdih`
+  (`out_configuration.cc:3226-3266`); the `.trg` prints the derivative record. With
+  `NRLAM = 0` nothing changes.
+- **Nine references**: `ch4_water_fep_precalc`, `meoh_water_fep_precalc` (charge changes: CRF
+  pair, RF self and exclusion terms), `aladip_vacuum_fep_precalc` (bonded `AB_*`, `AB_kinetic`,
+  `ABdih`), `aladip_vacuum_fep_lambdas_precalc` (`LAMBDAS` with `NRLAM 6 0.2 0.7`),
+  `aladip_vacuum_fep_shake_precalc`, `aladip_vacuum_fep_distres_precalc`,
+  `ch4_water_fep_precalc_twinrange` (pairlist every 5 steps, output every 2), and
+  `aladip_solvated_epsrf0`, `aladip_solvated_rcrf`. `aladip_vacuum_fep_pairpert_precalc` is
+  generated and ignored (see Known, deferred).
+
+### Fixed
+
+- **`EPSRF = 0`** (conducting boundary): gromosXX sets `crf = −1` (`nonbonded_term.cc:58-71`,
+  `perturbed_nonbonded_term.cc:51-61`); gromos-rs used the ε formula. Step-0 CRF of
+  `aladip_solvated_epsrf0` was −56.26, gromosXX −60.87; now equal, in every kernel.
+- **The reaction-field constants come from `RCRF`**, not `RCUTL` (`nonbonded.rf_cutoff`,
+  `in_parameter.cc:4606`). Step-0 CRF of `aladip_solvated_rcrf` (RCRF 1.2, RCUTL 1.4) was −60.83,
+  gromosXX −61.72; now equal. gromosXX accepts `RCRF ≠ RCUTL` silently (`check_parameter.cc` has
+  no rule); so does gromos-rs. Every other reference has `RCRF = RCUTL` and `EPSRF ≠ 0` and is
+  byte-identical.
+
+### Verified
+
+- References: 76 passed, 2 ignored (`aladip_gamd`, `aladip_vacuum_fep_pairpert_precalc`),
+  whole-block; check suite 10 passed, 1 ignored; `fep_null_perturbation` 2 passed; unit crates
+  green; the MPI build succeeds.
+- `NRLAM = 0`: every `.tre`/`.trg`/`.trf`/`.trc`/final configuration is byte-identical to 0.0.53
+  on all 68 previous references.
+- gromos++ `ene_ana` prints identical averages on our `ch4_water_fep_precalc` files and
+  gromosXX's.
+- LiveCoMS tutorial `t_02/DDM/md_TI/md_TI_ASA_Na.imd` runs to completion (50 000 steps, 292 s).
+
+### Measured
+
+Wall time, one thread, 500 steps, interleaved, n = 5, mean ± std (BENCHMARKING.md §9):
+
+| system | 0.0.53 | this version | gromosXX | gromosXX / this |
+|---|---|---|---|---|
+| `ch4_water_fep_l025`, outputs off | 11.33 ± 0.11 s | 11.30 ± 0.08 s | — | — |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | — | 11.31 ± 0.06 s | 11.93 ± 0.02 s | 1.055 ± 0.006 |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | — | 12.15 ± 0.05 s | 13.14 ± 0.02 s | 1.081 ± 0.005 |
+
+Without `PRECALCLAM` nothing changes beyond noise. 81 λ points on every step cost 7 % here and
+10 % in gromosXX.
+
+### Deliberate differences from gromosXX
+
+- `NRLAM = 1` is refused: gromosXX divides by `NRLAM − 1` and every λ_k is NaN.
+- Reproduced quirks (`.claude/porting.md`):
+  - the derivative record's sign convention, `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ`;
+  - the λ grid ignores the `LAMBDAS` polynomials and `NLAM`, except `slam` (the current mass λ)
+    in `AB_kinetic`;
+  - the long-range ext energies are refreshed only on pairlist steps that are also output steps,
+    and are zero on the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96,
+    280-300`);
+  - the improper angle is wrapped once, at the current λ, and not re-wrapped per λ_k;
+  - perturbed SHAKE books into the `AB_bond` derivative only (`perturbed_shake.cc:229-259`;
+    gromosXX's warning, `in_perturbation.cc:327-334`, is a prepare note);
+  - two bond-mixing forms are kept for bit-identity: `(1 − λ_k)·b0_A + λ_k·b0_B` on the grid,
+    `r0_A + L·Δr0` in the main term.
+- The two reaction-field fixes above (`EPSRF = 0` → `crf = −1`; constants from `RCRF`, not
+  `RCUTL`, accepted silently as gromosXX does).
+
+### Known, deferred
+
+- `PERTATOMPAIR` pairs with a perturbed atom are wrong in the main energy (`ptp.rs` type
+  underflow, list surgery, soft core); pinned by the ignored
+  `aladip_vacuum_fep_pairpert_precalc`, fixed next.
+
 ## [0.0.53] (2026-10-11)
 
 **Individual λ per interaction and energy-group pair (`LAMBDAS`), the λ exponent done as gromosXX
@@ -1843,7 +1933,7 @@ Code comments, tests and older entries above cite work by a stable id (`1.5`, `2
 | `1.5b` | Real-input compatibility | ✓ 0.0.42–0.0.46 |
 | `1.5c` | Tutorial 2 opened | ✓ 0.0.48 |
 | `1.7` | FEP / TI | ✓ complete for fixed λ |
-| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); steps 2–7 open |
+| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); steps 3–7 open |
 | `2.0` | Instancing model, phases 1–2e | ✓ |
 | `2.1` | Atom selection | ✓ complete |
 | `2.2` | Shared analysis infra | ✓ complete |
