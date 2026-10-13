@@ -11,10 +11,18 @@
 //! derivatives per frame for `bar` and `mbar`.
 //!
 //! Deliberate differences from gromos++ (item 1.8):
+//! - The dihedral term of the predicted ∂H/∂λ. gromos++ 9cd9f6b3 adds `FREEABDIH` without the
+//!   factor dΛ_dih/dλ every other term carries (`ext_ti_ana.cc:830`), exact only for a linear
+//!   `@lamdih`. Corrected by default since 0.0.56; `@parity gromospp`
+//!   ([`Parity::GromosppReleased`]) reproduces the defect. The oracle of the corrected output is
+//!   gromos++ 9cd9f6b3 patched with `D5_ext_ti_ana_dlam.patch`
+//!   (`crates/gromos-md/tests/gromosXX_references/patches/`), that of the reproduced one the
+//!   released build.
 //! - `@imd` goes through gromos-rs's IMD reader, which knows gromosXX's `LAMBDAS` rows by name
 //!   as well as by number and maps NTLI 10/11 as gromosXX does (distancefield/dihedralres;
-//!   gromos++'s mk_script swaps them, `ext_ti_ana.cc:1371`, ignores named rows and uses the
-//!   rows even when NTIL is off). mk_script's parser diagnostics on stdout are not reproduced.
+//!   gromos++'s own type table swaps them, `ext_ti_ana.cc:404` used at `:1371-1385`; its
+//!   mk_script reader ignores named rows and uses the rows even when NTIL is off). mk_script's
+//!   parser diagnostics on stdout are not reproduced.
 //! - The `PRECALCLAM` columns follow the trajectory's layout: with 12 columns (md++ 2023-04-15,
 //!   `out_configuration.cc:3230-3260`) disres/dihres/disfld are columns 8/10/11 (gromos++ reads
 //!   9 and 10, `ext_ti_ana.cc:781-782`, which are angres and dihres there); with 11 they are 8/9/10.
@@ -30,6 +38,7 @@
 use super::common::{
     cpow, draw_index, get_value, get_values, population_variance, wall_clock_seed,
 };
+use super::Parity;
 use crate::args::Arguments;
 use crate::energy_sequence::EnergySequence;
 use crate::lnexp::{ln_x_exp_ave, lnexp_ave};
@@ -70,7 +79,8 @@ pub const USAGE: &str = "# ext_ti_ana
 \t[@lam_precision <lambda value precision in outfiles, default: 2>]
 \t[@verbose       <print used parameters to file header>]
 \t[@bar_data      <print energies to be used for BAR (not reweighted)>]
-\t[@dHdl_data     <print dHdl values to be used for MBAR (not reweighted)>]";
+\t[@dHdl_data     <print dHdl values to be used for MBAR (not reweighted)>]
+\t[@parity        <gromospp: the dihedral dHdl as gromos++ 9cd9f6b3 computes it (default: corrected)>]";
 
 pub const KNOWN: &[&str] = &[
     "en_files",
@@ -129,6 +139,7 @@ pub const KNOWN: &[&str] = &[
     "cpus",
     "bar_data",
     "dHdl_data",
+    "parity",
 ];
 
 pub const PROGRAM: Program = Program {
@@ -212,6 +223,8 @@ pub struct Options {
     /// `@dHdl_data`, the same way.
     pub dhdl_data: Option<Vec<f64>>,
     pub cpus: u32,
+    /// `@parity`: whether the dihedral ∂H/∂λ carries dΛ_dih/dλ.
+    pub parity: Parity,
 }
 
 /// One interpolated λ: its value and derivative from the polynomial, and the two grid points
@@ -427,6 +440,7 @@ impl Options {
             disfld: present("no_disfld"),
         };
         let countframes = args.count("countframes") == 0;
+        let parity = Parity::from_args(args)?;
         let outdir: String = get_value(args, "outdir", Some(".".to_string()))?;
 
         let mut coefficients_sim = [IDENTITY; 12];
@@ -596,6 +610,7 @@ impl Options {
             bar_data,
             dhdl_data,
             cpus: cpus as u32,
+            parity,
         })
     }
 }
@@ -940,9 +955,13 @@ pub fn analyse(o: &Options) -> Result<Analysis, String> {
             if !ex.disfld {
                 de += l(DISFLD).at(sfe, c_disfld) * l(DISFLD).dlam;
             }
-            // gromos++ adds the dihedral derivative without its dλ factor (ext_ti_ana.cc:830)
             if !ex.dih {
-                de += sfe_dih[0];
+                // gromos++ 9cd9f6b3 leaves out dΛ_dih/dλ (ext_ti_ana.cc:830); x·1.0 is x exactly
+                let dlam = match o.parity {
+                    Parity::Corrected => l(DIH).dlam,
+                    Parity::GromosppReleased => 1.0,
+                };
+                de += sfe_dih[0] * dlam;
             }
 
             for (i, slj_i) in slj.iter().enumerate() {

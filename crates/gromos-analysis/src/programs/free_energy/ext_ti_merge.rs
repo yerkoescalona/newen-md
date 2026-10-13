@@ -7,12 +7,20 @@
 //!
 //! Reproduced from gromos++ as it is: one `no_errors` flag for all files (the first two-column
 //! line switches errors off everywhere), and a third column read as the error even when
-//! `ext_ti_ana @countframes` wrote a frame count there. gromos++'s error integral skips the
-//! point N−2 (`ext_ti_merge.cc:282`, `i < N-2`): the program prints that value for parity and
-//! [`Merged::integral_error_corrected`] includes the point. With fewer than two points the error
-//! is 0 (gromos++ reads past the end); no points at all is an error (gromos++ crashes).
+//! `ext_ti_ana @countframes` wrote a frame count there.
+//!
+//! Deliberate differences from gromos++ (item 1.8):
+//! - The error of the integral. gromos++ 9cd9f6b3's sum skips the point N−2
+//!   (`ext_ti_merge.cc:282`, `i < N-2`). Corrected by default since 0.0.56; `@parity gromospp`
+//!   ([`Parity::GromosppReleased`]) reproduces the defect. The oracle of the corrected output is
+//!   gromos++ 9cd9f6b3 patched with `D8_ext_ti_merge_loop.patch`
+//!   (`crates/gromos-md/tests/gromosXX_references/patches/`), that of the reproduced one the
+//!   released build. [`Merged::integral_error_corrected`] includes every point in both modes.
+//! - With fewer than two points the error is 0 (gromos++ reads past the end); no points at all
+//!   is an error (gromos++ crashes).
 
 use super::common::{get_value, parse_finite};
+use super::Parity;
 use crate::args::Arguments;
 use crate::programs::io_err;
 use gromos_io::args::{Program, Status};
@@ -24,7 +32,8 @@ pub const USAGE: &str = "# ext_ti_merge
 \t@files            <data files (ext_ti_ana output)>
 \t@noerrors         <do not read and use the error column which might be in the files>
 \t[@slam            <lambdas of the simulation, optional if found in the header of the data files after '#SLAM '>]
-\t[@lam_precision   <lambda value precision in outfiles, default: 2>]";
+\t[@lam_precision   <lambda value precision in outfiles, default: 2>]
+\t[@parity          <gromospp: the integral's error as gromos++ 9cd9f6b3 prints it (default: corrected)>]";
 
 pub const KNOWN: &[&str] = &[
     "files",
@@ -32,6 +41,7 @@ pub const KNOWN: &[&str] = &[
     "noerrors",
     "weightfunction",
     "lam_precision",
+    "parity",
 ];
 
 pub const PROGRAM: Program = Program {
@@ -58,9 +68,10 @@ pub struct Merged {
     pub dhdl: Vec<f64>,
     pub error: Option<Vec<f64>>,
     pub integral: f64,
-    /// gromos++'s error of the integral (the point N−2 left out).
+    /// The printed error of the integral: [`Merged::integral_error_corrected`], or under
+    /// [`Parity::GromosppReleased`] gromos++'s (the point N−2 left out).
     pub integral_error: Option<f64>,
-    /// The same with every point.
+    /// The error of the integral with every point, whatever the parity.
     pub integral_error_corrected: Option<f64>,
 }
 
@@ -72,6 +83,7 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
 pub fn evaluate(argv: &[String], out: &mut dyn Write) -> Result<Merged, String> {
     let args = Arguments::from_vec(argv.to_vec(), KNOWN, USAGE)?;
     let mut no_errors = args.has("noerrors");
+    let parity = Parity::from_args(&args)?;
     if args.count("files") <= 1 {
         return Err(format!("At least two data files required!\n{USAGE}"));
     }
@@ -113,7 +125,7 @@ pub fn evaluate(argv: &[String], out: &mut dyn Write) -> Result<Merged, String> 
     if weightfunction != "default" {
         return Err(format!("Unknown weightfunction {weightfunction}"));
     }
-    let merged = merge(&files, no_errors)?;
+    let merged = merge(&files, no_errors, parity)?;
     let prec = lam_precision as usize;
     let mut text = String::new();
     for (k, (&l, &v)) in merged.lambda.iter().zip(&merged.dhdl).enumerate() {
@@ -191,8 +203,9 @@ pub fn parse_predicted(
     Ok(f)
 }
 
-/// gromos++ `weight_function` and the integrals (`ext_ti_merge.cc:266-344`).
-pub fn merge(files: &[Predicted], no_errors: bool) -> Result<Merged, String> {
+/// gromos++ `weight_function` and the integrals (`ext_ti_merge.cc:266-344`); `parity` picks
+/// [`Merged::integral_error`].
+pub fn merge(files: &[Predicted], no_errors: bool, parity: Parity) -> Result<Merged, String> {
     // one entry per simulated λ (a later file with the same λ replaces an earlier one)
     let mut by_slam: BTreeMap<u64, &Predicted> = BTreeMap::new();
     let key = |x: f64| x.to_bits();
@@ -253,8 +266,11 @@ pub fn merge(files: &[Predicted], no_errors: bool) -> Result<Merged, String> {
     let (error, integral_error, integral_error_corrected) = if no_errors {
         (None, None, None)
     } else {
-        let e = integrate_error(&lam, &err, false);
         let c = integrate_error(&lam, &err, true);
+        let e = match parity {
+            Parity::Corrected => c,
+            Parity::GromosppReleased => integrate_error(&lam, &err, false),
+        };
         (Some(err), Some(e), Some(c))
     };
     Ok(Merged {
@@ -277,7 +293,7 @@ pub fn integrate(x: &[f64], y: &[f64]) -> f64 {
 }
 
 /// The error of [`integrate`] from independent point errors `y`:
-/// √(Σ w_i² y_i²) with the trapezoid weights. `all_points = false` is gromos++'s loop
+/// √(Σ w_i² y_i²) with the trapezoid weights. `all_points = false` is gromos++ 9cd9f6b3's loop
 /// (`i < N-2`, so the point N−2 is missing); fewer than two points give 0.
 pub fn integrate_error(x: &[f64], y: &[f64], all_points: bool) -> f64 {
     let n = x.len();

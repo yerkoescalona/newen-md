@@ -405,9 +405,10 @@ fn _ext_ti_ana(
 }
 
 /// `bar` in process (`gromos_analysis::programs::bar::bar`) on `ext_ti_ana @bar_data` files:
-/// per interval and in total, kJ/mol, with the table the program prints.
+/// per interval and in total, kJ/mol, with the table the program prints. `parity` is `@parity`
+/// (`"gromospp"` reproduces gromos++ 9cd9f6b3's error; `None` the corrected one).
 #[pyfunction]
-#[pyo3(signature = (files, temperature, *, max_iterations = 500, convergence = 1e-5, bootstrap = 0, seed = None, printdist = None))]
+#[pyo3(signature = (files, temperature, *, max_iterations = 500, convergence = 1e-5, bootstrap = 0, seed = None, printdist = None, parity = None))]
 #[allow(clippy::too_many_arguments)]
 fn _bar(
     py: Python<'_>,
@@ -418,9 +419,15 @@ fn _bar(
     bootstrap: usize,
     seed: Option<u32>,
     printdist: Option<String>,
+    parity: Option<String>,
 ) -> PyResult<Bound<'_, PyDict>> {
     use gromos_analysis::programs::bar;
+    use gromos_analysis::programs::free_energy::Parity;
 
+    let parity = parity
+        .as_deref()
+        .map_or(Ok(Parity::default()), Parity::parse)
+        .map_err(|e| program_error(py, e, String::new()))?;
     let result = py.allow_threads(|| -> Result<_, (String, String)> {
         let data = files
             .iter()
@@ -434,6 +441,7 @@ fn _bar(
             bootstrap,
             seed,
             printdist: printdist.map(std::path::PathBuf::from),
+            parity,
         };
         let mut buf: Vec<u8> = Vec::new();
         let r = bar::bar(&data, &opts, &mut buf);

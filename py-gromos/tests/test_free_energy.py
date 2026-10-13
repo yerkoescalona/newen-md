@@ -5,7 +5,8 @@ The programs' agreement with gromos++ (byte for byte) and of `mbar` with pymbar 
 Rust side (``crates/gromos-analysis/tests/gromospp_references.rs``, ``mbar_reference.rs``). These
 tests check that the Python calls run the same code: the files ``ext_ti_ana`` writes are
 gromos++'s, the numbers ``bar`` returns are the ones it prints, and ``mbar`` on two states is
-``bar``.
+``bar``. By default ``bar`` and ``ext_ti_merge`` print the corrected errors (``chain_fixed/``, the
+patched gromos++); ``parity="gromospp"`` prints gromos++ 9cd9f6b3's (``chain/``).
 """
 
 from pathlib import Path
@@ -18,6 +19,7 @@ from gromos import analysis
 REPO_ROOT = Path(__file__).parent.parent.parent
 DATA = REPO_ROOT / "crates" / "gromos-analysis" / "tests" / "data" / "ext_ti_ana"
 CHAIN = DATA / "chain"
+CHAIN_FIXED = DATA / "chain_fixed"
 LAMS = ["0.00", "0.25", "0.50", "0.75", "1.00"]
 
 pytestmark = pytest.mark.skipif(not DATA.exists(), reason="reference fixtures not in the checkout")
@@ -83,12 +85,17 @@ def test_ext_ti_ana_without_writing_and_with_the_builtin_library(tmp_path, monke
 def test_bar_returns_what_it_prints(tmp_path):
     files = [CHAIN / f"bar_data_l{lam}.dat" for lam in reversed(LAMS)]
     r = analysis.bar(files, 300.0, convergence=1e-10, printdist=tmp_path)
-    assert r["stdout"] == (CHAIN / "bar.stdout").read_text()
+    assert r["stdout"] == (CHAIN_FIXED / "bar.stdout").read_text()
     assert r["lam_i"] == [0.0, 0.25, 0.5, 0.75]
     rows = [ln.split() for ln in r["stdout"].splitlines()[1:5]]
     np.testing.assert_allclose(r["dg"], [float(x[2]) for x in rows], atol=5e-6)
     np.testing.assert_allclose(r["error"], [float(x[4]) for x in rows], atol=5e-6)
-    assert all(np.isfinite(r["error_corrected"]))
+    assert r["error"] == r["error_corrected"]
+    assert r["error_total"] == r["error_total_corrected"]
+    g = analysis.bar(files, 300.0, convergence=1e-10, parity="gromospp")
+    assert g["stdout"] == (CHAIN / "bar.stdout").read_text()
+    assert g["error_corrected"] == r["error_corrected"] and g["error"] != r["error"]
+    assert g["dg"] == r["dg"]
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "dist_0_1.dat",
         "dist_1_2.dat",
@@ -116,9 +123,12 @@ def test_the_old_two_list_bar_call_is_refused():
 def test_ext_ti_merge_reads_the_count_column_as_the_error():
     files = [CHAIN / f"predicted_l{lam}.dat" for lam in ["0.50", "0.00", "1.00", "0.25", "0.75"]]
     r = analysis.ext_ti_merge(files)
-    assert r["stdout"] == (CHAIN / "merge.stdout").read_text()
+    assert r["stdout"] == (CHAIN_FIXED / "merge.stdout").read_text()
     assert len(r["lambda"]) == 21
-    assert r["integral_error_corrected"] >= r["integral_error"]
+    assert r["integral_error"] == r["integral_error_corrected"]
+    g = analysis.ext_ti_merge(files, parity="gromospp")
+    assert g["stdout"] == (CHAIN / "merge.stdout").read_text()
+    assert g["integral_error_corrected"] == r["integral_error_corrected"] > g["integral_error"]
     r2 = analysis.ext_ti_merge(files, noerrors=True)
     assert r2["error"] is None and r2["integral_error"] is None
     assert r2["integral"] == pytest.approx(r["integral"], abs=0)

@@ -805,6 +805,7 @@ def bar(
     bootstrap: int = 0,
     seed: int | None = None,
     printdist: str | os.PathLike[str] | None = None,
+    parity: str | None = None,
 ) -> dict[str, Any]:
     """
     Free-energy differences between neighbouring λ by Bennett's acceptance ratio (gromos++
@@ -826,15 +827,19 @@ def bar(
         Bootstrap seed base; gromos++ takes the wall clock, which is the default here too.
     printdist : path, optional
         Directory for the ``dist_<k>_<k+1>.dat`` ΔE distributions (``@printdist``).
+    parity : str, optional
+        ``"gromospp"`` prints the analytical error as gromos++ 9cd9f6b3 does, divided by an extra
+        (ln⟨f⟩)² (``@parity gromospp``); the default is the corrected error.
 
     Returns
     -------
     dict
         Per interval (arrays in ascending λ): ``lam_i``, ``lam_j``, ``dg`` (G(λ_j) − G(λ_i),
-        kJ/mol), ``error`` (gromos++'s analytical error, which divides by an extra (ln⟨f⟩)²),
-        ``error_corrected`` (without that factor), ``bootstrap``, ``overlap``, ``iterations``;
-        the sums ``dg_total``, ``error_total``, ``error_total_corrected``, ``bootstrap_total``;
-        and ``stdout``, the table the program prints.
+        kJ/mol), ``error`` (the analytical error printed: the corrected one, or gromos++'s with
+        ``parity="gromospp"``), ``error_corrected`` (always the corrected one), ``bootstrap``,
+        ``overlap``, ``iterations``; the sums ``dg_total``, ``error_total``,
+        ``error_total_corrected``, ``bootstrap_total``; and ``stdout``, the table the program
+        prints.
 
     Notes
     -----
@@ -869,6 +874,7 @@ def bar(
         bootstrap=bootstrap,
         seed=seed,
         printdist=None if printdist is None else os.fspath(printdist),
+        parity=parity,
     )
 
 
@@ -900,6 +906,7 @@ def ext_ti_ana(
     bar_data: bool | Sequence[float] = False,
     dhdl_data: bool | Sequence[float] = False,
     write: bool = True,
+    parity: str | None = None,
 ) -> dict[str, Any]:
     """
     Reweight one simulation's precalculated-λ energies onto other λ (gromos++ ``ext_ti_ana``),
@@ -912,6 +919,8 @@ def ext_ti_ana(
     ``dhdl_data``: ``True`` for every predicted λ or a list of λ. Without ``library`` the
     built-in md++ library is used. With ``write`` the files go to ``outdir`` as gromos++ writes
     them (``predicted_l<slam>.dat``, ``bar_data_l<slam>.dat``, ``dHdl_data_l<slam>.dat``).
+    ``parity="gromospp"`` adds the dihedral ∂H/∂λ without dΛ_dih/dλ, as gromos++ 9cd9f6b3 does
+    (``@parity gromospp``); the default carries the factor.
 
     Returns
     -------
@@ -957,6 +966,7 @@ def ext_ti_ana(
         ("verbose", verbose),
         ("bar_data", _lambda_list(bar_data)),
         ("dHdl_data", _lambda_list(dhdl_data)),
+        ("parity", parity),
     ]
     return _ext_ti_ana(_argv(keys), seed=seed, write=write)
 
@@ -967,6 +977,7 @@ def ext_ti_merge(
     slam: Sequence[float] | None = None,
     noerrors: bool = False,
     lam_precision: int | None = None,
+    parity: str | None = None,
 ) -> dict[str, Any]:
     """
     Merge the ``ext_ti_ana`` predictions of several simulations into one ⟨∂H/∂λ⟩ curve and
@@ -976,15 +987,17 @@ def ext_ti_merge(
     -------
     dict
         ``lambda``, ``dhdl``, ``error`` (``None`` without errors), ``integral`` (kJ/mol),
-        ``integral_error`` (gromos++'s, which leaves out the second-to-last point),
-        ``integral_error_corrected`` (every point) and ``stdout``. A third column the files
-        carry is read as the error, as gromos++ reads it, even when it is a frame count.
+        ``integral_error`` (the error printed: every point, or with ``parity="gromospp"``
+        gromos++ 9cd9f6b3's, which leaves out the second-to-last point),
+        ``integral_error_corrected`` (always every point) and ``stdout``. A third column the
+        files carry is read as the error, as gromos++ reads it, even when it is a frame count.
     """
     keys: list[tuple[str, Any]] = [
         ("files", list(files)),
         ("slam", None if slam is None else list(slam)),
         ("noerrors", noerrors),
         ("lam_precision", lam_precision),
+        ("parity", parity),
     ]
     return _ext_ti_merge(_argv(keys))
 

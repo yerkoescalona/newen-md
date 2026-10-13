@@ -2,6 +2,7 @@
 //! the ext_ti_ana chain (`tests/data/mbar/make_reference.py` made the numbers), and against
 //! `bar` for two states, where MBAR is BAR.
 
+use gromos_analysis::programs::free_energy::Parity;
 use gromos_analysis::programs::{bar, mbar};
 use std::path::{Path, PathBuf};
 
@@ -64,6 +65,7 @@ fn mbar_of_two_states_is_bar() {
             bootstrap: 0,
             seed: None,
             printdist: None,
+            parity: Parity::default(),
         };
         let b = bar::bar(&files, &opts, &mut std::io::sink()).unwrap();
         let kbt = gromos_analysis::GROMOSPP_KB * 300.0;
@@ -91,6 +93,7 @@ fn bar_bootstrap_is_reproducible_with_a_seed() {
         bootstrap: 20,
         seed: Some(12345),
         printdist: None,
+        parity: Parity::default(),
     };
     let mut out_a = Vec::new();
     let mut out_b = Vec::new();
@@ -100,6 +103,18 @@ fn bar_bootstrap_is_reproducible_with_a_seed() {
     let boot = a.intervals[0].bootstrap.unwrap();
     assert!(boot.is_finite() && boot > 0.0);
     assert_eq!(a, b);
-    // the corrected analytical error leaves out gromos++'s extra 1/(ln<f>)² factor
-    assert!(a.intervals[0].error_corrected != a.intervals[0].error);
+    // by default the printed error is the corrected one; gromos++ 9cd9f6b3's extra
+    // 1/(ln<f>)² factor only under Parity::GromosppReleased
+    assert_eq!(a.intervals[0].error, a.intervals[0].error_corrected);
+    let opts = bar::BarOptions {
+        parity: Parity::GromosppReleased,
+        ..opts
+    };
+    let g = bar::bar(&files, &opts, &mut std::io::sink()).unwrap();
+    assert_eq!(
+        g.intervals[0].error_corrected,
+        a.intervals[0].error_corrected
+    );
+    assert!(g.intervals[0].error != g.intervals[0].error_corrected);
+    assert_eq!(g.intervals[0].dg, a.intervals[0].dg);
 }

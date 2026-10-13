@@ -20,9 +20,11 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
 - `ener` ✓ — energy recalculation from trajectory via `gromos-forces::energy::single_point_energy`
 - `ext_ti_ana`, `bar`, `ext_ti_merge` ✓ verified (1.8) — the gromos++ programs, byte for byte
   on the oracle cases (`tests/data/README.md`: A1–A5 and the five-window CH4 chain): PRECALCLAM
-  reweighting, BAR with gromos++'s error (its extra 1/(ln⟨f⟩)² kept for parity, the corrected
-  error returned too), the merge with its error integral (point N−2 skipped for parity, the full
-  sum returned too). Deliberate differences in each module's header. Library API:
+  reweighting, BAR and its error, the merge with its error integral. Three gromos++ 9cd9f6b3
+  defects (BAR error ÷ (ln⟨f⟩)² twice, merge error without point N−2, dihedral ∂H/∂λ without
+  dΛ/dλ) are corrected by default and reproduced under `@parity gromospp`
+  (`programs::free_energy::Parity`); the corrected output is checked against patched gromos++
+  (`A2_fixed`, `chain_fixed`). Deliberate differences in each module's header. Library API:
   `programs::ext_ti_ana::{Options, analyse, write_files}`, `programs::bar::{read_bar_file, bar,
   do_bar}`, `programs::ext_ti_merge::{merge, integrate, integrate_error}`; Python
   `gromos.analysis.ext_ti_ana/bar/ext_ti_merge`.
