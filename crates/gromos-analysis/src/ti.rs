@@ -18,6 +18,27 @@ pub struct TiWindow {
     pub n: usize,
 }
 
+impl TiWindow {
+    /// ⟨∂H/∂λ⟩ of the dH/dλ samples of one window; `None` without samples.
+    pub fn from_samples(lambda: f64, samples: impl IntoIterator<Item = f64>) -> Option<Self> {
+        let mut stat = Stat::new();
+        for x in samples {
+            stat.add(x);
+        }
+        let n = stat.n();
+        if n == 0 {
+            return None;
+        }
+        let ee = if n >= 4 { stat.ee() } else { stat.rmsd() };
+        Some(TiWindow {
+            lambda,
+            mean: stat.ave(),
+            ee,
+            n,
+        })
+    }
+}
+
 /// The windows in ascending λ and, with two or more, ΔG = ∫⟨∂H/∂λ⟩dλ by the trapezoid rule and
 /// its error from the per-window errors with the trapezoid weights (windows independent).
 #[derive(Debug, Clone, PartialEq)]
@@ -55,22 +76,10 @@ pub fn trapezoid_from_trg(
             continue;
         }
         let lambda = lambdas.map_or(traj.frames[0].lambda, |l| l[i]);
-        let mut stat = Stat::new();
-        for frame in traj.frames.iter().skip(skip) {
-            stat.add(frame.dhdl_total);
+        match TiWindow::from_samples(lambda, traj.frames.iter().skip(skip).map(|f| f.dhdl_total)) {
+            Some(w) => windows.push(w),
+            None => eprintln!("Warning: window λ={lambda} has 0 samples after skipping {skip}"),
         }
-        let n = stat.n();
-        if n == 0 {
-            eprintln!("Warning: window λ={lambda} has 0 samples after skipping {skip}");
-            continue;
-        }
-        let ee = if n >= 4 { stat.ee() } else { stat.rmsd() };
-        windows.push(TiWindow {
-            lambda,
-            mean: stat.ave(),
-            ee,
-            n,
-        });
     }
     Ok(trapezoid(windows))
 }

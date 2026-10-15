@@ -12,6 +12,9 @@ All lower crates (gromos-core, gromos-forces, gromos-integrators, gromos-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Net charge (1.8, 0.0.59):** `md` prints `Perturbation net charge: A … B … (ΔQ = …)` on a
+  perturbed run and warns when ΔQ ≠ 0 under a reaction field (`fep_null_perturbation` pins
+  ΔQ = 0 and no warning for the null perturbation).
 - **MPI (2026-08-30):** `md` built with `--features use-mpi` (`LIBCLANG_PATH=/usr/lib/llvm-19/lib`)
   runs under `mpirun -np N`: every rank runs the whole driver on the same inputs, the pair terms are
   split by `RunOptions::pair_partition` and summed each step (`mod mpi_support` at the bottom of

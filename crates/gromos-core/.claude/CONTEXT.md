@@ -23,6 +23,8 @@ None — foundation crate.
   `m:` (solute by role), `s:` (solvent by role), syntax-error hints
 - PBC gathering: `gather.rs` — `gather_chain`, `gather_bond`, `gather_molecules` ✓
 - Statistics: `stat.rs` — `Stat` with `ave()`, `rmsd()`, `ee()` (block averaging) ✓
+- Perturbation net charge (1.8, 0.0.59): `NetCharge` (A/B, `delta()`, per molecule);
+  `Topology::apply_perturbation` returns the solute's, `perturbed_molecule_charges` per molecule
 - Pairlist: `PairlistAlgorithm` enum wired everywhere (9a-0 ✓); `CellListPairlistAlgorithm` bit-identical to Standard (9a-1 ✓, margin=0); `water_1000_spc_gridcell` reference validates against gromosXX Grid_Cell_Pairlist
 - `SpatialIndex`: query-based neighbor service (`neighbor_pairs`, periodic-image shift per pair),
   independent of the MD pairlist's charge-group/twin-range/solvent-sentinel shape. Used by every

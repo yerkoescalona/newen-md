@@ -77,6 +77,13 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   `Topology`/`Configuration`/`CheckReport`, and `System.solvate()`/`.add_ions()`/`.check()` over
   the same verbs. `gromos.ProgramError` carries the program's partial stdout. `tests/test_tools.py`
   (26) pins text ↔ object agreement across the boundary; the Rust side pins library ↔ binary.
+- **Free-energy windows (1.8, 0.0.59)** — `gromos.free_energy`: `LambdaSchedule(points,
+  interaction_lambdas)` → one `Recipe` per λ, `run_windows(system, recipes, workdir, dry_run)` in
+  process (kept windows `<workdir>/l0.250.npz` are read, not rerun), `collect(workdir)`,
+  `FreeEnergyWindows.ti()/.report()` (the `gromos_analysis::ti` estimator). TI only; BAR/MBAR stay
+  on the binary's `.tre`/`.trg` (`gromos.analysis`). `tests/test_free_energy.py` reproduces every
+  dH/dλ sample of the four `ch4_water_fep_l*` references. `system_builder.py` no longer has a second
+  `EnergyTimeseries`. User guide: `docs/user-guide/free-energy.md`.
 - Remaining P3 items:
   - [ ] `gromos.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
         `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.
@@ -88,6 +95,7 @@ python/gromos/__init__.py        — top-level API (the module contract; System/
 python/gromos/gromos.pyi         — type stubs (stubtest-clean; `_AlgorithmKind`/`_TermKind` literals)
 python/gromos/exceptions.py      — RecipeError / PlanError / MissingFeatureError / RunError
 python/gromos/timeseries.py      — EnergyTimeseries over run()'s array
+python/gromos/free_energy.py     — λ windows in process: LambdaSchedule, run_windows, TI
 python/gromos/tools/             — the gromos++ programs: run()/programs() + the typed prep chain
 python/gromos/analysis.py        — the old subprocess stub; replaced by gromos/analysis/ in 3.10 step 6
 python/gromos/system_builder.py  — P3 design sketch: ForceField→BuildingBlock→Topology algebra

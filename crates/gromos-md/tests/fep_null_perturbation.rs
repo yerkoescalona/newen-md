@@ -78,6 +78,17 @@ fn run_input(pttopo: Option<&Path>, input: &Path, tag: &str) -> (Vec<f64>, Strin
 }
 
 fn run_with(pttopo: Option<&Path>, input: &Path, tag: &str, extra: &[&str]) -> (Vec<f64>, String) {
+    let (e, forces, _) = run_logged(pttopo, input, tag, extra);
+    (e, forces)
+}
+
+/// [`run_with`], plus what `md` printed (stdout, then stderr).
+fn run_logged(
+    pttopo: Option<&Path>,
+    input: &Path,
+    tag: &str,
+    extra: &[&str],
+) -> (Vec<f64>, String, String) {
     let r = refs();
     let out = std::env::temp_dir().join(format!("gromos_rs_fep_null_{tag}_{}", std::process::id()));
     fs::create_dir_all(&out).unwrap();
@@ -111,6 +122,11 @@ fn run_with(pttopo: Option<&Path>, input: &Path, tag: &str, extra: &[&str]) -> (
     let frames = read_energy_trajectory_native(out.join("e.tre")).unwrap();
     let f = &frames[0];
     let forces = fs::read_to_string(out.join("f.trf")).unwrap();
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&status.stdout),
+        String::from_utf8_lossy(&status.stderr)
+    );
     (
         vec![
             f.total,
@@ -124,6 +140,7 @@ fn run_with(pttopo: Option<&Path>, input: &Path, tag: &str, extra: &[&str]) -> (
             f.coul_real,
         ],
         forces,
+        log,
     )
 }
 
@@ -155,6 +172,23 @@ fn null_perturbation_is_a_no_op_and_soft_core_is_not() {
         e[7], reference[7],
         "soft-core LJ with α_lj = 0.3 left the energy unchanged"
     );
+}
+
+/// A null perturbation keeps the net charge: `md` reports ΔQ = 0 and does not warn about a
+/// finite-size correction.
+#[test]
+fn null_perturbation_reports_no_net_charge_change() {
+    let dir = std::env::temp_dir().join(format!("gromos_rs_fep_null_dq_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let null = dir.join("null.ptp");
+    fs::write(&null, ptp(ATOMS, 0.0, 0.0)).unwrap();
+    let input = refs().join("aladip_vacuum_fep/aladip_vacuum_fep.in");
+    let (_, _, log) = run_logged(Some(&null), &input, "dq", &[]);
+    assert!(
+        log.contains("Perturbation net charge: A 0.000 B 0.000 (ΔQ = 0.000)"),
+        "{log}"
+    );
+    assert!(!log.contains("finite-size correction"), "{log}");
 }
 
 /// `aladip_vacuum_fep.in` with a `LAMBDAS` block that is on and sets every kind gromosXX lets a

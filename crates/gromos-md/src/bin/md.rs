@@ -484,6 +484,13 @@ fn main() {
                  {} impropers, {} dihedrals, {} soft bonds, {} soft angles, {} soft impropers",
                 atoms, bonds, angles, impropers, dihedrals, soft_bonds, soft_angles, soft_impropers
             ),
+            PrepareNote::PerturbationNetCharge { charge } => {
+                println!("  Perturbation net charge: {charge}")
+            },
+            PrepareNote::NetChargeChanged { delta, nlrele } => log::warn!(
+                "perturbation changes net charge by {delta:.3} under reaction field \
+                 (NLRELE={nlrele}): ΔG needs a finite-size correction"
+            ),
             PrepareNote::EdsLoaded { atoms, states } => println!(
                 "  EDS perturbation topology: {} atoms with {} end states",
                 atoms, states

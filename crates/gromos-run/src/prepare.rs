@@ -21,7 +21,7 @@ use gromos_core::{
     validation::{
         validate_configuration, validate_coordinates, validate_topology, ValidationReport,
     },
-    IndividualLambdas, PrecalcLambdas, Topology,
+    IndividualLambdas, NetCharge, PrecalcLambdas, Topology,
 };
 use gromos_io::{coordinate::CoordinateData, imd::ImdParameters, ptp::read_pttopo};
 
@@ -73,6 +73,16 @@ pub enum PrepareNote {
         soft_bonds: usize,
         soft_angles: usize,
         soft_impropers: usize,
+    },
+    /// Net charge of the solute in the two states of the perturbation (`NTG != 0`).
+    PerturbationNetCharge { charge: NetCharge },
+    /// The perturbation changes the solute's net charge under a reaction field (NLRELE −1, 1
+    /// or 4): the ΔG of a charge change carries a finite-size artefact and needs a correction
+    /// (e.g. `dGslv_pbsolv`). A warning, not a refusal; gromosXX says nothing.
+    NetChargeChanged {
+        /// ΔQ = Q_B − Q_A (e)
+        delta: f64,
+        nlrele: i32,
     },
     /// The number of solvent molecules in the coordinate file differs from `NSM`; the
     /// coordinate file wins.
@@ -203,6 +213,16 @@ pub fn prepare_system(
              unperturbed topology"
                 .to_string(),
         ));
+    }
+    if imd.ntg != 0 && !topology.perturbed_solute.atoms.is_empty() {
+        let charge = topology.perturbation_net_charge();
+        notes.push(PrepareNote::PerturbationNetCharge { charge });
+        if charge.delta() != 0.0 && matches!(imd.nlrele, -1 | 1 | 4) {
+            notes.push(PrepareNote::NetChargeChanged {
+                delta: charge.delta(),
+                nlrele: imd.nlrele,
+            });
+        }
     }
 
     let Coordinates {
@@ -768,6 +788,64 @@ mod tests {
             mixed.topology.mass, plain.topology.mass,
             "λ-mixed masses expected"
         );
+    }
+
+    #[test]
+    fn a_net_charge_change_under_reaction_field_is_a_warning() {
+        // CB of the neutral dipeptide: +1 in state A, 0 in state B
+        let ptp = |qa: f64, qb: f64| {
+            format!(
+                "TITLE\ncharge\nEND\nPERTATOMPARAM\n1\n    1 1 CB 14 15.0350 {qa:6.3} 14 15.0350 \
+                 {qb:6.3} 0.0 0.0\nEND\n"
+            )
+        };
+        let run = |text: String, nlrele: i32, tag: &str| {
+            let path = tmp_ptp(tag, &text);
+            let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+            let constants = parsed.physical_constants;
+            let coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+                .unwrap()
+                .into();
+            let imd = ImdParameters {
+                nsm: 20,
+                ntg: 1,
+                nlrele,
+                ..Default::default()
+            };
+            let inputs = RunInputs {
+                pttopo: Some(path.clone()),
+                ..Default::default()
+            };
+            let p = prepare_system(&imd, build_topology(parsed), constants, coords, &inputs);
+            std::fs::remove_file(path).ok();
+            p.unwrap().notes
+        };
+        let charge = |notes: &[PrepareNote]| {
+            notes.iter().find_map(|n| match n {
+                PrepareNote::PerturbationNetCharge { charge } => Some(*charge),
+                _ => None,
+            })
+        };
+        let changed = |notes: &[PrepareNote]| {
+            notes.iter().find_map(|n| match n {
+                PrepareNote::NetChargeChanged { delta, nlrele } => Some((*delta, *nlrele)),
+                _ => None,
+            })
+        };
+
+        let notes = run(ptp(1.0, 0.0), 1, "plus1");
+        let q = charge(&notes).expect("net charge reported");
+        assert!((q.a - 1.0).abs() < 1e-9 && q.b.abs() < 1e-9, "{q:?}");
+        let (delta, nlrele) = changed(&notes).expect("warned");
+        assert!((delta + 1.0).abs() < 1e-9 && nlrele == 1);
+        // the other reaction-field modes warn too; no electrostatics or a lattice sum does not
+        assert!(changed(&run(ptp(1.0, 0.0), -1, "plus1_lserf")).is_some());
+        assert!(changed(&run(ptp(1.0, 0.0), 0, "plus1_none")).is_none());
+        assert!(changed(&run(ptp(1.0, 0.0), 2, "plus1_ewald")).is_none());
+        // equal end states: ΔQ = 0, no warning
+        let notes = run(ptp(0.0, 0.0), 1, "neutral");
+        assert_eq!(charge(&notes).unwrap().delta(), 0.0);
+        assert!(changed(&notes).is_none());
     }
 
     fn try_aladip(imd: &ImdParameters) -> Result<Prepared, RunError> {

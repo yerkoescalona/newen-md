@@ -141,21 +141,26 @@ impl PyTopology {
     ///
     /// Args:
     ///     pttopo_file: Path to the perturbation topology (.ptp)
-    fn apply_perturbation(&mut self, pttopo_file: &str) -> PyResult<()> {
+    ///
+    /// Returns:
+    ///     (net_charge_a, net_charge_b): the solute's net charge (e) in state A and B; a
+    ///     difference under a reaction field means ΔG needs a finite-size correction.
+    fn apply_perturbation(&mut self, pttopo_file: &str) -> PyResult<(f64, f64)> {
         let pt = gromos_io::ptp::read_pttopo(pttopo_file).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
                 "Failed to read perturbation topology '{}': {}",
                 pttopo_file, e
             ))
         })?;
-        self.inner
+        let q = self
+            .inner
             .apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
         if let Some(m) = pt.eds {
             self.inner
                 .apply_eds_perturbation(m.num_states, m.state_names, m.atoms)
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         }
-        Ok(())
+        Ok((q.a, q.b))
     }
 
     fn __repr__(&self) -> String {

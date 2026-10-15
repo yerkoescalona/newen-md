@@ -77,6 +77,10 @@ topo = Topology("system.topo")
 **`solvate(nsm: int)`**  
 Append `nsm` copies of the solvent template to the topology in-place.
 
+**`apply_perturbation(pttopo_file: str) -> tuple[float, float]`**  
+Merge a perturbation topology (`.ptp`) in place; returns the solute's net charge (e) in state
+A and state B.
+
 ---
 
 ## Configuration
@@ -421,6 +425,25 @@ import gromos.timeseries
 gromos.timeseries.config.dataframe_backend = "pandas"   # or "polars" / "dict"
 gromos.timeseries.config.plot_backend = "matplotlib"     # or "plotly"
 ```
+
+---
+
+## Free-energy windows (`gromos.free_energy`)
+
+```python
+from gromos.free_energy import LambdaSchedule, run_windows, collect
+windows = run_windows(system, LambdaSchedule([0, 0.5, 1]).recipes(base), workdir="ti")
+dg, error = windows.ti(skip=2)
+```
+
+| Name | Description |
+|------|-------------|
+| `LambdaSchedule(points, interaction_lambdas=None)` | `.recipes(base)`: one recipe per λ (`LAMBDAS` rows optional); `.names` |
+| `run_windows(system, recipes, *, workdir=None, dry_run=False)` | Runs each window in process → `FreeEnergyWindows`; kept windows (`<workdir>/<name>.npz`) are read, not rerun |
+| `collect(workdir)` | The windows kept in `workdir` |
+| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`) |
+
+See the user guide page *Free-energy windows*.
 
 ---
 

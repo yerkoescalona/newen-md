@@ -31,7 +31,9 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
 - `mbar` (no gromos++ counterpart, 1.8) — MBAR on `ext_ti_ana @bar_data` files, against pymbar
   (`tests/mbar_reference.rs`); `programs::mbar::mbar`, Python `gromos.analysis.mbar`.
 - `ti::trapezoid_from_trg` — the plain trapezoid TI over `.trg` totals the old gromos-rs
-  `ext_ti_ana` was (`scripts/ti_ch4.py --estimator ti`, `gromos.analysis.ti_trapezoid`).
+  `ext_ti_ana` was (`scripts/ti_ch4.py --estimator ti`, `gromos.analysis.ti_trapezoid`);
+  `TiWindow::from_samples` is the same window over in-memory dH/dλ
+  (`gromos.free_energy.FreeEnergyWindows.ti`, 0.0.59).
 - `energy_sequence::EnergySequence` — the `@en_files`/`@fr_files` frame stream `ene_ana` and
   `ext_ti_ana` share.
 - `fit.rs` ✓ — Kabsch rotational fit (Horn 1987 quaternion); `superimpose()`, `rmsd()`, 7 unit tests

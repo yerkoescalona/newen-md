@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.59] (2026-10-16)
+
+**Net charge of a perturbation, λ windows from Python** (1.8): every perturbed run reports the
+solute's net charge in state A and B, and a charge change under a reaction field is a warning
+(ΔG needs a finite-size correction); `gromos.free_energy` turns one perturbed recipe into λ
+windows, runs them in process and integrates ⟨∂H/∂λ⟩. No engine output changes; 91 references
+pass.
+
+### Added (1.8 step 4a — net-charge bookkeeping)
+
+- `gromos_core::NetCharge` (A, B, `delta()` exactly 0 within 1e-6 e, `Display`
+  `A 1.000 B 0.000 (ΔQ = -1.000)`); `Topology::apply_perturbation` returns the solute's,
+  `Topology::perturbed_molecule_charges` gives it per molecule holding a perturbed atom
+  (`end_state_charges`: the topology's charges with each `PERTATOMPARAM` atom's A or B charge).
+- `prepare_system` notes `PrepareNote::PerturbationNetCharge` on every perturbed run (`NTG ≠ 0`,
+  `.ptp` or Python object path) and `NetChargeChanged { delta, nlrele }` when ΔQ ≠ 0 under a
+  reaction field (NLRELE −1, 1, 4). The `md` binary prints `Perturbation net charge: A … B …
+  (ΔQ = …)` and warns `perturbation changes net charge by ΔQ under reaction field (NLRELE=…): ΔG
+  needs a finite-size correction`. No refusal.
+- `make_pt_top` prints `net charge of molecule m: A … B … (ΔQ = …)` per perturbed molecule;
+  `pt_top` adds the same lines to the title of the topology it writes (its output is the
+  topology).
+- Python: `Topology.apply_perturbation(path)` returns `(net_charge_a, net_charge_b)` (was `None`).
+- Tests: `gromos-run` `a_net_charge_change_under_reaction_field_is_a_warning` (CB of aladip
+  +1 → 0: charges and warning; NLRELE −1 warns, 0 and 2 do not; equal states ΔQ = 0, no
+  warning); `gromos-tools` `pt_top_and_make_pt_top_print_the_net_charges` (+1 → 0 through both
+  programs); `fep_null_perturbation::null_perturbation_reports_no_net_charge_change` (`md`
+  prints ΔQ = 0.000 and no warning); a core unit test.
+
+### Added (1.8 step 5, TI — py-gromos free-energy driver)
+
+- `gromos.free_energy`: `LambdaSchedule(points, interaction_lambdas)` → one `Recipe` per λ
+  (`perturbation.lambda`, optional `LAMBDAS` rows); `run_windows(system, recipes, workdir,
+  dry_run)` runs each window in process, sampling dH/dλ at the steps the run's `.trg` holds;
+  windows kept as `<workdir>/l0.250.npz` are read instead of rerun, `dry_run` returns the job
+  list; `collect(workdir)`; `FreeEnergyWindows.ti(skip)` → (ΔG, error), `.mean_dhdl()`,
+  `.report()`.
+- The estimator is `gromos_analysis::ti` (`TiWindow::from_samples`, shared with
+  `trapezoid_from_trg`), reached through the private binding `_ti_trapezoid_series`; no TI
+  arithmetic in Python.
+- One `EnergyTimeseries`: the design sketch in `system_builder.py` uses `timeseries.py`'s
+  instead of defining a second class.
+- User guide page *Free-energy windows* (`docs/user-guide/free-energy.md`), API reference,
+  stubs.
+- `tests/test_free_energy.py`: the five CH4 → dummy windows (λ = 0, 0.25, 0.5, 0.75, 1, 10
+  steps) built from `ch4_water_fep.in` by the schedule equal the `ch4_water_fep_l*` inputs; every
+  dH/dλ sample of the four referenced windows matches gromosXX's `.trg` (largest relative
+  deviation 4.5e-10, the printed precision), so the per-window means do; `ti()` equals
+  `analysis.ti_trapezoid` on those `.trg` files; kept windows read back identically.
+
+### Deliberate differences from gromosXX
+
+- gromosXX runs a charge-changing perturbation silently; gromos-rs warns under a reaction field.
+
+### Not done (left for later)
+
+- BAR/MBAR from `FreeEnergyWindows` (the in-process windows carry no PRECALCLAM energies; the
+  binary's `.tre`/`.trg` go through `gromos.analysis`), `Perturbation.from_ptp`/`mutate`, window
+  parallelism, `scripts/ti_ch4.py` as a wrapper over the module (unchanged).
+
+### Verified
+
+- References: 91 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed.
+- core, io, run, forces, integrators, tools, analysis: 666 tests green; clippy only the two
+  known doc-list warnings; `cargo fmt --check` clean; `pytest` 711 passed / 66 skipped; stubtest
+  clean; G6/G11 lint gates clean.
+
 ## [0.0.58] (2026-10-16)
 
 **TI-EDS: perturbed atoms next to EDS end states** (1.8): an `EDS` run with `PERTURBATION NTG = 1`

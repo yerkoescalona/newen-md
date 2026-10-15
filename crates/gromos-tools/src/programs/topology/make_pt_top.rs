@@ -6,10 +6,12 @@
 //! by comparing two molecular topologies (states A and B).
 
 use crate::programs::io_err;
+use crate::programs::topology::pt_top::net_charge_line;
 use gromos::io::{
     topology::{build_topology, read_topology_file},
     PtpWriter,
 };
+use gromos_core::NetCharge;
 use gromos_io::args::{Arguments, Program, Status};
 use std::io::Write;
 
@@ -159,21 +161,27 @@ pub fn run(argv: &[String], out: &mut dyn Write) -> Result<(), String> {
         ));
     }
 
-    // Count perturbed atoms
-    let mut n_perturbed = 0;
-    for i in 0..topo_a.num_atoms() {
-        let is_perturbed = topo_a.iac[i] != topo_b.iac[i]
-            || (topo_a.mass[i] - topo_b.mass[i]).abs() > 1e-6
-            || (topo_a.charge[i] - topo_b.charge[i]).abs() > 1e-6;
-        if is_perturbed {
-            n_perturbed += 1;
-        }
-    }
+    let perturbed: Vec<bool> = (0..topo_a.num_atoms())
+        .map(|i| {
+            topo_a.iac[i] != topo_b.iac[i]
+                || (topo_a.mass[i] - topo_b.mass[i]).abs() > 1e-6
+                || (topo_a.charge[i] - topo_b.charge[i]).abs() > 1e-6
+        })
+        .collect();
+    let n_perturbed = perturbed.iter().filter(|&&p| p).count();
 
     writeln!(out).map_err(io_err)?;
     writeln!(out, "Perturbation analysis:").map_err(io_err)?;
     writeln!(out, "  Total atoms:      {}", topo_a.num_atoms()).map_err(io_err)?;
     writeln!(out, "  Perturbed atoms:  {}", n_perturbed).map_err(io_err)?;
+    for (m, q) in NetCharge::of_perturbed_molecules(
+        &topo_a.molecules,
+        &topo_a.charge,
+        &topo_b.charge,
+        &perturbed,
+    ) {
+        writeln!(out, "  {}", net_charge_line(m, &q)).map_err(io_err)?;
+    }
     writeln!(out).map_err(io_err)?;
 
     if n_perturbed == 0 {

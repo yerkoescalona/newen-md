@@ -27,6 +27,9 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **Net charge of a perturbation (1.8, 0.0.59):** `prepare_system` notes the solute's net
+  charge in state A and B (`PrepareNote::PerturbationNetCharge`) on every perturbed run and
+  `NetChargeChanged` when ΔQ ≠ 0 under a reaction field (NLRELE −1/1/4): a warning, no refusal.
 - **MPI (2026-08-30):** `RunOptions::pair_partition: Option<(usize, usize)>` sets
   `Forcefield::pair_partition` on the built sequence; the caller installs the reducer
   (`sequence.find_mut::<Forcefield>()`). `tests/pair_partition.rs` checks that rank shares sum to

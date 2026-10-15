@@ -562,6 +562,41 @@ fn _ti_trapezoid(
     let r = py
         .allow_threads(|| gromos_analysis::ti::trapezoid_from_trg(&files, lambdas.as_deref(), skip))
         .map_err(|e| program_error(py, e, String::new()))?;
+    ti_result_dict(py, &r)
+}
+
+/// Plain multi-window TI over in-memory dH/dλ series, one per λ, each after dropping its
+/// first `skip` samples: the estimator of `_ti_trapezoid` (`gromos_analysis::ti`).
+#[pyfunction]
+#[pyo3(signature = (lambdas, series, skip=0))]
+fn _ti_trapezoid_series(
+    py: Python<'_>,
+    lambdas: Vec<f64>,
+    series: Vec<Vec<f64>>,
+    skip: usize,
+) -> PyResult<Bound<'_, PyDict>> {
+    if lambdas.len() != series.len() {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "{} lambda values for {} series: give one per series",
+            lambdas.len(),
+            series.len()
+        )));
+    }
+    let windows = lambdas
+        .iter()
+        .zip(&series)
+        .filter_map(|(&l, s)| {
+            gromos_analysis::ti::TiWindow::from_samples(l, s.iter().skip(skip).copied())
+        })
+        .collect();
+    let r = gromos_analysis::ti::trapezoid(windows);
+    ti_result_dict(py, &r)
+}
+
+fn ti_result_dict<'py>(
+    py: Python<'py>,
+    r: &gromos_analysis::ti::TiResult,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new_bound(py);
     let w = &r.windows;
     d.set_item("lambda", w.iter().map(|x| x.lambda).collect::<Vec<_>>())?;
@@ -579,6 +614,7 @@ pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_ext_ti_merge, m)?)?;
     m.add_function(wrap_pyfunction!(_mbar, m)?)?;
     m.add_function(wrap_pyfunction!(_ti_trapezoid, m)?)?;
+    m.add_function(wrap_pyfunction!(_ti_trapezoid_series, m)?)?;
     m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;

@@ -214,6 +214,75 @@ pub struct PerturbedAtom {
     pub crf_soft: f64,
 }
 
+/// Net charge (e) of a set of atoms in the two end states of a perturbation (1.8).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NetCharge {
+    /// State A.
+    pub a: f64,
+    /// State B.
+    pub b: f64,
+}
+
+impl NetCharge {
+    /// Charges summed in f64 differ from an exact sum by far less than this.
+    pub const TOLERANCE: f64 = 1e-6;
+
+    /// ΔQ = Q_B − Q_A, exactly 0 within [`NetCharge::TOLERANCE`].
+    pub fn delta(&self) -> f64 {
+        let d = self.b - self.a;
+        if d.abs() < Self::TOLERANCE {
+            0.0
+        } else {
+            d
+        }
+    }
+
+    /// The net charge of each molecule in `molecules` that holds an atom marked in
+    /// `perturbed`, with its index: `charge_a` and `charge_b` are the per-atom charges of the
+    /// two states. An empty `molecules` is one molecule over every atom.
+    pub fn of_perturbed_molecules(
+        molecules: &[std::ops::Range<usize>],
+        charge_a: &[f64],
+        charge_b: &[f64],
+        perturbed: &[bool],
+    ) -> Vec<(usize, NetCharge)> {
+        let whole = 0..charge_a.len();
+        let molecules = if molecules.is_empty() {
+            std::slice::from_ref(&whole)
+        } else {
+            molecules
+        };
+        molecules
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| (m.start..m.end).any(|i| perturbed.get(i).copied().unwrap_or(false)))
+            .map(|(k, m)| {
+                (
+                    k,
+                    NetCharge {
+                        a: m.clone().filter_map(|i| charge_a.get(i)).sum(),
+                        b: m.clone().filter_map(|i| charge_b.get(i)).sum(),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+/// `A 1.000 B 0.000 (ΔQ = -1.000)`: three decimals, a rounded −0 printed as 0.
+impl std::fmt::Display for NetCharge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = |x: f64| (x * 1e3).round() / 1e3 + 0.0;
+        write!(
+            f,
+            "A {:.3} B {:.3} (ΔQ = {:.3})",
+            r(self.a),
+            r(self.b),
+            r(self.delta())
+        )
+    }
+}
+
 /// How a perturbed atom pair interacts in one state (`PERTATOMPAIR` columns `i(A)`, `i(B)`).
 ///
 /// The file values are read as they are, as gromosXX does (`in_perturbation.cc:1186`,
@@ -1355,7 +1424,60 @@ impl Topology {
     ///
     /// Call after `build_topology()` and before `solvate()`; applying twice replaces the
     /// previous perturbation's terms but cannot restore bonds or exclusions already removed.
+    /// Returns the solute's net charge in the two states ([`Topology::perturbation_net_charge`]).
     pub fn apply_perturbation(
+        &mut self,
+        perturbed_solute: PerturbedSolute,
+        is_perturbed: Vec<bool>,
+    ) -> NetCharge {
+        self.merge_perturbation(perturbed_solute, is_perturbed);
+        self.perturbation_net_charge()
+    }
+
+    /// The solute's per-atom charges in state A and state B: the topology's charges with each
+    /// perturbed atom's `PERTATOMPARAM` charge of that state in its place.
+    pub fn end_state_charges(&self) -> (Vec<f64>, Vec<f64>) {
+        let n = self.num_solute_atoms().min(self.charge.len());
+        let mut a = self.charge[..n].to_vec();
+        let mut b = a.clone();
+        for p in &self.perturbed_solute.atoms {
+            if p.seq < n {
+                a[p.seq] = p.a_charge;
+                b[p.seq] = p.b_charge;
+            }
+        }
+        (a, b)
+    }
+
+    /// Net charge of the whole solute in state A and state B.
+    pub fn perturbation_net_charge(&self) -> NetCharge {
+        let (a, b) = self.end_state_charges();
+        NetCharge {
+            a: a.iter().sum(),
+            b: b.iter().sum(),
+        }
+    }
+
+    /// Net charge in state A and B of each solute molecule holding a perturbed atom, with the
+    /// molecule's index.
+    pub fn perturbed_molecule_charges(&self) -> Vec<(usize, NetCharge)> {
+        let (a, b) = self.end_state_charges();
+        let mut perturbed = vec![false; a.len()];
+        for p in &self.perturbed_solute.atoms {
+            if let Some(x) = perturbed.get_mut(p.seq) {
+                *x = true;
+            }
+        }
+        let solute: Vec<_> = self
+            .molecules
+            .iter()
+            .filter(|m| m.end <= a.len())
+            .cloned()
+            .collect();
+        NetCharge::of_perturbed_molecules(&solute, &a, &b, &perturbed)
+    }
+
+    fn merge_perturbation(
         &mut self,
         perturbed_solute: PerturbedSolute,
         mut is_perturbed: Vec<bool>,
@@ -1972,5 +2094,28 @@ mod tests {
         // Check off-diagonal (geometric mean)
         let c6_01 = (0.001_f64 * 0.002_f64).sqrt();
         assert!((topo.lj_parameter(0, 1).c6 - c6_01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn net_charge_of_the_perturbed_molecules() {
+        // two molecules; atom 3 (the second's first) goes from +1 to 0
+        let molecules = [0..2, 2..4];
+        let a = [-0.5, 0.5, 1.0, 0.0];
+        let b = [-0.5, 0.5, 0.0, 0.0];
+        let perturbed = [false, false, true, false];
+        let q = NetCharge::of_perturbed_molecules(&molecules, &a, &b, &perturbed);
+        assert_eq!(q, vec![(1, NetCharge { a: 1.0, b: 0.0 })]);
+        assert_eq!(q[0].1.delta(), -1.0);
+        // no molecule boundaries: one molecule over every atom
+        let q = NetCharge::of_perturbed_molecules(&[], &a, &b, &perturbed);
+        assert_eq!(q, vec![(0, NetCharge { a: 1.0, b: 0.0 })]);
+        // a sum that is zero up to rounding is exactly zero
+        let q = NetCharge {
+            a: 0.1 + 0.2,
+            b: 0.3,
+        };
+        assert_eq!(q.delta().to_bits(), 0.0_f64.to_bits());
+        let q = NetCharge { a: -1e-17, b: 1.0 };
+        assert_eq!(q.to_string(), "A 0.000 B 1.000 (ΔQ = 1.000)");
     }
 }

@@ -67,7 +67,8 @@ Python-callable API for running simulations and analysing trajectories.
   binary's code), inserts the optional ML term after `Forcefield` via `AlgorithmSequence::insert`,
   and maps `RunError` onto the builtin exceptions the binding always raised (`run_err`). Python now
   honours the topology's `four_pi_eps_i`, takes NSM from the coordinate file, and uses the binary's
-  parallel-kernel policy. FEP: `Topology.apply_perturbation(path)` (no `Simulation` kwarg).
+  parallel-kernel policy. FEP: `Topology.apply_perturbation(path)` (no `Simulation` kwarg),
+  which returns the solute's net charge in state A and B (0.0.59).
   `resolve_algorithm_sequence` (the descriptor path) survives until steps 3–4 with the same
   parallel policy/`four_pi_eps_i` so `test_front_end_parity.py` stays exact.
 - **3.9 step 2 ✓ (2026-08-29).** `build_simulation` goes through the recipe path

@@ -199,10 +199,10 @@ class Topology:
     @property
     def charges(self) -> npt.NDArray[np.float64]: ...
     def solvate(self, nsm: int) -> None: ...
-    def apply_perturbation(self, pttopo_file: str) -> None:
+    def apply_perturbation(self, pttopo_file: str) -> tuple[float, float]:
         """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs and its MPERTATOM EDS
         end states (what `md @pttopo` does with NTG != 0 / EDS = 1). Call before solvate() and
-        before building a Simulation."""
+        before building a Simulation. Returns the solute's net charge (e) in state A and B."""
         ...
     def __repr__(self) -> str: ...
     def __len__(self) -> int: ...
@@ -827,6 +827,12 @@ def _ti_trapezoid(
     files: list[str], lambdas: list[float] | None = None, skip: int = 0
 ) -> dict[str, Any]:
     """Plain multi-window TI over `.trg` files (trapezoid rule)."""
+    ...
+
+def _ti_trapezoid_series(
+    lambdas: list[float], series: list[list[float]], skip: int = 0
+) -> dict[str, Any]:
+    """The same TI over in-memory dH/dλ series, one per λ (`gromos.free_energy`)."""
     ...
 
 def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:

@@ -65,7 +65,8 @@ except ImportError:
 # ── The gromos++ system-preparation programs, in process ───────
 # `tools.run(name, **kwargs)` for any of the 33; typed wrappers for the preparation chain
 # (`make_top`, `pdb2g96`, `sim_box`, `ion`, `check_top`, …) that take and return objects.
-from . import exceptions, tools
+# ── λ windows of a perturbed run, in process: `free_energy.LambdaSchedule`, `run_windows` ─
+from . import exceptions, free_energy, tools
 from .exceptions import MissingFeatureError, PlanError, ProgramError, RecipeError, RunError
 
 # `gromos.analysis` (subprocess wrappers around gromos++ programs, mostly stubs) and
@@ -118,6 +119,8 @@ __all__ = [
     # Timeseries
     "EnergyTimeseries",
     "EnergyTrajectory",
+    # Free-energy windows
+    "free_energy",
     # Meta
     "__version__",
 ]

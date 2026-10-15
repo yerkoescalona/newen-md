@@ -178,3 +178,118 @@ def test_ti_trapezoid_integrates_the_windows():
     expect = np.trapezoid(r["mean"], r["lambda"])
     assert r["dg"] == pytest.approx(expect, rel=1e-12)
     assert r["dg_error"] > 0
+
+
+# ---- gromos.free_energy: λ windows run from Python ------------------------------------------
+
+REF = REPO_ROOT / "crates" / "gromos-md" / "tests" / "gromosXX_references"
+SHARED = REF / "shared"
+# the ch4_water_fep_l* references: 10 steps, dH/dλ every step; λ = 0.5 has no .trg reference
+CH4_WINDOWS = {
+    0.0: "ch4_water_fep_l000",
+    0.25: "ch4_water_fep_l025",
+    0.5: None,
+    0.75: "ch4_water_fep_l075",
+    1.0: "ch4_water_fep_l100",
+}
+
+
+def _trg_dhdl(path: Path) -> list[float]:
+    lines = path.read_text().splitlines()
+    return [float(lines[i + 1]) for i, ln in enumerate(lines) if ln.strip() == "# totals"]
+
+
+def _ch4_base():
+    from gromos import Recipe
+
+    return (
+        Recipe.from_imd(str(REF / "ch4_water_fep" / "ch4_water_fep.in"))
+        .with_inputs(pttopo=str(SHARED / "ch4_spc_dummy.ptp"))
+        .update(control={"steps": 10}, outputs={"ntwg": 1})
+    )
+
+
+@pytest.mark.skipif(not REF.exists(), reason="reference systems not in the checkout")
+def test_lambda_windows_reproduce_the_reference_dhdl(tmp_path):
+    from gromos import Recipe, System
+    from gromos.free_energy import LambdaSchedule, collect, run_windows
+
+    schedule = LambdaSchedule(list(CH4_WINDOWS))
+    recipes = schedule.recipes(_ch4_base())
+    # each window's recipe is its reference's .imd (but the title), with its @pttopo
+    for (lam, name), r in zip(CH4_WINDOWS.items(), recipes, strict=True):
+        assert r.perturbation["lambda"] == lam
+        if name:
+            ref = (
+                Recipe.from_imd(str(REF / name / f"{name}.in"))
+                .with_inputs(pttopo=str(SHARED / "ch4_spc_dummy.ptp"))
+                .to_dict()
+            )
+            ours = r.to_dict()
+            ref.pop("title"), ours.pop("title")
+            assert ours == ref, name
+
+    system = System.from_files(str(SHARED / "ch4_spc.top"), str(SHARED / "ch4_spc.cnf"))
+    windows = run_windows(system, recipes, workdir=tmp_path)
+    assert windows.lambdas == list(CH4_WINDOWS)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [f"{n}.npz" for n in schedule.names]
+    trgs, lams = [], []
+    for w, (lam, name) in zip(windows, CH4_WINDOWS.items(), strict=True):
+        assert len(w.dhdl) == 10
+        if not name:
+            continue
+        trg = REF / name / "expected" / "free_energy.trg"
+        expected = _trg_dhdl(trg)
+        for i, (a, e) in enumerate(zip(w.dhdl, expected, strict=True)):
+            assert abs(a - e) <= max(abs(e) * 1e-6, 1e-8), f"{name} frame {i}: {a} vs {e}"
+        assert np.mean(w.dhdl) == pytest.approx(np.mean(expected), rel=1e-7)
+        trgs.append(trg)
+        lams.append(lam)
+
+    dg, err = windows.ti()
+    assert np.isfinite(dg) and err > 0
+    assert "ΔG (TI, trapezoid)" in windows.report()
+    # the estimator is the one of `analysis.ti_trapezoid` on the reference .trg files
+    four = run_windows(system, [r for r, n in zip(recipes, CH4_WINDOWS.values(), strict=True) if n])
+    r = analysis.ti_trapezoid(trgs, lams, skip=2)
+    assert four.ti(skip=2) == pytest.approx((r["dg"], r["dg_error"]), rel=1e-6)
+
+    # kept windows are read back, not run again
+    again = run_windows(system, recipes, workdir=tmp_path, dry_run=True)
+    kept = collect(tmp_path)
+    for a, b, c in zip(windows, again, kept, strict=True):
+        assert np.array_equal(a.dhdl, b.dhdl) and np.array_equal(a.dhdl, c.dhdl)
+    assert kept.mean_dhdl() == windows.mean_dhdl()
+
+
+def test_lambda_schedule_sets_lambda_and_the_interaction_lambdas():
+    from gromos.free_energy import LambdaSchedule, run_windows
+
+    rows = [{"kind": "vdw", "g1": 1, "g2": 2, "a": 0.0, "b": 0.0, "c": 0.5, "d": 0.5, "e": 0.0}]
+    recipes = LambdaSchedule([0.2, 0.8], interaction_lambdas=rows).recipes(_ch4_base())
+    assert [r.perturbation["lambda"] for r in recipes] == [0.2, 0.8]
+    assert all(r.perturbation["lambdas"] == {"enabled": True, "rows": rows} for r in recipes)
+    with pytest.raises(ValueError, match="outside"):
+        LambdaSchedule([0.0, 1.5])
+    with pytest.raises(ValueError, match="resolve"):
+        LambdaSchedule([0.5, 0.5])
+    plain = _ch4_base().update(perturbation={"enabled": 0})
+    with pytest.raises(Exception, match="no perturbation"):
+        LambdaSchedule([0.5]).recipes(plain)
+    # a dry run without a workdir runs nothing
+    jobs = run_windows(None, recipes, dry_run=True)  # type: ignore[arg-type]
+    assert [w.name for w in jobs] == ["l0.200", "l0.800"]
+    assert all(w.energies is None and w.recipe is not None for w in jobs)
+
+
+def test_apply_perturbation_returns_the_net_charges(tmp_path):
+    from gromos import Topology
+
+    top = Topology(str(SHARED / "ch4_spc.top"))
+    assert top.apply_perturbation(str(SHARED / "ch4_spc_dummy.ptp")) == (0.0, 0.0)
+    ptp = tmp_path / "plus.ptp"
+    ptp.write_text(
+        "TITLE\ncharge\nEND\nPERTATOMPARAM\n1\n    1 1 CM 17 16.043 1.0 17 16.043 0.0 0.0 0.0\nEND\n"
+    )
+    a, b = Topology(str(SHARED / "ch4_spc.top")).apply_perturbation(str(ptp))
+    assert (a, b) == pytest.approx((1.0, 0.0))

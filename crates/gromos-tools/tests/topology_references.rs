@@ -388,6 +388,74 @@ fn pt_top_matches_gromospp() {
     assert_same(&ours, &theirs);
 }
 
+/// A +1 → 0 perturbation: `pt_top` puts each perturbed molecule's net charge in A and B into
+/// its title, `make_pt_top` prints it (1.8).
+#[test]
+fn pt_top_and_make_pt_top_print_the_net_charges() {
+    use gromos_tools::programs::topology::{make_pt_top, pt_top};
+    let dir = std::env::temp_dir().join(format!("gromos_net_charge_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let top = references().join("shared/ch4_spc.top");
+    let ptp = |name: &str, qa: f64, qb: f64| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "TITLE\ncharge\nEND\nPERTATOMPARAM\n1\n    1 1 CM 17 16.043 {qa} 17 16.043 {qb} \
+                 0.0 0.0\nEND\n"
+            ),
+        )
+        .unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let call = |run: fn(&[String], &mut dyn std::io::Write) -> Result<(), String>,
+                args: &[&str]| {
+        let mut argv = vec!["prog".to_string()];
+        argv.extend(args.iter().map(|s| s.to_string()));
+        let argv = gromos_io::normalize(argv).expect("normalize");
+        let mut out = Vec::new();
+        run(&argv, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    };
+    let top_s = top.to_string_lossy();
+
+    let minus = ptp("minus.ptp", 1.0, 0.0);
+    let text = call(
+        pt_top::run,
+        &["@topo", &top_s, "@pttopo", &minus, "@type", "TOPO"],
+    );
+    assert!(
+        text.contains("net charge of molecule 1: A 1.000 B 0.000 (ΔQ = -1.000)"),
+        "{text}"
+    );
+
+    // the state-B topology of a 0 → +1 perturbation is the +1 topology
+    let plus = ptp("plus.ptp", 0.0, 1.0);
+    let plus_top = dir.join("plus.top");
+    let text = call(
+        pt_top::run,
+        &["@topo", &top_s, "@pttopo", &plus, "@type", "TOPO"],
+    );
+    assert!(text.contains("A 0.000 B 1.000 (ΔQ = 1.000)"), "{text}");
+    std::fs::write(&plus_top, text).unwrap();
+    let out_ptp = dir.join("made.ptp");
+    let text = call(
+        make_pt_top::run,
+        &[
+            "@topo",
+            &plus_top.to_string_lossy(),
+            &top_s,
+            "@out",
+            &out_ptp.to_string_lossy(),
+        ],
+    );
+    assert!(
+        text.contains("net charge of molecule 1: A 1.000 B 0.000 (ΔQ = -1.000)"),
+        "{text}"
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// gromos++'s output text, token by token (numbers within `rel`); the TITLE block is skipped
 /// because ours keeps the input title's trailing blanks.
 fn assert_same_text(ours: &str, theirs: &str, rel: f64) {
