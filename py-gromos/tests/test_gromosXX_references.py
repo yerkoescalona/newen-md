@@ -332,6 +332,10 @@ REFERENCE_SYSTEMS = [
     "two_waters_eds",
     "aladip_vacuum_eds_multis_fixed",
     "aladip_vacuum_eds_pairs_fixed",
+    # TI-EDS: EDS with perturbed atoms (FORM 2 against the D2-patched gromosXX)
+    "aladip_eds_solv_ti",
+    "aladip_eds_solv_ti_groups",
+    "aladip_eds_solv_ti_multis_fixed",
 ]
 
 # EDS references compared end-state by end-state at frame 0 (`Simulation.eds_vi`,
@@ -346,6 +350,9 @@ EDS_SYSTEMS = {
     "aladip_vacuum_eds_pairs_fixed": True,
     "aladip_vacuum_eds_multis": False,
     "aladip_vacuum_eds_pairs": True,
+    "aladip_eds_solv_ti": True,
+    "aladip_eds_solv_ti_groups": True,
+    "aladip_eds_solv_ti_multis_fixed": True,
 }
 
 # Systems with a known, pre-existing position-output mismatch that is not a
@@ -492,13 +499,14 @@ def test_reference_eds_end_states(system_name):
 # ============================================================================
 
 
-def _parse_expected_dhdl(trg_path):
-    """The first value of every FREEENERDERIVS03 block's totals: the whole dH/dλ."""
+def _parse_expected_dhdl(trg_path, slot=1):
+    """Value `slot` (1-based) of every FREEENERDERIVS03 block's totals; the first is the whole
+    dH/dλ, the 35th the EDS reference state's ∂V_R/∂λ."""
     values = []
     lines = trg_path.read_text().splitlines()
     for i, line in enumerate(lines):
         if line.strip() == "# totals":
-            values.append(float(lines[i + 1]))
+            values.append(float(lines[i + slot]))
     return values
 
 
@@ -532,7 +540,13 @@ def test_reference_dhdl(system_name):
             f"{system_name} frame {i} dhdl: {a} vs {e}"
         )
     for t in terms:
-        assert set(t) == {"lj", "crf", "bonded", "kinetic", "constraints", "distanceres"}
+        assert set(t) == {"lj", "crf", "bonded", "kinetic", "constraints", "distanceres", "eds"}
+    for i, (t, e) in enumerate(
+        zip(terms, _parse_expected_dhdl(expected_trg, slot=35), strict=True)
+    ):
+        assert abs(t["eds"] - e) <= max(abs(e) * 1e-6, 1e-8), (
+            f"{system_name} frame {i} dV_R/dλ: {t['eds']} vs {e}"
+        )
 
 
 # ============================================================================

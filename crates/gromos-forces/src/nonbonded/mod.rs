@@ -15,6 +15,7 @@ pub mod xtb;
 
 pub use eds::{
     eds_one_four_interactions, eds_pair_interactions, eds_rf_excluded_interactions,
+    eds_ti_one_four_interactions, eds_ti_pair_interactions, eds_ti_rf_excluded_interactions,
     split_eds_pairs, EdsAtoms, EdsStorage,
 };
 pub use embedding::ElectrostaticEmbedding;

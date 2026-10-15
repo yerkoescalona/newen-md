@@ -631,6 +631,11 @@ class Simulation:
         without EDS."""
         ...
     @property
+    def eds_dvi(self) -> list[float]:
+        """∂V_i/∂λ of the EDS end states (kJ/mol) at the last step, one per state: the
+        EDS–perturbed pairs of a run with perturbed atoms; empty without EDS."""
+        ...
+    @property
     def dhdl(self) -> float:
         """dH/dλ (kJ/mol) at the last step — the TI integrand: the whole derivative (kinetic,
         potential, constraints and restraints), the first value of a ``.trg`` frame; 0 unless
@@ -639,8 +644,9 @@ class Simulation:
     @property
     def dhdl_terms(self) -> dict[str, float]:
         """dH/dλ split by term at the last step (kJ/mol): ``lj``, ``crf``, ``bonded``,
-        ``kinetic`` (λ-dependent masses), ``constraints`` (perturbed SHAKE) and
-        ``distanceres`` (perturbed distance restraints)."""
+        ``kinetic`` (λ-dependent masses), ``constraints`` (perturbed SHAKE),
+        ``distanceres`` (perturbed distance restraints) and ``eds`` (∂V_R/∂λ of an EDS run
+        with perturbed atoms, ``.trg`` slot 35)."""
         ...
     @property
     def term_energies(self) -> dict[str, float]:

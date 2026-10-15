@@ -145,10 +145,24 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   references.
 - **EDS inputs gromosXX does not check** (refused): FORM 3 pair states outside 1..N
   (`eds.cc:635, 660` index with them), an `MPERTATOM` IAC of 0 (unsigned, wraps;
-  `in_perturbation.cc:1721-1727`). Not ported, refused by name: the EDS–perturbed pair kernels
-  (cases 2-5, so EDS with `PERTATOMPARAM`), the shifted reaction field (NLRELE 4), AEDS,
-  REPLICA_EDS; SD and the coarse-grained and virtual-atom variants need blocks the recipe does
-  not model.
+  `in_perturbation.cc:1721-1727`). Not ported, refused by name: the shifted reaction field
+  (NLRELE 4), AEDS, REPLICA_EDS; SD and the coarse-grained and virtual-atom variants need blocks
+  the recipe does not model.
+- **TI-EDS inputs gromosXX computes wrongly** (A, refused, not reproduced; `check_ti_eds`,
+  `gromos-run/src/prepare.rs`): an atom in both `PERTATOMPARAM` and `MPERTATOM` gets pair code
+  6, which no case handles, so its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65,
+  641-643`; dossier D18); a `PERTATOMPAIR` pair with an EDS atom is computed with the topology
+  type and charge in every end state (`perturbed_nonbonded_pair.cc` has no EDS branch; D19).
+  PRECALCLAM, slow growth (DLAMT ≠ 0) and NSCALE ≠ 0 stay refused with EDS as without it
+  (gromosXX locks the first two against EDS, `check_parameter.cc:4271, 2528-2530`).
+- **TI-EDS pair ownership** (deliberate difference, same terms): gromosXX's perturbed atom owns
+  an excluded or 1-4 EDS–perturbed pair (`PERTATOMPARAM` takes the pair before `MPERTATOM` looks,
+  `in_perturbation.cc:1363-1391, 1748-1777`; case 4 at `perturbed_nonbonded_innerloop.cc:2277-2341,
+  3696-3743`), gromos-rs's EDS atom owns every EDS–perturbed pair (`Topology::apply_eds_perturbation`,
+  `EdsAtoms`, `gromos-forces/src/nonbonded/eds.rs`): the same kernel per state, summed in another
+  order, so agreement is to rounding, not bit for bit (pinned at energy_rel 1e-10 /
+  force_abs 1e-8 by `aladip_eds_solv_ti`, `_groups`, `_multis_fixed`; every printed number
+  equal). FORMS 2 and 3 book Σ p_i ∂V_i/∂λ as FORM 1 does (the released gromosXX books 0, D2).
 - **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
   SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
   it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated

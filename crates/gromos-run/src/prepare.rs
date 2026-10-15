@@ -193,6 +193,7 @@ pub fn prepare_system(
         },
         _ => {},
     }
+    check_ti_eds(&topology)?;
     if imd.ntg == 0 && !topology.perturbed_solute.atoms.is_empty() {
         // Only reachable from the object path (`Topology.apply_perturbation` in Python): the
         // regular solute already lost its perturbed terms, so running with NTG=0 would not be
@@ -425,9 +426,8 @@ pub fn prepare_system(
 /// Whether the `MPERTATOM` block of a perturbation topology can be merged (gromosXX
 /// `in_perturbation.cc`): required with EDS on, which also forbids the PERT* blocks of a run without perturbation
 /// ("block X not supported for eds!", `:1805-1820`) and needs NPTB = NUMSTATES (`:1650`);
-/// refused without EDS (gromosXX reads it anyway and finds NPTB ≠ 0 states). Atoms perturbed
-/// in both ways, and perturbed atom pairs of an EDS atom, are refused: the EDS–perturbed pair
-/// kernels (`perturbed_nonbonded_innerloop.cc` cases 2-5) are not ported.
+/// refused without EDS (gromosXX reads it anyway and finds NPTB ≠ 0 states). With
+/// perturbation the PERT* blocks run next to it (TI-EDS; [`check_ti_eds`]).
 fn check_eds_perturbation(
     eds: Option<&gromos_io::imd::EdsBlock>,
     pt: &gromos_io::ptp::PerturbedTopology,
@@ -464,27 +464,41 @@ fn check_eds_perturbation(
                  without PERTURBATION NTG = 1 holds MPERTATOM only)"
             ));
         }
-    } else {
-        let eds_atom = |i: usize| m.atoms.iter().any(|a| a.seq == i);
-        if !pt.perturbed_solute.atoms.is_empty() {
-            return err(
-                "EDS with perturbed atoms (PERTATOMPARAM): the EDS–perturbed pair kernels are \
-                 not ported"
-                    .to_string(),
-            );
-        }
-        if let Some(p) = pt
-            .perturbed_solute
-            .atom_pairs
-            .iter()
-            .find(|p| eds_atom(p.i) || eds_atom(p.j))
-        {
-            return err(format!(
-                "PERTATOMPAIR {}-{} involves an EDS atom: not supported",
-                p.i + 1,
-                p.j + 1
-            ));
-        }
+    }
+    Ok(())
+}
+
+/// TI-EDS (EDS with perturbed atoms, gromosXX 869b8a24): what gromosXX accepts but does not
+/// compute, refused on every path to a topology with EDS end states and perturbed terms. An
+/// atom in both `PERTATOMPARAM` and `MPERTATOM` falls through gromosXX's pair classification
+/// (code 6, no case: its pairs are dropped silently, `perturbed_nonbonded_innerloop.cc:54-65`);
+/// a `PERTATOMPAIR` pair has no EDS branch (`perturbed_nonbonded_pair.cc` uses the topology
+/// type and charge in every state).
+fn check_ti_eds(topology: &Topology) -> Result<(), RunError> {
+    let eds = &topology.eds_solute;
+    if eds.is_empty() {
+        return Ok(());
+    }
+    let eds_atom = |i: usize| eds.atoms.iter().any(|a| a.seq == i);
+    let pert = &topology.perturbed_solute;
+    if let Some(a) = pert.atoms.iter().find(|a| eds_atom(a.seq)) {
+        return Err(RunError::Inconsistent(format!(
+            "atom {} is in both PERTATOMPARAM and MPERTATOM: an atom is either perturbed or \
+             has EDS end states (gromosXX drops its pairs silently)",
+            a.seq + 1
+        )));
+    }
+    if let Some(p) = pert
+        .atom_pairs
+        .iter()
+        .find(|p| eds_atom(p.i) || eds_atom(p.j))
+    {
+        return Err(RunError::Inconsistent(format!(
+            "PERTATOMPAIR {}-{} involves an EDS atom: not supported (gromosXX computes it with \
+             the topology type and charge in every end state)",
+            p.i + 1,
+            p.j + 1
+        )));
     }
     Ok(())
 }
@@ -942,11 +956,22 @@ mod tests {
         // …which a perturbed run reads
         assert!(eds_prepare(1, 2, Some(path.clone())).is_ok());
         std::fs::remove_file(path).ok();
-        // perturbed atoms and EDS atoms in one run
+        // perturbed atoms next to EDS atoms (TI-EDS) run…
         let atom = "PERTATOMPARAM\n1\n7 1 C 12 12.011 0.38 12 12.011 0.38 0.5 0.5\nEND\n";
         let path = tmp_ptp("pertatom", &format!("{mpert}{atom}"));
+        assert!(eds_prepare(1, 2, Some(path.clone())).is_ok());
+        std::fs::remove_file(path).ok();
+        // …but not an atom in both PERTATOMPARAM and MPERTATOM (N, atom 4)…
+        let atom = "PERTATOMPARAM\n1\n4 1 N 5 14.0067 -0.28 5 14.0067 0.1 0.5 0.5\nEND\n";
+        let path = tmp_ptp("pertatom_eds", &format!("{mpert}{atom}"));
         let e = err(eds_prepare(1, 2, Some(path.clone())));
-        assert!(e.contains("PERTATOMPARAM"), "{e}");
+        assert!(e.contains("both PERTATOMPARAM and MPERTATOM"), "{e}");
+        std::fs::remove_file(path).ok();
+        // …nor a perturbed atom pair of an EDS atom
+        let pair = "PERTATOMPAIR\n1\n4 10 1 0\nEND\n";
+        let path = tmp_ptp("pertpair_eds", &format!("{mpert}{pair}"));
+        let e = err(eds_prepare(1, 2, Some(path.clone())));
+        assert!(e.contains("PERTATOMPAIR 4-10 involves an EDS atom"), "{e}");
         std::fs::remove_file(path).ok();
         // MPERTATOM without EDS
         let mut imd = perturbed(1, 1);

@@ -6,11 +6,21 @@
 //! and never into the standard force, energy or group matrices; the EDS algorithm mixes the
 //! states afterwards. Pairs without an EDS atom stay with the standard kernels.
 //!
-//! Only the lj_crf interaction function is ported (cases 0 EDS–normal and 1 EDS–EDS of
-//! `perturbed_nonbonded_innerloop.cc:84-165`); the EDS–perturbed cases are refused when the run
-//! is built.
+//! Only the lj_crf interaction function is ported: cases 0 EDS–normal and 1 EDS–EDS of
+//! `perturbed_nonbonded_innerloop.cc:84-165`, and TI-EDS, case 2/4 EDS–perturbed (`:167-239`,
+//! `:409-481`, the 1-4 pairs `:2057-2121`, `:2277-2341`, the excluded pairs `:3696-3743`): the
+//! soft-core A/B pair of each state, with its λ derivative per state. An EDS–perturbed pair
+//! belongs to the EDS atom here, also when excluded or 1-4 (gromosXX: to the perturbed atom);
+//! the terms are the same, summed in another order. Case 5 (perturbed–perturbed) is state
+//! independent and stays with the perturbed kernels; an atom both EDS and perturbed (gromosXX's
+//! unhandled case 6) and perturbed atom pairs of an EDS atom are refused when the run is built.
 
-use super::{CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix, LJParameters};
+use super::innerloops::with_groups;
+use super::perturbed::{perturbed_lj_crf_interaction_scaled, rf_soft_interaction};
+use super::{
+    CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix, LJParameters, PertAtomInfo,
+    PerturbedLambdaParams,
+};
 use gromos_core::math::{BoundaryCondition, Vec3};
 use gromos_core::topology::Topology;
 
@@ -30,10 +40,17 @@ pub struct EdsAtoms {
     iac: Vec<u32>,
     /// `[k * num_states + s]`: charge of EDS atom k in state s.
     charge: Vec<f64>,
-    /// The excluded partners each EDS atom owns.
+    /// The excluded partners each EDS atom owns, without perturbed atoms.
     exclusions: Vec<Vec<usize>>,
-    /// The 1-4 partners each EDS atom owns.
+    /// The 1-4 partners each EDS atom owns, without perturbed atoms.
     one_four_pairs: Vec<Vec<usize>>,
+    /// Per atom of the system: whether it is a perturbed atom (`PERTATOMPARAM`) without end
+    /// states.
+    perturbed: Vec<bool>,
+    /// The perturbed excluded partners each EDS atom owns (TI-EDS).
+    ti_exclusions: Vec<Vec<usize>>,
+    /// The perturbed 1-4 partners each EDS atom owns (TI-EDS).
+    ti_one_four_pairs: Vec<Vec<usize>>,
 }
 
 impl EdsAtoms {
@@ -45,6 +62,12 @@ impl EdsAtoms {
         }
         let n = eds.num_states;
         let mut slot = vec![NOT_EDS; n_atoms];
+        let mut perturbed = vec![false; n_atoms];
+        for a in &topo.perturbed_solute.atoms {
+            if let Some(p) = perturbed.get_mut(a.seq) {
+                *p = true;
+            }
+        }
         let mut out = Self {
             num_states: n,
             slot: Vec::new(),
@@ -53,17 +76,36 @@ impl EdsAtoms {
             charge: Vec::with_capacity(eds.atoms.len() * n),
             exclusions: Vec::with_capacity(eds.atoms.len()),
             one_four_pairs: Vec::with_capacity(eds.atoms.len()),
+            perturbed: Vec::new(),
+            ti_exclusions: Vec::with_capacity(eds.atoms.len()),
+            ti_one_four_pairs: Vec::with_capacity(eds.atoms.len()),
         };
         for (k, a) in eds.atoms.iter().enumerate() {
             slot[a.seq] = k as u32;
+            perturbed[a.seq] = false;
+        }
+        let split = |list: &[usize]| -> (Vec<usize>, Vec<usize>) {
+            list.iter().partition(|&&j| !perturbed[j])
+        };
+        for a in &eds.atoms {
             out.seq.push(a.seq);
             out.iac.extend(a.iac.iter().map(|&t| t as u32));
             out.charge.extend_from_slice(&a.charge);
-            out.exclusions.push(a.exclusions.clone());
-            out.one_four_pairs.push(a.one_four_pairs.clone());
+            let (plain, ti) = split(&a.exclusions);
+            out.exclusions.push(plain);
+            out.ti_exclusions.push(ti);
+            let (plain, ti) = split(&a.one_four_pairs);
+            out.one_four_pairs.push(plain);
+            out.ti_one_four_pairs.push(ti);
         }
         out.slot = slot;
+        out.perturbed = perturbed;
         Some(out)
+    }
+
+    /// Whether any pair of an EDS atom can have a perturbed partner (TI-EDS).
+    pub fn has_perturbed(&self) -> bool {
+        self.perturbed.iter().any(|&p| p)
     }
 
     /// Whether atom `i` has end states.
@@ -94,6 +136,8 @@ pub struct EdsStorage {
     pub virial: Vec<[[f64; 3]; 3]>,
     /// Energy of state s.
     pub energy: Vec<f64>,
+    /// ∂V_s/∂λ of state s (the EDS–perturbed pairs).
+    pub dvdl: Vec<f64>,
 }
 
 impl EdsStorage {
@@ -104,6 +148,7 @@ impl EdsStorage {
             forces: vec![Vec3::ZERO; num_states * n_atoms],
             virial: vec![[[0.0; 3]; 3]; num_states],
             energy: vec![0.0; num_states],
+            dvdl: vec![0.0; num_states],
         }
     }
 
@@ -111,6 +156,7 @@ impl EdsStorage {
         self.forces.fill(Vec3::ZERO);
         self.virial.fill([[0.0; 3]; 3]);
         self.energy.fill(0.0);
+        self.dvdl.fill(0.0);
     }
 
     /// Add `other` (same layout) to this storage.
@@ -128,6 +174,9 @@ impl EdsStorage {
         for (d, s) in self.energy.iter_mut().zip(&other.energy) {
             *d += s;
         }
+        for (d, s) in self.dvdl.iter_mut().zip(&other.dvdl) {
+            *d += s;
+        }
     }
 
     pub fn num_states(&self) -> usize {
@@ -140,20 +189,30 @@ impl EdsStorage {
     }
 }
 
-/// Move every pair with an EDS atom from `list` to `eds`, the EDS atom first — gromosXX's
-/// `insert_pair` tries `(a1, a2)` and then `(a2, a1)` (`standard_pairlist_algorithm.cc:499-505,
-/// 680-698`), for the short- and the long-range lists alike. Run after every pairlist update.
-pub fn split_eds_pairs(list: &mut Vec<(u32, u32)>, atoms: &EdsAtoms, eds: &mut Vec<(u32, u32)>) {
+/// Move every pair with an EDS atom from `list` to `eds`, or to `ti` when the other atom is
+/// perturbed, the EDS atom first — gromosXX's `insert_pair` tries `(a1, a2)` and then `(a2, a1)`
+/// (`standard_pairlist_algorithm.cc:499-505, 680-698`), for the short- and the long-range lists
+/// alike. Run after every pairlist update.
+pub fn split_eds_pairs(
+    list: &mut Vec<(u32, u32)>,
+    atoms: &EdsAtoms,
+    eds: &mut Vec<(u32, u32)>,
+    ti: &mut Vec<(u32, u32)>,
+) {
     list.retain(|&(a, b)| {
-        if atoms.is_eds(a as usize) {
-            eds.push((a, b));
-            false
+        let pair = if atoms.is_eds(a as usize) {
+            (a, b)
         } else if atoms.is_eds(b as usize) {
-            eds.push((b, a));
-            false
+            (b, a)
         } else {
-            true
+            return true;
+        };
+        if atoms.perturbed[pair.1 as usize] {
+            ti.push(pair);
+        } else {
+            eds.push(pair);
         }
+        false
     });
 }
 
@@ -382,6 +441,223 @@ pub fn eds_rf_excluded_interactions<BC: BoundaryCondition>(
     }
 }
 
+/// The λ parameters of the EDS–perturbed pair `(i, j)`: its energy-group cell's
+/// (`individual_lambda[eg(i)][eg(j)]`, symmetric), the only entry with one group.
+#[inline(always)]
+fn ti_lambda<'a, const GROUPS: bool>(
+    lps: &'a [PerturbedLambdaParams],
+    egroups: &EnergyGroups<'_>,
+    i: usize,
+    j: usize,
+) -> &'a PerturbedLambdaParams {
+    &lps[if GROUPS { egroups.cell(i, j) } else { 0 }]
+}
+
+/// The perturbed partner `j` of an EDS atom.
+#[inline(always)]
+fn ti_partner(pert: &[Option<PertAtomInfo>], j: usize) -> &PertAtomInfo {
+    pert[j]
+        .as_ref()
+        .expect("a TI-EDS partner is a perturbed atom")
+}
+
+/// One pair `(i, j)` of EDS atom `i` and perturbed atom `j`, in every state (gromosXX cases 2
+/// and 4, `perturbed_nonbonded_innerloop.cc:167-239, 409-481`): the soft-core A/B pair kernel
+/// with `lj[M_IAC_i[s]][A_IAC_j]` / `[B_IAC_j]`, charges `M_q_i[s]·A_q_j` / `·B_q_j` and the
+/// perturbed atom's α, into state s's force, virial, energy and ∂V_s/∂λ. `ONE_FOUR` selects
+/// cs6/cs12.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn eds_ti_pair<BC: BoundaryCondition, const VIRIAL: bool, const ONE_FOUR: bool>(
+    i: usize,
+    j: usize,
+    positions: &[Vec3],
+    atoms: &EdsAtoms,
+    p: &PertAtomInfo,
+    lp: &PerturbedLambdaParams,
+    lj_params: &LJParamMatrix,
+    crf: &CRFParameters,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    coulomb_scaling: f64,
+    out: &mut EdsStorage,
+) {
+    let Some((iac_i, q_i)) = atoms.states(i) else {
+        return;
+    };
+    let r = boundary.nearest_image(positions[i], positions[j]);
+    let n_atoms = out.n_atoms;
+    for s in 0..atoms.num_states {
+        let t = iac_i[s] as usize;
+        let (a, b) = (lj_params.get(t, p.a_iac), lj_params.get(t, p.b_iac));
+        let ((a_c6, a_c12), (b_c6, b_c12)) = if ONE_FOUR {
+            ((a.cs6, a.cs12), (b.cs6, b.cs12))
+        } else {
+            ((a.c6, a.c12), (b.c6, b.c12))
+        };
+        let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
+            r,
+            a_c6,
+            a_c12,
+            b_c6,
+            b_c12,
+            q_i[s] * p.a_charge,
+            q_i[s] * p.b_charge,
+            p.alpha_lj,
+            p.alpha_crf,
+            lp,
+            crf,
+            four_pi_eps_i,
+            coulomb_scaling,
+        );
+        let term = r * f;
+        out.forces[s * n_atoms + i] += term;
+        out.forces[s * n_atoms + j] -= term;
+        if VIRIAL {
+            let (rv, tv) = ([r.x, r.y, r.z], [term.x, term.y, term.z]);
+            let v = &mut out.virial[s];
+            for (b, rb) in rv.iter().enumerate() {
+                for (a, ta) in tv.iter().enumerate() {
+                    v[b][a] += rb * ta;
+                }
+            }
+        }
+        out.energy[s] += e_lj + e_crf;
+        out.dvdl[s] += de_lj + de_crf;
+    }
+}
+
+/// The pairlist pairs of EDS atoms with perturbed atoms (each `(i, j)` with EDS atom `i`, as
+/// [`split_eds_pairs`] leaves them in its `ti` list), every state, into `out`; λ from the
+/// parameter table `lps` of the energy-group pairs; the per-state virial only with `VIRIAL`.
+#[allow(clippy::too_many_arguments)]
+pub fn eds_ti_pair_interactions<BC: BoundaryCondition, const VIRIAL: bool>(
+    pairs: &[(u32, u32)],
+    positions: &[Vec3],
+    atoms: &EdsAtoms,
+    pert: &[Option<PertAtomInfo>],
+    lj_params: &LJParamMatrix,
+    crf: &CRFParameters,
+    lps: &[PerturbedLambdaParams],
+    egroups: EnergyGroups<'_>,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    out: &mut EdsStorage,
+) {
+    with_groups!(egroups, G => {
+        for &(i, j) in pairs {
+            let (i, j) = (i as usize, j as usize);
+            eds_ti_pair::<BC, VIRIAL, false>(
+                i,
+                j,
+                positions,
+                atoms,
+                ti_partner(pert, j),
+                ti_lambda::<G>(lps, &egroups, i, j),
+                lj_params,
+                crf,
+                boundary,
+                four_pi_eps_i,
+                1.0,
+                out,
+            );
+        }
+    })
+}
+
+/// The 1-4 pairs of EDS atoms with perturbed atoms (gromosXX `perturbed_one_four_outerloop`,
+/// cases 2/4 at `perturbed_nonbonded_innerloop.cc:2057-2121, 2277-2341`): cs6/cs12 and the
+/// Coulomb scaling of the standard 1-4 term; the per-state virial always.
+#[allow(clippy::too_many_arguments)]
+pub fn eds_ti_one_four_interactions<BC: BoundaryCondition>(
+    positions: &[Vec3],
+    atoms: &EdsAtoms,
+    pert: &[Option<PertAtomInfo>],
+    lj_params: &LJParamMatrix,
+    crf: &CRFParameters,
+    lps: &[PerturbedLambdaParams],
+    egroups: EnergyGroups<'_>,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    coulomb_scaling: f64,
+    out: &mut EdsStorage,
+) {
+    with_groups!(egroups, G => {
+        for (k, &i) in atoms.seq.iter().enumerate() {
+            for &j in &atoms.ti_one_four_pairs[k] {
+                eds_ti_pair::<BC, true, true>(
+                    i,
+                    j,
+                    positions,
+                    atoms,
+                    ti_partner(pert, j),
+                    ti_lambda::<G>(lps, &egroups, i, j),
+                    lj_params,
+                    crf,
+                    boundary,
+                    four_pi_eps_i,
+                    coulomb_scaling,
+                    out,
+                );
+            }
+        }
+    })
+}
+
+/// The excluded pairs of EDS atoms with perturbed atoms, with NSLFEXCL (gromosXX
+/// `eds_perturbed_RF_exclusions_loop` case 4, `perturbed_nonbonded_innerloop.cc:3696-3743`): the
+/// soft reaction-field term without self-term correction (`eds_perturbed_rf_interaction`,
+/// `perturbed_nonbonded_term.cc:566-603`) with charges `M_q_i[s]·A_q_j` / `·B_q_j` and the
+/// perturbed atom's α_crf, every state; the per-state virial always.
+#[allow(clippy::too_many_arguments)]
+pub fn eds_ti_rf_excluded_interactions<BC: BoundaryCondition>(
+    positions: &[Vec3],
+    atoms: &EdsAtoms,
+    pert: &[Option<PertAtomInfo>],
+    crf: &CRFParameters,
+    lps: &[PerturbedLambdaParams],
+    egroups: EnergyGroups<'_>,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    out: &mut EdsStorage,
+) {
+    let n_atoms = out.n_atoms;
+    with_groups!(egroups, G => {
+        for (k, &i) in atoms.seq.iter().enumerate() {
+            let q_i = &atoms.charge[k * atoms.num_states..(k + 1) * atoms.num_states];
+            for &j in &atoms.ti_exclusions[k] {
+                let p = ti_partner(pert, j);
+                let lp = ti_lambda::<G>(lps, &egroups, i, j);
+                let r = boundary.nearest_image(positions[i], positions[j]);
+                let r2 = r.length_squared();
+                for (s, &q) in q_i.iter().enumerate() {
+                    let (f, e, de) = rf_soft_interaction(
+                        r2,
+                        q * p.a_charge,
+                        q * p.b_charge,
+                        p.alpha_crf,
+                        lp,
+                        crf,
+                        four_pi_eps_i,
+                    );
+                    let f = r * f;
+                    out.energy[s] += e;
+                    out.dvdl[s] += de;
+                    out.forces[s * n_atoms + i] += f;
+                    out.forces[s * n_atoms + j] -= f;
+                    let (rv, fv) = ([r.x, r.y, r.z], [f.x, f.y, f.z]);
+                    let v = &mut out.virial[s];
+                    for (a, ra) in rv.iter().enumerate() {
+                        for (b, fb) in fv.iter().enumerate() {
+                            v[a][b] += ra * fb;
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,10 +707,11 @@ mod tests {
     fn pairs_with_an_eds_atom_move_with_the_eds_atom_first() {
         let a = atoms();
         let mut list = vec![(0, 1), (1, 2), (1, 1), (2, 0)];
-        let mut eds = Vec::new();
-        split_eds_pairs(&mut list, &a, &mut eds);
+        let (mut eds, mut ti) = (Vec::new(), Vec::new());
+        split_eds_pairs(&mut list, &a, &mut eds, &mut ti);
         assert_eq!(list, [(1, 1)]);
         assert_eq!(eds, [(0, 1), (2, 1), (2, 0)]);
+        assert!(ti.is_empty());
     }
 
     /// Each state of a pair is the plain LJ + reaction-field pair with that state's parameters.
@@ -479,6 +756,154 @@ mod tests {
         for s in 0..2 {
             let f = out.state_forces(s);
             assert!((f[0] + f[1] + f[2]).length() < 1e-12);
+        }
+    }
+
+    /// EDS atom 0 (states as in `atoms`) and perturbed atom 1; atom 0 owns the pair as an
+    /// exclusion, a 1-4 pair or a pairlist pair.
+    fn ti_atoms(excluded: bool, one_four: bool) -> (EdsAtoms, Vec<Option<PertAtomInfo>>) {
+        use gromos_core::topology::PerturbedAtom;
+        let mut topo = Topology::new();
+        topo.eds_solute = EdsSolute {
+            num_states: 2,
+            state_names: vec![],
+            atoms: vec![EdsPerturbedAtom {
+                seq: 0,
+                iac: vec![0, 1],
+                charge: vec![0.4, -0.2],
+                exclusions: if excluded { vec![1] } else { vec![] },
+                one_four_pairs: if one_four { vec![1] } else { vec![] },
+            }],
+        };
+        topo.perturbed_solute.atoms.push(PerturbedAtom {
+            seq: 1,
+            a_iac: 1,
+            a_mass: 1.0,
+            a_charge: 0.3,
+            b_iac: 0,
+            b_mass: 1.0,
+            b_charge: -0.5,
+            lj_soft: 0.7,
+            crf_soft: 0.4,
+        });
+        let pert = vec![
+            None,
+            Some(PertAtomInfo {
+                a_iac: 1,
+                b_iac: 0,
+                a_charge: 0.3,
+                b_charge: -0.5,
+                alpha_lj: 0.7,
+                alpha_crf: 0.4,
+            }),
+        ];
+        (EdsAtoms::from_topology(&topo, 2).unwrap(), pert)
+    }
+
+    fn lambda(l: f64) -> Vec<PerturbedLambdaParams> {
+        vec![PerturbedLambdaParams::from_lambda(
+            l, l, l, l, 1.0, 1.0, 1.0, 1.0, 2,
+        )]
+    }
+
+    /// Energy and ∂V_s/∂λ of every state of the one EDS–perturbed pair at λ (`kind` 0 pairlist,
+    /// 1 1-4, 2 excluded).
+    fn ti_states(kind: u8, l: f64) -> EdsStorage {
+        let (a, pert) = ti_atoms(kind == 2, kind == 1);
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let pos = [Vec3::ZERO, Vec3::new(0.21, 0.08, -0.05)];
+        let mut out = EdsStorage::new(2, 2);
+        let lps = lambda(l);
+        let g = EnergyGroups::single();
+        match kind {
+            0 => {
+                let (mut list, mut eds, mut ti) = (vec![(1, 0)], Vec::new(), Vec::new());
+                split_eds_pairs(&mut list, &a, &mut eds, &mut ti);
+                assert!(list.is_empty() && eds.is_empty());
+                assert_eq!(ti, [(0, 1)]);
+                eds_ti_pair_interactions::<_, true>(
+                    &ti,
+                    &pos,
+                    &a,
+                    &pert,
+                    &lj(),
+                    &crf,
+                    &lps,
+                    g,
+                    &Vacuum,
+                    138.9354,
+                    &mut out,
+                );
+            },
+            1 => eds_ti_one_four_interactions(
+                &pos,
+                &a,
+                &pert,
+                &lj(),
+                &crf,
+                &lps,
+                g,
+                &Vacuum,
+                138.9354,
+                1.0,
+                &mut out,
+            ),
+            _ => eds_ti_rf_excluded_interactions(
+                &pos, &a, &pert, &crf, &lps, g, &Vacuum, 138.9354, &mut out,
+            ),
+        }
+        out
+    }
+
+    /// Each state of an EDS–perturbed pair is the soft-core A/B pair with the state's type and
+    /// charge, and its booked ∂V_s/∂λ is the λ derivative of its energy.
+    #[test]
+    fn ti_eds_states_are_soft_core_pairs_with_their_lambda_derivative() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let r = Vec3::ZERO - Vec3::new(0.21, 0.08, -0.05);
+        let l = 0.3;
+        let out = ti_states(0, l);
+        for (s, (t, q)) in [(0usize, 0.4), (1, -0.2)].into_iter().enumerate() {
+            let (pa, pb) = (lj().get(t, 1), lj().get(t, 0));
+            let (_, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
+                r,
+                pa.c6,
+                pa.c12,
+                pb.c6,
+                pb.c12,
+                q * 0.3,
+                q * -0.5,
+                0.7,
+                0.4,
+                &lambda(l)[0],
+                &crf,
+                138.9354,
+                1.0,
+            );
+            assert_eq!(out.energy[s], e_lj + e_crf);
+            assert_eq!(out.dvdl[s], de_lj + de_crf);
+            let f = out.state_forces(s);
+            assert!((f[0] + f[1]).length() < 1e-12);
+        }
+        let h = 1e-5;
+        for kind in 0..3 {
+            let (up, down, at) = (
+                ti_states(kind, l + h),
+                ti_states(kind, l - h),
+                ti_states(kind, l),
+            );
+            for s in 0..2 {
+                let fd = (up.energy[s] - down.energy[s]) / (2.0 * h);
+                assert!(
+                    (fd - at.dvdl[s]).abs() < 1e-6 * fd.abs().max(1.0),
+                    "kind {kind} state {s}: {fd} vs {}",
+                    at.dvdl[s]
+                );
+                assert!(
+                    at.dvdl[s].abs() > 1e-3,
+                    "kind {kind} state {s}: no λ dependence"
+                );
+            }
         }
     }
 

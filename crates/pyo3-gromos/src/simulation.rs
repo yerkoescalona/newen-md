@@ -644,8 +644,9 @@ impl PySimulation {
     }
 
     /// dH/dλ split by term at the last step (kJ/mol): `lj`, `crf`, `bonded`, `kinetic` (the
-    /// λ-dependent masses), `constraints` (perturbed SHAKE) and `distanceres` (perturbed
-    /// distance restraints).
+    /// λ-dependent masses), `constraints` (perturbed SHAKE), `distanceres` (perturbed
+    /// distance restraints) and `eds` (∂V_R/∂λ of an EDS run with perturbed atoms, `.trg` slot
+    /// 35).
     #[getter]
     fn dhdl_terms<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
         let e = &self.configuration.old().perturbed_energy_derivatives;
@@ -659,6 +660,7 @@ impl PySimulation {
         d.set_item("kinetic", e.kinetic_total)?;
         d.set_item("constraints", e.constraint_total)?;
         d.set_item("distanceres", e.distanceres_total)?;
+        d.set_item("eds", e.eds_vr)?;
         Ok(d)
     }
 
@@ -674,6 +676,17 @@ impl PySimulation {
     #[getter]
     fn eds_vi(&self) -> Vec<f64> {
         self.configuration.old().energies.eds_vi.clone()
+    }
+
+    /// ∂V_i/∂λ of the EDS end states (kJ/mol) at the last step, one per state (the `.trg`'s
+    /// `# eds` rows): the EDS–perturbed pairs of a run with perturbed atoms; empty without EDS.
+    #[getter]
+    fn eds_dvi(&self) -> Vec<f64> {
+        self.configuration
+            .old()
+            .perturbed_energy_derivatives
+            .eds_vi
+            .clone()
     }
 
     /// Kinetic energy (kJ/mol).

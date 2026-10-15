@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.58] (2026-10-16)
+
+**TI-EDS: perturbed atoms next to EDS end states** (1.8): an `EDS` run with `PERTURBATION NTG = 1`
+and `PERTATOMPARAM` atoms, which gromosXX accepts since 869b8a24 (undocumented in Vol. 2/4), no
+longer refused: per-state soft-core energies and forces of the EDS–perturbed pairs, ∂V_i/∂λ per
+end state, ∂V_R/∂λ = Σ p_i ∂V_i/∂λ in the `.trg`. Three new references; 91 pass.
+
+### Added (1.8 — TI-EDS)
+
+- **EDS–perturbed pairs** (`gromos-forces/src/nonbonded/eds.rs`: `eds_ti_pair_interactions`,
+  `eds_ti_one_four_interactions`, `eds_ti_rf_excluded_interactions`): cases 2 and 4 of
+  `perturbed_nonbonded_innerloop.cc` (`:167-239, 409-481`; 1-4 `:2057-2121, 2277-2341`;
+  excluded `:3696-3743`). Per state s the soft-core A/B kernel of the perturbed pairs
+  (`perturbed_lj_crf_interaction_scaled`, `rf_soft_interaction`) with `lj[M_IAC_e[s]][A_IAC_p]` /
+  `[B_IAC_p]`, charges `M_q_e[s]·A_q_p` / `·B_q_p`, the perturbed atom's α, the λ of the pair's
+  energy-group cell (`LAMBDAS`); the 1-4 pairs with cs6/cs12 and the 1-4 Coulomb scaling, the
+  excluded pairs (NSLFEXCL) with the soft reaction field and no self-term correction. Into the
+  state's force, virial and energy and a new per-state `EdsStorage::dvdl`, which the force field
+  books as the derivative record's `eds_vi` (long-range pairs on pairlist steps, as the energies).
+  `split_eds_pairs` sends a pair of an EDS atom and a perturbed atom to its own list (EDS atom
+  first); `EdsAtoms` splits the owned excluded and 1-4 partners the same way, so no branch runs in
+  the plain EDS loops, and none of this runs without perturbed atoms.
+- **The EDS step** already booked Σ p_i ∂V_i/∂λ (the derivative record's `eds_vr`, part of its
+  special energy, so of dH/dλ) for every form; it is now non-zero. `.trg`: slot 35 and the
+  `# eds` rows (∂V_i/∂λ per state).
+- Python: `Simulation.eds_dvi` (∂V_i/∂λ per state), `Simulation.dhdl_terms["eds"]` (∂V_R/∂λ, so
+  the terms sum to `dhdl`); stubs.
+- Refused, on the `.ptp` and the Python object path alike (`check_ti_eds`,
+  `gromos-run/src/prepare.rs`, unit-tested): an atom in both `PERTATOMPARAM` and `MPERTATOM`, a
+  `PERTATOMPAIR` pair with an EDS atom (below). PRECALCLAM, slow growth (DLAMT ≠ 0) and
+  NSCALE ≠ 0 stay refused with EDS as in any perturbed run.
+- References: `aladip_eds_solv_ti` (aladip in 20 SPC, EDS atoms N4 and H11, perturbed CB1, C8,
+  N10, CB12 with their own α, RLAM 0.3: EDS–perturbed pairlist pairs with the EDS atom first and
+  second, a 1-4 pair, five excluded pairs; `.trg` every step), `aladip_eds_solv_ti_groups` (two
+  energy groups across the EDS and perturbed atoms, `LAMBDAS` on) — native gromosXX;
+  `aladip_eds_solv_ti_multis_fixed` (FORM 2) — native + `patches/D2_eds_weights.patch`. Whole
+  block, `.tre`, `.trg` and forces.
+- `gromos-run/tests/ti_eds_lambda.rs`: three end states, FORMS 1/2/3, every state weighted
+  ≥ 5 %: the booked ∂V_i/∂λ and ∂V_R/∂λ at step 0 against central differences of V_i and V_R
+  between runs at λ = 0.3 ± δ (Richardson over δ = 1e-3, 1e-4): deviation 1.3e-11 / 5.1e-11 /
+  3.9e-11 kJ/mol for ∂V_R/∂λ (FORMS 1/2/3).
+
+### Deliberate differences from gromosXX
+
+- **Ownership of the excluded and 1-4 EDS–perturbed pairs.** gromosXX's perturbed atom owns them
+  (`PERTATOMPARAM` takes them before `MPERTATOM` looks, `in_perturbation.cc:1363-1391,
+  1748-1777`; case 4), gromos-rs's EDS atom owns every EDS–perturbed pair (as it owns every other
+  pair of its). The terms are the same, summed in another order: agreement to rounding, not bit
+  for bit. The three references state energy_rel 1e-10 / force_abs 1e-8; measured, every printed
+  `.tre` and `.trg` number is equal and the forces agree within 1e-9 kJ mol⁻¹ nm⁻¹ (the last
+  printed digit).
+- FORMS 2 and 3 book Σ p_i ∂V_i/∂λ; the released gromosXX books 0 (`eds.cc:603-604, 704-705`,
+  part of D2, corrected in 0.0.57).
+
+### Refused gromosXX defects (not reproduced)
+
+- **An atom in both `PERTATOMPARAM` and `MPERTATOM`** gets pair code 6, which no case of the
+  innerloop handles: its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65`;
+  dossier D18).
+- **`PERTATOMPAIR` with an EDS atom**: `perturbed_nonbonded_pair.cc` has no EDS branch and uses the
+  topology type and charge in every end state (D19).
+
+### Verified
+
+- References: 91 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 3 passed. The 89 existing references' output is byte-identical to the
+  0.0.57 binary (all files but `<tre>.recipe.toml`, the version in the provenance line
+  normalised).
+- Timing against the 0.0.57 binary (n = 5, interleaved, one thread, `taskset -c 2`):
+  `ch4_water_fep_l025` 500 steps 11.547 ± 0.043 s vs 11.550 ± 0.049 s — unchanged.
+- core, io, run, forces, integrators: 550 tests green; clippy only the two known doc-list
+  warnings; `pytest` 708 passed / 66 skipped; stubtest clean; G6/G11 lint gates clean.
+
 ## [0.0.57] (2026-10-13)
 
 **EDS through the recipe, the extended-TI analysis chain, `dGslv_pbsolv`** (1.8): an `EDS` block

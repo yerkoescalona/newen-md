@@ -1097,6 +1097,11 @@ ref_test!(aladip_vacuum_eds, "aladip_vacuum_eds");
 ref_test!(aladip_vacuum_eds3, "aladip_vacuum_eds3");
 ref_test!(aladip_eds_solv, "aladip_eds_solv");
 ref_test!(two_waters_eds, "two_waters_eds");
+// TI-EDS: perturbed atoms next to the EDS atoms, the per-state soft-core pairs and ∂V_i/∂λ.
+// gromos-rs's EDS atom owns the excluded and 1-4 EDS–perturbed pairs, gromosXX's perturbed atom:
+// the same terms summed in another order.
+ref_test!(aladip_eds_solv_ti, "aladip_eds_solv_ti");
+ref_test!(aladip_eds_solv_ti_groups, "aladip_eds_solv_ti_groups");
 // FORMS 2 and 3 against gromosXX with its force weights corrected
 // (`tests/gromosXX_references/patches/D2_eds_weights.patch`): the documented formulas.
 ref_test!(
@@ -1106,6 +1111,10 @@ ref_test!(
 ref_test!(
     aladip_vacuum_eds_pairs_fixed,
     "aladip_vacuum_eds_pairs_fixed"
+);
+ref_test!(
+    aladip_eds_solv_ti_multis_fixed,
+    "aladip_eds_solv_ti_multis_fixed"
 );
 // The same FORMS against the released gromosXX, whose force weights are defective: only the
 // end-state energies of frame 0 (and, for FORM 3, V_R) — see the `compare` key of their
