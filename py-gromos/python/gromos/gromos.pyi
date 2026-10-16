@@ -627,6 +627,13 @@ class Simulation:
     @property
     def kinetic_energy(self) -> float: ...
     @property
+    def precalclam(self) -> dict[str, npt.NDArray[np.float64]] | None:
+        """The extended-TI (``PRECALCLAM``) data of the last step, ``None`` without it:
+        ``lambdas`` (the grid, N), ``energies`` and ``derivatives`` (N × 12, the ``.tre``'s and
+        the ``.trg``'s ``# precalclam`` rows), ``abdih`` and ``free_abdih`` (A, B). Computed
+        on the steps NTWG divides only."""
+        ...
+    @property
     def eds_vr(self) -> float:
         """EDS reference-state energy V_R (kJ/mol) at the last step (``.tre`` slot 35, part of
         ``total_energy`` through the special energy); 0 without EDS."""
@@ -857,6 +864,43 @@ def _ti_trapezoid_series(
     lambdas: list[float], series: list[list[float]], skip: int = 0
 ) -> dict[str, Any]:
     """The same TI over in-memory dH/dλ series, one per λ (`gromos.free_energy`)."""
+    ...
+
+def _precalc_bar_data(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+) -> list[dict[str, Any]]:
+    """The per-frame energies BAR/MBAR use, from in-memory PRECALCLAM frames
+    (`gromos.free_energy`): per window `slam`, `plam`, `e_s`, `e_p`, kJ/mol."""
+    ...
+
+def _precalc_bar(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+    *,
+    max_iterations: int = 500,
+    convergence: float = 1e-5,
+) -> dict[str, Any]:
+    """`bar` over in-memory PRECALCLAM frames: what `_bar` returns."""
+    ...
+
+def _precalc_mbar(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+    *,
+    max_iterations: int = 10000,
+    tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    """MBAR over in-memory PRECALCLAM frames: what `_mbar` returns, plus `lambdas`."""
     ...
 
 def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:

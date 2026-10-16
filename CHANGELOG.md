@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.62] (2026-10-16)
+
+**BAR and MBAR of λ windows run from Python** (1.8 step 5): a window run with `PRECALCLAM` keeps
+the energies of every sampled frame at the grid's λ, and `FreeEnergyWindows.bar()` / `.mbar()`
+give ΔG through the Rust `ext_ti_ana` → `bar` / `mbar` chain, equal to `gromos.analysis.bar` /
+`mbar` on the same frames. No engine output changes; 106 references pass.
+
+### Added (1.8 step 5 — BAR/MBAR)
+
+- **`Simulation.precalclam`** (Python): the extended-TI data of the last step, `None` without
+  `PRECALCLAM`: `lambdas` (the grid), `energies` and `derivatives` (N × 12, the `.tre`'s and
+  `.trg`'s `# precalclam` rows), `abdih`, `free_abdih` (the `# ABdih` rows). Computed on NTWG
+  steps only, as the engine fills it.
+- **`ext_ti_ana` over frames held in memory** (`gromos_analysis::programs::ext_ti_ana`):
+  `PrecalcFrame` (one frame's rows), `analyse_frames(&Options, &[PrecalcFrame])` (the program's
+  `analyse` with the frames from memory instead of `@en_files`/`@fr_files`, one loop for both),
+  `Options::for_frames` (a simulation at `slam` with NLAM and the identity λ-dependence,
+  gromos++'s defaults otherwise) and `bar_file` (the `@bar_data` energies at given λ as the
+  `bar::BarFile` `bar` and `mbar` read, the simulated λ unrounded; a λ off the grid is an error
+  naming it).
+- **`gromos.free_energy`**: `run_windows` keeps `Simulation.precalclam` of every sampled frame in
+  `Window.precalclam` (`Precalclam`: the stacked rows with the run's grid, NLAM, first-bath
+  temperature and whether it had `LAMBDAS` rows), also in the window's `.npz`, so `collect()`
+  windows keep it. `FreeEnergyWindows.bar(skip, temperature=None)` and `.mbar(skip,
+  temperature=None)` → `Estimate` (`.dg`, `.error` from the first window to the last, `.steps` per
+  neighbouring pair; unpacks as `dg, error`), `.bar_data(skip)` → the per-frame energies both use.
+  `skip` drops the first frames of each window, as `.ti(skip)` does. The arithmetic is Rust's:
+  the private bindings `_precalc_bar_data`, `_precalc_bar` (`bar::bar`, corrected error) and
+  `_precalc_mbar` (`mbar::reduced_potentials` + `mbar::mbar`).
+- User guide (*Free-energy windows*, section *BAR and MBAR*), API reference, stubs.
+- Tests: `test_window_precalclam_frames_equal_gromosxx` — each of the nine `*precalc*`
+  references (CH4 and methanol in water, the twin-range CH4 run, aladip with bonded, SHAKE,
+  distance-restraint, `LAMBDAS` and both atom-pair kernels) run as a window gives gromosXX's `.tre`
+  `# precalclam`/`# ABdih` rows and the `.trg`'s derivative rows on every frame (largest relative
+  deviation 5.0e-10, the printed precision); nine CH4 → dummy windows (λ = k/8, a nine-point grid,
+  300 steps at 300 K, a frame every 5 steps): `bar_data()` is the linear-λ energy of the raw rows
+  (1e-12), `bar()` and `mbar()` equal `analysis.bar` / `analysis.mbar` on the same frames written
+  out at full precision (1e-10, total and every pair), and the estimates survive `collect()`; TI,
+  BAR and MBAR agree (skip 10: −5.305 ± 0.741, −5.813 ± 1.544, −5.558 ± 0.683 kJ/mol; the test
+  asserts twice the combined error). `ext_ti_ana` unit tests: frames in memory give the files'
+  `Analysis` exactly; `bar_file` refuses a λ off the grid.
+
+### Changed
+
+- `run_windows` samples a window in chunks of NTWG steps (`run(0)`, then `run(NTWG)` per frame)
+  instead of one `run()`, to read `precalclam` after each sampled step; the energies are the same
+  frames.
+- `ext_ti_ana::analyse` reads its frames through the same loop as `analyse_frames`; an `ABDIH`
+  subblock missing from a frame is now reported before a wrong `PRECALCLAM` row count (only the
+  order of two errors changes).
+
+### Verified
+
+- References: 106 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed.
+- analysis (81 tests, `gromospp_references` 28 and `mbar_reference` 3 among them) and
+  pyo3-gromos green; clippy no new warnings (the two known doc-list ones in forces and run);
+  `cargo fmt --check` clean; `pytest` 843 passed / 77 skipped; stubtest clean; ruff and mypy
+  clean on the touched Python; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- BAR/MBAR of windows with `LAMBDAS` rows (refused: `Options::for_frames` takes the identity
+  λ-dependence; `ext_ti_ana`'s `@lam<X>_sim` coefficients would need the recipe's rows), and a
+  grid that does not hold every window's λ (refused).
+- The MBAR error is the asymptotic one and assumes uncorrelated frames: on frames 5 steps apart it
+  is about half the BAR error, which carries each side's statistical inefficiency. No
+  decorrelation or block analysis is applied.
+- `Perturbation.from_ptp`/`mutate`, window parallelism, `scripts/ti_ch4.py` as a wrapper over the
+  module (unchanged since 0.0.59).
+
 ## [0.0.61] (2026-10-16)
 
 **Slow growth** (1.8): PERTURBATION DLAMT ≠ 0 runs instead of being refused — λ moves by

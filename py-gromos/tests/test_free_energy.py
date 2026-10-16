@@ -293,3 +293,183 @@ def test_apply_perturbation_returns_the_net_charges(tmp_path):
     )
     a, b = Topology(str(SHARED / "ch4_spc.top")).apply_perturbation(str(ptp))
     assert (a, b) == pytest.approx((1.0, 0.0))
+
+
+# ---- BAR and MBAR from the windows' PRECALCLAM energies -------------------------------------
+
+PRECALC_REFERENCES = sorted(p.name for p in REF.glob("*precalc*")) if REF.exists() else []
+PC_KEYS = ("energies", "derivatives", "abdih", "free_abdih")
+
+
+def _precalclam_frames(path: Path) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Each frame's ``# precalclam`` rows (N × 12) and ``# ABdih`` row of a .tre or .trg."""
+    lines = path.read_text().splitlines()
+    frames = []
+    for i, ln in enumerate(lines):
+        if ln.strip() != "# precalclam":
+            continue
+        n = int(lines[i + 2])
+        rows = np.array([[float(x) for x in lines[i + 4 + k].split()] for k in range(n)])
+        assert lines[i + 4 + n].strip() == "# ABdih"
+        dih = np.array([float(x) for x in lines[i + 6 + n].split()])
+        frames.append((rows, dih))
+    return frames
+
+
+def _close(actual: np.ndarray, expected: np.ndarray, rel: float, what: str) -> None:
+    # the reference prints 10 significant digits; 1e-12 kJ/mol covers its printed zeros
+    bad = np.abs(actual - expected) > rel * np.abs(expected) + 1e-12
+    assert not bad.any(), f"{what}: {actual[bad]} vs {expected[bad]}"
+
+
+@pytest.mark.parametrize("name", PRECALC_REFERENCES)
+def test_window_precalclam_frames_equal_gromosxx(name):
+    """Every sampled frame of a window run with PRECALCLAM holds gromosXX's ``# precalclam``
+    and ``# ABdih`` rows: the energies of the ``.tre``, the derivatives of the ``.trg``."""
+    from test_gromosXX_references import _parse_input_toml, _recipe_for
+
+    from gromos import System
+    from gromos.free_energy import run_windows
+
+    d = REF / name
+    inputs = _parse_input_toml(d)
+    system = System.from_files(
+        str((d / inputs["topology"]).resolve()), str((d / inputs["configuration"]).resolve())
+    )
+    recipe = _recipe_for(d)
+    (w,) = run_windows(system, [recipe])
+    pc = w.precalclam
+    assert pc is not None
+    grid = recipe.perturbation["precalclam"]
+    assert pc.grid == (grid["nr_lambdas"], grid["min_lambda"], grid["max_lambda"])
+    tre = _precalclam_frames(d / "expected" / "energies.tre")
+    trg = _precalclam_frames(d / "expected" / "free_energy.trg")
+    assert len(tre) == len(trg) == len(pc.energies) == len(w.dhdl) > 1
+    for f, ((e, a), (de, da)) in enumerate(zip(tre, trg, strict=True)):
+        _close(pc.energies[f], e, 1e-9, f"{name} frame {f} energies")
+        _close(pc.abdih[f], a, 1e-9, f"{name} frame {f} ABdih")
+        _close(pc.derivatives[f], de, 1e-9, f"{name} frame {f} derivatives")
+        _close(pc.free_abdih[f], da, 1e-9, f"{name} frame {f} free ABdih")
+
+
+# nine CH4 → dummy windows on a nine-point PRECALCLAM grid, 300 steps each at 300 K (Berendsen,
+# τ = 0.1 ps), a frame every 5 steps; the first 10 frames of each are dropped
+CH4_FEP_LAMBDAS = [k / 8 for k in range(9)]
+CH4_FEP_SKIP = 10
+
+
+@pytest.fixture(scope="module")
+def ch4_fep_windows(tmp_path_factory):
+    from gromos import System
+    from gromos.free_energy import LambdaSchedule, run_windows
+
+    base = _ch4_base().update(
+        control={"steps": 300},
+        outputs={"ntwg": 5, "energy_every": 5},
+        ensemble={"thermostat": {"baths": [{"tau": 0.1, "temperature": 300.0}]}},
+        perturbation={"precalclam": {"nr_lambdas": 9, "min_lambda": 0.0, "max_lambda": 1.0}},
+    )
+    system = System.from_files(str(SHARED / "ch4_spc.top"), str(SHARED / "ch4_spc.cnf"))
+    workdir = tmp_path_factory.mktemp("fep")
+    return run_windows(system, LambdaSchedule(CH4_FEP_LAMBDAS).recipes(base), workdir=workdir)
+
+
+def _write_bar_data(path: Path, b: dict) -> None:
+    """``b`` as an ``ext_ti_ana @bar_data`` file, every number at full precision."""
+    lines = [str(len(b["plam"])), " ".join(repr(float(x)) for x in [b["slam"], *b["plam"]])]
+    for n, e in enumerate(b["e_s"]):
+        lines.append(" ".join(repr(float(x)) for x in [e, *b["e_p"][:, n]]))
+    path.write_text("\n".join(lines) + "\n")
+
+
+@pytest.mark.skipif(not REF.exists(), reason="reference systems not in the checkout")
+def test_bar_and_mbar_are_the_analysis_programs_on_the_same_frames(ch4_fep_windows, tmp_path):
+    from gromos.free_energy import collect
+
+    windows = ch4_fep_windows
+    skip = CH4_FEP_SKIP
+    data = windows.bar_data(skip)
+    for w, b in zip(windows, data, strict=True):
+        pc = w.precalclam
+        assert pc is not None and pc.temperature == 300.0 and pc.grid == (9, 0.0, 1.0)
+        assert len(pc.energies) == len(w.dhdl) == 60
+        assert b["slam"] == w.lam and list(b["plam"]) == CH4_FEP_LAMBDAS
+        # the energy at λ_p of the linear dependence (NLAM = 1) from the raw grid rows
+        e = pc.energies[skip:]
+        for p, lam in enumerate(CH4_FEP_LAMBDAS):
+            r = e[:, p]
+            at = (
+                (1 - lam) * r[:, 0]
+                + lam * r[:, 1]
+                + (1 - lam) * r[:, 2]
+                + lam * r[:, 3]
+                + r[:, 4:].sum(axis=1)
+                + (1 - lam) * pc.abdih[skip:, 0]
+                + lam * pc.abdih[skip:, 1]
+            )
+            np.testing.assert_allclose(b["e_p"][p], at, rtol=1e-12, atol=1e-10)
+            if lam == w.lam:
+                np.testing.assert_allclose(b["e_s"], at, rtol=1e-12, atol=1e-10)
+
+    files = []
+    for b in data:
+        files.append(tmp_path / f"bar_data_l{b['slam']:.3f}.dat")
+        _write_bar_data(files[-1], b)
+    bar = windows.bar(skip)
+    ref = analysis.bar(files, 300.0, convergence=1e-10)
+    assert bar.lambdas == tuple(CH4_FEP_LAMBDAS) == tuple(ref["lam_i"] + ref["lam_j"][-1:])
+    assert bar.dg == pytest.approx(ref["dg_total"], rel=1e-10, abs=1e-10)
+    assert bar.error == pytest.approx(ref["error_total"], rel=1e-10, abs=1e-10)
+    for (dg, err), rdg, rerr in zip(bar.steps, ref["dg"], ref["error"], strict=True):
+        assert dg == pytest.approx(rdg, rel=1e-10, abs=1e-10)
+        assert err == pytest.approx(rerr, rel=1e-10, abs=1e-10)
+
+    n_k = [len(b["e_s"]) for b in data]
+    u_kn = np.array(
+        [
+            np.concatenate([b["e_s"] if k == i else b["e_p"][k] for i, b in enumerate(data)])
+            for k in range(len(data))
+        ]
+    )
+    m = windows.mbar(skip)
+    rm = analysis.mbar(u_kn, n_k, 300.0)
+    last = len(data) - 1
+    assert m.lambdas == bar.lambdas
+    assert m.dg == pytest.approx(rm["dg"][0, last], rel=1e-10, abs=1e-10)
+    assert m.error == pytest.approx(rm["ddg"][0, last], rel=1e-10, abs=1e-10)
+    for k, (dg, err) in enumerate(m.steps):
+        assert dg == pytest.approx(rm["dg"][k, k + 1], rel=1e-10, abs=1e-10)
+        assert err == pytest.approx(rm["ddg"][k, k + 1], rel=1e-10, abs=1e-10)
+
+    # kept windows carry their PRECALCLAM data: the same estimates after collect()
+    first = windows[0].path
+    assert first is not None
+    kept = collect(first.parent)
+    assert tuple(kept.bar(skip)) == tuple(bar) and tuple(kept.mbar(skip)) == tuple(m)
+
+
+@pytest.mark.skipif(not REF.exists(), reason="reference systems not in the checkout")
+def test_ti_bar_and_mbar_agree_within_their_errors(ch4_fep_windows):
+    windows = ch4_fep_windows
+    ti = windows.ti(CH4_FEP_SKIP)
+    bar = windows.bar(CH4_FEP_SKIP)
+    mbar = windows.mbar(CH4_FEP_SKIP)
+    dg, err = bar
+    assert (dg, err) == (bar.dg, bar.error) and bar.method == "BAR" and mbar.method == "MBAR"
+    assert len(bar.steps) == len(mbar.steps) == len(CH4_FEP_LAMBDAS) - 1
+    assert sum(s[0] for s in bar.steps) == pytest.approx(bar.dg, rel=1e-12)
+    estimates = {"TI": ti, "BAR": tuple(bar), "MBAR": tuple(mbar)}
+    for a, (ga, ea) in estimates.items():
+        assert np.isfinite(ga) and ea > 0, a
+        for b, (gb, eb) in estimates.items():
+            assert abs(ga - gb) <= 2 * np.hypot(ea, eb), f"{a} {ga} ± {ea} vs {b} {gb} ± {eb}"
+
+
+def test_bar_needs_precalclam_windows():
+    from gromos.free_energy import FreeEnergyWindows, Window
+
+    windows = FreeEnergyWindows([Window(0.0), Window(1.0)])
+    with pytest.raises(ValueError, match="without PRECALCLAM"):
+        windows.bar()
+    with pytest.raises(ValueError, match="at least two"):
+        FreeEnergyWindows([Window(0.0)]).mbar()

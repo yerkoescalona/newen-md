@@ -10,6 +10,11 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Extended TI in process (1.8, 0.0.62):** `Simulation.precalclam` (the grid, the `# precalclam`
+  energy and derivative rows, `# ABdih`) of the last step; `_precalc_bar_data`, `_precalc_bar`,
+  `_precalc_mbar` (`programs.rs`) take per-window frame stacks and call
+  `ext_ti_ana::bar_file` → `bar::bar` / `mbar::{reduced_potentials, mbar}`
+  (`gromos.free_energy.FreeEnergyWindows.bar/.mbar`).
 - **Slow growth (1.8, 0.0.61):** `Simulation` calls `gromos_run::advance_lambda` after the
   constructor's step 0 and after every `step`/`run` step, as `md` does (no "converged" stop, so
   under steepest descent λ also moves on the step `md` stops at).

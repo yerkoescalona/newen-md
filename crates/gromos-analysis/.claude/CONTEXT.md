@@ -25,7 +25,9 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   dΛ/dλ) are corrected by default and reproduced under `@parity gromospp`
   (`programs::free_energy::Parity`); the corrected output is checked against patched gromos++
   (`A2_fixed`, `chain_fixed`). Deliberate differences in each module's header. Library API:
-  `programs::ext_ti_ana::{Options, analyse, write_files}`, `programs::bar::{read_bar_file, bar,
+  `programs::ext_ti_ana::{Options, analyse, write_files}` (and over frames held in memory,
+  0.0.62: `Options::for_frames`, `analyse_frames`, `bar_file` → a `bar::BarFile`, what
+  `gromos.free_energy`'s BAR/MBAR run on), `programs::bar::{read_bar_file, bar,
   do_bar}`, `programs::ext_ti_merge::{merge, integrate, integrate_error}`; Python
   `gromos.analysis.ext_ti_ana/bar/ext_ti_merge`.
 - `mbar` (no gromos++ counterpart, 1.8) — MBAR on `ext_ti_ana @bar_data` files, against pymbar

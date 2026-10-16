@@ -80,10 +80,18 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
 - **Free-energy windows (1.8, 0.0.59)** — `gromos.free_energy`: `LambdaSchedule(points,
   interaction_lambdas)` → one `Recipe` per λ, `run_windows(system, recipes, workdir, dry_run)` in
   process (kept windows `<workdir>/l0.250.npz` are read, not rerun), `collect(workdir)`,
-  `FreeEnergyWindows.ti()/.report()` (the `gromos_analysis::ti` estimator). TI only; BAR/MBAR stay
-  on the binary's `.tre`/`.trg` (`gromos.analysis`). `tests/test_free_energy.py` reproduces every
-  dH/dλ sample of the four `ch4_water_fep_l*` references. `system_builder.py` no longer has a second
-  `EnergyTimeseries`. User guide: `docs/user-guide/free-energy.md`.
+  `FreeEnergyWindows.ti()/.report()` (the `gromos_analysis::ti` estimator).
+  `tests/test_free_energy.py` reproduces every dH/dλ sample of the four `ch4_water_fep_l*`
+  references. `system_builder.py` no longer has a second `EnergyTimeseries`. User guide:
+  `docs/user-guide/free-energy.md`.
+- **BAR/MBAR of the windows (1.8, 0.0.62)** — a window run with `PRECALCLAM` keeps
+  `Simulation.precalclam` of every sampled frame (`Window.precalclam`, also in its `.npz`);
+  `FreeEnergyWindows.bar(skip)`/`.mbar(skip)` → `Estimate` (total and per neighbouring pair),
+  `.bar_data(skip)`: `ext_ti_ana`'s `@bar_data` energies, `bar` and `mbar` in Rust through
+  `_precalc_bar_data`/`_precalc_bar`/`_precalc_mbar`, no estimator arithmetic in Python. The grid
+  must hold every window's λ; `LAMBDAS` windows are refused. Tests: the nine `*precalc*`
+  references' rows frame by frame (rel 1e-9), `bar()`/`mbar()` = `analysis.bar`/`mbar` on the same
+  frames (1e-10), TI/BAR/MBAR agreement on nine CH4 windows.
 - Remaining P3 items:
   - [ ] `gromos.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
         `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.
@@ -95,7 +103,7 @@ python/gromos/__init__.py        — top-level API (the module contract; System/
 python/gromos/gromos.pyi         — type stubs (stubtest-clean; `_AlgorithmKind`/`_TermKind` literals)
 python/gromos/exceptions.py      — RecipeError / PlanError / MissingFeatureError / RunError
 python/gromos/timeseries.py      — EnergyTimeseries over run()'s array
-python/gromos/free_energy.py     — λ windows in process: LambdaSchedule, run_windows, TI
+python/gromos/free_energy.py     — λ windows in process: LambdaSchedule, run_windows, TI, BAR, MBAR
 python/gromos/tools/             — the gromos++ programs: run()/programs() + the typed prep chain
 python/gromos/analysis.py        — the old subprocess stub; replaced by gromos/analysis/ in 3.10 step 6
 python/gromos/system_builder.py  — P3 design sketch: ForceField→BuildingBlock→Topology algebra

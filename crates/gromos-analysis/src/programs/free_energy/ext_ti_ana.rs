@@ -35,6 +35,7 @@
 //!   can be given (library), gromos++ takes `time(NULL)`; an `@slj_scrf_file` whose last `END`
 //!   has no newline is read (gromos++ drops that block).
 
+use super::bar::BarFile;
 use super::common::{
     cpow, draw_index, get_value, get_values, population_variance, wall_clock_seed,
 };
@@ -272,6 +273,15 @@ struct Grid {
 }
 
 impl Grid {
+    fn new(n: usize, minlam: f64, maxlam: f64) -> Grid {
+        let step = (maxlam - minlam) / (n - 1) as f64;
+        Grid {
+            minlam,
+            step,
+            p_lam: (0..n).map(|p| p as f64 * step + minlam).collect(),
+        }
+    }
+
     /// gromos++ `getSingleLambda` (`ext_ti_ana.cc:1123-1166`). `checked` is false for lj, crf
     /// and dih, whose λ only enters as a factor and may leave the grid.
     fn single(&self, c: &[f64; 5], slam: f64, checked: bool) -> Result<Lam, String> {
@@ -409,6 +419,55 @@ impl Options {
     pub fn from_argv(argv: &[String]) -> Result<Options, String> {
         let args = Arguments::from_vec(argv.to_vec(), KNOWN, USAGE)?;
         Self::from_args(&args, true)
+    }
+
+    /// The options of a call on frames held in memory ([`analyse_frames`], [`bar_file`]): a
+    /// simulation at `slam` with `NLAM = nlam` and the identity λ-dependence of every term,
+    /// predicting for the same; `@bar_data` at `bar_data`; every other value gromos++'s
+    /// default. No files are named.
+    pub fn for_frames(
+        temp: f64,
+        nrlambdas: usize,
+        minlam: f64,
+        maxlam: f64,
+        slam: f64,
+        nlam: f64,
+        mut bar_data: Vec<f64>,
+    ) -> Result<Options, String> {
+        if nrlambdas < 2 {
+            return Err(format!(
+                "nrlambdas: {nrlambdas} precalculated lambdas leave no grid to interpolate on"
+            ));
+        }
+        bar_data.sort_by(|a, b| a.total_cmp(b));
+        Ok(Options {
+            en_files: Vec::new(),
+            fr_files: Vec::new(),
+            library: None,
+            temp,
+            nrlambdas,
+            minlam,
+            maxlam,
+            slam,
+            nlams: nlam,
+            nlamp: nlam,
+            coefficients_sim: [IDENTITY; 12],
+            coefficients: [IDENTITY; 12],
+            slj_scrf_file: None,
+            exclude: Exclude::default(),
+            countframes: false,
+            pmin: 0,
+            pmax: nrlambdas,
+            bootstrap: 0,
+            seed: None,
+            outdir: ".".into(),
+            lam_precision: 2,
+            verbose: false,
+            bar_data: Some(bar_data),
+            dhdl_data: None,
+            cpus: 1,
+            parity: Parity::default(),
+        })
     }
 
     /// `library_required = false` lets a library caller leave `@library` out for gromos-io's
@@ -736,14 +795,128 @@ fn read_slj_scrf(path: &str) -> Result<(SoftnessSets, SoftnessSets), String> {
 /// Read the trajectories and compute every prediction (`ext_ti_ana.cc:540-1092`), without
 /// writing anything.
 pub fn analyse(o: &Options) -> Result<Analysis, String> {
+    analyse_source(o, None)
+}
+
+/// [`analyse`] over frames held in memory instead of `@en_files`/`@fr_files` (`o.en_files`,
+/// `o.fr_files` and `o.library` are not read): what a run that kept its PRECALCLAM energies,
+/// e.g. a Python `Simulation`, gives the program.
+pub fn analyse_frames(o: &Options, frames: &[PrecalcFrame]) -> Result<Analysis, String> {
+    analyse_source(o, Some(frames))
+}
+
+/// One frame's extended-TI data: the `PRECALCLAM` rows of the energy trajectory and the
+/// `FREEPRECALCLAM` rows of the free-energy trajectory (one per grid λ, 11 or 12 columns), and
+/// their `ABDIH`/`FREEABDIH` rows (A, B).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrecalcFrame {
+    pub energies: Vec<Vec<f64>>,
+    pub derivatives: Vec<Vec<f64>>,
+    pub abdih: [f64; 2],
+    pub free_abdih: [f64; 2],
+}
+
+/// The tables of one frame, borrowed from where they are kept.
+struct FrameTables<'a> {
+    se: &'a [Vec<f64>],
+    sfe: &'a [Vec<f64>],
+    se_dih: [f64; 2],
+    sfe_dih: [f64; 2],
+}
+
+/// The `@en_files`/`@fr_files` frame stream.
+struct FileFrames {
+    en: EnergySequence,
+    fr: EnergySequence,
+    etrj: EnergyTraj,
+}
+
+impl FileFrames {
+    fn next(&mut self) -> Result<Option<FrameTables<'_>>, String> {
+        if !self.en.read_frame(&mut self.etrj)? || !self.fr.read_frame(&mut self.etrj)? {
+            return Ok(None);
+        }
+        let se = self
+            .etrj
+            .table("PRECALCLAM")
+            .ok_or("the library declares no PRECALCLAM subblock")?;
+        let sfe = self
+            .etrj
+            .table("FREEPRECALCLAM")
+            .ok_or("the library declares no FREEPRECALCLAM subblock")?;
+        Ok(Some(FrameTables {
+            se,
+            sfe,
+            se_dih: abdih(&self.etrj, "ABDIH")?,
+            sfe_dih: abdih(&self.etrj, "FREEABDIH")?,
+        }))
+    }
+}
+
+enum Frames<'a> {
+    Files(Box<FileFrames>),
+    Memory(std::slice::Iter<'a, PrecalcFrame>),
+}
+
+impl Frames<'_> {
+    fn next(&mut self) -> Result<Option<FrameTables<'_>>, String> {
+        match self {
+            Frames::Files(f) => f.next(),
+            Frames::Memory(it) => Ok(it.next().map(|f| FrameTables {
+                se: &f.energies,
+                sfe: &f.derivatives,
+                se_dih: f.abdih,
+                sfe_dih: f.free_abdih,
+            })),
+        }
+    }
+}
+
+/// `@bar_data` of one simulation from frames held in memory: `o.bar_data`'s λ, the energies
+/// [`analyse_frames`] gives them, as the [`BarFile`] `bar` would read from
+/// `bar_data_l<slam>.dat` (at full precision, the simulated λ `o.slam` unrounded). Every
+/// `o.bar_data` λ must be a grid point.
+pub fn bar_file(o: &Options, frames: &[PrecalcFrame]) -> Result<BarFile, String> {
+    let wanted = o.bar_data.as_deref().unwrap_or_default();
+    let grid = Grid::new(o.nrlambdas, o.minlam, o.maxlam);
+    let eps = lam_epsilon(o.lam_precision);
+    if let Some(&l) = wanted
+        .iter()
+        .find(|&&l| !grid.p_lam.iter().any(|&p| (l - p).abs() < eps))
+    {
+        return Err(format!(
+            "lambda {} is not a point of the PRECALCLAM grid ({} points on [{}, {}]): BAR and \
+             MBAR need the energies at every simulated lambda",
+            g6(l),
+            o.nrlambdas,
+            g6(o.minlam),
+            g6(o.maxlam)
+        ));
+    }
+    let a = analyse_frames(o, frames)?;
+    let b = a
+        .predictions
+        .into_iter()
+        .next()
+        .and_then(|p| p.bar)
+        .ok_or("bar_file: Options::bar_data is not set")?;
+    Ok(BarFile {
+        slam: o.slam,
+        plam: b.plam,
+        e_s: b.e_s,
+        e_p: b.e_p,
+    })
+}
+
+/// `10^-(lam_precision + 2)`: how close a `@bar_data`/`@dHdl_data` λ must be to its grid point.
+fn lam_epsilon(lam_precision: usize) -> f64 {
+    cpow(10.0, -((lam_precision + 2) as f64))
+}
+
+fn analyse_source(o: &Options, frames: Option<&[PrecalcFrame]>) -> Result<Analysis, String> {
     let n = o.nrlambdas;
-    let step = (o.maxlam - o.minlam) / (n - 1) as f64;
-    let grid = Grid {
-        minlam: o.minlam,
-        step,
-        p_lam: (0..n).map(|p| p as f64 * step + o.minlam).collect(),
-    };
-    let lam_epsilon = cpow(10.0, -((o.lam_precision + 2) as f64));
+    let grid = Grid::new(n, o.minlam, o.maxlam);
+    let lam_epsilon = lam_epsilon(o.lam_precision);
     // @bar_data / @dHdl_data λ → grid index; every value must match one grid point
     let index_of = |vals: &Option<Vec<f64>>, what: &str| -> Result<Vec<Option<usize>>, String> {
         let mut idx = vec![None; n];
@@ -811,17 +984,28 @@ pub fn analyse(o: &Options) -> Result<Analysis, String> {
         .collect::<Result<_, _>>()?;
 
     let kbt = crate::gromospp_kb_warn() * o.temp;
-    let lib_text = match &o.library {
-        Some(path) => std::io::read_to_string(
-            gromos_io::gz::open_text(path)
-                .map_err(|_| format!("failed to open library file {path}"))?,
-        )
-        .map_err(|e| format!("{path}: {e}"))?,
-        None => OFFICIAL_LIBRARY.to_string(),
+    let mut source = match frames {
+        Some(f) => Frames::Memory(f.iter()),
+        None => {
+            let lib_text = match &o.library {
+                Some(path) => std::io::read_to_string(
+                    gromos_io::gz::open_text(path)
+                        .map_err(|_| format!("failed to open library file {path}"))?,
+                )
+                .map_err(|e| format!("{path}: {e}"))?,
+                None => OFFICIAL_LIBRARY.to_string(),
+            };
+            let lib_name = o.library.as_deref().unwrap_or("<built-in library>");
+            let mut etrj =
+                EnergyTraj::from_library(&lib_text).map_err(|e| format!("{lib_name}: {e}"))?;
+            etrj.add_constant("MASS", 0.0);
+            Frames::Files(Box::new(FileFrames {
+                en: EnergySequence::new(o.en_files.clone(), "ENERTRJ", lib_name),
+                fr: EnergySequence::new(o.fr_files.clone(), "FRENERTRJ", lib_name),
+                etrj,
+            }))
+        },
     };
-    let lib_name = o.library.as_deref().unwrap_or("<built-in library>");
-    let mut etrj = EnergyTraj::from_library(&lib_text).map_err(|e| format!("{lib_name}: {e}"))?;
-    etrj.add_constant("MASS", 0.0);
 
     let nr_plam = o.pmax - o.pmin;
     let (ni, nj) = (slj.len(), scrf.len());
@@ -842,23 +1026,18 @@ pub fn analyse(o: &Options) -> Result<Analysis, String> {
     let mut e_bar: Vec<Vec<f64>> = vec![Vec::new(); combos * nr_bar];
     let mut e_dhdl: Vec<Vec<f64>> = vec![Vec::new(); combos * nr_dhdl];
 
-    let mut en = EnergySequence::new(o.en_files.clone(), "ENERTRJ", lib_name);
-    let mut fr = EnergySequence::new(o.fr_files.clone(), "FRENERTRJ", lib_name);
     let ex = o.exclude;
     let r = &reference;
     let mut n_frames = 0usize;
     let mut columns: Option<(usize, usize, usize)> = None;
-    loop {
-        if !en.read_frame(&mut etrj)? || !fr.read_frame(&mut etrj)? {
-            break;
-        }
+    while let Some(FrameTables {
+        se,
+        sfe,
+        se_dih,
+        sfe_dih,
+    }) = source.next()?
+    {
         n_frames += 1;
-        let se = etrj
-            .table("PRECALCLAM")
-            .ok_or("the library declares no PRECALCLAM subblock")?;
-        let sfe = etrj
-            .table("FREEPRECALCLAM")
-            .ok_or("the library declares no FREEPRECALCLAM subblock")?;
         if se.len() != n {
             return Err(format!(
                 "Expected {n} precalculated values but found {} in the energy trajectory\n",
@@ -889,9 +1068,6 @@ pub fn analyse(o: &Options) -> Result<Analysis, String> {
                 c
             },
         };
-        let se_dih = abdih(&etrj, "ABDIH")?;
-        let sfe_dih = abdih(&etrj, "FREEABDIH")?;
-
         // the reference energy, in gromos++'s term order (ext_ti_ana.cc:762-784)
         let pow1_rlj = cpow(1.0 - r[LJ].lam, o.nlams);
         let pow_rlj = cpow(r[LJ].lam, o.nlams);
@@ -997,7 +1173,10 @@ pub fn analyse(o: &Options) -> Result<Analysis, String> {
         }
     }
     if n_frames == 0 {
-        return Err("no frames read from @en_files/@fr_files".into());
+        return Err(match frames {
+            None => "no frames read from @en_files/@fr_files".into(),
+            Some(_) => "no frames".into(),
+        });
     }
     if o.cpus != 1 {
         return Err(format!(
@@ -1225,4 +1404,113 @@ pub fn write_files(o: &Options, a: &Analysis) -> Result<Vec<String>, String> {
         put(file_name(o, "predicted", pr.labels), predicted_text(o, pr))?;
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn data(name: &str) -> String {
+        format!(
+            "{}/tests/data/ext_ti_ana/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    }
+
+    /// The five-window CH4 chain's λ = 0.25 window, with `@bar_data` at the five window λ.
+    fn window_options() -> Options {
+        let argv: Vec<String> = [
+            "ext_ti_ana",
+            "@en_files",
+            &data("windows/ch4_l0.25.tre"),
+            "@fr_files",
+            &data("windows/ch4_l0.25.trg"),
+            "@library",
+            &data("ene_ana.md++.lib"),
+            "@temp",
+            "300",
+            "@nrlambdas",
+            "21",
+            "@minlam",
+            "0",
+            "@maxlam",
+            "1",
+            "@slam",
+            "0.25",
+            "@NLAMs",
+            "1",
+            "@bar_data",
+            "0",
+            "0.25",
+            "0.5",
+            "0.75",
+            "1",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let argv = gromos_io::normalize(argv).unwrap();
+        Options::from_argv(&argv).unwrap()
+    }
+
+    fn frames_of(o: &Options) -> Vec<PrecalcFrame> {
+        let lib = std::fs::read_to_string(o.library.as_ref().unwrap()).unwrap();
+        let mut f = FileFrames {
+            en: EnergySequence::new(o.en_files.clone(), "ENERTRJ", "lib"),
+            fr: EnergySequence::new(o.fr_files.clone(), "FRENERTRJ", "lib"),
+            etrj: EnergyTraj::from_library(&lib).unwrap(),
+        };
+        f.etrj.add_constant("MASS", 0.0);
+        let mut out = Vec::new();
+        while let Some(t) = f.next().unwrap() {
+            out.push(PrecalcFrame {
+                energies: t.se.to_vec(),
+                derivatives: t.sfe.to_vec(),
+                abdih: t.se_dih,
+                free_abdih: t.sfe_dih,
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn frames_in_memory_give_what_the_files_give() {
+        let o = window_options();
+        let frames = frames_of(&o);
+        assert_eq!(frames.len(), 20);
+        let from_files = analyse(&o).unwrap();
+        assert_eq!(analyse_frames(&o, &frames).unwrap(), from_files);
+
+        // the same window through `for_frames`: gromos++'s defaults, no files
+        let m = Options::for_frames(
+            300.0,
+            21,
+            0.0,
+            1.0,
+            0.25,
+            1.0,
+            vec![1.0, 0.0, 0.5, 0.25, 0.75],
+        )
+        .unwrap();
+        let b = bar_file(&m, &frames).unwrap();
+        let expect = from_files.predictions[0].bar.clone().unwrap();
+        assert_eq!(b.slam, 0.25);
+        assert_eq!(b.plam, expect.plam);
+        assert_eq!(b.e_s, expect.e_s);
+        assert_eq!(b.e_p, expect.e_p);
+    }
+
+    #[test]
+    fn bar_file_needs_every_lambda_on_the_grid() {
+        let frames = frames_of(&window_options());
+        let m = Options::for_frames(300.0, 21, 0.0, 1.0, 0.25, 1.0, vec![0.25, 0.33]).unwrap();
+        let e = bar_file(&m, &frames).unwrap_err();
+        assert!(
+            e.contains("0.33 is not a point of the PRECALCLAM grid"),
+            "{e}"
+        );
+        let ok = Options::for_frames(300.0, 21, 0.0, 1.0, 0.25, 1.0, vec![0.25, 0.3]).unwrap();
+        assert!(analyse_frames(&ok, &[]).unwrap_err().contains("no frames"));
+        assert!(Options::for_frames(300.0, 1, 0.0, 1.0, 0.25, 1.0, vec![]).is_err());
+    }
 }

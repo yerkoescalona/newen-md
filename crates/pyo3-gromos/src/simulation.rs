@@ -26,7 +26,7 @@
 //! `posresspec=`/`refpos=`/`ml_*=` keyword arguments and `Simulation.from_sequence` — still
 //! work for one deprecation cycle, warn, and are translated into a recipe.
 
-use numpy::PyArray2;
+use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 
 use gromos_core::{
@@ -670,6 +670,46 @@ impl PySimulation {
         d.set_item("distanceres", e.distanceres_total)?;
         d.set_item("eds", e.eds_vr)?;
         Ok(d)
+    }
+
+    /// The extended-TI (`PRECALCLAM`) data of the last step, `None` when the recipe has none:
+    /// `lambdas` (the grid, N), `energies` and `derivatives` (N × 12, the `.tre`'s and the
+    /// `.trg`'s `# precalclam` rows: A/B LJ, A/B CRF, then the kinetic, bond, angle, improper,
+    /// distance-, angle-, dihedral-restraint and distance-field terms), `abdih` and
+    /// `free_abdih` (A, B: the `# ABdih` rows). Computed on the steps NTWG divides only.
+    #[getter]
+    fn precalclam<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+        let Some(grid) = self.topology.precalc_lambdas else {
+            return Ok(None);
+        };
+        let state = self.configuration.old();
+        let (e, d) = (
+            &state.energies.precalc,
+            &state.perturbed_energy_derivatives.precalc,
+        );
+        let n = e.nr_lambdas();
+        let rows = |p: &gromos_core::PrecalcEnergies| -> Vec<Vec<f64>> {
+            (0..n).map(|k| p.row(k).to_vec()).collect()
+        };
+        let out = pyo3::types::PyDict::new_bound(py);
+        out.set_item(
+            "lambdas",
+            PyArray1::from_vec_bound(py, (0..n).map(|k| grid.lambda(k)).collect()),
+        )?;
+        out.set_item("energies", PyArray2::from_vec2_bound(py, &rows(e))?)?;
+        out.set_item("derivatives", PyArray2::from_vec2_bound(py, &rows(d))?)?;
+        out.set_item(
+            "abdih",
+            PyArray1::from_vec_bound(py, vec![e.a_dihedral, e.b_dihedral]),
+        )?;
+        out.set_item(
+            "free_abdih",
+            PyArray1::from_vec_bound(py, vec![d.a_dihedral, d.b_dihedral]),
+        )?;
+        Ok(Some(out))
     }
 
     /// EDS reference-state energy V_R (kJ/mol) at the last step (`.tre` slot 35, part of

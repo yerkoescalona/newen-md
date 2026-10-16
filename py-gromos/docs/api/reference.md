@@ -285,6 +285,7 @@ ts.plot("bond", "angle")
 | `term_energies` | `dict[str, float]` | Energy of each additive term at the last step, keyed by registry name (`xtb`, `xtb:1` for a repeated kind); their sum is what the terms add to `total_energy` |
 | `dhdl` | `float` | ∂H/∂λ at the last step (kJ/mol) — the TI integrand, the whole derivative (the `.trg`'s first value); 0 without a perturbation |
 | `dhdl_terms` | `dict[str, float]` | ∂H/∂λ split: `lj`, `crf`, `bonded`, `kinetic`, `constraints`, `distanceres` |
+| `precalclam` | `dict[str, ndarray]` or `None` | Extended TI (`PRECALCLAM`) at the last step: `lambdas` (the grid), `energies` and `derivatives` (N × 12, the `.tre`'s and `.trg`'s `# precalclam` rows), `abdih`, `free_abdih` (A, B); computed on NTWG steps only; `None` without `PRECALCLAM` |
 | `recipe` | `Recipe` | The effective recipe the engine ran (`recipe_toml`: as TOML) |
 | `plan` | `Plan` | The plan the engine instantiated, a frozen snapshot (`plan_json`: as JSON) |
 | `diagnostics` | `list[str]` | Absent optional blocks (and what that means), passed-through blocks |
@@ -434,6 +435,8 @@ gromos.timeseries.config.plot_backend = "matplotlib"     # or "plotly"
 from gromos.free_energy import LambdaSchedule, run_windows, collect
 windows = run_windows(system, LambdaSchedule([0, 0.5, 1]).recipes(base), workdir="ti")
 dg, error = windows.ti(skip=2)
+dg, error = windows.bar(skip=2)    # with PRECALCLAM on a grid holding every window's λ
+dg, error = windows.mbar(skip=2)
 ```
 
 | Name | Description |
@@ -441,7 +444,9 @@ dg, error = windows.ti(skip=2)
 | `LambdaSchedule(points, interaction_lambdas=None)` | `.recipes(base)`: one recipe per λ (`LAMBDAS` rows optional); `.names` |
 | `run_windows(system, recipes, *, workdir=None, dry_run=False)` | Runs each window in process → `FreeEnergyWindows`; kept windows (`<workdir>/<name>.npz`) are read, not rerun |
 | `collect(workdir)` | The windows kept in `workdir` |
-| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`) |
+| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; `.bar(skip, temperature=None)`, `.mbar(skip, temperature=None)` → `Estimate`; `.bar_data(skip)` → the per-frame energies both use; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`, `.precalclam`) |
+| `Estimate` | `.method` (`"BAR"`, `"MBAR"`), `.lambdas`, `.dg`, `.error` (first → last window, kJ/mol), `.steps` (`(ΔG, error)` per neighbouring pair); unpacks as `dg, error` |
+| `Precalclam` | A window's `PRECALCLAM` frames (`.energies`, `.derivatives`, `.abdih`, `.free_abdih`) with `.grid`, `.nlam`, `.temperature` |
 
 See the user guide page *Free-energy windows*.
 

@@ -1,14 +1,14 @@
 # Free-energy windows
 
-A free-energy difference by thermodynamic integration (TI) needs the same perturbed run at
+A free-energy difference by thermodynamic integration (TI), BAR or MBAR needs the same perturbed run at
 several values of λ, the coupling parameter between state A (λ = 0) and state B (λ = 1):
 
 $$
 \Delta G_{A \to B} = \int_0^1 \left\langle \frac{\partial H}{\partial \lambda} \right\rangle_\lambda d\lambda
 $$
 
-`gromos.free_energy` builds those runs from one recipe, runs them in process and integrates
-the result. It adds no physics: each window is an ordinary `Simulation`, and dH/dλ is the
+`gromos.free_energy` builds those runs from one recipe, runs them in process and estimates
+ΔG from them. It adds no physics: each window is an ordinary `Simulation`, and dH/dλ is the
 value the engine writes first in each `.trg` frame (`Simulation.dhdl`, the `dhdl` column of
 `Simulation.run()`).
 
@@ -60,13 +60,49 @@ print(windows.report(skip=2))
   from the block-averaging error of each window. It is the estimator of
   `gromos.analysis.ti_trapezoid`, which reads `.trg` files instead.
 
-BAR and MBAR need the energies at the other λ values (`PRECALCLAM`), which the `md` binary
-writes into its `.tre`/`.trg`: `gromos.analysis.ext_ti_ana`, `bar` and `mbar` read those files
-(`scripts/ti_ch4.py --estimator bar|mbar`).
+## BAR and MBAR
+
+Bennett's acceptance ratio and MBAR need each frame's energy at the other windows' λ as well.
+The engine computes them with extended TI (`PRECALCLAM`): on every NTWG step, the energies of
+every perturbed term at `nr_lambdas` λ points from `min_lambda` to `max_lambda`. Choose the grid
+so that it holds every window's λ, and sample energies and dH/dλ together (NTWE = NTWG):
+
+```python
+base = base.update(
+    outputs={"ntwg": 5, "energy_every": 5},
+    perturbation={"precalclam": {"nr_lambdas": 5, "min_lambda": 0.0, "max_lambda": 1.0}},
+)
+windows = run_windows(system, LambdaSchedule([0.0, 0.25, 0.5, 0.75, 1.0]).recipes(base),
+                      workdir="fep_ch4")
+bar = windows.bar(skip=2)            # Estimate: .dg, .error, .steps
+dg, error = windows.mbar(skip=2)
+for (lam_i, lam_j), (step, step_error) in zip(zip(bar.lambdas, bar.lambdas[1:]), bar.steps):
+    print(f"{lam_i:.2f} → {lam_j:.2f}: {step:8.3f} ± {step_error:.3f} kJ/mol")
+```
+
+- Each window keeps `Simulation.precalclam` of every sampled frame (`Window.precalclam`, and in
+  its `.npz`, so `collect()` gives windows BAR and MBAR still work on).
+- `bar(skip, temperature=None)` and `mbar(skip, temperature=None)` drop the first `skip` frames
+  of each window, as `ti(skip)` does. The temperature is the windows' first bath unless given.
+- The energy of a frame at λ is what `ext_ti_ana @bar_data` computes from the same rows
+  (`windows.bar_data(skip)` returns them), and the estimators are `gromos.analysis.bar` (the
+  corrected analytical error, with the statistical inefficiency of each side) and
+  `gromos.analysis.mbar` (the asymptotic error, which assumes uncorrelated frames and so comes
+  out smaller than BAR's on frames a few steps apart). No estimator arithmetic is done in Python.
+- Windows run with `LAMBDAS` rows (individual λ per interaction) are refused for now.
+
+The `md` binary writes the same data into its `.tre`/`.trg`; `gromos.analysis.ext_ti_ana`,
+`bar` and `mbar` read those files (`scripts/ti_ch4.py --estimator bar|mbar`).
 
 ## Checked against gromosXX
 
 `tests/test_free_energy.py` runs the CH4 → dummy windows at λ = 0, 0.25, 0.5, 0.75 and 1
 (CH4 in 999 SPC, 10 steps) from Python: every dH/dλ sample agrees with gromosXX's `.trg` for the
 four windows that have a reference (relative 1e-6), and `ti()` equals `analysis.ti_trapezoid`
-on those `.trg` files.
+on those `.trg` files. Every `PRECALCLAM` reference (nine systems: CH4 and methanol in water,
+alanine dipeptide with bonded, SHAKE, distance-restraint, `LAMBDAS` and atom-pair
+perturbations) run as a window gives gromosXX's `# precalclam` and `# ABdih` rows of every
+frame, energies and derivatives (relative 1e-9, the printed precision). Nine CH4 windows on a
+nine-point grid (300 steps each) give `bar()` and `mbar()` equal to `analysis.bar` and
+`analysis.mbar` on the same frames (1e-10), and TI, BAR and MBAR within twice their combined
+errors of each other.

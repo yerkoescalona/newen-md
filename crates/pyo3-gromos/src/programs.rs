@@ -449,6 +449,17 @@ fn _bar(
         r.map(|r| (r, text.clone())).map_err(|e| (e, text))
     });
     let (r, stdout) = result.map_err(|(e, text)| program_error(py, e, text))?;
+    bar_result_dict(py, &r, stdout)
+}
+
+/// The dict `_bar` returns for a `bar::BarResult` (kJ/mol) and the table it printed.
+fn bar_result_dict<'py>(
+    py: Python<'py>,
+    r: &gromos_analysis::programs::bar::BarResult,
+    stdout: String,
+) -> PyResult<Bound<'py, PyDict>> {
+    use gromos_analysis::programs::bar;
+
     let d = PyDict::new_bound(py);
     let col = |f: fn(&bar::Interval) -> f64| r.intervals.iter().map(f).collect::<Vec<f64>>();
     d.set_item("lam_i", col(|i| i.lam_i))?;
@@ -518,7 +529,6 @@ fn _mbar<'py>(
     tolerance: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
     use gromos_analysis::programs::mbar;
-    use numpy::{PyArray1, PyArray2};
 
     let kbt = gromos_analysis::GROMOSPP_KB * temperature;
     let view = u_kn.as_array();
@@ -530,6 +540,17 @@ fn _mbar<'py>(
     let r = py
         .allow_threads(|| mbar::mbar(&rows, &n_k, max_iterations, tolerance))
         .map_err(|e| program_error(py, e, String::new()))?;
+    mbar_result_dict(py, &r, kbt)
+}
+
+/// The dict `_mbar` returns for an `mbar::MbarResult` (kT units) at `kbt`: kJ/mol.
+fn mbar_result_dict<'py>(
+    py: Python<'py>,
+    r: &gromos_analysis::programs::mbar::MbarResult,
+    kbt: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    use numpy::{PyArray1, PyArray2};
+
     let scale = |m: &[Vec<f64>]| -> Vec<Vec<f64>> {
         m.iter()
             .map(|r| r.iter().map(|x| x * kbt).collect())
@@ -546,6 +567,195 @@ fn _mbar<'py>(
     d.set_item("kT", kbt)?;
     d.set_item("self_consistent_iterations", r.self_consistent_iterations)?;
     d.set_item("newton_iterations", r.newton_iterations)?;
+    Ok(d)
+}
+
+/// One simulated λ's extended-TI frames, as `gromos.free_energy` passes them: a dict with
+/// `lam`, `energies` and `derivatives` (frames × grid λ × 12) and `abdih`, `free_abdih`
+/// (frames × 2) — `Simulation.precalclam` of every sampled step, stacked.
+#[derive(FromPyObject)]
+struct PrecalcWindow<'py> {
+    #[pyo3(item)]
+    lam: f64,
+    #[pyo3(item)]
+    energies: numpy::PyReadonlyArray3<'py, f64>,
+    #[pyo3(item)]
+    derivatives: numpy::PyReadonlyArray3<'py, f64>,
+    #[pyo3(item)]
+    abdih: numpy::PyReadonlyArray2<'py, f64>,
+    #[pyo3(item)]
+    free_abdih: numpy::PyReadonlyArray2<'py, f64>,
+}
+
+/// The frames of `w` after the first `skip`.
+fn precalc_frames(
+    w: &PrecalcWindow<'_>,
+    skip: usize,
+) -> PyResult<Vec<gromos_analysis::programs::ext_ti_ana::PrecalcFrame>> {
+    use gromos_analysis::programs::ext_ti_ana::PrecalcFrame;
+
+    let (e, d) = (w.energies.as_array(), w.derivatives.as_array());
+    let (a, fa) = (w.abdih.as_array(), w.free_abdih.as_array());
+    let n = e.shape()[0];
+    if d.shape()[0] != n || a.shape()[0] != n || fa.shape()[0] != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "lambda {}: energies, derivatives, abdih and free_abdih need one row per frame",
+            w.lam
+        )));
+    }
+    if a.shape()[1] != 2 || fa.shape()[1] != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "lambda {}: abdih and free_abdih need two columns (A, B)",
+            w.lam
+        )));
+    }
+    let table = |t: numpy::ndarray::ArrayView2<'_, f64>| -> Vec<Vec<f64>> {
+        t.outer_iter().map(|r| r.to_vec()).collect()
+    };
+    Ok((skip..n)
+        .map(|f| PrecalcFrame {
+            energies: table(e.index_axis(numpy::ndarray::Axis(0), f)),
+            derivatives: table(d.index_axis(numpy::ndarray::Axis(0), f)),
+            abdih: [a[[f, 0]], a[[f, 1]]],
+            free_abdih: [fa[[f, 0]], fa[[f, 1]]],
+        })
+        .collect())
+}
+
+/// `ext_ti_ana @bar_data` of every window at every window's λ, from frames held in memory
+/// (`ext_ti_ana::bar_file`): what `bar` and `mbar` read. `grid` is PRECALCLAM's
+/// `(NRLAM, MINLAM, MAXLAM)`, `nlam` the simulations' NLAM.
+fn precalc_bar_files(
+    py: Python<'_>,
+    windows: &[PrecalcWindow<'_>],
+    grid: (usize, f64, f64),
+    nlam: f64,
+    temperature: f64,
+    skip: usize,
+) -> PyResult<Vec<gromos_analysis::programs::bar::BarFile>> {
+    use gromos_analysis::programs::ext_ti_ana;
+
+    let lams: Vec<f64> = windows.iter().map(|w| w.lam).collect();
+    let frames = windows
+        .iter()
+        .map(|w| precalc_frames(w, skip))
+        .collect::<PyResult<Vec<_>>>()?;
+    py.allow_threads(|| {
+        lams.iter()
+            .zip(&frames)
+            .map(|(&lam, f)| {
+                let o = ext_ti_ana::Options::for_frames(
+                    temperature,
+                    grid.0,
+                    grid.1,
+                    grid.2,
+                    lam,
+                    nlam,
+                    lams.clone(),
+                )?;
+                ext_ti_ana::bar_file(&o, f).map_err(|e| format!("window lambda = {lam}: {e}"))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })
+    .map_err(|e| program_error(py, e, String::new()))
+}
+
+/// The per-frame energies BAR and MBAR use, from in-memory PRECALCLAM frames: per window
+/// `slam`, `plam` (the window λ), `e_s` (at `slam`) and `e_p` (at each `plam`), kJ/mol.
+#[pyfunction]
+#[pyo3(signature = (windows, grid, nlam, temperature, skip = 0))]
+fn _precalc_bar_data<'py>(
+    py: Python<'py>,
+    windows: Vec<PrecalcWindow<'py>>,
+    grid: (usize, f64, f64),
+    nlam: f64,
+    temperature: f64,
+    skip: usize,
+) -> PyResult<Bound<'py, PyList>> {
+    use numpy::{PyArray1, PyArray2};
+
+    let files = precalc_bar_files(py, &windows, grid, nlam, temperature, skip)?;
+    let out = PyList::empty_bound(py);
+    for f in &files {
+        let d = PyDict::new_bound(py);
+        d.set_item("slam", f.slam)?;
+        d.set_item("plam", PyArray1::from_slice_bound(py, &f.plam))?;
+        d.set_item("e_s", PyArray1::from_slice_bound(py, &f.e_s))?;
+        d.set_item(
+            "e_p",
+            PyArray2::from_vec2_bound(py, &f.e_p)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+        )?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
+/// `bar` (`gromos_analysis::programs::bar::bar`, corrected error) over in-memory PRECALCLAM
+/// frames: the dict `_bar` returns.
+#[pyfunction]
+#[pyo3(signature = (windows, grid, nlam, temperature, skip = 0, *, max_iterations = 500, convergence = 1e-5))]
+#[allow(clippy::too_many_arguments)]
+fn _precalc_bar<'py>(
+    py: Python<'py>,
+    windows: Vec<PrecalcWindow<'py>>,
+    grid: (usize, f64, f64),
+    nlam: f64,
+    temperature: f64,
+    skip: usize,
+    max_iterations: usize,
+    convergence: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    use gromos_analysis::programs::bar;
+
+    let files = precalc_bar_files(py, &windows, grid, nlam, temperature, skip)?;
+    let opts = bar::BarOptions {
+        temp: temperature,
+        max_iterations,
+        convergence,
+        bootstrap: 0,
+        seed: None,
+        printdist: None,
+        parity: Default::default(),
+    };
+    let result = py.allow_threads(|| {
+        let mut buf: Vec<u8> = Vec::new();
+        let r = bar::bar(&files, &opts, &mut buf);
+        (r, String::from_utf8_lossy(&buf).into_owned())
+    });
+    let r = result
+        .0
+        .map_err(|e| program_error(py, e, result.1.clone()))?;
+    bar_result_dict(py, &r, result.1)
+}
+
+/// MBAR (`gromos_analysis::programs::mbar`) over in-memory PRECALCLAM frames, every window's
+/// energies at every window's λ: the dict `_mbar` returns, plus `lambdas` (ascending).
+#[pyfunction]
+#[pyo3(signature = (windows, grid, nlam, temperature, skip = 0, *, max_iterations = 10000, tolerance = 1e-10))]
+#[allow(clippy::too_many_arguments)]
+fn _precalc_mbar<'py>(
+    py: Python<'py>,
+    windows: Vec<PrecalcWindow<'py>>,
+    grid: (usize, f64, f64),
+    nlam: f64,
+    temperature: f64,
+    skip: usize,
+    max_iterations: usize,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    use gromos_analysis::programs::mbar;
+
+    let files = precalc_bar_files(py, &windows, grid, nlam, temperature, skip)?;
+    let kbt = gromos_analysis::GROMOSPP_KB * temperature;
+    let (lam, r) = py
+        .allow_threads(|| -> Result<_, String> {
+            let (lam, u_kn, n_k) = mbar::reduced_potentials(&files, kbt)?;
+            Ok((lam, mbar::mbar(&u_kn, &n_k, max_iterations, tolerance)?))
+        })
+        .map_err(|e| program_error(py, e, String::new()))?;
+    let d = mbar_result_dict(py, &r, kbt)?;
+    d.set_item("lambdas", lam)?;
     Ok(d)
 }
 
@@ -615,6 +825,9 @@ pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_mbar, m)?)?;
     m.add_function(wrap_pyfunction!(_ti_trapezoid, m)?)?;
     m.add_function(wrap_pyfunction!(_ti_trapezoid_series, m)?)?;
+    m.add_function(wrap_pyfunction!(_precalc_bar_data, m)?)?;
+    m.add_function(wrap_pyfunction!(_precalc_bar, m)?)?;
+    m.add_function(wrap_pyfunction!(_precalc_mbar, m)?)?;
     m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;
