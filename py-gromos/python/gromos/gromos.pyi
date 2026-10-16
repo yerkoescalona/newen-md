@@ -776,6 +776,10 @@ class System:
     @property
     def configuration(self) -> Configuration: ...
     def write(self, path: str) -> None: ...
+    def __reduce__(self) -> tuple[Any, tuple[str, str]]:
+        """A `System.from_files` system pickles as `from_files` on its two (absolute) paths; one
+        built in memory raises `TypeError`."""
+        ...
     def __repr__(self) -> str: ...
 
 # Free functions
@@ -823,6 +827,39 @@ def _make_top(
     *, build: list[str], param: str, seq: list[str], solv: str | None = None
 ) -> Topology: ...
 def _check_top(topology: Topology) -> tuple[list[str], list[str], str]: ...
+def _make_pt_top_mutate(
+    topology: Topology,
+    atoms: str | list[int],
+    *,
+    charge_b: list[float] | None = None,
+    iac_b: list[int] | None = None,
+    mass_b: list[float] | None = None,
+    alpha_lj: float = 1.51,
+    alpha_crf: float = 0.5,
+    title: str | None = None,
+) -> tuple[str, list[tuple[int, float, float]]]:
+    """`make_pt_top` from `topology` to a copy with new state-B parameters on `atoms` (a gromos++
+    specifier or 0-based indices; `iac_b` 1-based): the `.ptp` text and each perturbed
+    molecule's (0-based index, Q_A, Q_B)."""
+    ...
+
+def _ptp_net_charge(topology: Topology, text: str) -> tuple[float, float]:
+    """The solute's net charge in A and B with the `.ptp` text merged into a copy of
+    `topology` (what `Topology.apply_perturbation` returns)."""
+    ...
+
+def _precalclam_longrange_warning(recipe: Recipe) -> str | None:
+    """The `PrecalclamLongRangeGaps` warning a run of `recipe` raises, or `None`
+    (`gromos.free_energy` warns once for a set of windows with it)."""
+    ...
+
+def _pt_top(
+    topology: Topology, text: str, *, first_atom: int = 0
+) -> tuple[Topology, list[tuple[int, float, float]]]:
+    """`pt_top`: `topology` in state B of the `.ptp` text, and each perturbed molecule's
+    (0-based index, Q_A, Q_B)."""
+    ...
+
 def _ext_ti_ana(argv: list[str], *, seed: int | None = None, write: bool = True) -> dict[str, Any]:
     """`ext_ti_ana` in process: the predictions as arrays and the files written;
     `gromos.analysis.ext_ti_ana` builds `argv` from keywords."""

@@ -77,7 +77,10 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   numbers within the last printed digit (byte-identical where they were made). `@epsRF 1` (SC) is
   refused: gromos++ aborts there. Library API: `pb::dgslv_fd` / `pb::solve_fd`, `pb::dgslv_fft` /
   `pb::solve_fft`, and the whole program as `programs::dgslv_pbsolv::evaluate` (bound in Python
-  as `gromos.analysis.dgslv_pbsolv`).
+  as `gromos.analysis.dgslv_pbsolv`). Step-4b gate cases (0.0.64): one Na⁺ and `ch4_water_fep`'s
+  CH4 with a unit charge in 999 SPC, LS and RF, 32³/50³ grids: stdout and every `DGRESULT`
+  byte-identical to gromos++ (`dgslv_pbsolv_unit_charges_in_spc_match_gromospp`); its constants
+  checked against gromos-core (porting.md).
 
 ## Shape — 26 of the 83 programs are library functions
 The programs converted so far follow gromos-tools: the body is

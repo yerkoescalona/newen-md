@@ -249,6 +249,102 @@ fn _check_top(topology: &PyTopology) -> (Vec<String>, Vec<String>, String) {
     (report.errors, report.warnings, report.text)
 }
 
+// ── Perturbation topologies (`gromos.free_energy.Perturbation`) ─────────────────────────────
+
+/// 0-based atom indices from a gromos++ atom specifier (`"1:1"`, `"1:CM"`) or a sequence of
+/// 0-based indices.
+fn atom_indices(topology: &PyTopology, atoms: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    if let Ok(spec) = atoms.extract::<String>() {
+        let sel = gromos_core::selection::AtomSelection::from_string(&spec, &topology.inner)
+            .map_err(|e| verb_err(format!("atoms {spec:?}: {e}")))?;
+        return Ok(sel.indices().to_vec());
+    }
+    atoms.extract::<Vec<usize>>().map_err(|_| {
+        PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "atoms: an atom specifier (str) or a sequence of 0-based atom indices",
+        )
+    })
+}
+
+fn molecule_charges(charges: Vec<(usize, gromos_core::NetCharge)>) -> Vec<(usize, f64, f64)> {
+    charges.into_iter().map(|(m, q)| (m, q.a, q.b)).collect()
+}
+
+/// `make_pt_top` from `topology` (state A) to its `make_pt_top::mutate`d copy (state B):
+/// returns `(ptp text, [(molecule, Q_A, Q_B)])`, molecules 0-based. `iac_b` is the topology
+/// file's (1-based) IAC.
+#[pyfunction]
+#[pyo3(signature = (topology, atoms, *, charge_b = None, iac_b = None, mass_b = None, alpha_lj = 1.51, alpha_crf = 0.5, title = None))]
+#[allow(clippy::too_many_arguments)]
+fn _make_pt_top_mutate(
+    topology: &PyTopology,
+    atoms: &Bound<'_, PyAny>,
+    charge_b: Option<Vec<f64>>,
+    iac_b: Option<Vec<usize>>,
+    mass_b: Option<Vec<f64>>,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    title: Option<&str>,
+) -> PyResult<(String, Vec<(usize, f64, f64)>)> {
+    use gromos_tools::programs::make_pt_top::{self, Mutation};
+    let atoms = atom_indices(topology, atoms)?;
+    let iac = iac_b
+        .map(|v| {
+            v.into_iter()
+                .map(|t| {
+                    t.checked_sub(1)
+                        .ok_or_else(|| verb_err("iac_b: IAC numbers start at 1".into()))
+                })
+                .collect::<PyResult<Vec<usize>>>()
+        })
+        .transpose()?;
+    let mutation = Mutation {
+        charge: charge_b.as_deref(),
+        iac: iac.as_deref(),
+        mass: mass_b.as_deref(),
+    };
+    let topo_b = make_pt_top::mutate(&topology.inner, &atoms, &mutation).map_err(verb_err)?;
+    let (text, charges) = make_pt_top::make_pt_top(
+        &topology.inner,
+        &topo_b,
+        alpha_lj,
+        alpha_crf,
+        title.unwrap_or("gromos.free_energy.Perturbation.mutate"),
+    )
+    .map_err(verb_err)?;
+    Ok((text, molecule_charges(charges)))
+}
+
+fn parse_ptp(text: &str) -> PyResult<gromos_io::ptp::PerturbedTopology> {
+    gromos_io::ptp::parse_pttopo(text).map_err(|e| verb_err(format!("perturbation topology: {e}")))
+}
+
+/// The solute's net charge in state A and B with the perturbation `text` merged into a copy of
+/// `topology`: what `Topology.apply_perturbation` returns.
+#[pyfunction]
+fn _ptp_net_charge(topology: &PyTopology, text: &str) -> PyResult<(f64, f64)> {
+    let pt = parse_ptp(text)?;
+    let mut topo = topology.inner.clone();
+    let q = topo.apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
+    Ok((q.a, q.b))
+}
+
+/// `pt_top`: state B of `topology` with the perturbation `text` applied from atom
+/// `first_atom` (0-based), and `[(molecule, Q_A, Q_B)]`.
+#[pyfunction]
+#[pyo3(signature = (topology, text, *, first_atom = 0))]
+fn _pt_top(
+    topology: &PyTopology,
+    text: &str,
+    first_atom: usize,
+) -> PyResult<(PyTopology, Vec<(usize, f64, f64)>)> {
+    let pt = parse_ptp(text)?;
+    let (b, charges) =
+        gromos_tools::programs::pt_top::pt_top(topology.parsed.clone(), &pt, first_atom)
+            .map_err(verb_err)?;
+    Ok((PyTopology::from_parsed(b), molecule_charges(charges)))
+}
+
 // ── Analysis programs whose results are numbers ─────────────────────────────────────────────
 
 /// `dGslv_pbsolv` in process (`gromos_analysis::programs::dgslv_pbsolv::evaluate`, the code the
@@ -839,6 +935,9 @@ pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_pdb2g96, m)?)?;
     m.add_function(wrap_pyfunction!(_make_top, m)?)?;
     m.add_function(wrap_pyfunction!(_check_top, m)?)?;
+    m.add_function(wrap_pyfunction!(_make_pt_top_mutate, m)?)?;
+    m.add_function(wrap_pyfunction!(_ptp_net_charge, m)?)?;
+    m.add_function(wrap_pyfunction!(_pt_top, m)?)?;
     m.add("ProgramError", m.py().get_type_bound::<ProgramError>())?;
     Ok(())
 }

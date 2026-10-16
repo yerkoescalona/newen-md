@@ -33,6 +33,15 @@ from gromos import (
     Topology,
 )
 
+# Two slow-growth references take λ past 1 on purpose (`aladip_vacuum_fep_slowgrowth_cont` pins
+# gromosXX's unbounded λ; `aladip_vacuum_em_slowgrowth` runs all its 500 steps here, where `md`
+# stops the minimiser at 13): `Simulation` warns, and these tests compare the numbers instead.
+pytestmark = [
+    pytest.mark.filterwarnings(r"ignore:slow growth takes lambda out of \[0, 1\]"),
+    # ch4_water_fep_precalc_twinrange (NSNB 5, NTWG 2) pins the PRECALCLAM long-range quirk
+    pytest.mark.filterwarnings(r"ignore:PRECALCLAM with a twin-range pairlist"),
+]
+
 # Paths
 REPO_ROOT = Path(__file__).parent.parent.parent
 REF_DIR = REPO_ROOT / "crates" / "gromos-md" / "tests" / "gromosXX_references"

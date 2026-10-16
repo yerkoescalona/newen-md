@@ -33,8 +33,32 @@ net_a, net_b = Topology("ch4_spc.top").apply_perturbation("ch4_spc_dummy.ptp")  
 
 A perturbation that changes the net charge under a reaction field runs, but the `md` binary
 warns: the ΔG of a charge change carries a finite-size artefact and needs a correction
-(`gromos.analysis.dgslv_pbsolv`). `pt_top` and `make_pt_top` print each perturbed molecule's
-net charge in both states as well.
+(`gromos.analysis.dgslv_pbsolv`, below). `pt_top` and `make_pt_top` print each perturbed
+molecule's net charge in both states as well.
+
+### Making a perturbation: `Perturbation`
+
+`gromos.free_energy.Perturbation` holds a `.ptp` and the solute's net charge in its two states.
+`Perturbation.mutate` writes one with gromos-tools' `make_pt_top`, from a topology (state A) and
+a copy of it with new charges, types or masses on chosen atoms (state B); `from_ptp` reads a
+file:
+
+```python
+from gromos.free_energy import Perturbation
+
+plus = Perturbation.mutate(system, "1:1", charge_b=1.0, alpha_lj=0.0, alpha_crf=0.0)
+plus.net_charge_a, plus.net_charge_b, plus.delta_charge     # (0.0, 1.0, 1.0)
+dummy = Perturbation.mutate(system, "1:CM", iac_b=22)       # IAC as in the topology file
+kept = Perturbation.from_ptp("ch4_spc_dummy.ptp", system)   # charges need the topology
+```
+
+- `atoms` is a gromos++ atom specifier or a sequence of 0-based indices (solute atoms only);
+  `charge_b`, `iac_b` and `mass_b` take one value for every atom or one per atom, and keep state
+  A's when left out. `alpha_lj`/`alpha_crf` are the soft-core parameters (`@softpar`).
+- `plus.end_state(system, "B")` is the topology in state B (`pt_top`), e.g. for
+  `dgslv_pbsolv`; `plus.write(path)` writes the file; `str(plus)` is its text.
+- `run_windows(..., perturbation=plus)` gives it to every window as `inputs["pttopo"]`
+  (written to `<workdir>/perturbation.ptp`), so the recipes need no file.
 
 ## Windows
 
@@ -50,8 +74,8 @@ print(windows.report(skip=2))
 - `LambdaSchedule(points, interaction_lambdas=None)` sets `perturbation.lambda` of each window;
   `interaction_lambdas` are `LAMBDAS` rows (`{"kind": "vdw", "g1": 1, "g2": 2, "a": …, "e": …}`),
   the same individual λ_i(λ) in every window.
-- `run_windows(system, recipes, workdir=None, dry_run=False)` runs the windows one after the
-  other. A window samples dH/dλ every `outputs["ntwg"]` steps at the steps a `.trg` of the same
+- `run_windows(system, recipes, perturbation=None, workdir=None, dry_run=False, parallel=1)`
+  runs the windows one after the other, or `parallel` at a time in worker processes. A window samples dH/dλ every `outputs["ntwg"]` steps at the steps a `.trg` of the same
   run holds (0, NTWG, … below `control["steps"]`), so its series is the `.trg`'s first column.
   With a `workdir`, each window's energies are kept as `<workdir>/l0.250.npz`, and a window
   whose file exists is read instead of run again; `dry_run=True` returns the job list without
@@ -59,6 +83,18 @@ print(windows.report(skip=2))
 - `FreeEnergyWindows.ti(skip)` integrates ⟨∂H/∂λ⟩ with the trapezoid rule; its error comes
   from the block-averaging error of each window. It is the estimator of
   `gromos.analysis.ti_trapezoid`, which reads `.trg` files instead.
+
+### Parallel windows
+
+`parallel=N` runs N windows at a time, each in its own process (`multiprocessing` with *spawn*;
+a script needs the `if __name__ == "__main__":` guard). Not threads: a `Simulation` holds the
+interpreter while it runs and belongs to the thread that made it, so threads would take turns.
+A worker reads the system again with `System.from_files` on the same files (the only `System`
+that pickles; one built in memory is refused) and runs its window exactly as the sequential loop
+does, so the numbers are the same, bit for bit. Each worker uses the whole thread pool, as a
+sequential run does (the parallel kernels' sums depend on the number of threads), so processes
+pay off when one window does not keep the machine busy: small systems, or recipes with
+`execution.parallel = "serial"`.
 
 ## BAR and MBAR
 
@@ -93,6 +129,34 @@ for (lam_i, lam_j), (step, step_error) in zip(zip(bar.lambdas, bar.lambdas[1:]),
 
 The `md` binary writes the same data into its `.tre`/`.trg`; `gromos.analysis.ext_ti_ana`,
 `bar` and `mbar` read those files (`scripts/ti_ch4.py --estimator bar|mbar`).
+
+## A charge change and its finite-size correction
+
+Charging an atom under a reaction field gives a ΔG that depends on the box and the cut-off;
+`dGslv_pbsolv` computes the correction from Poisson–Boltzmann solves on the end states
+(CB/NPBC − LS/PBC, plus LS/PBC[FFT] − RF/PBC[FFT] for a reaction field):
+
+```python
+from gromos import analysis
+
+def pb(state):
+    path = f"state_{state}.top"
+    plus.end_state(system, state).write(path)
+    es = base.forcefield["electrostatics"]
+    return analysis.dgslv_pbsolv(
+        topo=path, coord="ch4_spc.cnf", pbc="r", atoms="1:a", atoms_to_charge="1:a",
+        scheme="RF", eps_solv=66.6, eps_rf=es["epsilon_rf"], rcut=es["rf_cutoff"],
+        gridspacing=0.1, npbc_size=5.0, probe_iac=5,
+    )["documented_correction"]
+
+dg, error = windows.bar(skip=20)
+corrected = dg + pb("B") - pb("A")
+```
+
+`tests/test_free_energy_charge.py` does exactly this for CH4 → CH4⁺ in 999 SPC: seven windows
+(600 steps each, four worker processes), TI, BAR and MBAR within twice their combined errors
+(about −242 kJ/mol), and a correction of −77.98 kJ/mol whose parts agree with gromos++'s
+`dGslv_pbsolv` on the same state to 0.01 kJ/mol.
 
 ## Checked against gromosXX
 

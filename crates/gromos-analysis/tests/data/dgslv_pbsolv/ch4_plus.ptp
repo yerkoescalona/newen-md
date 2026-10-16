@@ -1,0 +1,54 @@
+TITLE
+gromos.free_energy.Perturbation.mutate
+END
+PERTATOMPARAM
+# number of perturbed atoms
+    1
+#  NR  RES  NAME IAC(A)  MASS(A) CHARGE(A) IAC(B)  MASS(B) CHARGE(B)       ALJ       ACRF
+    1    1    CM  17   16.04300    0.00000  17   16.04300    1.00000       0.00       0.00
+END
+PERTATOMPAIR
+# number of perturbed atom pairs
+0
+#    i     j  i(A)  i(B)
+END
+PERTBONDSTRETCH
+# number of perturbed bonds
+0
+#    i     j t(A) t(B)
+END
+PERTBONDSTRETCHH
+# number of perturbed bonds
+0
+#    i     j t(A) t(B)
+END
+PERTBONDANGLE
+# number of perturbed bond angles
+0
+#    i     j     k t(A) t(B)
+END
+PERTBONDANGLEH
+# number of perturbed bond angles
+0
+#    i     j     k t(A) t(B)
+END
+PERTIMPROPERDIH
+# number of perturbed improper dihedrals
+0
+#    i     j     k     l t(A) t(B)
+END
+PERTIMPROPERDIHH
+# number of perturbed improper dihedrals
+0
+#    i     j     k     l t(A) t(B)
+END
+PERTPROPERDIH
+# number of perturbed dihedrals
+0
+#    i     j     k     l t(A) t(B)
+END
+PERTPROPERDIHH
+# number of perturbed dihedrals
+0
+#    i     j     k     l t(A) t(B)
+END

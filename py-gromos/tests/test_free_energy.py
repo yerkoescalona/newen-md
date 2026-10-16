@@ -9,6 +9,7 @@ gromos++'s, the numbers ``bar`` returns are the ones it prints, and ``mbar`` on 
 patched gromos++); ``parity="gromospp"`` prints gromos++ 9cd9f6b3's (``chain/``).
 """
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -282,6 +283,24 @@ def test_lambda_schedule_sets_lambda_and_the_interaction_lambdas():
     assert all(w.energies is None and w.recipe is not None for w in jobs)
 
 
+@pytest.mark.skipif(not REF.exists(), reason="reference systems not in the checkout")
+def test_slow_growth_past_the_end_state_warns_and_runs():
+    import warnings
+
+    from gromos import Simulation, System
+
+    system = System.from_files(str(SHARED / "ch4_spc.top"), str(SHARED / "ch4_spc.cnf"))
+    # λ 0.9 + 10/ps · 0.002 ps per step: 1.0 after step 4, 1.02 after step 5
+    sim = Simulation(system, _ch4_base().update(perturbation={"lambda": 0.9, "dlamt": 10.0}))
+    with pytest.warns(UserWarning, match=r"after step 5: lambda = 1\.020000") as record:
+        sim.run(9)
+    assert len(record) == 1, "reported once, when λ leaves [0, 1]"
+    # ending exactly on λ = 1 is inside; the pytest configuration makes any warning an error
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        Simulation(system, _ch4_base().update(perturbation={"lambda": 0.8, "dlamt": 10.0})).run(9)
+
+
 def test_apply_perturbation_returns_the_net_charges(tmp_path):
     from gromos import Topology
 
@@ -337,7 +356,9 @@ def test_window_precalclam_frames_equal_gromosxx(name):
         str((d / inputs["topology"]).resolve()), str((d / inputs["configuration"]).resolve())
     )
     recipe = _recipe_for(d)
-    (w,) = run_windows(system, [recipe])
+    gaps = name == "ch4_water_fep_precalc_twinrange"  # NSNB 5, NTWG 2: the long-range warning
+    with pytest.warns(UserWarning, match="twin-range") if gaps else contextlib.nullcontext():
+        (w,) = run_windows(system, [recipe])
     pc = w.precalclam
     assert pc is not None
     grid = recipe.perturbation["precalclam"]
@@ -463,6 +484,46 @@ def test_ti_bar_and_mbar_agree_within_their_errors(ch4_fep_windows):
         assert np.isfinite(ga) and ea > 0, a
         for b, (gb, eb) in estimates.items():
             assert abs(ga - gb) <= 2 * np.hypot(ea, eb), f"{a} {ga} ± {ea} vs {b} {gb} ± {eb}"
+
+
+@pytest.mark.skipif(not REF.exists(), reason="reference systems not in the checkout")
+def test_twin_range_precalclam_with_interleaved_output_warns_once():
+    """NSNB 5, NTWG 2: gromosXX's λ_k rows after a pairlist step that is not an output step
+    miss the long-range terms (reproduced); a run, the windows and BAR/MBAR say so once."""
+    import warnings
+
+    from gromos import Recipe, Simulation, System
+    from gromos.free_energy import LambdaSchedule, run_windows
+
+    name = "ch4_water_fep_precalc_twinrange"
+    base = (
+        Recipe.from_imd(str(REF / name / f"{name}.in"))
+        .with_inputs(pttopo=str(SHARED / "ch4_spc_dummy.ptp"))
+        .update(control={"steps": 10})
+    )
+    system = System.from_files(str(SHARED / "ch4_spc.top"), str(SHARED / "ch4_spc.cnf"))
+    match = r"NSNB.*NTWG.*long-range contribution.*BAR and MBAR.*biased"
+    with pytest.warns(UserWarning, match=match) as record:
+        Simulation(system, base)
+    assert len(record) == 1
+    assert "every 5 steps (NSNB)" in str(record[0].message)
+    assert "every 2 steps (NTWG)" in str(record[0].message)
+
+    recipes = LambdaSchedule([0.0, 1.0]).recipes(base)
+    with pytest.warns(UserWarning, match=match) as record:
+        windows = run_windows(system, recipes)
+    assert len(record) == 1, "once for all windows"
+    for estimator in (windows.bar, windows.mbar):
+        with pytest.warns(UserWarning, match=match) as record:
+            estimator(temperature=300.0)
+        assert len(record) == 1, estimator.__name__
+
+    # NTWG a multiple of NSNB: every λ_k row is complete, nothing to say
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        whole = [r.update(outputs={"ntwg": 10, "energy_every": 10}) for r in recipes]
+        run_windows(system, whole, dry_run=True)
+        Simulation(system, whole[0])
 
 
 def test_bar_needs_precalclam_windows():

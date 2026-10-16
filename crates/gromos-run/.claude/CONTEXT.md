@@ -31,7 +31,11 @@ RunError                                                                 -> ever
   `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
   DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)
   call it after every step, `start`'s included. `check_slow_growth` (`plan.rs`) refuses gromosXX's
-  locks; DLAMT < 0 is refused whatever NTG says.
+  locks; DLAMT < 0 is refused whatever NTG says. Since 0.0.64 `advance_lambda` returns the new
+  λ on the step that takes it out of [0, 1] and `prepare_system` notes
+  `PrepareNote::LambdaOutOfRange { lambda }` when a run starts outside it (a `PERTDATA` λ); `md`
+  warns and `Simulation` raises a Python `UserWarning`, both with `lambda_warning`'s text. λ stays
+  unbounded, as in gromosXX (never a refusal).
 - **A-EDS (1.8, 0.0.60):** `RunRecipe::aeds` (the `AEDS` block), `check_aeds` (refusals, called
   from `check_eds`), `EdsPlan::aeds` (FORM 1, s = 1, the search settings). `prepare_system` takes
   the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the

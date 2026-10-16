@@ -526,10 +526,16 @@ fn main() {
                      inappropriate)"
                 );
             },
+            PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg } => {
+                log::warn!("{}", gromos_run::precalclam_longrange_warning(*nsnb, *ntwg))
+            },
             PrepareNote::AedsSearchIgnored => println!(
                 "  WARNING: Initial settings for A-EDS parameter search simulation found but not \
                  read (NTIAEDSS = 1)"
             ),
+            PrepareNote::LambdaOutOfRange { lambda } => {
+                log::warn!("{}", gromos_run::lambda_warning(None, *lambda))
+            },
             PrepareNote::Validation { stage, report } => {
                 report.print();
                 if report.has_errors() {
@@ -1165,7 +1171,9 @@ fn main() {
         // Slow growth closes the step (gromosXX `Slow_Growth`, last in the sequence before the
         // energy totals; skipped on the step the minimiser stops at, whose sequence ends early).
         old_lambda = topo.lambda;
-        advance_lambda(&recipe, &mut topo);
+        if let Some(lambda) = advance_lambda(&recipe, &mut topo) {
+            log::warn!("{}", gromos_run::lambda_warning(Some(step), lambda));
+        }
 
         // Log progress
         if due(step, nstlog) {

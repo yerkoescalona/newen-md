@@ -216,6 +216,28 @@ fn apply_legacy_kwargs(
     Ok(())
 }
 
+/// λ outside [0, 1] as a Python `UserWarning` (`gromos_run::lambda_warning`).
+fn warn_lambda(py: Python<'_>, after_step: Option<usize>, lambda: f64) -> PyResult<()> {
+    warn_user(py, &gromos_run::lambda_warning(after_step, lambda))
+}
+
+fn warn_user(py: Python<'_>, text: &str) -> PyResult<()> {
+    PyErr::warn_bound(
+        py,
+        &py.get_type_bound::<pyo3::exceptions::PyUserWarning>(),
+        text,
+        1,
+    )
+}
+
+/// The `PrecalclamLongRangeGaps` warning a run of `recipe` raises, or `None`
+/// (`gromos.free_energy` warns once for a set of windows with it).
+#[pyfunction]
+fn _precalclam_longrange_warning(recipe: PyRef<PyRecipe>) -> Option<String> {
+    gromos_run::precalclam_longrange_gaps(&recipe.inner.to_imd())
+        .map(|(nsnb, ntwg)| gromos_run::precalclam_longrange_warning(nsnb, ntwg))
+}
+
 /// The one way a `Simulation` comes into being: prepare the system, build (or take) the
 /// plan, instantiate it, run `init` + step 0.
 fn build_from_recipe(
@@ -228,6 +250,19 @@ fn build_from_recipe(
     let (topo, physical_constants, coords) = parts.into_pieces();
     let prepared =
         prepare_system(&imd, topo, physical_constants, coords, &recipe.inputs).map_err(run_err)?;
+    for note in &prepared.notes {
+        match note {
+            gromos_run::PrepareNote::LambdaOutOfRange { lambda } => {
+                Python::with_gil(|py| warn_lambda(py, None, *lambda))?
+            },
+            gromos_run::PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg } => {
+                Python::with_gil(|py| {
+                    warn_user(py, &gromos_run::precalclam_longrange_warning(*nsnb, *ntwg))
+                })?
+            },
+            _ => {},
+        }
+    }
     let built = match plan {
         Some(plan) => build_sequence_from_plan(&recipe, plan, &prepared),
         None => build_sequence_from_recipe(&recipe, &prepared),
@@ -250,7 +285,9 @@ fn build_from_recipe(
 
     let mut sim_state = SimulationState::new(dt, recipe.control.steps);
     start(&mut md_sequence, &topo, &mut conf, &sim_state).map_err(run_err)?;
-    advance_lambda(&recipe, &mut topo);
+    if let Some(lambda) = advance_lambda(&recipe, &mut topo) {
+        Python::with_gil(|py| warn_lambda(py, Some(sim_state.step), lambda))?;
+    }
     sim_state.advance();
 
     Ok(PySimulation {
@@ -415,7 +452,7 @@ impl PySimulation {
     ///
     /// Example:
     ///     sim.step(1000)  # advance 1000 steps
-    fn step(&mut self, n_steps: usize) -> PyResult<()> {
+    fn step(&mut self, py: Python<'_>, n_steps: usize) -> PyResult<()> {
         for _ in 0..n_steps {
             self.md_sequence
                 .run_step(&self.topology, &mut self.configuration, &self.sim_state)
@@ -425,7 +462,9 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
-            advance_lambda(&self.recipe, &mut self.topology);
+            if let Some(lambda) = advance_lambda(&self.recipe, &mut self.topology) {
+                warn_lambda(py, Some(self.sim_state.step), lambda)?;
+            }
             self.sim_state.advance();
         }
         Ok(())
@@ -460,7 +499,9 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
-            advance_lambda(&self.recipe, &mut self.topology);
+            if let Some(lambda) = advance_lambda(&self.recipe, &mut self.topology) {
+                warn_lambda(py, Some(self.sim_state.step), lambda)?;
+            }
             self.sim_state.advance();
             if (i + 1) % ene_freq == 0 {
                 rows.push(self.energy_row());
@@ -896,5 +937,6 @@ impl PySimulation {
 /// Register simulation bindings in the Python module.
 pub fn register_simulation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimulation>()?;
+    m.add_function(wrap_pyfunction!(_precalclam_longrange_warning, m)?)?;
     Ok(())
 }

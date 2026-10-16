@@ -1186,6 +1186,47 @@ fn dgslv_pbsolv_matches_gromospp() {
     );
 }
 
+/// The two systems of the 1.8 step-4b gate, each with `@schemeELEC LS` and `RF`: one Na⁺
+/// (`na.top`, 54A8) and the CH4 of `ch4_water_fep` with a unit charge (`ch4q.top`, `pt_top`
+/// with `ch4_plus.ptp`), both at the CH4's place in its cubic box of 999 SPC; grids 32³ and 50³.
+#[test]
+fn dgslv_pbsolv_unit_charges_in_spc_match_gromospp() {
+    for (system, top) in [("na", "%DATA%/na.top"), ("ch4q", "%DATA%/ch4q.top")] {
+        let common = [
+            "@topo",
+            top,
+            "@coord",
+            "%SHARED%/ch4_spc.cnf",
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:a",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@probeIAC",
+            "5",
+        ];
+        let ls: Vec<&str> = common
+            .iter()
+            .copied()
+            .chain(["@schemeELEC", "LS"])
+            .collect();
+        dgslv_pbsolv_case(&format!("{system}_ls"), &ls);
+        let rf: Vec<&str> = common
+            .iter()
+            .copied()
+            .chain(["@schemeELEC", "RF", "@epsRF", "78.5", "@rcut", "1.4"])
+            .collect();
+        dgslv_pbsolv_case(&format!("{system}_rf"), &rf);
+    }
+}
+
 // ── ext_ti_ana → bar → ext_ti_merge (item 1.8): files and stdout byte for byte ─────────────
 // `@parity gromospp` against gromos++ 9cd9f6b3 (`A1`–`A4`, `chain`); the default (corrected)
 // against gromos++ 9cd9f6b3 + the D4/D5/D8 patches (`A2_fixed`, `chain_fixed`).

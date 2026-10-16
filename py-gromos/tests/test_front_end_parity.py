@@ -47,6 +47,13 @@ from gromos import (
     terms,
 )
 
+# the slow-growth references that take λ past 1 warn, and so does
+# ch4_water_fep_precalc_twinrange (see test_gromosXX_references.py)
+pytestmark = [
+    pytest.mark.filterwarnings(r"ignore:slow growth takes lambda out of \[0, 1\]"),
+    pytest.mark.filterwarnings(r"ignore:PRECALCLAM with a twin-range pairlist"),
+]
+
 
 def _load(system_name: str):
     system_dir = REF_DIR / system_name

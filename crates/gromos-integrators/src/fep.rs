@@ -1,33 +1,25 @@
-//! Free Energy Perturbation (FEP) module
+//! Free Energy Perturbation (FEP) data types
 //!
-//! Direct translation of GROMOS FEP capabilities from:
-//! - md++/src/algorithm/integration/slow_growth.cc
+//! [`LambdaController`] (the global λ a replica carries, `replica.rs`) and the dual-state
+//! [`PerturbedAtom`] parameters, from:
 //! - md++/src/topology/perturbed_atom.h
 //! - md++/src/interaction/nonbonded/interaction/perturbed_nonbonded_term.h
+//!
+//! What `md` and `gromos.Simulation` run lives elsewhere: slow growth (gromosXX
+//! `slow_growth.cc`) is `gromos_run::advance_lambda`, which leaves λ unbounded as gromosXX does
+//! (its caller warns when λ leaves [0, 1], no clamp); the individual λ of every
+//! interaction are `Topology::individual_lambdas` (gromos-core); the perturbed kernels are in
+//! gromos-forces. [`LambdaController::update`] clamps to [0, 1] and is not that path.
 //!
 //! # Overview
 //!
 //! Free energy perturbation allows calculation of free energy differences by
 //! gradually transforming one molecular state (A) into another (B) using a
-//! coupling parameter λ ∈ [0,1]:
+//! coupling parameter λ:
 //!
 //! - λ = 0: Pure state A
 //! - λ = 1: Pure state B
 //! - 0 < λ < 1: Hybrid state
-//!
-//! # Methods
-//!
-//! - **Thermodynamic Integration (TI)**: ΔG = ∫₀¹ ⟨∂H/∂λ⟩_λ dλ
-//! - **Slow Growth**: Continuous λ evolution, λ(t) = λ₀ + (dλ/dt)·t
-//! - **Staged Windows**: Multiple simulations at fixed λ values
-//!
-//! # Features
-//!
-//! - Dual-state topology (A/B parameters for each perturbed atom)
-//! - Lambda-dependent parameter interpolation
-//! - Soft-core potentials (prevent singularities)
-//! - Individual lambda values per interaction type
-//! - Energy group-specific scaling
 
 /// The global λ of a replica and its slow-growth rate.
 ///

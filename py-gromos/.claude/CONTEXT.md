@@ -92,6 +92,15 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   must hold every window's λ; `LAMBDAS` windows are refused. Tests: the nine `*precalc*`
   references' rows frame by frame (rel 1e-9), `bar()`/`mbar()` = `analysis.bar`/`mbar` on the same
   frames (1e-10), TI/BAR/MBAR agreement on nine CH4 windows.
+- **Charge changes end to end (1.8, 0.0.64)** — `Perturbation.mutate(system, atoms, charge_b=…,
+  iac_b=…, mass_b=…)` / `.from_ptp(path, topology)` (the `.ptp` text from gromos-tools'
+  `make_pt_top`, net charges as `Topology.apply_perturbation` gives them, `.end_state()` by
+  `pt_top`); `run_windows(..., perturbation=, parallel=N)`: N spawn worker processes (a
+  `Simulation` is unsendable and holds the GIL, so threads would not overlap), the same numbers
+  bit for bit; `FreeEnergyWindows.window_statistics(skip)`. `scripts/ti_ch4.py` runs gromos-rs
+  through the module and gromosXX on the same recipes' `.imd`. `tests/test_free_energy_charge.py`:
+  CH4 → CH4⁺ in 999 SPC, seven windows, TI/BAR/MBAR within 2σ, the `dGslv_pbsolv` correction on
+  the end states against gromos++ (0.01 kJ/mol).
 - Remaining P3 items:
   - [ ] `gromos.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
         `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.
@@ -103,7 +112,7 @@ python/gromos/__init__.py        — top-level API (the module contract; System/
 python/gromos/gromos.pyi         — type stubs (stubtest-clean; `_AlgorithmKind`/`_TermKind` literals)
 python/gromos/exceptions.py      — RecipeError / PlanError / MissingFeatureError / RunError
 python/gromos/timeseries.py      — EnergyTimeseries over run()'s array
-python/gromos/free_energy.py     — λ windows in process: LambdaSchedule, run_windows, TI, BAR, MBAR
+python/gromos/free_energy.py     — λ windows: Perturbation, LambdaSchedule, run_windows (parallel), TI, BAR, MBAR
 python/gromos/tools/             — the gromos++ programs: run()/programs() + the typed prep chain
 python/gromos/analysis.py        — the old subprocess stub; replaced by gromos/analysis/ in 3.10 step 6
 python/gromos/system_builder.py  — P3 design sketch: ForceField→BuildingBlock→Topology algebra

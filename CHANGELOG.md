@@ -5,6 +5,143 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.64] (2026-10-16)
+
+**A charge change from Python, end to end** (1.8 step 5 and the step-4b gate): a perturbation is
+made in Python by gromos-tools' `make_pt_top` (`Perturbation.mutate`), its λ windows run in
+worker processes, TI, BAR and MBAR agree, and `dGslv_pbsolv` on the end states gives the
+finite-size correction, matching gromos++ on the same state. Slow growth that takes λ out of
+[0, 1] now warns. No engine output changes; 116 references (115 pass, `aladip_gamd` ignored).
+
+### Added (1.8 step 5 — perturbations, parallel windows)
+
+- **`gromos.free_energy.Perturbation`**: `mutate(system, atoms, charge_b=, iac_b=, mass_b=,
+  alpha_lj=1.51, alpha_crf=0.5)` (state B = the topology with new charges, 1-based IACs or masses
+  on a gromos++ atom specifier or 0-based indices, one value or one per atom; the `.ptp` written
+  by `make_pt_top`), `from_ptp(path, topology=None)`; `.text`, `.net_charge_a`/`.net_charge_b`
+  (`Topology::apply_perturbation` on a copy: what `Topology.apply_perturbation` returns),
+  `.delta_charge`,
+  `.write(path)`, `.end_state(system, "A"|"B")` (`pt_top`). No perturbation logic in Python:
+  the private bindings `_make_pt_top_mutate`, `_ptp_net_charge`, `_pt_top`.
+- **Typed verbs** in gromos-tools: `make_pt_top::make_pt_top` (two topologies → `.ptp` text and
+  each perturbed molecule's net charge; `run` calls it), `make_pt_top::mutate` (+ `Mutation`:
+  refuses no atoms, solvent atoms, an atom twice, an IAC beyond the topology's types, a mass ≤ 0,
+  a value count that is neither one nor one per atom), `pt_top::pt_top` (state B of a topology;
+  `run` calls it). gromos-io: `ptp::parse_pttopo(&str)` (`read_pttopo` reads the file and calls
+  it) and `ptp::write_ptp(&mut dyn Write, …)` (`PtpWriter` delegates to it).
+- **`run_windows(..., perturbation=, parallel=N)`**: the perturbation is written to
+  `<workdir>/perturbation.ptp` (a temporary file without `workdir`) and given to every window as
+  `inputs["pttopo"]`; a recipe that names one already is refused. `parallel=N` runs N windows at
+  a time in *spawn* worker processes (`concurrent.futures.ProcessPoolExecutor`): `Simulation` is
+  `unsendable` and keeps the GIL while it runs, and `Algorithm` is not `Send`, so threads would
+  take turns. The worker rebuilds the system with `System.from_files` and runs the window as the
+  sequential loop does: the numbers are bit-identical (the parallel kernels' sums depend on the
+  thread count, which is the same in every process; `RAYON_NUM_THREADS` 1, 4 and 16 differ by up
+  to 2·10⁻⁹ kJ/mol on 60 steps of `ch4_water_fep`, 16 twice by 0).
+- **`System` pickles** when made by `System.from_files` (as `from_files` on its absolute paths;
+  the class is now `gromos.System` to pickle); one built in memory raises `TypeError`, and
+  `run_windows(parallel>1)` says so before starting workers.
+- `FreeEnergyWindows.window_statistics(skip)`: per window λ, ⟨∂H/∂λ⟩, its block-averaging error
+  and the sample count (what `report()` prints).
+- **`scripts/ti_ch4.py`** is a wrapper over the module: one `LambdaSchedule` over the reference
+  recipe, gromos-rs through `run_windows` (`--parallel` new; the other flags kept), gromosXX on
+  the same recipes written by `Recipe.to_imd`, its files through `gromos.analysis` as before.
+  Windows are kept per engine and kind (`<workdir>/<engine>/plain|precalclam<N>`). The table's
+  ⟨∂H/∂λ⟩ column is the `.trg` mean for every estimator (it was `ext_ti_ana`'s prediction at
+  the window's λ for BAR/MBAR). Same numbers on the 11-window, 1000-step demo (`--engine
+  gromos-rs`): TI −9.26 ± 0.49, BAR −10.30 ± 1.84, MBAR −9.96 ± 0.62 kJ/mol before and after
+  (MBAR −9.963150325264 → −9.963150325343, the energies now from memory instead of the
+  `.tre`'s printed digits); every window's mean identical. On 100 steps
+  both engines give the same ΔG to the printed digit (TI −5.49, BAR −23.05, MBAR −24.08).
+
+### Added (1.8 step 4b gate — `dGslv_pbsolv` on unit charges)
+
+- gromos++ oracle (`~/.cache/gromos-rs-item-1.8/pb_oracle/`, the patched build) on one Na⁺
+  (`na.top`, the LiveCoMS t_02 54A8 topology) and `ch4_water_fep`'s CH4 with a unit charge
+  (`ch4q.top`: `pt_top` with `ch4_plus.ptp`, written by `Perturbation.mutate`), both at the CH4's
+  place in its box of 999 SPC, `@schemeELEC LS` and `RF` (EPSRF 78.5, RCRF 1.4), grids 32³ and
+  50³: `tests/data/dgslv_pbsolv/{na,ch4q}_{ls,rf}.{stdout,log}` + README.
+  `dgslv_pbsolv_unit_charges_in_spc_match_gromospp`: stdout and every `DGRESULT` byte-identical;
+  the RF logs differ only in the sign of printed zeros (`-0.000`), which the test allows.
+  Corrections (CB/NPBC − LS/PBC [+ LS/PBC FFT − RF/PBC FFT]): Na⁺ −60.873 (LS), −77.739 (RF);
+  CH4⁺ −60.926 (LS), −77.986 (RF) kJ/mol.
+- `py-gromos/tests/test_free_energy_charge.py`: CH4 → CH4⁺ in 999 SPC by `Perturbation.mutate`
+  (α 0), seven windows λ = k/6 on a seven-point `PRECALCLAM` grid, 600 steps each from 300 K,
+  four worker processes; ⟨∂H/∂λ⟩ falls with λ; TI, BAR and MBAR (20 frames dropped) within twice
+  their combined errors, about −242 kJ/mol; `dGslv_pbsolv` on both end states through
+  `gromos.analysis.dgslv_pbsolv` (`Perturbation.end_state` written out): state A 0, state B each
+  free energy within 0.01 kJ/mol of gromos++'s, correction −77.985 kJ/mol. Also: parallel windows
+  equal the sequential ones (every energy and `PRECALCLAM` array, `bar()`, `ti()`); `mutate` is
+  the oracle's `.ptp` byte for byte and `from_ptp` reads it back with the charges; the refusals.
+- porting.md: the check of `dGslv_pbsolv`'s hard-coded constants against gromos-core (1/(4πε₀)
+  from the topology, gromos++'s 138.935484611 only for PQR input; k_B and N_A unused; the water
+  defaults ε 78.4, probe 0.14 nm, hydrogen 0.05 nm are gromos++'s, gromos-core has none).
+
+### Added (1.8 — slow growth out of range)
+
+- `gromos_run::advance_lambda` returns the new λ on the step that takes it out of [0, 1] (from
+  inside; 10⁻⁹ tolerance, `lambda_in_range`), and `prepare_system` notes
+  `PrepareNote::LambdaOutOfRange { lambda }` when a run starts outside [0, 1] (a `PERTDATA` λ;
+  RLAM is checked). `md` prints both as warnings, `Simulation` raises a Python `UserWarning`
+  (constructor, `step`, `run`), with one text (`lambda_warning`): `slow growth takes lambda out
+  of [0, 1] after step 39: lambda = 1.005000; every perturbed term and mass is extrapolated past
+  the end state` for `aladip_vacuum_fep_slowgrowth_cont`. Never a refusal: λ stays unbounded as
+  in gromosXX and the outputs are unchanged. A warning at the crossing rather than a prediction
+  from NSTLIM, because a minimisation stops early (`aladip_vacuum_em_slowgrowth`: NSTLIM 500, `md`
+  stops at 13 steps, inside [0, 1]; Python runs all 500 and warns after step 218). The Python
+  reference and parity tests ignore this one warning (pytest turns warnings into errors).
+- Tests: `a_pertdata_lambda_outside_zero_one_is_a_warning` (gromos-run), the crossing and its
+  one report in `slow_growth_moves_lambda_and_the_masses_without_a_bound`,
+  `test_slow_growth_past_the_end_state_warns_and_runs` (Python: once, after step 5; none when λ
+  ends on 1).
+
+### Changed
+
+- `gromos-integrators/src/fep.rs`'s header no longer says slow growth lives there: it names
+  `gromos_run::advance_lambda` (unbounded λ, the new warning) and says `LambdaController`
+  (replica code) clamps and is not what `md` runs.
+- `make_pt_top` writes the `.ptp` with `std::fs::write` of the verb's text (an error now says
+  "Error writing perturbation topology" where it said "Error creating output file").
+
+### Verified
+
+- References: 115 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed;
+  `aeds_runs` 4 passed (`cargo test --release -p gromos-md`, the `md` binary rebuilt).
+- tools, analysis, run, pyo3-gromos: 211 tests green (`gromospp_references` 29, two `dGslv_pbsolv`
+  tests among them; `topology_references` 9); clippy on the touched crates only the two known
+  doc-list warnings (forces, run); `cargo fmt --check` clean; G6/G11 lint greps clean.
+- `pytest` 923 passed / 86 skipped (`test_free_energy_charge.py` 6, `test_free_energy.py` 25);
+  stubtest clean; ruff and mypy clean on the touched Python (`ruff format` differences in
+  `test_gromosXX_references.py`, `test_free_energy.py` and `analysis.py` predate this version).
+
+### Found (gromosXX defect D34, reproduced)
+
+- The gap between `ext_ti_ana`'s predicted ⟨∂H/∂λ⟩ and the `.trg` mean on gromosXX's own
+  100-step files (`scripts/ti_ch4.py --engine both --steps 100 --lambdas 0,0.5,1 --ntwg 2
+  --estimator bar`: 2.058 vs 2.550 kJ/mol at λ = 0, NSNB 5, NTWG 2) is the reproduced
+  PRECALCLAM long-range quirk (porting.md), now dossier D34: on an output step after a pairlist
+  step that was not one, the λ_k rows lack the long-range terms (two of every five frames short
+  by about 1.25 kJ/mol in `A_e_lj`), so BAR/MBAR from them is biased in both engines alike; the
+  bias is zero when NTWG is a multiple of NSNB. Now a warning, never a refusal:
+  `PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg }` (`gromos_run::precalclam_longrange_gaps`:
+  a twin-range pairlist with neither of NSNB and NTWG dividing the other), printed by `md`; a
+  `UserWarning` from `Simulation`, once from `run_windows` and from `FreeEnergyWindows.bar()` /
+  `.mbar()` on such windows (one text, `precalclam_longrange_warning`). Tests:
+  `precalclam_with_interleaved_pairlist_and_output_steps_is_a_warning` (gromos-run),
+  `test_twin_range_precalclam_with_interleaved_output_warns_once` (Python); the reference and
+  parity tests expect or ignore it for `ch4_water_fep_precalc_twinrange`.
+
+### Not done (left for later)
+
+- `Perturbation` covers atom parameters (IAC, mass, charge); bonded and atom-pair perturbations
+  still come from a `.ptp` (`from_ptp`): the writer leaves those blocks empty, as before.
+- `PrepareNote::NetChargeChanged` still reaches Python only as `Perturbation.delta_charge`;
+  `Simulation` raises no warning for it.
+- The step-4b gate's (ii) is the charged CH4 of `ch4_water_fep`, as the gate says; the t_02
+  `md_TI_ASA_Na` set is not run.
+- The definition of done's other parts outside step 5: EDS through the recipe is in (0.0.60), the
+  plain-FEP benchmark ratios were not re-measured here (no engine change).
+
 ## [0.0.63] (2026-10-16)
 
 **Three A-EDS defects of gromosXX corrected by default** (1.8): the energy columns are the

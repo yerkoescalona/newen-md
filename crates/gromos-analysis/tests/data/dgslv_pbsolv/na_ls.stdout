@@ -1,0 +1,7 @@
+###### GATHER WARNING ######
+# NO Gathering method specified ! 
+# Thus : if the system is requested to be gathered, 
+# the gathering will be done using the COG gather method
+# atom   nres   name    charge        NPBC_SLV        NPBC_VAC         PBC_SLV         PBC_VAC
+     1      1     NA    1.0000     977.7540353    1571.4857105     976.4718297    1448.4578813
+

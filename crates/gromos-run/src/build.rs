@@ -843,13 +843,38 @@ pub fn start(
 /// carry the old λ (`.trg`, gromosXX `topo.old_lambda()`), except the `.tre` mass, summed over
 /// the masses already at the new λ (`out_configuration.cc:1786`); the final configuration's
 /// `PERTDATA` holds the new λ.
-pub fn advance_lambda(recipe: &RunRecipe, topo: &mut Topology) {
+///
+/// Returns the new λ on the step that takes it out of [0, 1] (from inside), for the caller to
+/// warn ([`lambda_warning`]); gromosXX neither clamps nor warns.
+pub fn advance_lambda(recipe: &RunRecipe, topo: &mut Topology) -> Option<f64> {
     let p = &recipe.perturbation;
     if p.enabled == 0 || p.dlamt == 0.0 {
-        return;
+        return None;
     }
+    let before = topo.lambda;
     topo.lambda += p.dlamt * recipe.control.dt;
     topo.update_for_lambda();
+    (lambda_in_range(before) && !lambda_in_range(topo.lambda)).then_some(topo.lambda)
+}
+
+/// λ in [0, 1], up to 10⁻⁹: a sum of DLAMT·Δt steps meant to end on 1 may overshoot it by
+/// rounding.
+pub fn lambda_in_range(lambda: f64) -> bool {
+    (-1e-9..=1.0 + 1e-9).contains(&lambda)
+}
+
+/// The warning for a λ outside [0, 1]: reached by slow growth after step `after_step`
+/// ([`advance_lambda`]), or, with `None`, the λ a run starts at
+/// ([`crate::PrepareNote::LambdaOutOfRange`]).
+pub fn lambda_warning(after_step: Option<usize>, lambda: f64) -> String {
+    let what = match after_step {
+        Some(step) => format!("slow growth takes lambda out of [0, 1] after step {step}"),
+        None => "the run starts outside [0, 1]".to_string(),
+    };
+    format!(
+        "{what}: lambda = {lambda:.6}; every perturbed term and mass is extrapolated past the \
+         end state"
+    )
 }
 
 #[cfg(test)]
@@ -1153,9 +1178,24 @@ mod tests {
         }
         assert_eq!(topo.lambda, expected);
         assert_eq!(topo.mass[0], (1.0 - expected) * 15.035 + expected * 12.035);
-        topo.lambda = 0.999;
-        advance_lambda(&recipe, &mut topo);
-        assert_eq!(topo.lambda, 0.999 + 2.0 * 0.002, "no clamp at 1");
+        topo.lambda = 0.995;
+        assert_eq!(
+            advance_lambda(&recipe, &mut topo),
+            None,
+            "λ = 0.999: inside"
+        );
+        assert_eq!(
+            advance_lambda(&recipe, &mut topo),
+            Some(0.995 + 2.0 * 0.002 + 2.0 * 0.002),
+            "the step that leaves [0, 1] is reported"
+        );
+        assert_eq!(
+            topo.lambda,
+            0.995 + 2.0 * 0.002 + 2.0 * 0.002,
+            "no clamp at 1"
+        );
+        assert_eq!(advance_lambda(&recipe, &mut topo), None, "reported once");
+        assert!(lambda_warning(Some(2), 1.007).contains("after step 2: lambda = 1.007000"));
         recipe.perturbation.enabled = 0;
         let before = topo.lambda;
         advance_lambda(&recipe, &mut topo);

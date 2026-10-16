@@ -112,9 +112,20 @@ pub enum PrepareNote {
         /// number of perturbed distance constraints
         constraints: usize,
     },
+    /// PRECALCLAM with a twin-range pairlist whose update (NSNB) and free-energy output (NTWG)
+    /// steps interleave: the λ_k rows written after a pairlist step that was not an output
+    /// step miss the long-range terms (gromosXX behaviour, reproduced; porting.md), so BAR or
+    /// MBAR from them is biased. A warning, not a refusal; gromosXX says nothing
+    /// ([`precalclam_longrange_gaps`], [`precalclam_longrange_warning`]).
+    PrecalclamLongRangeGaps { nsnb: usize, ntwg: usize },
     /// The configuration has an `AEDSSEARCH` block but the A-EDS search starts afresh
     /// (NTIAEDSS = 1): ignored, as gromosXX does with a warning.
     AedsSearchIgnored,
+    /// The run starts at a λ outside [0, 1] (a `PERTDATA` λ; RLAM is checked to [0, 1]): every
+    /// perturbed term and mass is extrapolated. A warning, not a refusal; gromosXX says nothing
+    /// (porting.md, slow growth). Slow growth that leaves [0, 1] during the run is reported by
+    /// [`crate::advance_lambda`].
+    LambdaOutOfRange { lambda: f64 },
     /// Non-fatal validation findings (errors or warnings) for `stage`.
     Validation {
         stage: &'static str,
@@ -285,6 +296,11 @@ pub fn prepare_system(
         imd.rlam
     };
     topology.lambda_exp = imd.nlam;
+    if imd.ntg != 0 && !crate::build::lambda_in_range(topology.lambda) {
+        notes.push(PrepareNote::LambdaOutOfRange {
+            lambda: topology.lambda,
+        });
+    }
     // 2. NTB=-1: truncated octahedron. GROMOS converts the legacy "cube edge length L" BOX
     //    block into the lower-triangular triclinic box vectors and rotates positions and
     //    velocities into that frame on read (io/configuration/in_configuration.cc).
@@ -396,6 +412,9 @@ pub fn prepare_system(
         notes.push(PrepareNote::PerturbedShakePrecalc {
             constraints: n_constraints,
         });
+    }
+    if let Some((nsnb, ntwg)) = precalclam_longrange_gaps(imd) {
+        notes.push(PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg });
     }
 
     // 3d. Make every charge group whole around its first atom, as gromosXX does on reading a
@@ -718,6 +737,30 @@ fn validate(
     Ok(())
 }
 
+/// `(NSNB, NTWG)` when a perturbed run with PRECALCLAM writes λ_k rows without the long-range
+/// terms on some output steps: a twin-range pairlist (RCUTP < RCUTL, NSNB > 1) keeps the
+/// long-range pairs from its last update, and their λ_k terms are evaluated only when that
+/// update is also an NTWG step (`perturbed_nonbonded_set.cc:87-96`). That happens on some
+/// output step exactly when neither of NSNB and NTWG divides the other.
+pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> {
+    let precalc = imd.ntg != 0 && imd.precalclam.is_some_and(|b| b.nr_lambdas > 0);
+    let twin_range = imd.rcutp < imd.rcutl - 1e-10 && imd.nsnb > 1;
+    let (nsnb, ntwg) = (imd.nsnb, imd.ntwg);
+    (precalc && twin_range && ntwg > 0 && ntwg % nsnb != 0 && nsnb % ntwg != 0)
+        .then_some((nsnb, ntwg))
+}
+
+/// The warning for [`PrepareNote::PrecalclamLongRangeGaps`] (`md` and Python print the same).
+pub fn precalclam_longrange_warning(nsnb: usize, ntwg: usize) -> String {
+    format!(
+        "PRECALCLAM with a twin-range pairlist updated every {nsnb} steps (NSNB) and \
+         free-energy output every {ntwg} steps (NTWG): as in gromosXX, the lambda_k energies \
+         and derivatives written on an output step that follows a pairlist step which was not \
+         an output step miss the long-range contribution (the dH/dlambda totals and the forces \
+         keep it), so BAR and MBAR from these rows are biased; set NTWG to a multiple of NSNB"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,6 +874,44 @@ mod tests {
     }
 
     #[test]
+    fn a_pertdata_lambda_outside_zero_one_is_a_warning() {
+        let imd = |nrdgl: i32| ImdParameters {
+            nsm: 20,
+            ntg: 1,
+            nrdgl,
+            rlam: 0.5,
+            ..Default::default()
+        };
+        let note = |imd: &ImdParameters, pertdata: Option<f64>| {
+            let parsed = read_topology_file(shared().join("aladip.topo")).unwrap();
+            let constants = parsed.physical_constants;
+            let mut coords: Coordinates = read_coordinates(shared().join("aladip.conf"))
+                .unwrap()
+                .into();
+            coords.pertdata = pertdata;
+            let inputs = RunInputs {
+                pttopo: Some(shared().join("aladip.pttopo")),
+                ..Default::default()
+            };
+            let p = prepare_system(imd, build_topology(parsed), constants, coords, &inputs);
+            p.unwrap().notes.iter().find_map(|n| match n {
+                PrepareNote::LambdaOutOfRange { lambda } => Some(*lambda),
+                _ => None,
+            })
+        };
+        // aladip_vacuum_fep_slowgrowth_cont's continuation would start at its last λ, 1.125
+        assert_eq!(note(&imd(1), Some(1.125)), Some(1.125));
+        assert_eq!(note(&imd(1), Some(-0.5)), Some(-0.5));
+        assert_eq!(note(&imd(1), Some(1.0 + 1e-12)), None);
+        assert_eq!(note(&imd(1), Some(0.525)), None);
+        assert_eq!(
+            note(&imd(0), Some(1.125)),
+            None,
+            "NRDGL = 0: RLAM, not PERTDATA"
+        );
+    }
+
+    #[test]
     fn a_net_charge_change_under_reaction_field_is_a_warning() {
         // CB of the neutral dipeptide: +1 in state A, 0 in state B
         let ptp = |qa: f64, qb: f64| {
@@ -886,6 +967,61 @@ mod tests {
         let notes = run(ptp(0.0, 0.0), 1, "neutral");
         assert_eq!(charge(&notes).unwrap().delta(), 0.0);
         assert!(changed(&notes).is_none());
+    }
+
+    #[test]
+    fn precalclam_with_interleaved_pairlist_and_output_steps_is_a_warning() {
+        let gaps = |imd: &ImdParameters| {
+            let parsed = read_topology_file(shared().join("ch4_spc.top")).unwrap();
+            let constants = parsed.physical_constants;
+            let coords: Coordinates = read_coordinates(shared().join("ch4_spc.cnf"))
+                .unwrap()
+                .into();
+            let inputs = RunInputs {
+                pttopo: Some(shared().join("ch4_spc_dummy.ptp")),
+                ..Default::default()
+            };
+            let p = prepare_system(imd, build_topology(parsed), constants, coords, &inputs);
+            p.unwrap().notes.iter().find_map(|n| match n {
+                PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg } => Some((*nsnb, *ntwg)),
+                _ => None,
+            })
+        };
+        let twinrange = gromos_io::imd::read_imd_file(
+            shared().join("../ch4_water_fep_precalc_twinrange/ch4_water_fep_precalc_twinrange.in"),
+        )
+        .unwrap();
+        assert_eq!((twinrange.nsnb, twinrange.ntwg), (5, 2));
+        assert_eq!(gaps(&twinrange), Some((5, 2)));
+        let with = |nsnb: usize, ntwg: usize| ImdParameters {
+            nsnb,
+            ntwg,
+            ..twinrange.clone()
+        };
+        assert_eq!(gaps(&with(5, 10)), None, "NTWG a multiple of NSNB");
+        assert_eq!(
+            gaps(&with(5, 1)),
+            None,
+            "every pairlist step is an output step"
+        );
+        assert_eq!(
+            gaps(&with(1, 2)),
+            None,
+            "NSNB 1: the pairlist is rebuilt every step"
+        );
+        assert_eq!(gaps(&with(4, 6)), Some((4, 6)));
+        let single_range = ImdParameters {
+            rcutl: twinrange.rcutp,
+            ..twinrange.clone()
+        };
+        assert_eq!(gaps(&single_range), None);
+        let no_precalc = ImdParameters {
+            precalclam: None,
+            ..twinrange.clone()
+        };
+        assert_eq!(gaps(&no_precalc), None);
+        let text = precalclam_longrange_warning(5, 2);
+        assert!(text.contains("every 5 steps (NSNB)") && text.contains("every 2 steps (NTWG)"));
     }
 
     fn try_aladip(imd: &ImdParameters) -> Result<Prepared, RunError> {

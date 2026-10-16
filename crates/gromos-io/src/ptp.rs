@@ -138,9 +138,13 @@ pub fn parse_mpertatom(lines: &[String]) -> Result<EdsPerturbation, IoError> {
 pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError> {
     let content = fs::read_to_string(path.as_ref())
         .map_err(|_| IoError::FileNotFound(path.as_ref().display().to_string()))?;
+    parse_pttopo(&content)
+}
 
+/// [`read_pttopo`] on the text of a perturbation topology.
+pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     // Split into named blocks: block_name → Vec<non-comment lines>
-    let blocks = parse_blocks(&content);
+    let blocks = parse_blocks(content);
 
     let mut names: Vec<String> = blocks.keys().cloned().collect();
     names.sort();
@@ -573,9 +577,9 @@ use std::io::{self, Write};
 
 use gromos_core::topology::Topology;
 
-/// Writer for a simple perturbation topology file.
-/// Note: this writes a non-standard format (PERTURBEDATOM block);
-/// the reader above handles the real GROMOS PERTATOMPARAM format.
+/// Writer for a perturbation topology file (gromos++ `make_pt_top` layout): the atoms whose
+/// IAC, mass or charge differ between two topologies in `PERTATOMPARAM`, the bonded blocks
+/// empty. [`write_ptp`] writes the same text to any writer.
 pub struct PtpWriter {
     file: File,
 }
@@ -595,111 +599,131 @@ impl PtpWriter {
         alpha_crf: f64,
         title: &str,
     ) -> io::Result<()> {
-        if topology_a.num_atoms() != topology_b.num_atoms() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "atom count mismatch",
+        write_ptp(
+            &mut self.file,
+            topology_a,
+            topology_b,
+            alpha_lj,
+            alpha_crf,
+            title,
+        )
+    }
+}
+
+/// The perturbation topology from state A (`topology_a`) to state B (`topology_b`), every
+/// perturbed atom with the soft-core parameters `alpha_lj`, `alpha_crf`.
+pub fn write_ptp(
+    out: &mut dyn Write,
+    topology_a: &Topology,
+    topology_b: &Topology,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    title: &str,
+) -> io::Result<()> {
+    if topology_a.num_atoms() != topology_b.num_atoms() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "atom count mismatch",
+        ));
+    }
+    writeln!(out, "TITLE\n{title}\nEND")?;
+    write_perturbed_atoms(out, topology_a, topology_b, alpha_lj, alpha_crf)?;
+    // The other blocks gromos++ `make_pt_top` writes, empty: this writer perturbs atom
+    // parameters only (: bonded perturbations come from gromos++ or by hand).
+    for (block, what, cols) in [
+        (
+            "PERTATOMPAIR",
+            "perturbed atom pairs",
+            "#    i     j  i(A)  i(B)",
+        ),
+        (
+            "PERTBONDSTRETCH",
+            "perturbed bonds",
+            "#    i     j t(A) t(B)",
+        ),
+        (
+            "PERTBONDSTRETCHH",
+            "perturbed bonds",
+            "#    i     j t(A) t(B)",
+        ),
+        (
+            "PERTBONDANGLE",
+            "perturbed bond angles",
+            "#    i     j     k t(A) t(B)",
+        ),
+        (
+            "PERTBONDANGLEH",
+            "perturbed bond angles",
+            "#    i     j     k t(A) t(B)",
+        ),
+        (
+            "PERTIMPROPERDIH",
+            "perturbed improper dihedrals",
+            "#    i     j     k     l t(A) t(B)",
+        ),
+        (
+            "PERTIMPROPERDIHH",
+            "perturbed improper dihedrals",
+            "#    i     j     k     l t(A) t(B)",
+        ),
+        (
+            "PERTPROPERDIH",
+            "perturbed dihedrals",
+            "#    i     j     k     l t(A) t(B)",
+        ),
+        (
+            "PERTPROPERDIHH",
+            "perturbed dihedrals",
+            "#    i     j     k     l t(A) t(B)",
+        ),
+    ] {
+        writeln!(out, "{block}\n# number of {what}\n0\n{cols}\nEND")?;
+    }
+    Ok(())
+}
+
+fn write_perturbed_atoms(
+    out: &mut dyn Write,
+    a: &Topology,
+    b: &Topology,
+    alpha_lj: f64,
+    alpha_crf: f64,
+) -> io::Result<()> {
+    // gromosXX / gromos++ layout (`PERTATOMPARAM`): NR RES NAME IAC(A) MASS(A) CHARGE(A)
+    // IAC(B) MASS(B) CHARGE(B) ALJ ACRF, IACs 1-based in the file.
+    let mut lines = Vec::new();
+    for i in 0..a.num_atoms() {
+        let (iac_a, iac_b) = (a.iac[i], b.iac[i]);
+        let (ma, mb) = (a.mass[i], b.mass[i]);
+        let (ca, cb) = (a.charge[i], b.charge[i]);
+        if iac_a != iac_b || (ma - mb).abs() > 1e-6 || (ca - cb).abs() > 1e-6 {
+            lines.push(format!(
+                "{:5}{:5}{:>6}{:4}{:11.5}{:11.5}{:4}{:11.5}{:11.5}{:11.2}{:11.2}",
+                i + 1,
+                a.residue_nr(i).unwrap_or(1),
+                a.atom_name(i).unwrap_or(""),
+                iac_a + 1,
+                ma,
+                ca,
+                iac_b + 1,
+                mb,
+                cb,
+                alpha_lj,
+                alpha_crf
             ));
         }
-        writeln!(self.file, "TITLE\n{title}\nEND")?;
-        self.write_perturbed_atoms(topology_a, topology_b, alpha_lj, alpha_crf)?;
-        // The other blocks gromos++ `make_pt_top` writes, empty: this writer perturbs atom
-        // parameters only (: bonded perturbations come from gromos++ or by hand).
-        for (block, what, cols) in [
-            (
-                "PERTATOMPAIR",
-                "perturbed atom pairs",
-                "#    i     j  i(A)  i(B)",
-            ),
-            (
-                "PERTBONDSTRETCH",
-                "perturbed bonds",
-                "#    i     j t(A) t(B)",
-            ),
-            (
-                "PERTBONDSTRETCHH",
-                "perturbed bonds",
-                "#    i     j t(A) t(B)",
-            ),
-            (
-                "PERTBONDANGLE",
-                "perturbed bond angles",
-                "#    i     j     k t(A) t(B)",
-            ),
-            (
-                "PERTBONDANGLEH",
-                "perturbed bond angles",
-                "#    i     j     k t(A) t(B)",
-            ),
-            (
-                "PERTIMPROPERDIH",
-                "perturbed improper dihedrals",
-                "#    i     j     k     l t(A) t(B)",
-            ),
-            (
-                "PERTIMPROPERDIHH",
-                "perturbed improper dihedrals",
-                "#    i     j     k     l t(A) t(B)",
-            ),
-            (
-                "PERTPROPERDIH",
-                "perturbed dihedrals",
-                "#    i     j     k     l t(A) t(B)",
-            ),
-            (
-                "PERTPROPERDIHH",
-                "perturbed dihedrals",
-                "#    i     j     k     l t(A) t(B)",
-            ),
-        ] {
-            writeln!(self.file, "{block}\n# number of {what}\n0\n{cols}\nEND")?;
-        }
-        Ok(())
     }
-
-    fn write_perturbed_atoms(
-        &mut self,
-        a: &Topology,
-        b: &Topology,
-        alpha_lj: f64,
-        alpha_crf: f64,
-    ) -> io::Result<()> {
-        // gromosXX / gromos++ layout (`PERTATOMPARAM`): NR RES NAME IAC(A) MASS(A) CHARGE(A)
-        // IAC(B) MASS(B) CHARGE(B) ALJ ACRF, IACs 1-based in the file.
-        let mut lines = Vec::new();
-        for i in 0..a.num_atoms() {
-            let (iac_a, iac_b) = (a.iac[i], b.iac[i]);
-            let (ma, mb) = (a.mass[i], b.mass[i]);
-            let (ca, cb) = (a.charge[i], b.charge[i]);
-            if iac_a != iac_b || (ma - mb).abs() > 1e-6 || (ca - cb).abs() > 1e-6 {
-                lines.push(format!(
-                    "{:5}{:5}{:>6}{:4}{:11.5}{:11.5}{:4}{:11.5}{:11.5}{:11.2}{:11.2}",
-                    i + 1,
-                    a.residue_nr(i).unwrap_or(1),
-                    a.atom_name(i).unwrap_or(""),
-                    iac_a + 1,
-                    ma,
-                    ca,
-                    iac_b + 1,
-                    mb,
-                    cb,
-                    alpha_lj,
-                    alpha_crf
-                ));
-            }
-        }
-        writeln!(self.file, "PERTATOMPARAM")?;
-        writeln!(self.file, "# number of perturbed atoms")?;
-        writeln!(self.file, "{:5}", lines.len())?;
-        writeln!(
-            self.file,
-            "#  NR  RES  NAME IAC(A)  MASS(A) CHARGE(A) IAC(B)  MASS(B) CHARGE(B)       ALJ       ACRF"
-        )?;
-        for l in lines {
-            writeln!(self.file, "{l}")?;
-        }
-        writeln!(self.file, "END")
+    writeln!(out, "PERTATOMPARAM")?;
+    writeln!(out, "# number of perturbed atoms")?;
+    writeln!(out, "{:5}", lines.len())?;
+    writeln!(
+        out,
+        "#  NR  RES  NAME IAC(A)  MASS(A) CHARGE(A) IAC(B)  MASS(B) CHARGE(B)       ALJ       ACRF"
+    )?;
+    for l in lines {
+        writeln!(out, "{l}")?;
     }
+    writeln!(out, "END")
 }
 
 #[cfg(test)]

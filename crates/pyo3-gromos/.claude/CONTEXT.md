@@ -10,6 +10,14 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Perturbations and parallel windows (1.8, 0.0.64):** `_make_pt_top_mutate`, `_ptp_net_charge`,
+  `_pt_top` (`programs.rs`) bind gromos-tools' `make_pt_top::{mutate, make_pt_top}` and
+  `pt_top::pt_top` for `gromos.free_energy.Perturbation`. `System` pickles when made by
+  `System.from_files` (as `from_files` on the absolute paths; `module = "gromos"`), which
+  `run_windows(parallel=N)` needs to hand it to worker processes; one built in memory raises
+  `TypeError`. `Simulation` raises a `UserWarning` when slow growth takes λ out of [0, 1]
+  (`advance_lambda`'s return, in the constructor, `step` and `run`) or the run starts outside it
+  (`PrepareNote::LambdaOutOfRange`).
 - **Extended TI in process (1.8, 0.0.62):** `Simulation.precalclam` (the grid, the `# precalclam`
   energy and derivative rows, `# ABdih`) of the last step; `_precalc_bar_data`, `_precalc_bar`,
   `_precalc_mbar` (`programs.rs`) take per-window frame stacks and call

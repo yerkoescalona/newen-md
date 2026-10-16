@@ -442,9 +442,10 @@ dg, error = windows.mbar(skip=2)
 | Name | Description |
 |------|-------------|
 | `LambdaSchedule(points, interaction_lambdas=None)` | `.recipes(base)`: one recipe per λ (`LAMBDAS` rows optional); `.names` |
-| `run_windows(system, recipes, *, workdir=None, dry_run=False)` | Runs each window in process → `FreeEnergyWindows`; kept windows (`<workdir>/<name>.npz`) are read, not rerun |
+| `Perturbation` | `.mutate(system, atoms, *, charge_b=None, iac_b=None, mass_b=None, alpha_lj=1.51, alpha_crf=0.5)` (`make_pt_top`), `.from_ptp(path, topology=None)`; `.text`, `.net_charge_a`, `.net_charge_b`, `.delta_charge`, `.path`, `.write(path)`, `.end_state(system, "A"\|"B")` (`pt_top`) |
+| `run_windows(system, recipes, *, perturbation=None, workdir=None, dry_run=False, parallel=1)` | Runs each window in process (or `parallel` worker processes, same numbers) → `FreeEnergyWindows`; kept windows (`<workdir>/<name>.npz`) are read, not rerun |
 | `collect(workdir)` | The windows kept in `workdir` |
-| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; `.bar(skip, temperature=None)`, `.mbar(skip, temperature=None)` → `Estimate`; `.bar_data(skip)` → the per-frame energies both use; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`, `.precalclam`) |
+| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.window_statistics(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; `.bar(skip, temperature=None)`, `.mbar(skip, temperature=None)` → `Estimate`; `.bar_data(skip)` → the per-frame energies both use; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`, `.precalclam`) |
 | `Estimate` | `.method` (`"BAR"`, `"MBAR"`), `.lambdas`, `.dg`, `.error` (first → last window, kJ/mol), `.steps` (`(ΔG, error)` per neighbouring pair); unpacks as `dg, error` |
 | `Precalclam` | A window's `PRECALCLAM` frames (`.energies`, `.derivatives`, `.abdih`, `.free_abdih`) with `.grid`, `.nlam`, `.temperature` |
 

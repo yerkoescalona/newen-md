@@ -456,6 +456,62 @@ fn pt_top_and_make_pt_top_print_the_net_charges() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// The typed verbs `gromos.free_energy.Perturbation` calls: `mutate` + `make_pt_top` write the
+/// `.ptp` `make_pt_top @topo A B` writes from the same two states, and `pt_top` applies it back.
+#[test]
+fn mutate_make_pt_top_and_pt_top_verbs_round_trip() {
+    use gromos_io::ptp::parse_pttopo;
+    use gromos_io::topology::build_topology;
+    use gromos_tools::programs::topology::make_pt_top::{self, Mutation};
+    use gromos_tools::programs::topology::pt_top;
+
+    let parsed = read_topology_file(references().join("shared/ch4_spc.top")).unwrap();
+    let a = build_topology(parsed.clone());
+    let plus = Mutation {
+        charge: Some(&[1.0]),
+        ..Default::default()
+    };
+    let b = make_pt_top::mutate(&a, &[0], &plus).unwrap();
+    assert_eq!((a.charge[0], b.charge[0]), (0.0, 1.0));
+    assert_eq!((a.iac[0], a.mass[0]), (b.iac[0], b.mass[0]));
+    let (text, charges) = make_pt_top::make_pt_top(&a, &b, 0.0, 0.0, "plus").unwrap();
+    assert_eq!(charges.len(), 1);
+    assert_eq!(
+        (charges[0].0, charges[0].1.a, charges[0].1.b),
+        (0, 0.0, 1.0)
+    );
+    // the file writer the `make_pt_top` binary used to call writes the same text
+    let file = std::env::temp_dir().join(format!("gromos_verbs_{}.ptp", std::process::id()));
+    gromos_io::PtpWriter::new(&file)
+        .unwrap()
+        .write(&a, &b, 0.0, 0.0, "plus")
+        .unwrap();
+    assert_eq!(text, std::fs::read_to_string(&file).unwrap());
+    std::fs::remove_file(&file).ok();
+
+    let pt = parse_pttopo(&text).unwrap();
+    assert_eq!(pt.perturbed_solute.atoms.len(), 1);
+    let (state_b, charges) = pt_top::pt_top(parsed, &pt, 0).unwrap();
+    assert_eq!(state_b.charges[0], 1.0);
+    assert_eq!((charges[0].1.a, charges[0].1.b), (0.0, 1.0));
+
+    let err = |atoms: &[usize], m: Mutation| make_pt_top::mutate(&a, atoms, &m).unwrap_err();
+    assert!(err(&[], plus).contains("no atoms"));
+    assert!(err(&[1], plus).contains("not a solute atom"));
+    assert!(err(&[0, 0], plus).contains("twice"));
+    assert!(err(&[0], Mutation::default()).contains("nothing to change"));
+    let too_many = Mutation {
+        charge: Some(&[1.0, 2.0]),
+        ..Default::default()
+    };
+    assert!(err(&[0], too_many).contains("one per atom"));
+    let bad_type = Mutation {
+        iac: Some(&[999]),
+        ..Default::default()
+    };
+    assert!(err(&[0], bad_type).contains("atom types"));
+}
+
 /// gromos++'s output text, token by token (numbers within `rel`); the TITLE block is skipped
 /// because ours keeps the input title's trailing blanks.
 fn assert_same_text(ours: &str, theirs: &str, rel: f64) {

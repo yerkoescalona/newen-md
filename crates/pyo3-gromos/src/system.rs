@@ -22,11 +22,14 @@ use crate::topology::PyTopology;
 /// print(system.charge)           # 0
 /// print(system.positions.shape)  # (648, 3)
 /// ```
-#[pyclass(name = "System")]
+#[pyclass(name = "System", module = "gromos")]
 #[derive(Debug)]
 pub struct PySystem {
     pub(crate) topology: PyTopology,
     pub(crate) configuration: PyConfiguration,
+    /// The (topology, coordinates) files of a `System.from_files` system, absolute: how it
+    /// pickles (a worker process reads the same files). `None` for a system built in memory.
+    source: Option<(String, String)>,
 }
 
 #[pymethods]
@@ -57,6 +60,7 @@ impl PySystem {
                 pertdata: conf_ref.pertdata,
                 aedssearch: conf_ref.aedssearch.clone(),
             },
+            source: None,
         })
     }
 
@@ -67,10 +71,28 @@ impl PySystem {
         let conf = PyConfiguration::from_file(conf_file)?;
         validate_atom_count_match(&topo.inner, conf.pos_data.len())
             .map_err(RecipeError::new_err)?;
+        let absolute = |p: &str| {
+            std::path::absolute(p).map_or_else(|_| p.to_string(), |a| a.display().to_string())
+        };
         Ok(Self {
             topology: topo,
             configuration: conf,
+            source: Some((absolute(topo_file), absolute(conf_file))),
         })
+    }
+
+    /// Pickling: a `System.from_files` system is `System.from_files` on the same (absolute)
+    /// paths, which is how `gromos.free_energy.run_windows(parallel=N)` hands it to its worker
+    /// processes. A system built in memory has no such form and does not pickle.
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (String, String))> {
+        let (topo, conf) = self.source.clone().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "only a System made by System.from_files pickles (as its two files); this one \
+                 was built in memory",
+            )
+        })?;
+        let from_files = py.get_type_bound::<Self>().getattr("from_files")?;
+        Ok((from_files, (topo, conf)))
     }
 
     // ── Properties ────────────────────────────────────────────────────────────
@@ -194,6 +216,7 @@ impl PySystem {
         Ok(Self {
             topology,
             configuration: PyConfiguration::from_atoms(result.atoms, result.box_dims),
+            source: None,
         })
     }
 
@@ -257,6 +280,7 @@ impl PySystem {
         Ok(Self {
             topology,
             configuration: PyConfiguration::from_atoms(result.atoms, result.box_dims),
+            source: None,
         })
     }
 

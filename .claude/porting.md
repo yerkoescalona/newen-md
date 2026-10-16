@@ -76,11 +76,13 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
 
 - **PRECALCLAM NRLAM = 1** (A). gromosXX accepts it and divides by `NRLAM − 1`: every λ_k is
   NaN. gromos-rs refuses it at build time (`check_precalclam`, `gromos-run/src/plan.rs`).
-- **PRECALCLAM long-range ext energies** (B). gromosXX computes the long-range perturbed pairs
-  only on pairlist steps and keeps them in `m_longrange_storage` until the next one; their ext
-  (λ_k) energies are filled only when that pairlist step is also an NTWG step, and are zero on
-  the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96, 280-300`).
+- **PRECALCLAM long-range ext energies** (B, D34). gromosXX computes the long-range perturbed
+  pairs only on pairlist steps and keeps them in `m_longrange_storage` until the next one; their
+  ext (λ_k) energies are filled only when that pairlist step is also an NTWG step, and are zero
+  on the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96, 280-300`).
   Reproduced (`Forcefield::longrange_perturbed`), pinned by `ch4_water_fep_precalc_twinrange`.
+  BAR/MBAR from those rows is biased unless NTWG is a multiple of NSNB (2.058 vs 2.550 kJ/mol
+  ⟨∂H/∂λ⟩ at λ = 0, NSNB 5, NTWG 2); `PrepareNote::PrecalclamLongRangeGaps` warns.
 - **PRECALCLAM grid in μ** (convention of the published method: de Ruiter & Oostenbrink, JCTC
   2016, 12, 4476, p. 7 and Eqs. 17/19; not a quirk). The grid is in the individual μ_k (no NLAM
   exponent, no `LAMBDAS` polynomial, no L′; softness = μ_k), so `ext_ti_ana` can apply any
@@ -207,11 +209,29 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   step's λ next to derivatives taken at the current one. λ has no upper bound (A): RLAM is
   checked to [0, 1] (`in_parameter.cc:878`), the running λ and a PERTDATA λ are not, so a run
   extrapolates past the end state with no warning. Reproduced (`aladip_vacuum_fep_slowgrowth_cont`
-  runs to λ = 1.125). gromosXX's own locks are refused (`check_slow_growth`, `plan.rs`): LAMBDAS
+  runs to λ = 1.125), with a warning gromosXX does not give: `md` and `Simulation` report the
+  step that takes λ out of [0, 1] (`advance_lambda`'s return) and a run that starts outside it
+  (`PrepareNote::LambdaOutOfRange`); never a refusal. gromosXX's own locks are refused (`check_slow_growth`, `plan.rs`): LAMBDAS
   with NTIL on, PRECALCLAM, EDS, A-EDS, lattice sums, NLRELE 4, conjugate gradients, GAMD,
   NTPOR 3. Not ported (A): the `.omd` "CUMULATIVE DG" sums DLAMT·∂H/∂λ without the Δt
   (`average.cc:425, 663`), a ΔG 1/Δt too large (−615.5 instead of −1.231 kJ/mol over 20 steps of
   `aladip_vacuum_fep_slowgrowth`'s run); gromos-rs writes no `.omd` averages.
+- **`dGslv_pbsolv` constants** (checked in 1.8 against gromos-core; no difference that changes
+  a number, nothing to reconcile). 1/(4πε₀) is the topology's `PHYSICALCONSTANTS` value, as in
+  `md` (138.9354 in every reference topology, `gromos_core::units::four_pi_eps_i`); only PQR
+  input falls back to gromos++'s `gmath/Physics.cc:53` 138.935484611
+  (`pb::GROMOSPP_FOUR_PI_EPS_I`, relative 6·10⁻⁷ from gromos-core's, kept for byte identity).
+  k_B and N_A are not used: the NPBC boundary has κ = 0 (`PB_Parameters.cc:69`, no ionic
+  strength, so no kT) and the energies come out in kJ/mol through 1/(4πε₀); gromos++'s own
+  pair (`Physics.cc:51-52`, k_B = 1.380658·10⁻²³ × 6.0221367·10²³ / 1000 = 0.0083145110 vs
+  gromos-core's gromosXX 0.00831441) never reaches the program. The water defaults are
+  gromos++'s, not gromos-core's (which has none): `@epsNPBC` 78.4 (and the FFT solver's
+  default ε 78.4), `@probeRAD` 0.14 nm, the hydrogen radius 0.05 nm, fixed because gromos++
+  reads `@radH` but does not list it (`dGslv_pbsolv.cc:448, 454, 498`; `PB_Parameters.cc`
+  `hradius`); `@epsSOLV` has no default and should be the
+  solvent model's permittivity (66.6 for SPC in the gromos++ examples), `@epsRF`/`@rcut` the
+  run's EPSRF/RCRF. Radii come from the topology's LJ parameters with the probe's IAC, the
+  engine's own table. Pinned by `dgslv_pbsolv_unit_charges_in_spc_match_gromospp`.
 - **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
   SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
   it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated
