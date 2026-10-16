@@ -763,6 +763,7 @@ pub fn build_sequence_from_plan(
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
+    crate::plan::check_electrostatics(recipe)?;
     crate::plan::check_perturbation(recipe)?;
     crate::plan::check_eds(recipe)?;
     crate::plan::check_plan_against_recipe(recipe, &plan)?;
@@ -1218,6 +1219,41 @@ mod tests {
             .err()
             .expect("refused");
         assert!(err.to_string().contains("NSCALE"), "{err}");
+    }
+
+    #[test]
+    fn lattice_sum_electrostatics_are_refused_for_an_unperturbed_run() {
+        let dir = refs().join("nacl_water_box");
+        let loaded = load(&dir).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_eq!(recipe.perturbation.enabled, 0);
+        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        for nlrele in [2, 3] {
+            let mut ls = recipe.clone();
+            ls.forcefield.electrostatics.electrostatics = nlrele;
+            let err = build_plan(&ls, &prepared.topology, &prepared.physical_constants)
+                .expect_err("refused");
+            assert!(
+                err.to_string()
+                    .contains(&format!("NLRELE = {nlrele}: lattice-sum")),
+                "{err}"
+            );
+            // a plan made from the reaction-field recipe does not get past it either
+            let err = build_sequence_from_plan(&ls, plan.clone(), &prepared)
+                .err()
+                .expect("refused");
+            assert!(err.to_string().contains("lattice-sum"), "{err}");
+        }
+        for nlrele in [-1, 0, 1] {
+            let mut rf = recipe.clone();
+            rf.forcefield.electrostatics.electrostatics = nlrele;
+            assert!(
+                crate::plan::check_electrostatics(&rf).is_ok(),
+                "NLRELE = {nlrele}"
+            );
+        }
     }
 
     #[test]

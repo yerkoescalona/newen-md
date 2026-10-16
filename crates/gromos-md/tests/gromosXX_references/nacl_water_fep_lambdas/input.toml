@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "nacl_water_fep_lambdas"
+description = "the same with LAMBDAS on, crf and vdw rows differing"
+level = 4
+isolates = "charge-changing perturbation under individual lambdas: the RF self and excluded terms take the crf lambda of group (1,1)"
+
+[input]
+topology = "../nacl_water_box/nacl_water_box.topo"
+configuration = "../nacl_water_box/nacl_water_box.conf"
+parameters = "nacl_water_fep_lambdas.in"
+pttopo = "../shared/nacl_na_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

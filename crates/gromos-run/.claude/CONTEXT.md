@@ -27,6 +27,10 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **Lattice sum refused (1.8, 0.0.65):** `check_electrostatics` (`plan.rs`, called by
+  `build_plan` and `build_sequence_from_plan`) refuses NLRELE 2/3 for every run, perturbed or
+  not: nothing calls gromos-forces' `electrostatics.rs`/`pme.rs`, and the reaction field would
+  run in their place. No reference input uses NLRELE 2/3.
 - **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
   `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
   DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)

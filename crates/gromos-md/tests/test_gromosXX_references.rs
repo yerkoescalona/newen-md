@@ -1107,6 +1107,15 @@ ref_test!(
     ch4_water_fep_precalc_twinrange,
     "ch4_water_fep_precalc_twinrange"
 );
+// A charge change (ΔQ = −1): Na⁺ → neutral dummy in `nacl_water_box` under reaction field. The
+// perturbed RF self term and the RF excluded Na–Cl pair move only when the charge does; plain
+// TI, PRECALCLAM 11 0 1, and LAMBDAS with crf ≠ vdw rows on (1,1) and (1,2).
+ref_test!(nacl_water_fep, "nacl_water_fep");
+ref_test!(nacl_water_fep_precalc, "nacl_water_fep_precalc");
+ref_test!(nacl_water_fep_lambdas, "nacl_water_fep_lambdas");
+// The same with the Na–Cl pair a 1-4 pair (`shared/nacl_water_box_14.topo`) and PRECALCLAM: the
+// perturbed 1-4 term, its dH/dλ and ext rows.
+ref_test!(nacl_water_fep_14, "nacl_water_fep_14");
 
 // Slow growth (DLAMT ≠ 0): λ += DLAMT·Δt after every step, the masses and every perturbed term
 // following it; the .trg carries the λ the step ran at, the .tre mass the masses at the next λ,

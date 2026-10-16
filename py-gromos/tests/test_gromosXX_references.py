@@ -354,6 +354,12 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_pairpert_precalc",
     "aladip_vacuum_fep_pairpert_precalc_fixed",
     "ch4_water_fep_precalc_twinrange",
+    # A charge change (Na+ -> neutral dummy, dQ = -1) under reaction field: the perturbed RF self
+    # term, the RF excluded Na-Cl pair (as a 1-4 pair in `_14`); plain TI, PRECALCLAM, LAMBDAS
+    "nacl_water_fep",
+    "nacl_water_fep_precalc",
+    "nacl_water_fep_lambdas",
+    "nacl_water_fep_14",
     # Slow growth (DLAMT != 0): lambda += DLAMT*dt after every step, masses and perturbed terms
     # following it; with perturbed SHAKE, continued with NRDGL = 1 past lambda = 1, in solvent,
     # and under steepest descent

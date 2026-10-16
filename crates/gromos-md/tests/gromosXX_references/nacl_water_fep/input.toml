@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "nacl_water_fep"
+description = "Na+ -> neutral dummy in 20 SPC under reaction field, plain TI at lambda 0.5"
+level = 4
+isolates = "charge-changing perturbation (dQ = -1): soft-core RF self term, RF excluded Na-Cl pair, Na-water pairs, dH/dlambda"
+
+[input]
+topology = "../nacl_water_box/nacl_water_box.topo"
+configuration = "../nacl_water_box/nacl_water_box.conf"
+parameters = "nacl_water_fep.in"
+pttopo = "../shared/nacl_na_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

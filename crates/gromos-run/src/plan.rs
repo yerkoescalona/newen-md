@@ -1049,6 +1049,20 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
     })
 }
 
+/// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) for every run, perturbed or not: nothing
+/// in the build path calls gromos-forces' `electrostatics.rs`/`pme.rs`, and the force field
+/// would run the reaction field in their place. Every build path runs it.
+pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
+    let nlrele = recipe.forcefield.electrostatics.electrostatics;
+    if matches!(nlrele, 2 | 3) {
+        return Err(RunError::Recipe(format!(
+            "NONBONDED NLRELE = {nlrele}: lattice-sum electrostatics (NLRELE 2/3) are not \
+             implemented (the reaction field would run in their place); use NLRELE 1"
+        )));
+    }
+    Ok(())
+}
+
 /// The PERTURBATION settings gromos-rs does not implement, refused instead of ignored, and the
 /// features gromosXX refuses together with individual λ (`check_parameter.cc:1581-1644`: slow
 /// growth, lattice sum, the conjugate-gradient minimiser, QM/MM, GaMD and AEDS stay locked
@@ -1318,6 +1332,7 @@ pub fn build_plan(
     } else {
         None
     };
+    check_electrostatics(recipe)?;
     check_perturbation(recipe)?;
     check_eds(recipe)?;
     let eds = eds_plan(recipe, constants.kB);

@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.65] (2026-10-16)
+
+**A charge-changing gromosXX reference set, lattice sums refused** (1.8 FE-9, FE-8 plain-MD
+half): Na⁺ → neutral dummy under reaction field is pinned by four native references, and NLRELE
+2/3 is refused for every run instead of running the reaction field silently. No engine output
+changes; 120 references (119 pass, `aladip_gamd` ignored).
+
+### Added (FE-9 — charge-changing references)
+
+- `shared/nacl_na_dummy.ptp`: Na⁺ (IAC 34, +1) → dummy (IAC 19 `DUM`, 0), mass unchanged,
+  α_LJ = α_CRF = 0.5; ΔQ = −1 (solute A 0, B −1). Run in `nacl_water_box` (62 atoms, 20 SPC,
+  NLRELE 1 with the box's RCRF 0.9 and EPSRF 61, RCUTL 0.9 in a 2 nm box), RLAM 0.5, 20 steps,
+  NTWE = NTWG = 1, native md++ (`scripts/regen_gromosXX_references.py`):
+  - `nacl_water_fep`: plain TI;
+  - `nacl_water_fep_precalc`: `PRECALCLAM 11 0 1`;
+  - `nacl_water_fep_lambdas`: `LAMBDAS` on, vdw and crf rows with different polynomials on
+    (1,1) and (1,2) (λ′ = 0.25 / 0.225 for vdw, 0.175 / 0.3125 for crf at λ = 0.5);
+  - `nacl_water_fep_14`: `nacl_water_fep_precalc` on `shared/nacl_water_box_14.topo`, where the
+    Na–Cl pair is a 1-4 pair instead of an exclusion (`nacl_water_box` has no 1-4 pair).
+  They pin the perturbed RF self term, the RF excluded Na–Cl pair and the perturbed 1-4 pair,
+  terms that only a charge change moves. gromosXX writes no column of their own for them: they
+  are booked in the (1,1) cells of the `# nonbonded` rows (frame-0 dH/dλ CRF −89.58 kJ/mol with
+  the exclusion, +208.66 as a 1-4 pair) and in `A_e_crf`/`B_e_crf` of the `# precalclam` rows,
+  which the harness compares whole-block with every other value.
+- Registered in `test_gromosXX_references.rs` and `py-gromos/tests/test_gromosXX_references.py`.
+
+### Added (FE-8, plain MD — lattice sums)
+
+- `gromos_run::plan::check_electrostatics`, called by `build_plan` and
+  `build_sequence_from_plan` before the perturbation checks: `NONBONDED NLRELE = 2: lattice-sum
+  electrostatics (NLRELE 2/3) are not implemented (the reaction field would run in their place);
+  use NLRELE 1`. It holds for unperturbed runs too; until now only the FEP, EDS, A-EDS, slow
+  growth and PRECALCLAM arms refused it, and a plain run with NLRELE 2/3 ran the reaction field.
+  No reference input (124 `.in`/`.imd` files) uses NLRELE 2/3. Test
+  `lattice_sum_electrostatics_are_refused_for_an_unperturbed_run` (gromos-run, on
+  `nacl_water_box`: both paths refuse 2 and 3, −1/0/1 pass).
+
+### Verified
+
+- The four new references pass at the global tolerances on the first run (energies, `.trg`,
+  forces, trajectory, final configuration); changing α_CRF in the `.ptp` to 0.4 fails all three
+  original ones in `# nonbonded`, `# totals` and `# precalclam`. `md` prints `Perturbation net
+  charge: A 0.000 B -1.000 (ΔQ = -1.000)` and the reaction-field warning for each.
+- References: 119 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed;
+  gromos-run all green (`recipe_roundtrip` included); clippy on gromos-run/gromos-md only the
+  two known doc-list warnings; `cargo fmt --check` clean; `pytest
+  tests/test_gromosXX_references.py` 419 passed / 75 skipped (the four new systems in all four
+  comparisons).
+
 ## [0.0.64] (2026-10-16)
 
 **A charge change from Python, end to end** (1.8 step 5 and the step-4b gate): a perturbation is

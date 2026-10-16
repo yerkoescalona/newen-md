@@ -19,7 +19,9 @@ matching gromosXX to reference tolerances.
   `aladip_vacuum_em_slowgrowth`.
 - **Net charge (1.8, 0.0.59):** `md` prints `Perturbation net charge: A … B … (ΔQ = …)` on a
   perturbed run and warns when ΔQ ≠ 0 under a reaction field (`fep_null_perturbation` pins
-  ΔQ = 0 and no warning for the null perturbation).
+  ΔQ = 0 and no warning for the null perturbation). Since 0.0.65 a charge change has native
+  references: `nacl_water_fep{,_precalc,_lambdas,_14}` (Na⁺ → dummy, ΔQ = −1, under RF: the
+  perturbed RF self term, the RF excluded and the 1-4 Na–Cl pair).
 - **MPI (2026-08-30):** `md` built with `--features use-mpi` (`LIBCLANG_PATH=/usr/lib/llvm-19/lib`)
   runs under `mpirun -np N`: every rank runs the whole driver on the same inputs, the pair terms are
   split by `RunOptions::pair_partition` and summed each step (`mod mpi_support` at the bottom of
@@ -28,7 +30,7 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **116 reference tests registered, 115 passing** in `tests/test_gromosXX_references.rs` (1
+- **120 reference tests registered, 119 passing** in `tests/test_gromosXX_references.rs` (1
   ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
@@ -90,7 +92,7 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 
 ## Reference systems
 
-The per-system status matrix — which of the 116 registered systems pass and what each isolates —
+The per-system status matrix — which of the 120 registered systems pass and what each isolates —
 lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test
