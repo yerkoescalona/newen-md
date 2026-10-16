@@ -30,7 +30,13 @@ Berendsen barostat, COM removal.
 - **Perturbed nonbonded** ✓: soft-core LJ+CRF correction (`perturbed_pairlist_correction`), self-energy, excluded-pair, and 1-4 corrections; wired via `Forcefield`; `ch4_water_fep` reference test passes.
 - EDS ✓ (1.8): `eds::Eds`, the reference Hamiltonian after the force field (FORMS 1-3,
   reference-tested), with perturbed atoms (TI-EDS, 0.0.58) Σ p_i ∂V_i/∂λ into the derivative
-  record's `eds_vr`; GaMD / REMD: **stubs only, untested**
+  record's `eds_vr`
+- A-EDS ✓ (1.8, 0.0.60): `Eds::accelerated`, V_R* and the fkfac-scaled EDS forces; FORMS 2-6
+  search through the pure functions `memory_time`, `initialise_search`, `offset_update`,
+  `track_state`, `emax_emin_update`, `advanced_offset_update` (`search_step`), on the
+  configuration's `AedsSearch` (the `AEDSSEARCH` block); reference-tested and replayed against
+  gromosXX (`gromos-run/tests/aeds_replay.rs`)
+- GaMD / REMD: **stubs only, untested**
 
 ## Key files
 ```

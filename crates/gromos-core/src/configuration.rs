@@ -222,6 +222,20 @@ pub struct Energy {
     pub eds_vi: Vec<f64>,
     /// The special-term part of each V_i (gromosXX `eds_vi_special`).
     pub eds_vi_special: Vec<f64>,
+    /// A-EDS: the unboosted mixed energy V_mix (gromosXX `eds_vmix`; in no total).
+    pub eds_vmix: f64,
+    /// A-EDS: E_max after this step's search update (gromosXX `eds_emax`).
+    pub eds_emax: f64,
+    /// A-EDS: E_min after this step's search update (gromosXX `eds_emin`).
+    pub eds_emin: f64,
+    /// A-EDS E_max/E_min search: the target state's mean of V_i − E_i^R (gromosXX `eds_globmin`).
+    pub eds_globmin: f64,
+    /// A-EDS E_max/E_min search: the target state's standard deviation of V_i
+    /// (gromosXX `eds_globminfluc`).
+    pub eds_globminfluc: f64,
+    /// A-EDS: the offsets E_i^R after this step's search update (gromosXX `eds_eir`, the
+    /// `# eds` offset column); sized with the end states, zero in plain EDS.
+    pub eds_eir: Vec<f64>,
 }
 
 /// The extended-TI part of an [`Energy`] record (gromosXX `A_lj_energy` … `AB_disfld`,
@@ -444,6 +458,12 @@ impl Energy {
             eds_vr: 0.0,
             eds_vi: Vec::new(),
             eds_vi_special: Vec::new(),
+            eds_vmix: 0.0,
+            eds_emax: 0.0,
+            eds_emin: 0.0,
+            eds_globmin: 0.0,
+            eds_globminfluc: 0.0,
+            eds_eir: Vec::new(),
         };
         e.resize(num_energy_groups, num_temperature_groups);
         e
@@ -584,16 +604,27 @@ impl Energy {
         }
         self.precalc.zero_potential();
         self.precalc.zero_kinetic();
+        // gromosXX `Energy::zero` (`energy.cc:151-163`)
         self.eds_vr = 0.0;
         self.eds_vi.fill(0.0);
         self.eds_vi_special.fill(0.0);
+        self.eds_vmix = 0.0;
+        self.eds_emax = 0.0;
+        self.eds_emin = 0.0;
+        self.eds_globmin = 0.0;
+        self.eds_globminfluc = 0.0;
+        self.eds_eir.fill(0.0);
     }
 
     /// Size the EDS end-state arrays for `num_states` states (gromosXX
     /// `Configuration::init`, `configuration.cc:403-419`), zeroed.
     pub fn resize_eds(&mut self, num_states: usize) {
         self.eds_vr = 0.0;
-        for v in [&mut self.eds_vi, &mut self.eds_vi_special] {
+        for v in [
+            &mut self.eds_vi,
+            &mut self.eds_vi_special,
+            &mut self.eds_eir,
+        ] {
             v.clear();
             v.resize(num_states, 0.0);
         }
@@ -721,6 +752,85 @@ pub struct Configuration {
     /// EDS end-state forces and virials of the current step (gromosXX `conf.special().eds`);
     /// empty without EDS.
     pub eds: EdsEndStates,
+    /// The A-EDS parameter-search state the run carries from step to step and from job to job
+    /// (the configuration's `AEDSSEARCH` block); `None` without A-EDS.
+    pub aeds: Option<AedsSearch>,
+}
+
+/// The mutable state of an A-EDS run: E_max, E_min and the offsets E_i^R with everything their
+/// searches accumulate (gromosXX keeps it in `sim.param().eds`, `simulation/parameter.h:3190-3312`,
+/// and writes it as the final configuration's `AEDSSEARCH` block, `out_configuration.cc:3985-4004`).
+/// Per-state vectors are indexed by end state.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AedsSearch {
+    /// E_max (kJ/mol)
+    pub emax: f64,
+    /// E_min (kJ/mol)
+    pub emin: f64,
+    /// highest V_mix at a state change since the last round trip
+    pub searchemax: f64,
+    /// number of round trips (every state visited) so far
+    pub emaxcounts: u32,
+    /// the state of the previous step
+    pub oldstate: u32,
+    /// `false` while E_min is held at or above the lowest average end-state energy (RESTREMIN
+    /// 1, until the first round trip)
+    pub fullemin: bool,
+    /// E_i^R
+    pub eir: Vec<f64>,
+    /// log of the memory-averaged exp(−β(V_i* − V_R*))
+    pub lnexpde: Vec<f64>,
+    /// −lnexpde/β
+    pub statefren: Vec<f64>,
+    /// visited since the last round trip
+    pub visited: Vec<bool>,
+    /// steps spent in state i
+    pub visitcounts: Vec<u32>,
+    /// running mean of V_i over the steps in state i
+    pub avgenergy: Vec<f64>,
+    /// running mean of V_i − E_i^R over the steps in state i
+    pub eiravgenergy: Vec<f64>,
+    /// Welford sum of squares of V_i
+    pub bigs: Vec<f64>,
+    /// standard deviation of V_i over the steps in state i
+    pub stdevenergy: Vec<f64>,
+    /// FORMS 5, 6: steps with V_i − V_R* within kT above the state's free energy (written,
+    /// never used)
+    pub framecounts: Vec<u32>,
+    /// The next step starts a fresh search (NTIAEDSS = 1; gromosXX `initaedssearch`). Not part
+    /// of the `AEDSSEARCH` block.
+    pub initialise: bool,
+}
+
+impl AedsSearch {
+    /// A fresh state for `num_states` states (gromosXX `read_AEDS`, `in_parameter.cc:4124-4136`).
+    pub fn new(emax: f64, emin: f64, eir: Vec<f64>, fullemin: bool) -> Self {
+        let n = eir.len();
+        Self {
+            emax,
+            emin,
+            searchemax: 0.0,
+            emaxcounts: 0,
+            oldstate: 0,
+            fullemin,
+            eir,
+            lnexpde: vec![0.0; n],
+            statefren: vec![0.0; n],
+            visited: vec![false; n],
+            visitcounts: vec![0; n],
+            avgenergy: vec![0.0; n],
+            eiravgenergy: vec![0.0; n],
+            bigs: vec![0.0; n],
+            stdevenergy: vec![0.0; n],
+            framecounts: vec![0; n],
+            initialise: true,
+        }
+    }
+
+    /// Number of end states.
+    pub fn num_states(&self) -> usize {
+        self.eir.len()
+    }
 }
 
 /// The state-dependent forces and virials of an EDS run, one entry per end state, written by
@@ -758,6 +868,7 @@ impl Configuration {
             current_idx: 0,
             lattice_shifts: vec![[0, 0, 0]; n_atoms],
             eds: EdsEndStates::default(),
+            aeds: None,
         }
     }
 

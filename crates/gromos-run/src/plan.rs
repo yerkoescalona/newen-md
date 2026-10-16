@@ -89,6 +89,29 @@ pub struct EdsPlan {
     /// 1/(k_B T): T of the first MULTIBATH bath, k_B from the topology's PHYSICALCONSTANTS
     /// (gromosXX `eds.cc:385-391`, `in_topology.cc:1407`).
     pub beta: f64,
+    /// Accelerated EDS (an `AEDS` block): FORM 1, s = 1, and these settings; `eir` holds the
+    /// starting offsets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aeds: Option<AedsPlan>,
+}
+
+/// The settings of accelerated EDS, resolved (gromosXX `read_AEDS`, `eds.cc:57-378`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AedsPlan {
+    /// FORM 1-6.
+    pub form: i32,
+    /// starting E_max and E_min (kJ/mol)
+    pub emax: f64,
+    pub emin: f64,
+    /// NTIAEDSS = 0 in FORMS 2-6: continue the configuration's AEDSSEARCH state.
+    pub restart: bool,
+    /// RESTREMIN = 0: E_min unrestricted from the start (gromosXX `fullemin`).
+    pub fullemin: bool,
+    pub bmax_type: u32,
+    pub bmax: f64,
+    pub asteps: u32,
+    pub bsteps: u32,
 }
 
 /// Everything `Forcefield` needs, resolved.
@@ -348,6 +371,7 @@ impl AlgorithmSpec {
                 pairs: Vec::new(),
                 eir: vec![0.0, 10.0],
                 beta: 1.0 / (gromos_core::units::kB * 300.0),
+                aeds: None,
             }),
             AlgorithmSpec::LeapFrogVelocity,
             AlgorithmSpec::Thermostat {
@@ -720,6 +744,7 @@ pub(crate) fn eds_on(recipe: &RunRecipe) -> bool {
 /// blocks the recipe does not model, refused as such). Checked again on a recipe built in
 /// memory, so the Python front-end meets the same rules as an `.imd` file.
 pub(crate) fn check_eds(recipe: &RunRecipe) -> Result<(), RunError> {
+    check_aeds(recipe)?;
     let Some(e) = recipe.eds.as_ref().filter(|e| e.enabled) else {
         return Ok(());
     };
@@ -837,9 +862,133 @@ pub(crate) fn check_eds(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
-/// The plan of an EDS run (`None` without EDS); `k_boltzmann` from the topology.
+/// The AEDS settings gromosXX refuses (`in_parameter.cc:3968-4140`, `check_parameter.cc:146-175`,
+/// the `aeds` feature locks, `check_parameter.cc:2571-2657`), the ones on which it crashes or
+/// computes nonsense (refused here instead: EMIN > EMAX, item 1.8 D14; BSTEPS < ASTEPS, D13), and
+/// the combinations gromos-rs has no reference for (triclinic and truncated-octahedral boxes).
+pub(crate) fn check_aeds(recipe: &RunRecipe) -> Result<(), RunError> {
+    let Some(a) = recipe.aeds.as_ref() else {
+        return Ok(());
+    };
+    let err = |m: String| Err(RunError::Recipe(format!("AEDS: {m}")));
+    if eds_on(recipe) {
+        // gromosXX's error fires whatever the AEDS block says (`in_parameter.cc:4029-4045`)
+        return err("AEDS cannot be used in combination with EDS (EDS block with EDS = 1)".into());
+    }
+    if !a.enabled {
+        return Ok(());
+    }
+    let n = a.num_states;
+    if n < 2 {
+        return err(format!("NUMSTATES = {n}: must be >= 2"));
+    }
+    let Some(form) = gromos_integrators::eds::AedsForm::from_gromos(a.form) else {
+        return err(format!("FORM = {}: must be 1, 2, 3, 4, 5 or 6", a.form));
+    };
+    if a.eir.len() != n {
+        return err(format!("{n} states but {} EIR values", a.eir.len()));
+    }
+    if a.emin > a.emax {
+        return err(format!(
+            "EMIN = {} is larger than EMAX = {}: gromosXX only warns, then leaves EIR unread \
+             and crashes (item 1.8 D14)",
+            a.emin, a.emax
+        ));
+    }
+    if !matches!(a.bmaxtype, 1 | 2) {
+        return err(format!("BMAXTYPE = {}: must be 1 or 2", a.bmaxtype));
+    }
+    if a.bmax.is_nan() || a.bmax <= 0.0 {
+        return err(format!("BMAX = {}: must be > 0", a.bmax));
+    }
+    if a.asteps == 0 || a.bsteps == 0 {
+        return err(format!(
+            "ASTEPS = {}, BSTEPS = {}: both must be > 0",
+            a.asteps, a.bsteps
+        ));
+    }
+    if form.searches_offsets() && a.bsteps < a.asteps {
+        return err(format!(
+            "BSTEPS = {} < ASTEPS = {}: gromosXX computes BSTEPS − ASTEPS unsigned, so the \
+             memory time wraps to about 4·10⁹ steps after the first step and the offsets freeze \
+             (item 1.8 D13); use BSTEPS >= ASTEPS",
+            a.bsteps, a.asteps
+        ));
+    }
+    let Some(t) = recipe
+        .ensemble
+        .thermostat
+        .as_ref()
+        .filter(|t| t.baths.iter().any(|b| b.tau != -1.0))
+    else {
+        return err(
+            "AEDS requires temperature coupling (a MULTIBATH bath with TAU != -1; gromosXX also \
+             accepts stochastic dynamics, which gromos-rs does not implement)"
+                .to_string(),
+        );
+    };
+    if t.baths
+        .iter()
+        .any(|b| b.temperature != t.baths[0].temperature)
+    {
+        return err("all baths must have the same temperature".to_string());
+    }
+    if t.baths[0].temperature == 0.0 {
+        return err("baths must have non zero temperature with AEDS".to_string());
+    }
+    if recipe.minimisation.method != 0 {
+        return err(format!(
+            "NTEM = {}: gromosXX keeps energy minimisation locked with AEDS",
+            recipe.minimisation.method
+        ));
+    }
+    if matches!(
+        recipe.boundary.kind,
+        BoundaryKind::Triclinic | BoundaryKind::TruncatedOctahedron
+    ) {
+        return err(
+            "only vacuum and rectangular boxes (NTB 0, 1): gromosXX allows the triclinic and \
+             truncated-octahedral boxes with AEDS, but gromos-rs has no EDS reference in them"
+                .to_string(),
+        );
+    }
+    match recipe.forcefield.electrostatics.electrostatics {
+        2 | 3 => {
+            return err("lattice-sum electrostatics (NLRELE 2/3) cannot be combined".to_string())
+        },
+        4 => {
+            return err(
+                "the shifted reaction field (NLRELE = 4) has EDS kernels in gromosXX that \
+                 gromos-rs does not port"
+                    .to_string(),
+            )
+        },
+        _ => {},
+    }
+    if !recipe.forcefield.terms.is_empty() {
+        return err("QM/ML terms cannot be combined with AEDS".to_string());
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return err("Gaussian accelerated MD (GAMD) cannot be combined with AEDS".to_string());
+    }
+    if ntil_on(recipe) {
+        return err(
+            "LAMBDAS on (individual λ): gromosXX keeps individual lambdas locked with AEDS"
+                .to_string(),
+        );
+    }
+    if recipe
+        .perturbation
+        .precalclam
+        .is_some_and(|pc| pc.nr_lambdas > 0)
+    {
+        return err("PRECALCLAM: gromosXX keeps precalculated lambdas locked with AEDS".into());
+    }
+    Ok(())
+}
+
+/// The plan of an EDS or AEDS run (`None` without either); `k_boltzmann` from the topology.
 fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
-    let e = recipe.eds.as_ref().filter(|e| e.enabled)?;
     let temperature = recipe
         .ensemble
         .thermostat
@@ -847,6 +996,28 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
         .baths
         .first()?
         .temperature;
+    if let Some(a) = recipe.aeds.as_ref().filter(|a| a.enabled) {
+        return Some(EdsPlan {
+            form: 1,
+            num_states: a.num_states,
+            s: vec![1.0],
+            pairs: Vec::new(),
+            eir: a.eir.clone(),
+            beta: 1.0 / (k_boltzmann * temperature),
+            aeds: Some(AedsPlan {
+                form: a.form,
+                emax: a.emax,
+                emin: a.emin,
+                restart: !a.ntiaedss && a.form != 1,
+                fullemin: !a.restremin,
+                bmax_type: a.bmaxtype as u32,
+                bmax: a.bmax,
+                asteps: a.asteps,
+                bsteps: a.bsteps,
+            }),
+        });
+    }
+    let e = recipe.eds.as_ref().filter(|e| e.enabled)?;
     Some(EdsPlan {
         form: e.form,
         num_states: e.num_states,
@@ -858,6 +1029,7 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
             .collect(),
         eir: e.eir.clone(),
         beta: 1.0 / (k_boltzmann * temperature),
+        aeds: None,
     })
 }
 
@@ -1833,6 +2005,118 @@ mod tests {
             eds_refusal(&r).contains("needs 2 pairs"),
             "{}",
             eds_refusal(&r)
+        );
+    }
+
+    // ── AEDS refusals (gromosXX read_AEDS, check_parameter.cc:146-175, the aeds locks) ───────
+    /// An AEDS run gromosXX accepts (`aladip_vacuum_aeds_f4`'s settings): no solvent
+    /// constraints needed, unlike EDS.
+    fn aeds_run(form: i32) -> RunRecipe {
+        let mut r = eds_run(1, 3);
+        r.eds = None;
+        r.constraints.solvent_algorithm = None;
+        r.aeds = Some(crate::recipe::Aeds {
+            enabled: true,
+            form,
+            num_states: 3,
+            emax: 0.0,
+            emin: 0.0,
+            eir: vec![0.0, 0.0, -3.0],
+            ntiaedss: true,
+            restremin: true,
+            bmaxtype: 1,
+            bmax: 0.1,
+            asteps: 20,
+            bsteps: 20,
+        });
+        r
+    }
+
+    #[test]
+    fn aeds_accepts_the_six_forms_and_plans_single_s() {
+        for form in 1..=6 {
+            check_eds(&aeds_run(form)).unwrap();
+        }
+        let plan = eds_plan(&aeds_run(4), 0.00831441).unwrap();
+        assert_eq!((plan.form, plan.s.clone()), (1, vec![1.0]));
+        let a = plan.aeds.unwrap();
+        assert_eq!((a.form, a.restart, a.fullemin), (4, false, false));
+        // NTIAEDSS = 0 continues the configuration's state, except in FORM 1
+        let mut r = aeds_run(2);
+        r.aeds.as_mut().unwrap().ntiaedss = false;
+        assert!(eds_plan(&r, 0.00831441).unwrap().aeds.unwrap().restart);
+        let mut r = aeds_run(1);
+        r.aeds.as_mut().unwrap().ntiaedss = false;
+        assert!(!eds_plan(&r, 0.00831441).unwrap().aeds.unwrap().restart);
+        // BSTEPS < ASTEPS is harmless where no memory time is used (FORMS 1 and 3)
+        for form in [1, 3] {
+            let mut r = aeds_run(form);
+            r.aeds.as_mut().unwrap().bsteps = 10;
+            check_eds(&r).unwrap();
+        }
+        // AEDS = 0: nothing to check, no plan
+        let mut off = aeds_run(4);
+        off.aeds.as_mut().unwrap().enabled = false;
+        check_eds(&off).unwrap();
+        assert!(eds_plan(&off, 0.00831441).is_none());
+    }
+
+    #[test]
+    fn aeds_refuses_what_gromosxx_refuses_or_crashes_on() {
+        let case = |f: &dyn Fn(&mut RunRecipe), what: &str| {
+            let mut r = aeds_run(4);
+            f(&mut r);
+            let e = check_eds(&r).unwrap_err().to_string();
+            assert!(e.contains(what) && e.contains("AEDS"), "{what}: {e}");
+        };
+        fn a(r: &mut RunRecipe) -> &mut crate::recipe::Aeds {
+            r.aeds.as_mut().unwrap()
+        }
+        case(&|r| r.eds = Some(eds_recipe(1, 3)), "combination with EDS");
+        case(
+            &|r| {
+                r.eds = Some(eds_recipe(1, 3));
+                a(r).enabled = false;
+            },
+            "combination with EDS",
+        );
+        case(&|r| a(r).emin = 1.0, "EMIN = 1 is larger than EMAX = 0");
+        case(&|r| a(r).bsteps = 10, "BSTEPS = 10 < ASTEPS = 20");
+        case(&|r| a(r).form = 7, "FORM = 7");
+        case(&|r| a(r).num_states = 1, "NUMSTATES = 1");
+        case(
+            &|r| a(r).eir.pop().map(|_| ()).unwrap(),
+            "3 states but 2 EIR",
+        );
+        case(&|r| a(r).bmaxtype = 3, "BMAXTYPE = 3");
+        case(&|r| a(r).bmax = 0.0, "BMAX = 0");
+        case(&|r| a(r).asteps = 0, "both must be > 0");
+        case(&|r| r.ensemble.thermostat = None, "temperature coupling");
+        case(
+            &|r| r.ensemble.thermostat.as_mut().unwrap().baths[0].temperature = 0.0,
+            "non zero temperature",
+        );
+        case(&|r| r.minimisation.method = 1, "NTEM = 1");
+        case(&|r| r.boundary.kind = BoundaryKind::Triclinic, "triclinic");
+        case(
+            &|r| r.forcefield.electrostatics.electrostatics = 2,
+            "lattice-sum",
+        );
+        case(
+            &|r| {
+                r.passthrough.insert("GAMD".into(), Vec::new());
+            },
+            "GAMD",
+        );
+        case(
+            &|r| {
+                r.perturbation.precalclam = Some(crate::recipe::PrecalcLam {
+                    nr_lambdas: 3,
+                    min_lambda: 0.0,
+                    max_lambda: 1.0,
+                })
+            },
+            "PRECALCLAM",
         );
     }
 

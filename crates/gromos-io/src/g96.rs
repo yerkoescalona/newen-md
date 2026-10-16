@@ -144,6 +144,45 @@ impl G96Writer {
         writeln!(self.writer, "END").map_err(err)
     }
 
+    /// Write the AEDSSEARCH block (the A-EDS search state a continuation run starts from) —
+    /// gromosXX `_print_aedssearch` (out_configuration.cc:3985-4004): fixed format, 9 decimals,
+    /// width 15; flags and counts as integers.
+    pub fn write_aedssearch(
+        &mut self,
+        s: &gromos_core::configuration::AedsSearch,
+    ) -> Result<(), String> {
+        let err = |e: std::io::Error| format!("Write error: {}", e);
+        let w = &mut self.writer;
+        writeln!(w, "AEDSSEARCH").map_err(err)?;
+        writeln!(w, "{:15.9}\n{:15.9}\n{:15.9}", s.emax, s.emin, s.searchemax).map_err(err)?;
+        writeln!(
+            w,
+            "{:15}\n{:15}\n{:15}",
+            s.emaxcounts,
+            s.oldstate,
+            u8::from(s.fullemin)
+        )
+        .map_err(err)?;
+        for i in 0..s.num_states() {
+            writeln!(
+                w,
+                "{:15.9} {:15.9} {:15.9} {:15} {:15} {:15.9} {:15.9} {:15.9} {:15.9} {:15}",
+                s.eir[i],
+                s.lnexpde[i],
+                s.statefren[i],
+                u8::from(s.visited[i]),
+                s.visitcounts[i],
+                s.avgenergy[i],
+                s.eiravgenergy[i],
+                s.bigs[i],
+                s.stdevenergy[i],
+                s.framecounts[i]
+            )
+            .map_err(err)?;
+        }
+        writeln!(w, "END").map_err(err)
+    }
+
     /// Write position block with full atom labels (residue number, name, atom name).
     ///
     /// Atoms are renumbered sequentially starting from 1.
@@ -304,6 +343,50 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, "PERTDATA\n      0.2500000\nEND\n");
         std::fs::remove_file(path).ok();
+    }
+
+    /// The block gromosXX wrote for a FORM 6 search (aladip, three states), byte for byte, and
+    /// read back.
+    #[test]
+    fn aedssearch_is_written_as_gromosxx_does_and_reads_back() {
+        let block = "AEDSSEARCH
+    5.000000000
+   -5.000000000
+    0.000000000
+              7
+              0
+              0
+    0.494146008    -0.695482463     1.734757904               1             157     0.160923377    -0.491641558   109.985544149     0.839663944             250
+    1.594612468    -1.315188147     3.280504045               0              18    -1.104058078    -2.490014747    13.835621966     0.902141960              58
+   -2.088758476     0.330672389    -0.824803745               1             125    -0.976024228     1.080319529    14.158800520     0.337911046             170
+END
+";
+        let lines: Vec<String> = block
+            .lines()
+            .skip(1)
+            .take_while(|l| *l != "END")
+            .map(|l| l.trim().to_string())
+            .collect();
+        let s = crate::coordinate::parse_aedssearch(&lines, 3).unwrap();
+        assert_eq!((s.emaxcounts, s.oldstate, s.fullemin), (7, 0, false));
+        assert_eq!(s.visited, vec![true, false, true]);
+        assert_eq!(s.framecounts, vec![250, 58, 170]);
+        assert!(!s.initialise);
+        let path = std::env::temp_dir().join(format!("gromos_aedss_{}.cnf", std::process::id()));
+        let mut w = G96Writer::new(&path).unwrap();
+        w.write_aedssearch(&s).unwrap();
+        w.close().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), block);
+        std::fs::remove_file(path).ok();
+        // a state line short, or a NUMSTATES that does not match the block
+        assert!(crate::coordinate::parse_aedssearch(&lines, 2).is_err());
+        let mut bad = lines.clone();
+        bad[7] = "1.0 2.0".to_string();
+        let e = crate::coordinate::parse_aedssearch(&bad, 3).unwrap_err();
+        assert!(
+            e.to_string().contains("bad line in AEDSSEARCH block"),
+            "{e}"
+        );
     }
 
     #[test]

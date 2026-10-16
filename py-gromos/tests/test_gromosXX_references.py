@@ -231,6 +231,19 @@ def _get_write_frequencies(system_dir):
 # Reference test systems — same as test_gromosXX_references.rs
 # ============================================================================
 
+AEDS_SYSTEMS = [
+    "aladip_vacuum_aeds_below",
+    "aladip_vacuum_aeds_inside",
+    "aladip_vacuum_aeds_above",
+    "aladip_vacuum_aeds_f2",
+    "aladip_vacuum_aeds_f4",
+    "aladip_vacuum_aeds_f5",
+    "aladip_vacuum_aeds_f6",
+    "aladip_vacuum_aeds_sigma0",
+    "aladip_vacuum_aeds_cont1",
+    "aladip_vacuum_aeds_cont2",
+]
+
 REFERENCE_SYSTEMS = [
     # Level 0: Pair interactions
     "pair_lj",
@@ -336,6 +349,9 @@ REFERENCE_SYSTEMS = [
     "aladip_eds_solv_ti",
     "aladip_eds_solv_ti_groups",
     "aladip_eds_solv_ti_multis_fixed",
+    # Accelerated EDS (1.8): FORM 1 at three window placements, the searches (FORMS 2, 4, 5,
+    # 6, and 3 with a zero-variance target held by RESTREMIN 1), a search over two jobs
+    *AEDS_SYSTEMS,
 ]
 
 # EDS references compared end-state by end-state at frame 0 (`Simulation.eds_vi`,
@@ -492,6 +508,58 @@ def test_reference_eds_end_states(system_name):
     if EDS_SYSTEMS[system_name]:
         assert abs(sim.eds_vr - vr_exp) <= abs(vr_exp) * ENERGY_REL_TOL
     assert _recipe_for(system_dir).eds["enabled"]
+
+
+def _parse_expected_aeds(tre_path):
+    """Every frame of an A-EDS `.tre`: slots 34 (V_mix), 36 (E_max), 37 (E_min) and the
+    `# eds` offset column."""
+    frames = []
+    lines = tre_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line == "# totals":
+            vmix, emax, emin = (float(lines[i + k]) for k in (34, 36, 37))
+            n_at = lines.index("# numstates", i)
+            n = int(lines[n_at + 1])
+            eir = [float(lines[n_at + 3 + k].split()[3]) for k in range(n)]
+            frames.append((vmix, emax, emin, eir))
+    return frames
+
+
+@pytest.mark.parametrize("system_name", AEDS_SYSTEMS)
+def test_reference_aeds_search(system_name):
+    """`Simulation.eds_vmix` / `eds_emax` / `eds_emin` / `eds_eir` every frame are gromosXX's
+    slots 34, 36, 37 and offset column (written after the search update); the continuation job
+    reads its start state from the configuration's AEDSSEARCH block."""
+    system_dir = REF_DIR / system_name
+    expected = _parse_expected_aeds(system_dir / "expected" / "energies.tre")
+    sim = _create_simulation(system_dir)
+    assert _recipe_for(system_dir).aeds["enabled"]
+
+    def close(a, e):
+        return abs(a - e) <= max(abs(e) * ENERGY_REL_TOL, 1e-9)
+
+    for k, (vmix, emax, emin, eir) in enumerate(expected):
+        if k:
+            sim.step(1)
+        assert close(sim.eds_vmix, vmix), f"{system_name} frame {k}: {sim.eds_vmix} vs {vmix}"
+        assert close(sim.eds_emax, emax), f"{system_name} frame {k}: {sim.eds_emax} vs {emax}"
+        assert close(sim.eds_emin, emin), f"{system_name} frame {k}: {sim.eds_emin} vs {emin}"
+        assert all(close(a, e) for a, e in zip(sim.eds_eir, eir, strict=True)), (
+            f"{system_name} frame {k}: {sim.eds_eir} vs {eir}"
+        )
+
+
+def test_aeds_continuation_needs_the_aedssearch_block():
+    """NTIAEDSS = 0 without an AEDSSEARCH block in the configuration is refused, as gromosXX
+    does."""
+    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2"
+    inputs = _parse_input_toml(system_dir)
+    system = System.from_files(
+        str((system_dir / inputs["topology"]).resolve()),
+        str((REF_DIR / "aladip_vacuum" / "aladip_vacuum.conf").resolve()),
+    )
+    with pytest.raises(Exception, match="no AEDSSEARCH block"):
+        Simulation(system, _recipe_for(system_dir))
 
 
 # ============================================================================

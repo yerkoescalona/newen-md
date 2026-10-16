@@ -457,6 +457,12 @@ class Recipe:
         or ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``."""
         ...
     @property
+    def aeds(self) -> dict[str, Any] | None:
+        """The ``AEDS`` block (``enabled``, ``form``, ``num_states``, ``emax``, ``emin``,
+        ``eir``, ``ntiaedss``, ``restremin``, ``bmaxtype``, ``bmax``, ``asteps``, ``bsteps``), or
+        ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``."""
+        ...
+    @property
     def outputs(self) -> dict[str, Any]: ...
     @property
     def execution(self) -> dict[str, Any]: ...
@@ -624,6 +630,24 @@ class Simulation:
     def eds_vr(self) -> float:
         """EDS reference-state energy V_R (kJ/mol) at the last step (``.tre`` slot 35, part of
         ``total_energy`` through the special energy); 0 without EDS."""
+        ...
+    @property
+    def eds_vmix(self) -> float:
+        """A-EDS mixed energy V_mix (kJ/mol) at the last step (``.tre`` slot 34, in no total);
+        0 without A-EDS."""
+        ...
+    @property
+    def eds_emax(self) -> float:
+        """A-EDS E_max (kJ/mol) after the last step's search update (``.tre`` slot 36)."""
+        ...
+    @property
+    def eds_emin(self) -> float:
+        """A-EDS E_min (kJ/mol) after the last step's search update (``.tre`` slot 37)."""
+        ...
+    @property
+    def eds_eir(self) -> list[float]:
+        """A-EDS offsets E_i^R (kJ/mol) after the last step's search update, one per state
+        (the ``.tre``'s ``# eds`` offset column); zeros in plain EDS, empty without EDS."""
         ...
     @property
     def eds_vi(self) -> list[float]:

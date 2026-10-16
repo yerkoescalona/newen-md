@@ -334,7 +334,13 @@ pub fn write_energyred_body<W: Write>(
     totals[23] = e.constraint_total;
     totals[24] = e.distanceres_total;
     totals[27] = e.posrest_total;
+    // ENER[34-39] (1-based): the A-EDS fields, zero in plain EDS (`energy.cc:655-660`)
+    totals[33] = e.eds_vmix;
     totals[34] = e.eds_vr;
+    totals[35] = e.eds_emax;
+    totals[36] = e.eds_emin;
+    totals[37] = e.eds_globmin;
+    totals[38] = e.eds_globminfluc;
     totals[39] = e.entropy_term;
     totals[46] = total + folded_total(&e.shift_extra_orig);
     totals[47] = total + folded_total(&e.shift_extra_phys);
@@ -412,8 +418,8 @@ pub fn write_energyred_body<W: Write>(
     }
 
     // gromosXX `out_configuration.cc:3182-3200`: per end state V_i, V_i − V_i^special,
-    // V_i^special, the AEDS offset (0 in plain EDS) and V_i plus the shifted-RF extras (none
-    // with the plain reaction field)
+    // V_i^special, the A-EDS offset E_i^R (0 in plain EDS) and V_i plus the shifted-RF extras
+    // (none with the plain reaction field)
     let n_states = e.eds_vi.len();
     writeln!(w, "# eds\n# numstates\n{n_states}")?;
     writeln!(
@@ -422,7 +428,7 @@ pub fn write_energyred_body<W: Write>(
     )?;
     for (k, &v) in e.eds_vi.iter().enumerate() {
         let special = at(&e.eds_vi_special, k);
-        row(w, &[v, v - special, special, 0.0, v, v])?;
+        row(w, &[v, v - special, special, at(&e.eds_eir, k), v, v])?;
     }
     writeln!(w, "# gamd\n# numaccelgroups\n{n_accel_groups}")?;
     writeln!(
@@ -941,7 +947,8 @@ mod tests {
     }
 
     /// gromosXX `out_configuration.cc:3182-3200`: the number of end states, then per state V_i,
-    /// its nonbonded and special parts, the offset (0 without AEDS) and V_i twice; V_R in slot 35.
+    /// its nonbonded and special parts, the offset (0 without AEDS) and V_i twice; V_R in slot 35
+    /// and the A-EDS fields in slots 34 and 36-39.
     #[test]
     fn the_eds_section_lists_every_end_state() {
         let mut e = Energy::new(1, 1);
@@ -956,6 +963,12 @@ mod tests {
         e.eds_vi = vec![15.5, -16.25];
         e.eds_vi_special = vec![0.5, 0.0];
         e.eds_vr = -26.0;
+        e.eds_eir = vec![0.0, 10.0];
+        e.eds_vmix = -25.0;
+        e.eds_emax = 40.0;
+        e.eds_emin = -60.0;
+        e.eds_globmin = -3.0;
+        e.eds_globminfluc = 0.5;
         let mut out = Vec::new();
         write_energyred_body(&mut out, &e, 1).unwrap();
         let text = String::from_utf8(out).unwrap();
@@ -968,9 +981,13 @@ mod tests {
             .collect();
         assert!(text.contains("# numstates\n2\n"));
         assert_eq!(rows[0], [15.5, 15.0, 0.5, 0.0, 15.5, 15.5]);
-        assert_eq!(rows[1], [-16.25, -16.25, 0.0, 0.0, -16.25, -16.25]);
-        let slot35: f64 = text.lines().nth(35).unwrap().trim().parse().unwrap();
-        assert_eq!(slot35, -26.0);
+        assert_eq!(rows[1], [-16.25, -16.25, 0.0, 10.0, -16.25, -16.25]);
+        // ENER[34-39]: V_mix, V_R, E_max, E_min, G, σ_G (line k of the text is ENER[k])
+        let slot = |k: usize| -> f64 { text.lines().nth(k).unwrap().trim().parse().unwrap() };
+        assert_eq!(
+            [slot(34), slot(35), slot(36), slot(37), slot(38), slot(39)],
+            [-25.0, -26.0, 40.0, -60.0, -3.0, 0.5]
+        );
     }
 
     #[test]

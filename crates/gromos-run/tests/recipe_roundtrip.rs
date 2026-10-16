@@ -157,21 +157,49 @@ fn unmodelled_blocks_are_refused_unless_allowed() {
     assert!(recipe.to_imd_string(None).contains("GAMD\n1 2 3\nEND"));
 }
 
-/// AEDS and REPLICA_EDS act together with the modelled EDS block: refused by name whatever the
+/// REPLICA_EDS acts together with the modelled EDS block: refused by name whatever the
 /// passthrough policy.
 #[test]
-fn accelerated_and_replica_eds_are_refused_even_when_allowed() {
-    for block in ["AEDS", "REPLICA_EDS"] {
-        let text = format!("SYSTEM\n  1 0\nEND\n{block}\n  1 1 2\nEND\n");
-        let imd = parse_imd_str(&text).unwrap();
-        let err = RunRecipe::from_imd_with(&imd, &PassthroughPolicy::allow([block]))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains(block) && err.contains("not implemented"),
-            "{err}"
-        );
-    }
+fn replica_eds_is_refused_even_when_allowed() {
+    let text = "SYSTEM\n  1 0\nEND\nREPLICA_EDS\n  1 1 2\nEND\n";
+    let imd = parse_imd_str(text).unwrap();
+    let err = RunRecipe::from_imd_with(&imd, &PassthroughPolicy::allow(["REPLICA_EDS"]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("REPLICA_EDS") && err.contains("not implemented"),
+        "{err}"
+    );
+}
+
+/// The AEDS block is modelled: every field survives `.imd` → recipe → `.imd` → recipe and the
+/// recipe's dict form.
+#[test]
+fn the_aeds_block_round_trips() {
+    let text =
+        "SYSTEM\n  1 0\nEND\nAEDS\n 1\n 5 3\n 10.5 -50\n 0 -5 -140\n 0 1 2 3 500 50000\nEND\n";
+    let imd = parse_imd_str(text).unwrap();
+    let recipe = RunRecipe::from_imd(&imd).unwrap().0;
+    let a = recipe.aeds.clone().unwrap();
+    assert!(a.enabled && !a.ntiaedss && a.restremin);
+    assert_eq!((a.form, a.num_states, a.bmaxtype), (5, 3, 2));
+    assert_eq!((a.emax, a.emin, a.bmax), (10.5, -50.0, 3.0));
+    assert_eq!(a.eir, vec![0.0, -5.0, -140.0]);
+    assert_eq!((a.asteps, a.bsteps), (500, 50000));
+    let again = RunRecipe::from_imd(&parse_imd_str(&recipe.to_imd_string(None)).unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(again.aeds, recipe.aeds);
+    let json = recipe.to_json().unwrap();
+    assert_eq!(RunRecipe::from_json(&json).unwrap().aeds, recipe.aeds);
+    // AEDS = 0: FORM and NUMSTATES only, as gromosXX reads it
+    let off = parse_imd_str("AEDS\n 0\n 1 2\nEND\n").unwrap();
+    let r = RunRecipe::from_imd(&off).unwrap().0;
+    assert!(!r.aeds.as_ref().unwrap().enabled);
+    let again = RunRecipe::from_imd(&parse_imd_str(&r.to_imd_string(None)).unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(again.aeds, r.aeds);
 }
 
 #[test]

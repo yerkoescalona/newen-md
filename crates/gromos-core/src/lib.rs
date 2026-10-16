@@ -61,7 +61,8 @@ pub use math::{BoundaryCondition, Mat3, Periodicity, Rectangular, Triclinic, Vac
 
 // Re-export configuration types
 pub use configuration::{
-    Box, BoxType, Configuration, EdsEndStates, Energy, PrecalcEnergies, State, StochasticVariables,
+    AedsSearch, Box, BoxType, Configuration, EdsEndStates, Energy, PrecalcEnergies, State,
+    StochasticVariables,
 };
 
 // Re-export the individual-λ table

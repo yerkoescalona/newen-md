@@ -761,6 +761,24 @@ fn run_reference(system: &str) {
                 "{system}: final configuration PERTDATA {a} vs gromosXX {b}"
             );
         }
+        // An A-EDS search (FORMS 2-6): the AEDSSEARCH state a continuation starts from, printed
+        // with 9 decimals (`out_configuration.cc:3985-4004`).
+        let ours = parse_block_values(&out.join("final.conf"), "AEDSSEARCH");
+        let theirs = parse_block_values(&expected_fin, "AEDSSEARCH");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration AEDSSEARCH has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-8 * b.abs().max(1.0),
+                "{system}: AEDSSEARCH value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
         // Time-averaged distance restraints (NTDIR < 0): the ⟨r⁻³⟩ a continuation starts from.
         let ours = parse_block_values(&out.join("final.conf"), "DISRESEXPAVE");
         let theirs = parse_block_values(&expected_fin, "DISRESEXPAVE");
@@ -1121,6 +1139,22 @@ ref_test!(
 // input.toml.
 ref_test!(aladip_vacuum_eds_multis, "aladip_vacuum_eds_multis");
 ref_test!(aladip_vacuum_eds_pairs, "aladip_vacuum_eds_pairs");
+
+// ── Accelerated EDS (1.8) ────────────────────────────────────────────────────
+// FORM 1 with V_mix below, inside and above the [E_min, E_max] window: V_R*, the scaled EDS forces.
+ref_test!(aladip_vacuum_aeds_below, "aladip_vacuum_aeds_below");
+ref_test!(aladip_vacuum_aeds_inside, "aladip_vacuum_aeds_inside");
+ref_test!(aladip_vacuum_aeds_above, "aladip_vacuum_aeds_above");
+// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block.
+ref_test!(aladip_vacuum_aeds_f2, "aladip_vacuum_aeds_f2");
+ref_test!(aladip_vacuum_aeds_f4, "aladip_vacuum_aeds_f4");
+ref_test!(aladip_vacuum_aeds_f5, "aladip_vacuum_aeds_f5");
+ref_test!(aladip_vacuum_aeds_f6, "aladip_vacuum_aeds_f6");
+// BMAXTYPE 2 with a target state without variance, held by RESTREMIN 1.
+ref_test!(aladip_vacuum_aeds_sigma0, "aladip_vacuum_aeds_sigma0");
+// A search in two jobs: the second continues the first's AEDSSEARCH block (NTIAEDSS 0).
+ref_test!(aladip_vacuum_aeds_cont1, "aladip_vacuum_aeds_cont1");
+ref_test!(aladip_vacuum_aeds_cont2, "aladip_vacuum_aeds_cont2");
 
 // ── Energy minimization ──────────────────────────────────────────────────────
 // gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.

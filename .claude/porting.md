@@ -146,8 +146,25 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
 - **EDS inputs gromosXX does not check** (refused): FORM 3 pair states outside 1..N
   (`eds.cc:635, 660` index with them), an `MPERTATOM` IAC of 0 (unsigned, wraps;
   `in_perturbation.cc:1721-1727`). Not ported, refused by name: the shifted reaction field
-  (NLRELE 4), AEDS, REPLICA_EDS; SD and the coarse-grained and virtual-atom variants need blocks
+  (NLRELE 4), REPLICA_EDS; SD and the coarse-grained and virtual-atom variants need blocks
   the recipe does not model.
+- **A-EDS inputs gromosXX crashes on or computes nonsense with** (A, refused, not reproduced;
+  `check_aeds`, `gromos-run/src/plan.rs`, and `emax_emin_update`): EMIN > EMAX (warning, then
+  EIR unread and a segfault, `in_parameter.cc:4084-4088`; D14); BSTEPS < ASTEPS in FORMS 2/4/5/6
+  (unsigned `bsteps − asteps`, τ ≈ 4·10⁹ steps, offsets frozen, `eds.cc:186`; D13 — the pure
+  `memory_time` reproduces the wrap); BMAXTYPE 2 with a target state without variance, unless
+  the RESTREMIN clamp catches it (division by b_max = 0 at `eds.cc:314`, E_min = −∞, V_R* NaN;
+  D15). Pinned by unit tests and `gromos-md/tests/aeds_runs.rs`.
+- **A-EDS bookkeeping** (B, reproduced; `gromos-integrators/src/eds.rs`): the energy columns
+  (`eds_emax`, `eds_emin`, the offsets) are written after the search update, so a frame's
+  `eds_vmix`/`eds_vr` belong to the previous frame's parameters (`eds.cc:368-372`; D16); the
+  FORMS 5/6 offset step is ASTEPS·Δt, a time used as an energy (`:355`; D17); τ ramps over the
+  current run only (`sim.steps()` from 0); state 0 is the default target and the mean of
+  V_i − E_i^R mixes the offsets of different steps (`:246, 252-261`); the FORMS 5/6 prevalences
+  are plain exponentials (`:339-343`, overflow below V_i − E_i^R ≈ −709/β); the boost scales only
+  the EDS part of forces, virial and dV/dλ (`:137-176`). Pinned by the `aladip_vacuum_aeds_*`
+  references (whole block, 9-decimal AEDSSEARCH) and `gromos-run/tests/aeds_replay.rs`
+  (gromosXX's V_i(t) through the pure functions, ≤ 1e-9 relative). Corrections are later work.
 - **TI-EDS inputs gromosXX computes wrongly** (A, refused, not reproduced; `check_ti_eds`,
   `gromos-run/src/prepare.rs`): an atom in both `PERTATOMPARAM` and `MPERTATOM` gets pair code
   6, which no case handles, so its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65,

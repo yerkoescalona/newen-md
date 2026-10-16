@@ -457,7 +457,29 @@ pub fn instantiate(
                 seq.push(instantiate_orchestrator(terms, topo, periodicity)?);
             },
             AlgorithmSpec::Eds(e) => {
-                use gromos_integrators::eds::{Eds, EdsForm};
+                use gromos_integrators::eds::{AedsForm, AedsParams, Eds, EdsForm};
+                if let Some(a) = &e.aeds {
+                    let form = AedsForm::from_gromos(a.form).ok_or_else(|| {
+                        RunError::InvalidPlan(format!("AEDS FORM {}: must be 1-6", a.form))
+                    })?;
+                    let params = AedsParams {
+                        form,
+                        bmax_type: a.bmax_type,
+                        bmax: a.bmax,
+                        asteps: a.asteps,
+                        bsteps: a.bsteps,
+                    };
+                    seq.push(Box::new(Eds::accelerated(
+                        params,
+                        a.emax,
+                        a.emin,
+                        e.eir.clone(),
+                        a.fullemin,
+                        a.restart,
+                        e.beta,
+                    )));
+                    continue;
+                }
                 let form = match e.form {
                     1 => EdsForm::SingleS {
                         s: e.s.first().copied().unwrap_or(1.0),
@@ -894,7 +916,7 @@ mod tests {
     }
 
     /// `.imd` blocks the test-only legacy builder never modelled.
-    const LEGACY_UNMODELLED_BLOCKS: [&str; 3] = ["LAMBDAS", "PRECALCLAM", "EDS"];
+    const LEGACY_UNMODELLED_BLOCKS: [&str; 4] = ["LAMBDAS", "PRECALCLAM", "EDS", "AEDS"];
 
     #[test]
     fn plan_matches_legacy_builder_bit_for_bit() {
@@ -938,7 +960,7 @@ mod tests {
             if loaded.imd.rcrf != loaded.imd.rcutl {
                 continue;
             }
-            // Nor did it model individual λ (LAMBDAS), extended TI (PRECALCLAM) or EDS: an input
+            // Nor did it model individual λ (LAMBDAS), extended TI (PRECALCLAM) or (A)EDS: an input
             // carrying any of them has no legacy counterpart either.
             let unmodelled: Vec<&str> = LEGACY_UNMODELLED_BLOCKS
                 .iter()

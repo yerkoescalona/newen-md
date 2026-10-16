@@ -14,15 +14,15 @@
 //! parameter defaults in `gromos-io` were aligned to that (3.9 A18).
 //!
 //! Blocks the recipe does not model (GAMD, QMMM, …) are refused unless the caller lists
-//! them in a [`PassthroughPolicy`]; allowed ones ride along verbatim in `passthrough`. AEDS and
-//! REPLICA_EDS are refused whatever the policy: they act together with the modelled EDS block.
+//! them in a [`PassthroughPolicy`]; allowed ones ride along verbatim in `passthrough`.
+//! REPLICA_EDS is refused whatever the policy: it acts together with the modelled EDS block.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use gromos_core::lambdas::InteractionLambda;
 pub use gromos_forces::nonbonded::AtomPairKernel;
 use gromos_io::imd::{
-    EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
+    AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
     PrecalcLamBlock, PressureParameters, TempBathParameters,
 };
 use gromos_io::imd_write::{write_imd, MODELLED_BLOCKS};
@@ -741,6 +741,86 @@ impl Eds {
     }
 }
 
+/// The `AEDS` block: accelerated EDS over `num_states` end states (single s = 1, the boost
+/// between E_min and E_max, and in FORMS 2-6 the parameter search; gromosXX `read_AEDS`). The
+/// end states come from the perturbation topology's `MPERTATOM` block, as for EDS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Aeds {
+    /// AEDS = 1 (`false`: the block is present and off).
+    pub enabled: bool,
+    /// FORM: 1 fixed; 2 search E^R; 3 search E_max/E_min; 4 search all; 5 E_max/E_min search
+    /// with the "advanced" offset update; 6 the advanced offset update alone.
+    pub form: i32,
+    /// NUMSTATES
+    pub num_states: usize,
+    /// EMAX (kJ/mol); FORMS 3-5 start the search at V_mix instead.
+    #[serde(default)]
+    pub emax: f64,
+    /// EMIN (kJ/mol)
+    #[serde(default)]
+    pub emin: f64,
+    /// EIR: the energy offset of every state (kJ/mol).
+    #[serde(default)]
+    pub eir: Vec<f64>,
+    /// NTIAEDSS: `true` start a fresh search; `false` continue the configuration's
+    /// `AEDSSEARCH` block, which then overrides EMAX, EMIN and EIR.
+    #[serde(default)]
+    pub ntiaedss: bool,
+    /// RESTREMIN: hold E_min at or above the lowest average end-state energy until every state
+    /// has been visited.
+    #[serde(default)]
+    pub restremin: bool,
+    /// BMAXTYPE: 1 BMAX in kJ/mol, 2 in standard deviations of the target state's energy.
+    #[serde(default)]
+    pub bmaxtype: i32,
+    /// BMAX: the maximum energy barrier parameter.
+    #[serde(default)]
+    pub bmax: f64,
+    /// ASTEPS: memory time (steps) at the start of each run; FORMS 5/6 offset step ASTEPS·Δt.
+    #[serde(default)]
+    pub asteps: u32,
+    /// BSTEPS: memory time (steps) at the end of each run.
+    #[serde(default)]
+    pub bsteps: u32,
+}
+
+impl Aeds {
+    fn from_block(b: &AedsBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            form: b.form,
+            num_states: b.num_states,
+            emax: b.emax,
+            emin: b.emin,
+            eir: b.eir.clone(),
+            ntiaedss: b.ntiaedss,
+            restremin: b.restremin,
+            bmaxtype: b.bmaxtype,
+            bmax: b.bmax,
+            asteps: b.asteps,
+            bsteps: b.bsteps,
+        }
+    }
+
+    fn to_block(&self) -> AedsBlock {
+        AedsBlock {
+            enabled: self.enabled,
+            form: self.form,
+            num_states: self.num_states,
+            emax: self.emax,
+            emin: self.emin,
+            eir: self.eir.clone(),
+            ntiaedss: self.ntiaedss,
+            restremin: self.restremin,
+            bmaxtype: self.bmaxtype,
+            bmax: self.bmax,
+            asteps: self.asteps,
+            bsteps: self.bsteps,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Outputs {
@@ -788,6 +868,9 @@ pub struct RunRecipe {
     /// EDS block; `None` = absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eds: Option<Eds>,
+    /// AEDS block; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aeds: Option<Aeds>,
     pub outputs: Outputs,
     pub execution: Execution,
     /// Auxiliary input files (perturbation topology, restraint specifications) — part of the run
@@ -935,22 +1018,11 @@ impl RunRecipe {
             if MODELLED_BLOCKS.contains(&name.as_str()) {
                 continue;
             }
-            // refused whatever the policy: both drive the EDS machinery (gromosXX refuses AEDS
-            // together with EDS = 1, `in_parameter.cc:4029-4041`)
-            match name.as_str() {
-                "AEDS" => {
-                    return Err(RunError::Recipe(
-                        "AEDS block: accelerated EDS is not implemented (plain EDS is the EDS \
-                         block; gromosXX refuses AEDS together with EDS = 1)"
-                            .to_string(),
-                    ))
-                },
-                "REPLICA_EDS" => {
-                    return Err(RunError::Recipe(
-                        "REPLICA_EDS block: replica-exchange EDS is not implemented".to_string(),
-                    ))
-                },
-                _ => {},
+            // refused whatever the policy: it drives the EDS machinery
+            if name == "REPLICA_EDS" {
+                return Err(RunError::Recipe(
+                    "REPLICA_EDS block: replica-exchange EDS is not implemented".to_string(),
+                ));
             }
             if !policy.allowed.contains(name) {
                 return Err(RunError::UnknownBlock {
@@ -1164,6 +1236,7 @@ impl RunRecipe {
                 atom_pair_kernel: AtomPairKernel::default(),
             },
             eds: imd.eds.as_ref().map(Eds::from_block),
+            aeds: imd.aeds.as_ref().map(Aeds::from_block),
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
                 ntwse: imd.ntwse,
@@ -1322,6 +1395,7 @@ impl RunRecipe {
                 max_lambda: p.max_lambda,
             }),
             eds: r.eds.as_ref().map(Eds::to_block),
+            aeds: r.aeds.as_ref().map(Aeds::to_block),
             ntem: r.minimisation.method,
             nmin: r.minimisation.min_steps,
             dele: r.minimisation.tolerance,

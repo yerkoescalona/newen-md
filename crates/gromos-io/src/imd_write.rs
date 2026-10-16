@@ -52,6 +52,7 @@ pub const MODELLED_BLOCKS: &[&str] = &[
     "PRECALCLAM",
     "ENERGYMIN",
     "EDS",
+    "AEDS",
 ];
 
 /// One data line: indented, values separated by two spaces.
@@ -358,6 +359,34 @@ pub fn write_imd(params: &ImdParameters, n_atoms: Option<usize>) -> String {
             }
             o.push_str("#    EIR\n");
             row(o, &b.eir.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+        });
+    }
+
+    if let Some(b) = &p.aeds {
+        block(&mut out, "AEDS", |o| {
+            o.push_str("#    AEDS\n");
+            row(o, vals![i32::from(b.enabled)]);
+            o.push_str("#    FORM  NUMSTATES\n");
+            row(o, vals![b.form, b.num_states]);
+            if !b.enabled {
+                return;
+            }
+            o.push_str("#    EMAX  EMIN\n");
+            row(o, vals![b.emax, b.emin]);
+            o.push_str("#    EIR\n");
+            row(o, &b.eir.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+            o.push_str("#    NTIAEDSS  RESTREMIN  BMAXTYPE  BMAX  ASTEPS  BSTEPS\n");
+            row(
+                o,
+                vals![
+                    i32::from(b.ntiaedss),
+                    i32::from(b.restremin),
+                    b.bmaxtype,
+                    b.bmax,
+                    b.asteps,
+                    b.bsteps
+                ],
+            );
         });
     }
 

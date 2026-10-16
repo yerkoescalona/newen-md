@@ -42,8 +42,8 @@ pub mod trajectory_binary;
 // Re-export commonly used types
 pub use args::{run_main, Arguments, Program, Status};
 pub use coordinate::{
-    parse_g96_labeled, read_coordinates, read_g96_labeled, CoordinateData, G96Atom,
-    LabeledCoordinateData,
+    parse_aedssearch, parse_g96_labeled, read_coordinates, read_g96_labeled, CoordinateData,
+    G96Atom, LabeledCoordinateData,
 };
 pub use dlg::{DlgWriter, LambdaDerivativeFrame};
 pub use energy::read_energy_trajectory_native;
@@ -55,8 +55,8 @@ pub use free_energy::{
 };
 pub use g96::{write_por, write_rpr};
 pub use imd::{
-    parse_imd_str, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
-    PrecalcLamBlock, PressureParameters, TempBathParameters,
+    parse_imd_str, AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow,
+    NonbondedExtra, PrecalcLamBlock, PressureParameters, TempBathParameters,
 };
 pub use imd_write::{write_imd, write_imd_file};
 pub use input::{GamdBlock, ReplicaBlock};

@@ -46,11 +46,15 @@ pub struct CoordinateData {
     /// λ of a `PERTDATA` block (gromosXX writes it into the final configuration of a perturbed
     /// run; a run with NRDGL=1 starts from it).
     pub pertdata: Option<f64>,
+    /// The data lines of an `AEDSSEARCH` block (the A-EDS search state of the run that wrote
+    /// the file); parsed by [`parse_aedssearch`] when a run continues the search.
+    pub aedssearch: Option<Vec<String>>,
 }
 
 /// Read raw coordinate data from a GROMOS coordinate file (.conf/.cnf/.g96).
 ///
-/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, GENBOX and PERTDATA blocks.
+/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, GENBOX, PERTDATA and AEDSSEARCH
+/// blocks.
 /// Returns raw data without constructing a Configuration object.
 pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoError> {
     let reader = crate::gz::open_text(path.as_ref())
@@ -61,6 +65,7 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
     let mut box_dims = Vec3::ZERO;
     let mut box_type: i32 = -1; // unknown until parsed
     let mut pertdata: Option<f64> = None;
+    let mut aedssearch: Option<Vec<String>> = None;
 
     #[derive(PartialEq)]
     enum Section {
@@ -72,6 +77,7 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
         Box,
         GenBox,
         PertData,
+        AedsSearch,
     }
     let mut section = Section::None;
     let mut genbox_line_num: usize = 0;
@@ -110,6 +116,11 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
                 section = Section::PertData;
                 continue;
             },
+            "AEDSSEARCH" => {
+                section = Section::AedsSearch;
+                aedssearch = Some(Vec::new());
+                continue;
+            },
             "END" => {
                 section = Section::None;
                 continue;
@@ -142,6 +153,13 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
                 }
             },
             Section::Velocity => {
+                // `G96Writer::write_velocities` (the `md` binary's final configuration) writes the
+                // three components without the 24-character label
+                let all: Vec<&str> = trimmed.split_whitespace().collect();
+                if all.len() == 3 {
+                    velocities.push(parse_vec3(&all)?);
+                    continue;
+                }
                 if line.len() < 24 {
                     continue;
                 }
@@ -198,6 +216,11 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
                         .and_then(|x| x.parse::<f64>().ok());
                 }
             },
+            Section::AedsSearch => {
+                if let Some(lines) = aedssearch.as_mut() {
+                    lines.push(trimmed.to_string());
+                }
+            },
             Section::None => {},
         }
     }
@@ -214,7 +237,62 @@ pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoErr
         box_dims,
         box_type,
         pertdata,
+        aedssearch,
     })
+}
+
+/// The A-EDS search state of an `AEDSSEARCH` block's data lines for `num_states` states
+/// (gromosXX `_read_aedssearch`, `in_configuration.cc:3687-3752`): E_max, E_min, the E_max
+/// candidate, the round-trip count, the previous state and the RESTREMIN flag one per line, then
+/// one line per state with E_i^R, the log average, the free energy, the visited flag, the visit
+/// count, the two mean energies, the Welford sum, the standard deviation and the frame count.
+/// Unlike gromosXX (which checks the stream once, after the last line) every line and the
+/// number of state lines are checked.
+pub fn parse_aedssearch(
+    lines: &[String],
+    num_states: usize,
+) -> Result<gromos_core::configuration::AedsSearch, IoError> {
+    let bad = |what: &str| IoError::ParseError(format!("bad line in AEDSSEARCH block: {what}"));
+    if lines.len() != 6 + num_states {
+        return Err(IoError::ParseError(format!(
+            "AEDSSEARCH block has {} lines, NUMSTATES = {num_states} needs {}",
+            lines.len(),
+            6 + num_states
+        )));
+    }
+    fn first<T: std::str::FromStr>(line: &str) -> Option<T> {
+        line.split_whitespace().next()?.parse().ok()
+    }
+    let mut s = gromos_core::configuration::AedsSearch::new(
+        first(&lines[0]).ok_or_else(|| bad("EMAX"))?,
+        first(&lines[1]).ok_or_else(|| bad("EMIN"))?,
+        vec![0.0; num_states],
+        first::<i64>(&lines[5]).ok_or_else(|| bad("FULLEMIN"))? == 1,
+    );
+    s.searchemax = first(&lines[2]).ok_or_else(|| bad("SEARCHEMAX"))?;
+    s.emaxcounts = first(&lines[3]).ok_or_else(|| bad("EMAXCOUNTS"))?;
+    s.oldstate = first(&lines[4]).ok_or_else(|| bad("OLDSTATE"))?;
+    s.initialise = false;
+    for (i, line) in lines[6..].iter().enumerate() {
+        let v: Vec<&str> = line.split_whitespace().collect();
+        let what = format!("state {}", i + 1);
+        if v.len() != 10 {
+            return Err(bad(&what));
+        }
+        let real = |k: usize| v[k].parse::<f64>().map_err(|_| bad(&what));
+        let count = |k: usize| v[k].parse::<u32>().map_err(|_| bad(&what));
+        s.eir[i] = real(0)?;
+        s.lnexpde[i] = real(1)?;
+        s.statefren[i] = real(2)?;
+        s.visited[i] = v[3].parse::<i64>().map_err(|_| bad(&what))? == 1;
+        s.visitcounts[i] = count(4)?;
+        s.avgenergy[i] = real(5)?;
+        s.eiravgenergy[i] = real(6)?;
+        s.bigs[i] = real(7)?;
+        s.stdevenergy[i] = real(8)?;
+        s.framecounts[i] = count(9)?;
+    }
+    Ok(s)
 }
 
 /// An atom with its label information and coordinates, as read from a G96 file.

@@ -194,6 +194,8 @@ pub struct ImdParameters {
     pub precalclam: Option<PrecalcLamBlock>,
     /// EDS block (enveloping distribution sampling); `None` = absent.
     pub eds: Option<EdsBlock>,
+    /// AEDS block (accelerated EDS); `None` = absent.
+    pub aeds: Option<AedsBlock>,
 
     // ENERGYMIN block
     /// Energy minimization method (0=off, 1=steepest descent, 2=Fletcher-Reeves CG)
@@ -408,6 +410,7 @@ impl Default for ImdParameters {
             lambdas: None,
             precalclam: None,
             eds: None,
+            aeds: None,
             raw_blocks: HashMap::new(),
         }
     }
@@ -658,6 +661,127 @@ pub fn parse_eds(lines: &[String]) -> Result<EdsBlock, IoError> {
     }
     for k in 0..n {
         b.eir.push(real(&mut t, &format!("EIR[{k}]"))?);
+    }
+    leftover(&mut t)?;
+    Ok(b)
+}
+
+/// The `AEDS` block (gromosXX `read_AEDS`, `in_parameter.cc:3968-4140`). With AEDS = 0 only
+/// FORM and NUMSTATES are read; the other fields are then zero.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AedsBlock {
+    /// AEDS: 0 off, 1 on.
+    pub enabled: bool,
+    /// FORM 1-6: 1 fixed parameters; 2 search E^R; 3 search E_max/E_min; 4 search all; 5 and 6
+    /// the "advanced" offset search with (5) or without (6) the E_max/E_min search.
+    pub form: i32,
+    /// NUMSTATES
+    pub num_states: usize,
+    /// EMAX (kJ/mol)
+    pub emax: f64,
+    /// EMIN (kJ/mol)
+    pub emin: f64,
+    /// EIR: the energy offset of every state.
+    pub eir: Vec<f64>,
+    /// NTIAEDSS: 1 start a fresh search; 0 continue the configuration's AEDSSEARCH block.
+    pub ntiaedss: bool,
+    /// RESTREMIN: 1 keep E_min at or above the lowest average end-state energy until every
+    /// state has been visited.
+    pub restremin: bool,
+    /// BMAXTYPE: 1 BMAX in kJ/mol, 2 BMAX in standard deviations.
+    pub bmaxtype: i32,
+    /// BMAX: the maximum energy barrier parameter.
+    pub bmax: f64,
+    /// ASTEPS: memory time (steps) at the start of the run.
+    pub asteps: u32,
+    /// BSTEPS: memory time (steps) at the end of the run.
+    pub bsteps: u32,
+}
+
+/// Parse the data lines of an `AEDS` block as gromosXX does: the token stream AEDS, FORM,
+/// NUMSTATES (FORM in 1..6 and NUMSTATES ≥ 2 even with AEDS = 0, which stops there), then EMAX,
+/// EMIN, NUMSTATES offsets EIR, NTIAEDSS, RESTREMIN, BMAXTYPE, BMAX, ASTEPS, BSTEPS. Left-over
+/// tokens are an error. EMIN > EMAX parses: gromosXX only warns and then reads nothing more
+/// (`:4084-4088`); the recipe refuses it.
+pub fn parse_aeds(lines: &[String]) -> Result<AedsBlock, IoError> {
+    let lines: Vec<String> = lines
+        .iter()
+        .map(|l| l.split('#').next().unwrap_or_default().trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    fn int(t: &mut Tokens<'_>, name: &str) -> Result<i32, IoError> {
+        t.next_i32(name)?
+            .ok_or_else(|| IoError::ParseError(format!("missing {name}")))
+    }
+    fn real(t: &mut Tokens<'_>, name: &str) -> Result<f64, IoError> {
+        t.next_f64(name)?
+            .ok_or_else(|| IoError::ParseError(format!("missing {name}")))
+    }
+    fn one_of(v: i32, name: &str, allowed: &[i32]) -> Result<i32, IoError> {
+        if allowed.contains(&v) {
+            Ok(v)
+        } else {
+            Err(IoError::ParseError(format!(
+                "AEDS {name} = {v}: must be one of {allowed:?}"
+            )))
+        }
+    }
+    let mut t = Tokens::new("AEDS", &lines);
+    let enabled = one_of(int(&mut t, "AEDS")?, "AEDS", &[0, 1])? == 1;
+    let form = one_of(int(&mut t, "FORM")?, "FORM", &[1, 2, 3, 4, 5, 6])?;
+    let n = int(&mut t, "NUMSTATES")?;
+    if n < 2 {
+        return Err(IoError::ParseError(format!(
+            "AEDS NUMSTATES = {n}: must be >= 2"
+        )));
+    }
+    let leftover = |t: &mut Tokens<'_>| match t.next_raw() {
+        Some(extra) => Err(IoError::ParseError(format!(
+            "Left-over parameters in AEDS block (from {extra:?})"
+        ))),
+        None => Ok(()),
+    };
+    let mut b = AedsBlock {
+        enabled,
+        form,
+        num_states: n as usize,
+        emax: 0.0,
+        emin: 0.0,
+        eir: Vec::new(),
+        ntiaedss: false,
+        restremin: false,
+        bmaxtype: 0,
+        bmax: 0.0,
+        asteps: 0,
+        bsteps: 0,
+    };
+    if !enabled {
+        leftover(&mut t)?;
+        return Ok(b);
+    }
+    b.emax = real(&mut t, "EMAX")?;
+    b.emin = real(&mut t, "EMIN")?;
+    for k in 0..b.num_states {
+        b.eir.push(real(&mut t, &format!("EIR[{k}]"))?);
+    }
+    b.ntiaedss = one_of(int(&mut t, "NTIAEDSS")?, "NTIAEDSS", &[0, 1])? == 1;
+    b.restremin = one_of(int(&mut t, "RESTREMIN")?, "RESTREMIN", &[0, 1])? == 1;
+    b.bmaxtype = one_of(int(&mut t, "BMAXTYPE")?, "BMAXTYPE", &[1, 2])?;
+    b.bmax = real(&mut t, "BMAX")?;
+    if b.bmax.is_nan() || b.bmax <= 0.0 {
+        return Err(IoError::ParseError(format!(
+            "AEDS BMAX = {}: must be > 0",
+            b.bmax
+        )));
+    }
+    for (name, slot) in [("ASTEPS", &mut b.asteps), ("BSTEPS", &mut b.bsteps)] {
+        let v = int(&mut t, name)?;
+        if v <= 0 {
+            return Err(IoError::ParseError(format!(
+                "AEDS {name} = {v}: must be > 0"
+            )));
+        }
+        *slot = v as u32;
     }
     leftover(&mut t)?;
     Ok(b)
@@ -1375,6 +1499,9 @@ fn parse_block(
         },
         "EDS" => {
             params.eds = Some(parse_eds(data_lines)?);
+        },
+        "AEDS" => {
+            params.aeds = Some(parse_aeds(data_lines)?);
         },
         "PERTURBATION" => {
             let mut t = Tokens::new("PERTURBATION", data_lines);
@@ -2097,6 +2224,58 @@ MULTIBATH\n    {algo_line}\n#   NBATHS\n    1\n#   TEMP0  TAU\n    300.0  0.1\n#
         ] {
             let e = eds_block(body).unwrap_err().to_string();
             assert!(e.contains(what) && e.contains("EDS"), "{body:?}: {e}");
+        }
+    }
+
+    // ── AEDS (gromosXX read_AEDS, in_parameter.cc:3968-4140) ─────────────────────────────────
+    fn aeds_block(body: &str) -> Result<Option<AedsBlock>, IoError> {
+        parse_imd_str(&format!("AEDS\n{body}\nEND\n")).map(|p| p.aeds)
+    }
+
+    #[test]
+    fn aeds_parses_the_token_stream() {
+        // gromosXX's own example block
+        let b = aeds_block(
+            "# AEDS\n  1\n# FORM  NUMSTATES\n  4  5\n# EMAX  EMIN\n  10  -50\n# EIR\n  0 -5 -140 \
+             -560 -74\n# NTIAEDSS  RESTREMIN  BMAXTYPE  BMAX  ASTEPS  BSTEPS\n  1 1 2 3 500 50000",
+        )
+        .unwrap()
+        .unwrap();
+        assert!(b.enabled && b.ntiaedss && b.restremin);
+        assert_eq!((b.form, b.num_states, b.bmaxtype), (4, 5, 2));
+        assert_eq!((b.emax, b.emin, b.bmax), (10.0, -50.0, 3.0));
+        assert_eq!(b.eir, vec![0.0, -5.0, -140.0, -560.0, -74.0]);
+        assert_eq!((b.asteps, b.bsteps), (500, 50000));
+        // EMIN > EMAX parses (gromosXX warns); the recipe refuses it
+        assert_eq!(
+            aeds_block("1\n1 2\n0 10\n0 0\n1 1 1 2 10 10")
+                .unwrap()
+                .unwrap()
+                .emin,
+            10.0
+        );
+        let off = aeds_block("0\n6 2").unwrap().unwrap();
+        assert!(!off.enabled && off.eir.is_empty());
+    }
+
+    #[test]
+    fn aeds_refuses_what_gromosxx_refuses() {
+        for (body, what) in [
+            ("0\n1 2\n0 0", "Left-over"),
+            ("1\n1 2\n0 0\n0 0\n1 1 1 2 10 10 3", "Left-over"),
+            ("2\n1 2", "AEDS = 2"),
+            ("1\n7 2", "FORM = 7"),
+            ("0\n1 1", "NUMSTATES = 1"),
+            ("1\n1 2\n0 0\n0 0\n2 1 1 2 10 10", "NTIAEDSS = 2"),
+            ("1\n1 2\n0 0\n0 0\n1 2 1 2 10 10", "RESTREMIN = 2"),
+            ("1\n1 2\n0 0\n0 0\n1 1 3 2 10 10", "BMAXTYPE = 3"),
+            ("1\n1 2\n0 0\n0 0\n1 1 1 0 10 10", "BMAX = 0"),
+            ("1\n1 2\n0 0\n0 0\n1 1 1 2 0 10", "ASTEPS = 0"),
+            ("1\n1 2\n0 0\n0 0\n1 1 1 2 10 -1", "BSTEPS = -1"),
+            ("1\n1 2\n0 0\n0\n1 1 1 2 10", "missing ASTEPS"),
+        ] {
+            let e = aeds_block(body).unwrap_err().to_string();
+            assert!(e.contains(what) && e.contains("AEDS"), "{body:?}: {e}");
         }
     }
 

@@ -32,6 +32,9 @@ pub struct PyConfiguration {
     pub(crate) labels: Option<Vec<G96Atom>>,
     /// λ of the file's PERTDATA block (a run with NRDGL=1 starts from it).
     pub(crate) pertdata: Option<f64>,
+    /// The data lines of the file's AEDSSEARCH block (an A-EDS search with NTIAEDSS = 0
+    /// continues from it).
+    pub(crate) aedssearch: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -63,6 +66,7 @@ impl PyConfiguration {
             box_dims: coord_data.box_dims,
             labels,
             pertdata: coord_data.pertdata,
+            aedssearch: coord_data.aedssearch,
         })
     }
 
@@ -142,6 +146,7 @@ impl PyConfiguration {
             box_dims,
             labels: Some(atoms),
             pertdata: None,
+            aedssearch: None,
         }
     }
 

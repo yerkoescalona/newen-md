@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_aeds_f5"
+description = "aladip vacuum, A-EDS FORM 5 (E_max/E_min search, prevalence-driven offsets with step ASTEPS*dt) over three end states of N and H (aladip_aeds3.mpt), EIR 0 0 -3, 250 steps from Maxwell-Boltzmann velocities"
+level = 4
+isolates = "A-EDS parameter search: slots 34-39, the offsets every frame (written after the update) and the final AEDSSEARCH block"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_aeds_f5.in"
+pttopo = "../shared/aladip_aeds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

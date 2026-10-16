@@ -5,6 +5,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.60] (2026-10-16)
+
+**Accelerated EDS** (1.8): the `AEDS` block (FORMS 1-6) runs through the recipe instead of being
+refused — the boosted reference energy V_R*, the scaled EDS forces, the E_max/E_min and offset
+searches, and the `AEDSSEARCH` state a chained search continues from — reproducing gromosXX
+247c95c4 where it is well defined and refusing the inputs it crashes on. Ten new references;
+101 pass, the 91 earlier ones byte-identical to 0.0.59.
+
+### Added (1.8 step 8 — A-EDS)
+
+- **`AEDS` block, modelled** (`gromos_io::imd::AedsBlock`, `RunRecipe::aeds`, Python
+  `Recipe.aeds`): gromosXX's token stream (`in_parameter.cc:3968-4140`) — AEDS, FORM (1-6),
+  NUMSTATES (≥ 2, read even with AEDS = 0, which stops there), EMAX, EMIN, EIR, NTIAEDSS,
+  RESTREMIN, BMAXTYPE (1, 2), BMAX (> 0), ASTEPS and BSTEPS (> 0); left-over tokens are an
+  error. `imd_write` writes it, so it round-trips. `MPERTATOM` and the end-state nonbonded terms
+  are EDS's.
+- **The A-EDS step** (`gromos_integrators::eds`, the same plan kind `eds`, `EdsPlan::aeds`):
+  V_mix is the single-s fold with s = 1; V_R* and the force factor (`boosted_reference`,
+  `eds.cc:122-134`); F += Σ p_i·fkfac·F_i, likewise the virial and Σ p_i ∂V_i/∂λ (only the EDS
+  part is scaled, as in gromosXX); V_R* in `eds_vr` and the special energy, V_mix in no total.
+- **The searches**, pure functions unit-tested and replayed against gromosXX: `memory_time`
+  (`:186`), `initialise_search` (`:107-120`), `offset_update` (`:184-221`), `track_state`
+  (`:223-266`, `check_round_trip` `:731-750`), `emax_emin_update` (`:270-330`, all four E_min
+  branches), `advanced_offset_update` (`:332-363`), `search_step` composing them.
+- **Search state in the configuration** (`gromos_core::AedsSearch`, `Configuration::aeds`): the
+  six scalars and ten per-state vectors of gromosXX's `sim.param().eds`. `md` writes it as the
+  final configuration's `AEDSSEARCH` block for FORMS 2-6 (`G96Writer::write_aedssearch`, fixed
+  format, 9 decimals, width 15, as `out_configuration.cc:3985-4004`); `read_coordinates` keeps the
+  block's lines and `parse_aedssearch` reads them. With NTIAEDSS = 0 in FORMS 2-6 the block is
+  required ("no AEDSSEARCH block in configuration") and overrides the input's EMAX, EMIN and EIR;
+  with NTIAEDSS = 1 a block present is ignored with gromosXX's warning. The Python front-end
+  reads it from the `.cnf` the same way.
+- **Output**: `ENERGY03` slots 34 (V_mix), 35 (V_R*), 36 (E_max), 37 (E_min), 38 (G), 39 (σ_G)
+  and the `# eds` offset column (E_i^R). Python: `Simulation.eds_vmix`, `eds_emax`, `eds_emin`,
+  `eds_eir`; stubs.
+- Refusals, each with a unit test (`check_aeds`, `gromos-run/src/plan.rs`): AEDS together with
+  EDS = 1 (whatever the AEDS block says, as gromosXX), no coupled bath, baths at different or zero
+  temperature, energy minimisation (gromosXX keeps steepest descent locked with AEDS too),
+  triclinic and truncated-octahedral boxes (gromosXX allows them; no reference here), lattice
+  sums, NLRELE 4, QM/ML terms, GAMD, LAMBDAS, PRECALCLAM, and the three defects below.
+  REPLICA_EDS stays refused by name.
+- References (native gromosXX, whole-block: energies, forces, trajectory, final configuration
+  with its `AEDSSEARCH` block): `aladip_vacuum_aeds_below` / `_inside` / `_above` (FORM 1, two
+  end states, V_mix below, inside and above the window); `aladip_vacuum_aeds_f2`, `_f4`, `_f5`,
+  `_f6` (three gentle end states `shared/aladip_aeds3.mpt`, 300 steps, 250 for FORM 5 — FORM 4
+  runs all four E_min branches and 16 round trips); `aladip_vacuum_aeds_sigma0` (FORM 3,
+  BMAXTYPE 2, an unvisited default target held by RESTREMIN 1); `aladip_vacuum_aeds_cont1/2` (a
+  FORM 4 search over two jobs, the second from the first's native final configuration with
+  overridden input EMAX/EMIN/EIR). The test compares the `AEDSSEARCH` block value by value.
+- `gromos-run/tests/aeds_replay.rs`: gromosXX's printed V_i(t) of the f2/f4/f5/f6/sigma0
+  references fed into the pure functions reproduce its V_mix and V_R* (with the previous frame's
+  parameters), E_max, E_min, G, σ_G and offsets (after the update) every frame, and its final
+  `AEDSSEARCH` block — largest relative deviation 8.0e-10 (the 10 printed digits).
+- `gromos-md/tests/aeds_runs.rs`: a search over 100 + 100 steps through our own `AEDSSEARCH`
+  against 200 steps in one job, and the refused inputs through `md`.
+
+### Changed
+
+- `read_coordinates` reads a `VELOCITY` block whose lines carry only the three components (what
+  `G96Writer::write_velocities`, so `md`'s final configuration, writes); it read them as missing,
+  so a run continued from `md`'s own final configuration started from zero velocities.
+
+### Deliberate differences from gromosXX
+
+- The FORM 5 reference stops at 250 steps: at step 299 of the same run one off-diagonal virial
+  element (0.1192, a sum of terms of order 10³) differs in its 9th significant digit
+  (1.2·10⁻⁹ kJ/mol), the chaos of 300 MD steps, not the search (frames 0-249 agree everywhere).
+- gromosXX accumulates the A-EDS virial and Σ p_i ∂V_i/∂λ in `long double` (its weight `pi` is
+  one, `eds.cc:139`); gromos-rs in double (rounding level, within every reference tolerance).
+
+### Refused gromosXX defects (not reproduced)
+
+- **EMIN > EMAX** (dossier D14): gromosXX warns, returns before EIR is read and the vectors are
+  sized (`in_parameter.cc:4084-4088`), and segfaults in the first step (FORM 1) or while reading
+  the configuration (FORMS 2-6, NTIAEDSS then uninitialised). Refused by the recipe.
+- **BSTEPS < ASTEPS** in FORMS 2, 4, 5, 6 (D13): `bsteps − asteps` is unsigned
+  (`eds.cc:186`, `parameter.h:3305-3309`), τ wraps to ~4·10⁹ steps after step 0 and the offsets
+  freeze to 1e-7. Refused; FORMS 1 and 3 never use τ and accept it. `memory_time` itself
+  reproduces the wrap.
+- **BMAXTYPE 2 with a target state without variance** (D15): b_max = 0 and `eds.cc:314` divides by
+  it, E_min = −∞, V_R* −∞ then NaN. Refused at the step where it happens ("use BMAXTYPE 1 or
+  RESTREMIN 1"); where the RESTREMIN clamp catches it (E_min = G) the run goes on as in gromosXX
+  (`aladip_vacuum_aeds_sigma0`).
+
+### Reproduced gromosXX defects
+
+- **The energy columns are written after the search update** (D16, `eds.cc:368-372`): a frame's
+  `eds_vmix` and `eds_vr` were computed with the previous frame's E^R, E_max and E_min, which the
+  same frame prints already updated. A reweighting script that rebuilds V_R* from the columns
+  (e.g. the LiveCoMS t_05 `search.py`) must use the previous frame's `e{i}r`, `eds_emax`,
+  `eds_emin`. Reproduced (`gromos-integrators/src/eds.rs`, `apply_accelerated`).
+- **FORMS 5/6 offset step ASTEPS·Δt** (D17, `eds.cc:355`): a time in ps used as kJ/mol, so the
+  learning rate depends on the time step and ASTEPS means a memory time in FORMS 2/4 but a rate
+  in 5/6. Reproduced (`search_step`).
+- **The memory-time ramp restarts in every job** (`sim.steps()` from 0, `eds.cc:186`): a chained
+  search has a saw-tooth τ; with ASTEPS = BSTEPS a chained search equals a single one.
+- **State 1 is the default target** even if never visited (its mean V_i − E_i^R then 0, a fake G,
+  `eds.cc:252-261`); the mean of V_i − E_i^R mixes the offsets of different steps (`:246`) while
+  σ is that of V_i.
+- **Prevalences without log-sum-exp** (new, inferred from `eds.cc:339-343`, not probed): FORMS 5/6
+  compute e^{−β(V_i − E_i^R)} directly, so a state with V_i − E_i^R below about −1770 kJ/mol at
+  300 K overflows to ∞ and the offsets become NaN.
+
+### Verified
+
+- References: 101 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed. The 91 earlier references (and `aladip_gamd`) produce
+  byte-identical output to the 0.0.59 binary (every file but `<tre>.recipe.toml`, the version in
+  the provenance line normalised).
+- Continuation: ours from gromosXX's job-1 configuration equals gromosXX's job 2 (the
+  `aladip_vacuum_aeds_cont2` reference); our job 1 → job 2 chain ends in the same `AEDSSEARCH`
+  block as gromosXX's chain, and both chains differ from the 200-step single job by at most
+  3.5·10⁻⁶ kJ/mol (5.3·10⁻⁸ relative), the 9-decimal restart round-off.
+- TI-AEDS (AEDS with `PERTATOMPARAM` atoms, which gromosXX allows), checked against the native
+  binary on `aladip_eds_solv_ti`'s system for 50 steps: FORM 1 inside the window, every `.tre`
+  number and the `.trg`'s dH/dλ and ∂V_R*/∂λ equal; FORM 4, ∂V_R*/∂λ within 5.5·10⁻¹⁰ relative.
+  No reference committed.
+- Timing against the 0.0.59 binary (`water_216_box`, 10 000 steps, one thread, n = 10,
+  interleaved): 7.295 ± 0.083 s vs 7.254 ± 0.258 s — unchanged.
+- core, io, run, forces, integrators: 568 tests green; clippy no new warnings; `cargo fmt
+  --check` clean; `pytest` 792 passed / 76 skipped; stubtest clean; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- The corrections of D16 and D17 (a switch writing the pre-update parameters, an offset step in
+  energy units) and of the per-job τ ramp; a log-sum-exp for the FORM 5/6 prevalences.
+- `AEDSSEARCH` in trajectory frames (gromosXX writes it only into the final configuration, so a
+  crashed search loses its state); the Python front-end reads the block but writes no final
+  configuration.
+- Triclinic and truncated-octahedral boxes with A-EDS (gromosXX allows them), stochastic dynamics
+  (not implemented), `eds_2box`.
+- The LiveCoMS t_05 tutorial runs and an `ene_ana → dfmult` comparison on a production run.
+
 ## [0.0.59] (2026-10-16)
 
 **Net charge of a perturbation, λ windows from Python** (1.8): every perturbed run reports the

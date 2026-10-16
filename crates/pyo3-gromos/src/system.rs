@@ -55,6 +55,7 @@ impl PySystem {
                 vel_data: conf_ref.vel_data.clone(),
                 box_dims: conf_ref.box_dims,
                 pertdata: conf_ref.pertdata,
+                aedssearch: conf_ref.aedssearch.clone(),
             },
         })
     }
@@ -123,6 +124,7 @@ impl PySystem {
             vel_data: self.configuration.vel_data.clone(),
             box_dims: self.configuration.box_dims,
             pertdata: self.configuration.pertdata,
+            aedssearch: self.configuration.aedssearch.clone(),
         }
     }
 

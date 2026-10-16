@@ -39,6 +39,9 @@ pub struct Coordinates {
     /// λ of the configuration's `PERTDATA` block, if it has one; a run with NRDGL=1 starts
     /// from it.
     pub pertdata: Option<f64>,
+    /// The data lines of the configuration's `AEDSSEARCH` block, if it has one; an A-EDS search
+    /// with NTIAEDSS = 0 continues from it.
+    pub aedssearch: Option<Vec<String>>,
 }
 
 impl From<CoordinateData> for Coordinates {
@@ -48,6 +51,7 @@ impl From<CoordinateData> for Coordinates {
             velocities: c.velocities,
             box_dims: c.box_dims,
             pertdata: c.pertdata,
+            aedssearch: c.aedssearch,
         }
     }
 }
@@ -108,6 +112,9 @@ pub enum PrepareNote {
         /// number of perturbed distance constraints
         constraints: usize,
     },
+    /// The configuration has an `AEDSSEARCH` block but the A-EDS search starts afresh
+    /// (NTIAEDSS = 1): ignored, as gromosXX does with a warning.
+    AedsSearchIgnored,
     /// Non-fatal validation findings (errors or warnings) for `stage`.
     Validation {
         stage: &'static str,
@@ -142,12 +149,19 @@ pub fn prepare_system(
     let mut notes = Vec::new();
 
     // 1. Perturbation topology: its PERT* blocks when NTG != 0 (FEP), its MPERTATOM block with
-    //    EDS on (gromosXX ignores the file with neither, and requires it for EDS).
-    let eds = imd.eds.as_ref().filter(|e| e.enabled);
+    //    EDS or AEDS on (gromosXX ignores the file with neither, and requires it for EDS).
+    let aeds = imd.aeds.as_ref().filter(|a| a.enabled);
+    let eds = imd
+        .eds
+        .as_ref()
+        .filter(|e| e.enabled)
+        .map(|e| e.num_states)
+        .or(aeds.map(|a| a.num_states));
     if eds.is_some() && inputs.pttopo.is_none() && topology.eds_solute.is_empty() {
         return Err(RunError::MissingInput {
             flag: "pttopo",
-            reason: "EDS = 1 (the end states come from its MPERTATOM block)".to_string(),
+            reason: "EDS = 1 or AEDS = 1 (the end states come from its MPERTATOM block)"
+                .to_string(),
         });
     }
     if let Some(path) = &inputs.pttopo {
@@ -187,11 +201,11 @@ pub fn prepare_system(
         }
     }
     match (eds, topology.eds_solute.is_empty()) {
-        (Some(e), false) if e.num_states != topology.eds_solute.num_states => {
+        (Some(n), false) if n != topology.eds_solute.num_states => {
             return Err(RunError::Inconsistent(format!(
                 "Number of perturbed states given in perturbation topology ({}) and input file \
                  ({}) do not match",
-                topology.eds_solute.num_states, e.num_states
+                topology.eds_solute.num_states, n
             )))
         },
         (None, false) => {
@@ -230,7 +244,32 @@ pub fn prepare_system(
         mut velocities,
         box_dims,
         pertdata,
+        aedssearch,
     } = coords;
+    // gromosXX `read_aedssearch` (`in_configuration.cc:1399-1455`): a search form (2-6) with
+    // NTIAEDSS = 0 continues the configuration's AEDSSEARCH block (it overrides the input's
+    // EMAX, EMIN and EIR); with NTIAEDSS = 1 the block is ignored with a warning.
+    let aeds_search = match aeds.filter(|a| a.form != 1) {
+        Some(a) if !a.ntiaedss => {
+            let lines = aedssearch.as_ref().ok_or_else(|| {
+                RunError::Inconsistent(
+                    "AEDS NTIAEDSS = 0: no AEDSSEARCH block in configuration".to_string(),
+                )
+            })?;
+            Some(
+                gromos_io::coordinate::parse_aedssearch(lines, a.num_states).map_err(|e| {
+                    RunError::Inconsistent(format!("configuration AEDSSEARCH block: {e}"))
+                })?,
+            )
+        },
+        Some(_) => {
+            if aedssearch.is_some() {
+                notes.push(PrepareNote::AedsSearchIgnored);
+            }
+            None
+        },
+        None => None,
+    };
     // gromosXX `in_topology.cc:367-370`: the run's λ and NLAM live on the topology. With NTG=1
     // and NRDGL=1, λ comes from the configuration's PERTDATA block instead, which must be
     // there (`in_configuration.cc:876-897`, `_read_pertdata` :2351-2371).
@@ -412,6 +451,7 @@ pub fn prepare_system(
         state.perturbed_energy_derivatives.resize_eds(n);
         conf.eds.resize(n, n_atoms);
     }
+    conf.aeds = aeds_search;
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)
@@ -449,12 +489,12 @@ pub fn prepare_system(
 /// refused without EDS (gromosXX reads it anyway and finds NPTB ≠ 0 states). With
 /// perturbation the PERT* blocks run next to it (TI-EDS; [`check_ti_eds`]).
 fn check_eds_perturbation(
-    eds: Option<&gromos_io::imd::EdsBlock>,
+    eds_states: Option<usize>,
     pt: &gromos_io::ptp::PerturbedTopology,
     perturbed: bool,
 ) -> Result<(), RunError> {
     let err = |m: String| Err(RunError::Inconsistent(m));
-    let Some(e) = eds else {
+    let Some(n) = eds_states else {
         if pt.eds.is_some() {
             return err(
                 "the perturbation topology has an MPERTATOM block (EDS end states) but the \
@@ -470,11 +510,11 @@ fn check_eds_perturbation(
                 .to_string(),
         );
     };
-    if m.num_states != e.num_states {
+    if m.num_states != n {
         return err(format!(
             "Number of perturbed states given in perturbation topology ({}) and input file ({}) \
              do not match",
-            m.num_states, e.num_states
+            m.num_states, n
         ));
     }
     if !perturbed {

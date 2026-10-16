@@ -63,6 +63,8 @@ struct Parts {
     box_dims: Vec3,
     /// λ of the configuration file's PERTDATA block (NRDGL=1).
     pertdata: Option<f64>,
+    /// The configuration file's AEDSSEARCH block (NTIAEDSS = 0).
+    aedssearch: Option<Vec<String>>,
 }
 
 impl Parts {
@@ -74,6 +76,7 @@ impl Parts {
             velocities: conf.vel_data.clone(),
             box_dims: conf.box_dims,
             pertdata: conf.pertdata,
+            aedssearch: conf.aedssearch.clone(),
         }
     }
 
@@ -103,6 +106,7 @@ impl Parts {
             velocities: coord_data.velocities,
             box_dims: coord_data.box_dims,
             pertdata: coord_data.pertdata,
+            aedssearch: coord_data.aedssearch,
         })
     }
 
@@ -112,6 +116,7 @@ impl Parts {
             velocities: self.velocities,
             box_dims: self.box_dims,
             pertdata: self.pertdata,
+            aedssearch: self.aedssearch,
         };
         (self.topo, self.physical_constants, coords)
     }
@@ -669,6 +674,34 @@ impl PySimulation {
     #[getter]
     fn eds_vr(&self) -> f64 {
         self.configuration.old().energies.eds_vr
+    }
+
+    /// A-EDS mixed energy V_mix (kJ/mol) at the last step (`.tre` slot 34, in no total); 0
+    /// without A-EDS.
+    #[getter]
+    fn eds_vmix(&self) -> f64 {
+        self.configuration.old().energies.eds_vmix
+    }
+
+    /// A-EDS E_max (kJ/mol) after the last step's search update (`.tre` slot 36); 0 without
+    /// A-EDS.
+    #[getter]
+    fn eds_emax(&self) -> f64 {
+        self.configuration.old().energies.eds_emax
+    }
+
+    /// A-EDS E_min (kJ/mol) after the last step's search update (`.tre` slot 37); 0 without
+    /// A-EDS.
+    #[getter]
+    fn eds_emin(&self) -> f64 {
+        self.configuration.old().energies.eds_emin
+    }
+
+    /// A-EDS offsets E_i^R (kJ/mol) after the last step's search update, one per state (the
+    /// `.tre`'s `# eds` offset column); zeros in plain EDS, empty without EDS.
+    #[getter]
+    fn eds_eir(&self) -> Vec<f64> {
+        self.configuration.old().energies.eds_eir.clone()
     }
 
     /// EDS end-state energies V_i (kJ/mol) at the last step, one per state (the `.tre`'s

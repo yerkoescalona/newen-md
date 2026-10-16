@@ -596,6 +596,12 @@ impl PyRecipe {
     fn eds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "eds")
     }
+    /// The `AEDS` block as a dict (`enabled`, `form`, `num_states`, `emax`, `emin`, `eir`,
+    /// `ntiaedss`, `restremin`, `bmaxtype`, `bmax`, `asteps`, `bsteps`), or `None` without one.
+    #[getter]
+    fn aeds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.group(py, "aeds")
+    }
     #[getter]
     fn outputs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "outputs")
@@ -750,6 +756,7 @@ impl PyRecipe {
             velocities: system.configuration.vel_data.clone(),
             box_dims: system.configuration.box_dims,
             pertdata: system.configuration.pertdata,
+            aedssearch: system.configuration.aedssearch.clone(),
         };
         let prepared = prepare_system(
             &imd,

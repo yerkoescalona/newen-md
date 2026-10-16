@@ -526,6 +526,10 @@ fn main() {
                      inappropriate)"
                 );
             },
+            PrepareNote::AedsSearchIgnored => println!(
+                "  WARNING: Initial settings for A-EDS parameter search simulation found but not \
+                 read (NTIAEDSS = 1)"
+            ),
             PrepareNote::Validation { stage, report } => {
                 report.print();
                 if report.has_errors() {
@@ -1371,6 +1375,13 @@ fn main() {
         // gromosXX `out_configuration.cc:540-546`: a perturbed run (NTG=1) adds PERTDATA, the λ
         // a run with NRDGL=1 continues from; time-averaged distance restraints (NTDIR < 0) add
         // their ⟨r⁻³⟩ (DISRESEXPAVE).
+        // gromosXX `out_configuration.cc:613-616`: an A-EDS search (FORMS 2-6) adds its state
+        // (AEDSSEARCH), what a run with NTIAEDSS = 0 continues from
+        let aeds_search = recipe
+            .aeds
+            .as_ref()
+            .filter(|a| a.enabled && a.form != 1)
+            .and(conf.aeds.as_ref());
         let disres_averages = if imd.ntdir < 0 {
             md_sequence
                 .find_mut::<gromos_integrators::algorithms::Forcefield>()
@@ -1393,6 +1404,9 @@ fn main() {
             }
             if let Some(averages) = &disres_averages {
                 w.write_disresexpave(averages)?;
+            }
+            if let Some(s) = aeds_search {
+                w.write_aedssearch(s)?;
             }
             w.close()
         };

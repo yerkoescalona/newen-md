@@ -57,6 +57,10 @@ matching gromosXX to reference tolerances.
 - **EDS through the recipe (1.8, 0.0.57).** The `EDS` block is modelled (`RunRecipe::eds`, the
   `eds` step after the force field); the out-of-band EDS path (`EdsBlock`, `eds_stats.dat`,
   `eds_vr.dat`, the `eds` binary) is gone and only `GAMD` still passes through the recipe.
+- **A-EDS through the recipe (1.8, 0.0.60).** The `AEDS` block runs (FORMS 1-6); `md` writes the
+  search state as the final configuration's `AEDSSEARCH` block (FORMS 2-6) and a run with
+  NTIAEDSS = 0 continues it. References `aladip_vacuum_aeds_*`; `tests/aeds_runs.rs` checks a
+  two-job search against one job and the refused inputs.
 
 ## Key files
 ```

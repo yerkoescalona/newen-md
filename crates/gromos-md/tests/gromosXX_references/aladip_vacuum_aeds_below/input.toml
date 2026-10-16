@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_aeds_below"
+description = "aladip vacuum, A-EDS FORM 1 over two end states of CB, N and H, EMAX 50 EMIN -10: V_mix below the window (V_R* = V_mix)"
+level = 4
+isolates = "A-EDS boost: V_mix (slot 34), V_R* (slot 35), E_max/E_min (36/37), the offsets in the eds rows, the EDS part of forces and virial scaled by fkfac"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_aeds_below.in"
+pttopo = "../shared/aladip_eds2.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

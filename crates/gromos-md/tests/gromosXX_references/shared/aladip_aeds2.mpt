@@ -1,0 +1,12 @@
+TITLE
+aladip probe: two gentle EDS end states (N/H of residue 2 more / less polar)
+END
+MPERTATOM
+# NJLA NPTB
+    2    2
+# state names
+  stateA  stateB
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2
+   4  N        5   -0.280     5   -0.480
+   5  H       18    0.280    18    0.480
+END
