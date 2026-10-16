@@ -81,6 +81,12 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   CH4 with a unit charge in 999 SPC, LS and RF, 32³/50³ grids: stdout and every `DGRESULT`
   byte-identical to gromos++ (`dgslv_pbsolv_unit_charges_in_spc_match_gromospp`); its constants
   checked against gromos-core (porting.md).
+- Charge-change corrections (1.8 FE-10/FE-11, 0.0.66) ✓: `free_energy::charge_correction` (the
+  Kastenholz–Hünenberger A1, A2, B, C1, C2 against the paper's Tables III/IV) and
+  `free_energy::rf_self_energy`, the GROMOS reaction-field self term that a raw ΔG holds and the
+  scheme excludes (C_rf from gromos-forces' `CRFParameters`; pinned to the TI integral of
+  `perturbed_self_energy_correction`). `ChargeCorrection::corrected` / `corrected_with_pb` give
+  [raw − self] + terms. Na⁺ → dummy chain run end to end: `docs/free_energy_validation.md`.
 
 ## Shape — 26 of the 83 programs are library functions
 The programs converted so far follow gromos-tools: the body is

@@ -23,7 +23,7 @@ Categories
 import os
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ import numpy.typing as npt
 from .gromos import (
     _bar,
     _charge_correction,
+    _rf_self_energy,
     _dgslv_pbsolv,
     _ext_ti_ana,
     _ext_ti_merge,
@@ -1265,7 +1266,9 @@ def charge_correction(
     -----
     ``dgslv_pbsolv``'s correction already holds the polarisation terms (``b`` for LS,
     ``a1 + a2 + b`` for a reaction field) for the real solute shape: add ``beyond_pb`` to it,
-    not ``total``. ``total`` replaces both for a spherical ion. A1, A2 and B scale with
+    not ``total``. ``total`` replaces both for a spherical ion. Under a reaction field the raw
+    GROMOS ΔG contains the self term ``rf_self_energy``, which the scheme excludes: take it off
+    first (``corrected_charging_dg``). A1, A2 and B scale with
     q_B² − q_A², C1 and C2 with q_B − q_A. A2 solves the paper's radial integral equation
     numerically (about 10 ms).
 
@@ -1294,6 +1297,103 @@ def charge_correction(
         quadrupole_trace=None if quadrupole_trace is None else float(quadrupole_trace),
         four_pi_eps_i=float(four_pi_eps_i),
     )
+
+
+def rf_self_energy(
+    charges_a: float | Sequence[float],
+    charges_b: float | Sequence[float],
+    cutoff: float,
+    eps_rf: float,
+    *,
+    kappa: float = 0.0,
+    eps_cs: float = 1.0,
+    four_pi_eps_i: float = 138.9354,
+) -> float:
+    r"""
+    ΔG_self, the change of the GROMOS reaction-field self energy when the charges go from
+    ``charges_a`` to ``charges_b`` (kJ/mol).
+
+    .. math::
+
+        \Delta G_\mathrm{self} = -\tfrac{1}{2} (4\pi\varepsilon_0)^{-1}
+        \frac{1 - C_\mathrm{rf}/2}{R_C} \sum_i (q_{B,i}^2 - q_{A,i}^2)
+
+    with C_rf the engine's (gromosXX ``nonbonded_term.cc:79-99``). GROMOS books
+    −½ q² (4πε₀)⁻¹ (1 − C_rf/2)/R_C for every charged atom and its λ-derivative in the
+    perturbed loop, so a raw TI, BAR or MBAR ΔG of a charge change contains this exactly. The
+    Kastenholz–Hünenberger correction is made for a raw ΔG without it: subtract it first
+    (``corrected_charging_dg``).
+
+    Parameters
+    ----------
+    charges_a, charges_b : float or sequence of float
+        Charges of the perturbed atoms in state A and B (e), atom by atom.
+    cutoff : float
+        Reaction-field radius RCRF (nm); 0 is no reaction field and gives 0.
+    eps_rf : float
+        EPSRF; 0 is a conducting boundary.
+    kappa : float
+        Inverse Debye length RKAPPA (nm⁻¹).
+    eps_cs : float
+        EPSCS, the permittivity inside the cut-off.
+    four_pi_eps_i : float
+        1/(4πε₀) in kJ mol⁻¹ nm e⁻² (gromos-core's value by default).
+
+    Examples
+    --------
+    >>> round(gromos.analysis.rf_self_energy(0.0, 1.0, 1.4, 61.0), 3)
+    -73.825
+    """
+
+    def charges(q: float | Sequence[float]) -> list[float]:
+        return [float(q)] if isinstance(q, (int, float)) else [float(x) for x in q]
+
+    return _rf_self_energy(
+        charges(charges_a),
+        charges(charges_b),
+        float(cutoff),
+        float(eps_rf),
+        kappa=float(kappa),
+        eps_cs=float(eps_cs),
+        four_pi_eps_i=float(four_pi_eps_i),
+    )
+
+
+def corrected_charging_dg(
+    raw_dg: float,
+    rf_self: float,
+    correction: Mapping[str, float],
+    *,
+    pb_a: float | None = None,
+    pb_b: float | None = None,
+) -> float:
+    """
+    The corrected ΔG of a charge change (kJ/mol): the raw value without the reaction-field
+    self term, plus the Kastenholz–Hünenberger terms.
+
+    Without ``pb_a``/``pb_b``: ``(raw_dg − rf_self) + correction["total"]`` (A1 + A2 + B + C1 +
+    C2 for a spherical ion). With them: ``(raw_dg − rf_self) + (pb_b − pb_a) +
+    correction["beyond_pb"]``, where ``pb_a`` and ``pb_b`` are the corrections
+    ``dgslv_pbsolv`` reports for the two end states (``documented_correction``) and
+    ``beyond_pb`` = C1 + C2.
+
+    Parameters
+    ----------
+    raw_dg : float
+        TI, BAR or MBAR ΔG of the charge change as the engine gives it.
+    rf_self : float
+        ``rf_self_energy`` of the same change (0 for a lattice sum).
+    correction : mapping
+        ``charge_correction`` of the same change.
+    pb_a, pb_b : float, optional
+        ``dgslv_pbsolv`` corrections of state A and state B; both or neither.
+    """
+    if (pb_a is None) != (pb_b is None):
+        raise ValueError("give both pb_a and pb_b, or neither")
+    base = float(raw_dg) - float(rf_self)
+    if pb_a is None or pb_b is None:
+        return base + float(correction["total"])
+    return base + (float(pb_b) - float(pb_a)) + float(correction["beyond_pb"])
 
 
 def m_widom(trajectory: str, topology: str, output: str | None = None) -> dict:
@@ -1617,10 +1717,12 @@ __all__ = [
     # Free Energy
     "bar",
     "charge_correction",
+    "corrected_charging_dg",
     "dgslv_pbsolv",
     "ext_ti_ana",
     "ext_ti_merge",
     "mbar",
+    "rf_self_energy",
     "ti_trapezoid",
     "m_widom",
     "reweight",

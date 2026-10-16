@@ -4,5 +4,6 @@
 pub mod charge_correction;
 
 pub use charge_correction::{
-    charge_correction, ChargeCorrection, ChargeCorrectionInput, Scheme, SolventModel,
+    charge_correction, rf_self_energy, ChargeCorrection, ChargeCorrectionInput, Scheme,
+    SolventModel,
 };

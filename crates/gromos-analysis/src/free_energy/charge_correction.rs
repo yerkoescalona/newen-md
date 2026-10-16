@@ -33,6 +33,22 @@
 //! `dGslv_pbsolv` is C1 + C2 ([`ChargeCorrection::beyond_pb`]), which no continuum model sees:
 //! it comes from the discrete solvent molecules.
 //!
+//! **The reaction-field self term comes off first.** GROMOS books a reaction-field self energy
+//! E_self = −½ q_i² (4πε₀)⁻¹ (1 − C_rf/2)/R_C for every charged atom (gromosXX
+//! `nonbonded_term.cc:79-99`, gromos-forces `rf_excluded_interactions` and
+//! `perturbed_self_energy_correction`), and the perturbed loop books its λ-derivative, so a raw
+//! GROMOS TI/BAR/MBAR ΔG of a charge change contains ΔG_self = −½ (4πε₀)⁻¹ (1 − C_rf/2)/R_C
+//! Σ_i (q_B,i² − q_A,i²) exactly ([`rf_self_energy`]). The scheme here is built for a raw ΔG
+//! without it (Reif, Hünenberger and Oostenbrink, J. Chem. Theory Comput. 8, 3705 (2012); Reif
+//! and Oostenbrink, J. Comput. Chem. 35, 227 (2014)), so the corrected value is
+//!
+//! ΔG_chg^cor = [ΔG_raw − ΔG_self] + A1 + A2 + B + C1 + C2 ([`ChargeCorrection::corrected`])
+//!
+//! or, with `dGslv_pbsolv`, [ΔG_raw − ΔG_self] + PB(B) − PB(A) + C1 + C2
+//! ([`ChargeCorrection::corrected_with_pb`]). ΔG_self is not part of A1: for q 0 → 1 at
+//! R_C = 1.4 nm and EPSRF 61 it is −73.8 kJ/mol next to A1 = −48.8, and leaving it in shifts
+//! the corrected value by that much.
+//!
 //! Units are gromos-core's: nm, e, kJ/mol, with 1/(4πε₀) = `four_pi_eps_i` (kJ mol⁻¹ nm e⁻²),
 //! so ε₀⁻¹ = 4π·`four_pi_eps_i`.
 //!
@@ -44,6 +60,7 @@
 //!     of the sodium cation", J. Chem. Phys. 124, 224501 (2006), doi:10.1063/1.2201698. Equation
 //!     and table numbers in this module are that paper's.
 
+use gromos_forces::CRFParameters;
 use nalgebra::{DMatrix, DVector};
 use std::f64::consts::PI;
 use std::str::FromStr;
@@ -244,6 +261,19 @@ impl ChargeCorrection {
     /// polarisation terms A1 + A2 + B.
     pub fn beyond_pb(&self) -> f64 {
         self.c1 + self.c2
+    }
+
+    /// The corrected ΔG of the charge change for a spherical ion,
+    /// [raw − ΔG_self] + A1 + A2 + B + C1 + C2, with `rf_self` from [`rf_self_energy`] (0 for a
+    /// lattice sum).
+    pub fn corrected(&self, raw: f64, rf_self: f64) -> f64 {
+        raw - rf_self + self.total()
+    }
+
+    /// The corrected ΔG with `dGslv_pbsolv`: [raw − ΔG_self] + PB(B) − PB(A) + C1 + C2, where
+    /// `pb_a` and `pb_b` are the corrections `dGslv_pbsolv` reports for the two end states.
+    pub fn corrected_with_pb(&self, raw: f64, rf_self: f64, pb_a: f64, pb_b: f64) -> f64 {
+        raw - rf_self + (pb_b - pb_a) + self.beyond_pb()
     }
 }
 
@@ -596,6 +626,43 @@ pub fn c2_lattice_sum_spc(q: f64, f: f64, ion_radius: f64) -> f64 {
     q * (f - 1.0) * (70.3 - 10.9 / ion_radius)
 }
 
+/// ΔG_self, the change of the GROMOS reaction-field self energy when the charges go from
+/// `charges_a` to `charges_b` (e): −½ (4πε₀)⁻¹ (1 − C_rf/2)/R_C Σ_i (q_B,i² − q_A,i²) kJ/mol, with
+/// C_rf of gromos-forces' [`CRFParameters`] for the reaction-field radius `cutoff` (RCRF, nm),
+/// `eps_rf` (EPSRF; 0 is conducting), `kappa` (RCRF's κ, nm⁻¹) and `eps_cs` (EPSCS). A raw
+/// GROMOS ΔG holds it exactly; subtract it before the correction terms (module documentation).
+/// `cutoff` 0 is no reaction field (gromos-forces' convention) and gives 0.
+pub fn rf_self_energy(
+    charges_a: &[f64],
+    charges_b: &[f64],
+    cutoff: f64,
+    eps_rf: f64,
+    kappa: f64,
+    eps_cs: f64,
+    fpepsi: f64,
+) -> Result<f64, String> {
+    if charges_a.len() != charges_b.len() {
+        return Err(format!(
+            "{} charges in state A, {} in state B",
+            charges_a.len(),
+            charges_b.len()
+        ));
+    }
+    if cutoff < 0.0 || eps_cs <= 0.0 || eps_rf < 0.0 || kappa < 0.0 {
+        return Err(format!(
+            "reaction field needs cutoff ≥ 0, eps_cs > 0, eps_rf ≥ 0 and kappa ≥ 0 \
+             (got {cutoff}, {eps_cs}, {eps_rf}, {kappa})"
+        ));
+    }
+    let crf_cut = CRFParameters::new(cutoff, eps_cs, eps_rf, kappa).crf_cut;
+    let dq2: f64 = charges_a
+        .iter()
+        .zip(charges_b)
+        .map(|(qa, qb)| qb * qb - qa * qa)
+        .sum();
+    Ok(-0.5 * fpepsi * crf_cut * dq2)
+}
+
 #[cfg(test)]
 mod tests {
     //! Against Tables III and IV of the paper: Na⁺ (R_I = 0.2 nm) in SPC, ε_S = 78.0 for A1
@@ -905,5 +972,91 @@ mod tests {
         }
         assert_eq!("rf".parse::<Scheme>(), Ok(Scheme::ReactionField));
         assert!("GM".parse::<Scheme>().is_err());
+    }
+
+    /// ΔG_self for q 0 → 1, R_C = 1.4 nm, κ = 0, ε_CS = 1 at three EPSRF (GROMOS 61, the
+    /// paper's 66.6 for SPC, 78.5).
+    #[test]
+    fn rf_self_energy_of_a_unit_charge() {
+        for (eps_rf, want) in [(61.0, -73.825), (66.6, -73.875), (78.5, -73.959)] {
+            let got = rf_self_energy(&[0.0], &[1.0], 1.4, eps_rf, 0.0, 1.0, F).unwrap();
+            close(&format!("ΔG_self at EPSRF {eps_rf}"), got, want, 0.01);
+        }
+        // q_B² − q_A², summed over atoms; conducting boundary C_rf = −1
+        let two = rf_self_energy(&[0.5, -1.0], &[1.0, 0.0], 1.4, 61.0, 0.0, 1.0, F).unwrap();
+        let one = rf_self_energy(&[0.0], &[1.0], 1.4, 61.0, 0.0, 1.0, F).unwrap();
+        assert!((two - one * (1.0 + 0.0 - 0.25 - 1.0)).abs() < 1e-12);
+        let conducting = rf_self_energy(&[0.0], &[1.0], 1.4, 0.0, 0.0, 1.0, F).unwrap();
+        assert!((conducting + 0.5 * F * 1.5 / 1.4).abs() < 1e-12);
+        assert_eq!(
+            rf_self_energy(&[1.0], &[0.0], 0.0, 61.0, 0.0, 1.0, F),
+            Ok(0.0)
+        );
+        assert!(rf_self_energy(&[1.0], &[0.0, 0.0], 1.4, 61.0, 0.0, 1.0, F).is_err());
+        assert!(rf_self_energy(&[1.0], &[0.0], 1.4, 61.0, 0.0, 0.0, F).is_err());
+    }
+
+    /// ΔG_self is what TI over the engine's own perturbed self term gives: the integral of
+    /// gromos-forces' `perturbed_self_energy_correction` dH/dλ on a one-atom charge change,
+    /// trapezoid over λ (exact for n = 1, a fine grid for n = 2), and the energy difference of
+    /// its end states.
+    #[test]
+    fn rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term() {
+        use gromos_forces::nonbonded::{
+            perturbed_self_energy_correction, EnergyGroups, GroupEnergies, PertAtomInfo,
+            PerturbedLambdaParams,
+        };
+        let (qa, qb, rc, eps_rf, kappa) = (1.0, -0.3, 1.4, 61.0, 0.7);
+        let crf = CRFParameters::new(rc, 1.0, eps_rf, kappa);
+        let pert = [Some(PertAtomInfo {
+            a_iac: 0,
+            b_iac: 0,
+            a_charge: qa,
+            b_charge: qb,
+            alpha_lj: 0.5,
+            alpha_crf: 0.5,
+        })];
+        let at = |lam: f64, n: i32| {
+            let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, n);
+            let mut sink = GroupEnergies::new(1);
+            perturbed_self_energy_correction(
+                &pert,
+                &crf,
+                &[lp],
+                F,
+                EnergyGroups::single(),
+                &mut sink,
+                None,
+            )
+        };
+        let want = rf_self_energy(&[qa], &[qb], rc, eps_rf, kappa, 1.0, F).unwrap();
+        for (n, points, tol) in [(1, 11, 1e-12), (2, 1001, 1e-5)] {
+            let h = 1.0 / (points - 1) as f64;
+            let dhdl: Vec<f64> = (0..points).map(|i| at(i as f64 * h, n).1).collect();
+            let ti = h * (dhdl.iter().sum::<f64>() - 0.5 * (dhdl[0] + dhdl[points - 1]));
+            assert!((ti - want).abs() < tol, "n = {n}: TI {ti}, ΔG_self {want}");
+            let de = at(1.0, n).0 - at(0.0, n).0;
+            assert!(
+                (de - want).abs() < 1e-12,
+                "n = {n}: ΔE {de}, ΔG_self {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn corrected_dg_takes_the_self_term_off_the_raw_value() {
+        let c = ChargeCorrection {
+            a1: -48.0,
+            a2: 10.0,
+            b: -5.0,
+            c1: -77.0,
+            c2: 0.0,
+            delta_phi_odl: 79.76,
+            quadrupole_trace: 0.0082,
+        };
+        assert!((c.corrected(-400.0, -73.8) - (-326.2 - 120.0)).abs() < 1e-12);
+        assert!(
+            (c.corrected_with_pb(-400.0, -73.8, 0.0, -77.7) - (-326.2 - 77.7 - 77.0)).abs() < 1e-12
+        );
     }
 }

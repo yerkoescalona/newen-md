@@ -101,6 +101,11 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   through the module and gromosXX on the same recipes' `.imd`. `tests/test_free_energy_charge.py`:
   CH4 → CH4⁺ in 999 SPC, seven windows, TI/BAR/MBAR within 2σ, the `dGslv_pbsolv` correction on
   the end states against gromos++ (0.01 kJ/mol).
+- Charge-change correction chain (1.8, 0.0.66): `gromos.analysis.charge_correction`,
+  `rf_self_energy` (the reaction-field self term the raw ΔG holds), `corrected_charging_dg`
+  ([raw − self] + PB(B) − PB(A) + C1 + C2, or + the five analytic terms); user guide "Correcting
+  a charge change". `scripts/na_hydration.py` runs Na⁺ → dummy in SPC through the whole chain
+  (`docs/free_energy_validation.md`).
 - Remaining P3 items:
   - [ ] `gromos.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
         `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.

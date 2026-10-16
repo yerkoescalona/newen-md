@@ -10,6 +10,9 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Charge-change corrections (1.8, 0.0.65–0.0.66):** `_charge_correction` and `_rf_self_energy`
+  (`programs.rs`) bind `gromos_analysis::free_energy::{charge_correction, rf_self_energy}` for
+  `gromos.analysis.charge_correction` / `rf_self_energy`.
 - **Perturbations and parallel windows (1.8, 0.0.64):** `_make_pt_top_mutate`, `_ptp_net_charge`,
   `_pt_top` (`programs.rs`) bind gromos-tools' `make_pt_top::{mutate, make_pt_top}` and
   `pt_top::pt_top` for `gromos.free_energy.Perturbation`. `System` pickles when made by

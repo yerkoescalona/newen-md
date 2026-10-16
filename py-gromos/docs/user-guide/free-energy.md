@@ -185,12 +185,39 @@ simulation gets wrong about charging an ion into five terms, each added to the r
 A1 + A2 + B under a reaction field (B alone for a lattice sum), and no continuum sees C1 or C2,
 which come from the discrete solvent molecules. `gromos.analysis.charge_correction` returns all
 five for a spherical ion, their sum `total`, and `beyond_pb` = C1 + C2, the part to add on top of
-`dGslv_pbsolv`. The full chain for the CH4 → CH4⁺ windows and `pb()` above:
+`dGslv_pbsolv`.
+
+Under a reaction field one more term comes off first: the **reaction-field self energy**.
+GROMOS (gromosXX and gromos-rs alike) books E_self = −½ q_i² FPEPSI (1 − C_rf/2)/R_C for every
+charged atom, and the perturbed loop books its λ-derivative, so the raw TI/BAR/MBAR ΔG of a
+charge change contains
+
+ΔG_self = −½ FPEPSI (1 − C_rf/2)/R_C · Σ_i (q_B,i² − q_A,i²)
+
+exactly (C_rf from RCRF, EPSRF, RKAPPA and EPSCS as in the engine). The Kastenholz–Hünenberger
+scheme is built for a raw ΔG without it (Reif, Hünenberger & Oostenbrink, J. Chem. Theory
+Comput. 8, 3705 (2012); Reif & Oostenbrink, J. Comput. Chem. 35, 227 (2014), which apply the
+scheme to GROMOS's reaction field). It is not part of A1 or of `dGslv_pbsolv`'s correction; it
+is a constant of the cut-off and the charges. The corrected value is therefore
+
+ΔG_cor = [ΔG_raw − ΔG_self] + A1 + A2 + B + C1 + C2, or, with `dGslv_pbsolv`,
+ΔG_cor = [ΔG_raw − ΔG_self] + PB(B) − PB(A) + C1 + C2 (C2 = 0 under a reaction field).
+
+`gromos.analysis.rf_self_energy` gives ΔG_self and `gromos.analysis.corrected_charging_dg` the
+whole chain. For q 0 → 1 at R_C = 1.4 nm (κ = 0, EPSCS 1) ΔG_self is −73.83 (EPSRF 61), −73.88
+(66.6) and −73.96 kJ/mol (78.5), next to A1 = −48.81, −48.88 and −48.99: forgetting to remove
+it leaves the corrected hydration free energy of a monovalent ion about 74 kJ/mol too negative.
+The full chain for the CH4 → CH4⁺ windows and `pb()` above:
 
 ```python
 dg, error = windows.bar(skip=20)          # raw ΔG: windows.ti(...) or windows.mbar(...) alike
-pb_correction = pb("B") - pb("A")         # A1 + A2 + B for the real solute
 es = base.forcefield["electrostatics"]
+rf_self = analysis.rf_self_energy(        # what the raw ΔG holds of the RF self term
+    plus.net_charge_a,                    # one perturbed atom: its charges in A and B
+    plus.net_charge_b,
+    es["rf_cutoff"],
+    es["epsilon_rf"],
+)
 cc = analysis.charge_correction(
     plus.delta_charge,                    # Q_B − Q_A (e)
     3.106,                                # box edge (nm): ch4_spc.cnf's cubic box
@@ -200,11 +227,14 @@ cc = analysis.charge_correction(
     charge_a=plus.net_charge_a,
     ion_radius=0.2,                       # nm; the terms barely move within ±0.05 nm
 )
-corrected = dg + pb_correction + cc["beyond_pb"]
+corrected = analysis.corrected_charging_dg(dg, rf_self, cc, pb_a=pb("A"), pb_b=pb("B"))
+# = (dg - rf_self) + (pb("B") - pb("A")) + cc["beyond_pb"]
 ```
 
-For an ion small enough to be a sphere, `dg + cc["total"]` is the same correction without the
-Poisson–Boltzmann solves. The terms, with the paper's equation numbers (its Sec. II):
+For an ion small enough to be a sphere, `corrected_charging_dg(dg, rf_self, cc)` =
+`(dg - rf_self) + cc["total"]` is the same correction without the Poisson–Boltzmann solves.
+With several perturbed atoms, pass their charges atom by atom: the self term sums q² per atom,
+not the net charge. The terms, with the paper's equation numbers (its Sec. II):
 
 - **A1** = −(8πε₀)⁻¹ q² (1 − ε_S⁻¹)/R_C (Eq. 25), ε_S = `eps_solvent` (78, water).
 - **A2** solves the paper's radial integral equation for the polarisation inside the cut-off
@@ -245,12 +275,12 @@ nine-point grid (300 steps each) give `bar()` and `mbar()` equal to `analysis.ba
 `analysis.mbar` on the same frames (1e-10), and TI, BAR and MBAR within twice their combined
 errors of each other.
 
-!!! warning "Open question: the reaction-field self-energy"
-    gromos-rs, like gromosXX, books a reaction-field self term
-    −½ q² FPEPSI (1 − C_rf/2)/R_c for every charged atom, so the raw TI/BAR/MBAR
-    ΔG of a charge change already contains part of the continuum response that
-    the A1 term describes. Kastenholz & Hünenberger's raw ΔG excludes self-energy
-    terms. Whether the GROMOS convention requires dropping that term before the
-    correction, or whether `dgslv_pbsolv` accounts for it, is being checked
-    against Reif, Hünenberger & Oostenbrink's application of the scheme to the
-    GROMOS reaction field. Until then the chain above may be off by that term.
+!!! note "The reaction-field self term"
+    The raw ΔG of a charge change under a reaction field contains the GROMOS self term
+    −½ FPEPSI (1 − C_rf/2)/R_C Σ (q_B² − q_A²) (gromosXX `nonbonded_term.cc:79-99` and the
+    perturbed loop's derivative of it). The self term is not a part of the continuum response
+    that A1 describes: it is a constant of the cut-off that the Kastenholz–Hünenberger raw ΔG
+    does not contain. Subtract it (`rf_self_energy`) before adding A1 + A2 + B + C1 + C2 or the
+    `dGslv_pbsolv` correction (Reif, Hünenberger & Oostenbrink, JCTC 2012; Reif & Oostenbrink,
+    JCC 2014). Leaving it in shifts a monovalent ion's corrected value by about −74 kJ/mol at
+    R_C = 1.4 nm.

@@ -82,3 +82,32 @@ def test_charge_correction_other_water_models():
 def test_charge_correction_refuses_what_it_has_no_formula_for(args, kwargs, message):
     with pytest.raises(ValueError, match=message):
         analysis.charge_correction(*args, **kwargs)
+
+
+@pytest.mark.parametrize(("eps_rf", "want"), [(61.0, -73.825), (66.6, -73.875), (78.5, -73.959)])
+def test_rf_self_energy_of_a_unit_charge(eps_rf, want):
+    """−½ FPEPSI (1 − C_rf/2)/R_C for q 0 → 1 at R_C = 1.4 nm, κ = 0, ε_CS = 1."""
+    assert analysis.rf_self_energy(0.0, 1.0, 1.4, eps_rf) == pytest.approx(want, abs=0.01)
+    assert analysis.rf_self_energy([1.0], [0.0], 1.4, eps_rf) == pytest.approx(-want, abs=0.01)
+
+
+def test_rf_self_energy_sums_atoms_and_refuses_mismatched_states():
+    one = analysis.rf_self_energy(0.0, 1.0, 1.4, 61.0)
+    two = analysis.rf_self_energy([0.5, -1.0], [1.0, 0.0], 1.4, 61.0)
+    assert two == pytest.approx(one * (1.0 - 0.25 - 1.0), rel=1e-12)
+    assert analysis.rf_self_energy(1.0, 0.0, 0.0, 61.0) == 0.0
+    with pytest.raises(ValueError, match="charges in state A"):
+        analysis.rf_self_energy([1.0], [0.0, 0.0], 1.4, 61.0)
+
+
+def test_corrected_charging_dg_takes_the_self_term_off():
+    c = analysis.charge_correction(1.0, 3.0, 1.4, 61.0)
+    raw, self_term = -400.0, analysis.rf_self_energy(0.0, 1.0, 1.4, 61.0)
+    assert analysis.corrected_charging_dg(raw, self_term, c) == pytest.approx(
+        raw - self_term + c["total"], abs=1e-12
+    )
+    assert analysis.corrected_charging_dg(raw, self_term, c, pb_a=-1.0, pb_b=-78.0) == (
+        pytest.approx(raw - self_term - 77.0 + c["beyond_pb"], abs=1e-12)
+    )
+    with pytest.raises(ValueError, match="both"):
+        analysis.corrected_charging_dg(raw, self_term, c, pb_a=0.0)

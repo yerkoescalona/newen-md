@@ -679,6 +679,31 @@ fn _charge_correction<'py>(
     Ok(d)
 }
 
+/// The GROMOS reaction-field self-energy change of a charge change
+/// (`gromos_analysis::free_energy::rf_self_energy`), kJ/mol.
+#[pyfunction]
+#[pyo3(signature = (charges_a, charges_b, cutoff, eps_rf, *, kappa, eps_cs, four_pi_eps_i))]
+fn _rf_self_energy(
+    charges_a: Vec<f64>,
+    charges_b: Vec<f64>,
+    cutoff: f64,
+    eps_rf: f64,
+    kappa: f64,
+    eps_cs: f64,
+    four_pi_eps_i: f64,
+) -> PyResult<f64> {
+    gromos_analysis::free_energy::rf_self_energy(
+        &charges_a,
+        &charges_b,
+        cutoff,
+        eps_rf,
+        kappa,
+        eps_cs,
+        four_pi_eps_i,
+    )
+    .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// MBAR (`gromos_analysis::programs::mbar::mbar`) on potentials `u_kn` in kJ/mol (K × N, the
 /// samples of state 0 first) at `temperature`: free energies and their errors in kJ/mol.
 #[pyfunction]
@@ -993,6 +1018,7 @@ pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_precalc_mbar, m)?)?;
     m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
     m.add_function(wrap_pyfunction!(_charge_correction, m)?)?;
+    m.add_function(wrap_pyfunction!(_rf_self_energy, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;
     m.add_function(wrap_pyfunction!(_sim_box, m)?)?;

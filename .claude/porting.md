@@ -266,6 +266,16 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
   printed unrotated while the trace uses the rotated tensor (`out_configuration.cc:3331-3344`);
   the last two in `volume_pressure` (`gromos-md/src/bin/md.rs`).
+- **Perturbed RF self term, "Chris: CHECK!"** (false alarm; not a quirk). The comment at
+  `perturbed_nonbonded_term.cc:749-751` (`gromosXX-patched`; `:596-598` in the non-ext
+  variant) worries that the `selfterm_correction` adds `+A_q·FPEPSI·crf_cut` with no B-state
+  term and no matching `de_rf`. It needs neither: the term is λ-independent, it only cancels the
+  state-A self energy the unperturbed excluded loop already booked, and the B state enters
+  through the λ-weighted `A_e_rf`/`B_e_rf` above it, whose derivative is in `de_rf`. The net
+  self energy is −½·FPEPSI·crf_cut·[(1−λ)ⁿq_A² + λⁿq_B²], and its TI integral is exactly
+  −½·FPEPSI·crf_cut·(q_B² − q_A²) (`perturbed_self_energy_correction` ↔
+  `gromos_analysis::free_energy::rf_self_energy`, test
+  `rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term`). Reproduced as is.
 - **Not ported, no reference**: position-restraint and distance/dihedral-restraint virials
   (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
   dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).

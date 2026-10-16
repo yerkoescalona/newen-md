@@ -5,6 +5,159 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.66] (2026-10-16)
+
+**The charge-correction chain, complete** (1.8 FE-10, FE-11, FE-12): the Kastenholz–Hünenberger
+correction terms, the reaction-field self term that a raw GROMOS ΔG holds and the scheme
+excludes, and Na⁺ → dummy run through the whole chain to the methodology-independent hydration
+free energy. Perturbation topologies are now checked as gromosXX checks them. No engine output
+changes.
+
+### Added (FE-10 — the analytic companions of `dGslv_pbsolv`)
+
+- **`gromos_analysis::free_energy::charge_correction`**: the correction terms of Kastenholz &
+  Hünenberger, J. Chem. Phys. 124, 224501 (2006) (doi:10.1063/1.2201698) for a charge change
+  q_A → q_B on a spherical ion in a cubic box, each added to the raw ΔG: A1 (Born beyond the
+  cut-off, Eq. 25), A2 (polarisation inside the cut-off: the paper's radial Fredholm equation,
+  Eqs. 26–29 with kernels A3/A6, solved by product integration and Richardson-extrapolated),
+  B (Eq. 32 for lattice sums, the fit of Eq. 33 for cut-offs), C1 (summation scheme, from the
+  solvent's quadrupole-moment trace γ, Eqs. 34–42), C2 (Eq. 46, and the SPC fit of Eq. 47 for
+  lattice sums). Schemes LS (tinfoil), CM, BM (= GROMOS RF with charge groups; `RF`), BA;
+  EPSRF 0 is conducting, as in the engine. Quadratic terms scale with q_B² − q_A², linear ones
+  with q_B − q_A. γ is Eq. 35 over the model's charges: SPC 0.0082, SPC/E 0.008476, TIP3P
+  0.0076414, TIP4P 0.0092948 e nm². `ChargeCorrection::beyond_pb` = C1 + C2 is what to add on
+  top of `dGslv_pbsolv`, whose correction already holds the polarisation terms (B for LS,
+  A1 + A2 + B for RF); `total` is all five, for a sphere without the PB solves.
+- Python: `gromos.analysis.charge_correction(delta_q, box_edge, cutoff, eps_rf, solvent="SPC",
+  *, scheme="RF", charge_a=0.0, ion_radius=0.2, eps_solvent=78.0, eps_model=None,
+  density=33.427, quadrupole_trace=None, four_pi_eps_i=138.9354)` → dict `a1, a2, b, c1, c2,
+  total, beyond_pb, delta_phi_odl, quadrupole_trace` (kJ/mol), over the private binding
+  `_charge_correction` (stub in `gromos.pyi`). Refused with `ValueError`: an unknown solvent or
+  scheme (GM/GA are not covered), C2 for a lattice sum in anything but SPC, A2 without a model
+  permittivity (tabulated for SPC only, 66.6), a cut-off not beyond the ion radius.
+- User guide: "Correcting a charge change" in `docs/user-guide/free-energy.md` — the five
+  terms, which of them `dGslv_pbsolv` provides, and the chain raw ΔG (TI/BAR/MBAR) +
+  `dGslv_pbsolv` + `charge_correction(...)["beyond_pb"]`.
+
+### Added (FE-11 — the reaction-field self term and the Na⁺ chain)
+
+- **`gromos_analysis::free_energy::rf_self_energy`**: ΔG_self = −½·FPEPSI·(1 − C_rf/2)/R_C ·
+  Σ_i (q_B,i² − q_A,i²), the GROMOS reaction-field self term that a raw TI/BAR/MBAR ΔG of a
+  charge change contains exactly (gromosXX `nonbonded_term.cc:79-99`; the perturbed loop books
+  its λ-derivative). C_rf comes from gromos-forces' `CRFParameters::new` (RCRF, EPSRF, κ, EPSCS),
+  not a copy. `ChargeCorrection::corrected(raw, rf_self)` = [raw − ΔG_self] + A1 + A2 + B + C1
+  + C2 and `corrected_with_pb(raw, rf_self, pb_a, pb_b)` = [raw − ΔG_self] + PB(B) − PB(A) + C1
+  + C2: the Kastenholz–Hünenberger scheme is built for a raw ΔG without the self term (Reif,
+  Hünenberger & Oostenbrink, JCTC 8, 3705 (2012); Reif & Oostenbrink, JCC 35, 227 (2014)).
+- Python: `gromos.analysis.rf_self_energy(charges_a, charges_b, cutoff, eps_rf, *, kappa=0.0,
+  eps_cs=1.0, four_pi_eps_i=138.9354)` (charges as floats or per-atom sequences; binding
+  `_rf_self_energy`, stub in `gromos.pyi`) and `gromos.analysis.corrected_charging_dg(raw_dg,
+  rf_self, correction, *, pb_a=None, pb_b=None)`.
+- **FE-11, the chain end to end**: `scripts/na_hydration.py` (build, prepare, windows, analyse,
+  pb, correct) and `docs/free_energy_validation/na_{em,eq,window}.imd`: Na⁺ → dummy in 878 SPC
+  (3.0 nm, NPT 298 K, RF RCRF 1.4 / EPSRF 61), 11 windows × 20 ps, n = 3, `PRECALCLAM 11 0 1`;
+  results in `docs/free_energy_validation.md` (raw outputs `~/.cache/gromos-rs-item-1.8/fe11/`).
+
+### Changed (FE-12 — housekeeping; FE-11 documentation)
+
+- **Perturbation topologies are checked as gromosXX checks them.** The pre-2005 block names
+  `PERTBOND03`, `PERTBANGLE03`, `PERTIMPDIHEDRAL03`, `PERTATOMPAIR03` and `PERTATOM03` were read as
+  their successors; `parse_pttopo` now refuses them with gromosXX's message ("The PERTBOND03 block
+  was renamed to PERTBONDSTRETCH.", `in_perturbation.cc:164-170` and the four like it).
+  `PERTDIHEDRAL03`, which gromosXX never reads and so refuses as "block PERTDIHEDRAL03 not
+  supported!" (`:1809-1813`), is refused with that message. No checked-in `.ptp` uses any of them.
+- **A perturbed bond must exist.** `Topology::apply_perturbation` returns
+  `Result<NetCharge, String>` and refuses, before changing the topology, a `PERTBONDSTRETCH(H)` or
+  `PERTBONDSOFT` bond that is not a bond of the topology: "Perturbation of a non-existing bond in
+  PERTBONDSTRETCH block." (`in_perturbation.cc:232-247, 271-286, 420-425`), with the atom numbers
+  appended. As gromosXX's `bondMatcher` does, the pair is matched in file order (`2 1` does not
+  find bond `1 2`). `md`/`RunRecipe` report it as an inconsistent input, Python's
+  `Topology.apply_perturbation` and `Perturbation` raise. Every reference `.ptp` passes the check
+  (its perturbed bonds are all topology bonds, in topology order).
+- **The Python package takes the workspace version.** `py-gromos/pyproject.toml` declared
+  `version = "0.1.0"` against the workspace's 0.0.64; it now declares `dynamic = ["version"]` and
+  maturin reads it from `py-gromos/Cargo.toml` (`version.workspace = true`), so
+  `importlib.metadata.version("gromos")` and `gromos.__version__` give the workspace version (0.0.66 here). `uv.lock` drops
+  the static version.
+- **CI runs on pushes to `develop`** as well as `main` and `ci` (`ci.yml`, `test-rust.yml`,
+  `test-python.yml`; pull requests already ran for every target branch). `release.yml` unchanged.
+- The free-energy user guide says that slow growth (DLAMT ≠ 0) runs and warns when λ leaves
+  [0, 1], that NSCALE ≠ 0 is refused, and that the two checks above refuse a `.ptp`.
+- **Every `.ptp` block the reader does not apply is refused** ("block X not supported!",
+  gromosXX `in_perturbation.cc:1803-1820`). Before, such a block was dropped silently. This
+  covers `PERTCONSTRAINT03` and `PERTPOLPARAM`, which gromosXX reads and gromos-rs does not
+  model, and replaces the special case for `PERTDIHEDRAL03`. `LAMBDADEP` gets gromosXX's own
+  message ("… is deprecated. Use LAMBDAS block in the input file"). `SCALEDINTERACTIONS` still
+  passes: NSCALE ≠ 0 is refused by the run, and `check/lambdas.pttopo` (the check-suite input,
+  run with NSCALE forced to 0) carries the block. No other checked-in `.ptp`/`.pttopo`/`.mpt`
+  has a block outside the read set.
+- User guide "Correcting a charge change": the "Open question" admonition is replaced by the
+  settled convention. The raw ΔG holds ΔG_self, which comes off before the correction terms; the
+  chain is written out with `rf_self_energy` and `corrected_charging_dg`. The sentence that the
+  self term "already contains part of the continuum response that A1 describes" is gone: it does
+  not. For q 0 → 1 at R_C 1.4 nm ΔG_self is −73.83 / −73.88 / −73.96 kJ/mol (EPSRF 61 / 66.6 /
+  78.5), next to A1 = −48.81 / −48.88 / −48.99, so leaving it in shifts a monovalent ion by
+  about 74 kJ/mol.
+- `.claude/porting.md`: gromosXX's "Chris: CHECK!" at `perturbed_nonbonded_term.cc:749-751`
+  (and `:596-598`) is a false alarm. The `+q_A²` self-term correction is λ-independent and the
+  B state enters through the λ-weighted terms whose derivative is in `de_rf`.
+
+### Corrected
+
+- **Soft-core terms made from nothing.** A `PERTBONDSOFT`, `PERTANGLESOFT` or
+  `PERTIMPROPERDIHSOFT` line with state-A type 0 (a bond, angle or improper that exists only in
+  state B) underflowed `type − 1` (a panic in debug, a wrapped index in release). Type 0 now
+  means "absent in that state" in either column, as in gromosXX (`in_perturbation.cc:435-449,
+  765-777, 1003-1015`): `SoftBond`/`SoftAngle`/`SoftImproper::a_type` is `Option<usize>` like
+  `b_type`, and the soft kernels give the absent state K = 0 and the other state's equilibrium
+  value, the dummy type gromosXX appends (`perturbed_soft_bond_interaction.cc:249-263` and the
+  angle and improper equivalents). Type 0 in both columns is refused ("Conversion from bond type
+  0 to bond type 0 in PERTBONDSOFT block."). A soft bond being made is exempt from the
+  non-existing-bond check, as gromosXX's `t_A > 0` condition makes it, and the reader logs
+  gromosXX's "You are making / breaking a bond" warnings. No reference uses type 0, so no
+  output changes.
+
+### Verified
+
+- Checked against the paper's Tables III and IV (Na⁺ in SPC, R_I = 0.2 nm, L = [(N_w + 1)/ρ]^⅓):
+  A1, C1, and B, C1, C2 of all ten lattice-sum boxes to 0.01 kJ/mol; B of all 34 CM/BM/BA rows
+  to 0.02; A2 for BM within 0.06. **Not reproduced to 0.1:** A2 for CM, where our converged
+  solve lies 0.07–0.25 kJ/mol below Table III (24.23 vs 24.48 at R_C = 0.8 nm, 13.47 vs 13.54
+  at 1.6), the gap shrinking with R_C; the same solver unconverged (spacing R_C/80) lands within
+  0.12, so it is most likely the table's discretisation. That test runs at 0.26 kJ/mol and says
+  so. The corrected ΔG°_slv (ΔG_chg + the five terms + 13.62) of all 44 LS/CM/BM/BA rows comes
+  out within 0.06 kJ/mol of the tables, CM within 0.26 (its A2); six rows are pinned in the test.
+  `py-gromos/tests/test_charge_correction.py`: a row of each scheme, the charge-change scaling,
+  other water models, the refusals.
+- `rf_self_energy` gives −73.825 / −73.875 / −73.959 kJ/mol for q 0 → 1 (R_C 1.4, κ 0, EPSCS 1;
+  EPSRF 61 / 66.6 / 78.5) to 0.01 in Rust and Python. It equals the trapezoid TI integral of
+  gromos-forces' `perturbed_self_energy_correction` dH/dλ on a one-atom change (q 1 → −0.3,
+  κ 0.7): 1e-12 for NLAM 1 on 11 points, 1e-5 for NLAM 2 on 1001. It also equals the end-state
+  energy difference to 1e-12.
+- **FE-11** (n = 3, 160 of 200 frames per window kept): raw ΔG(Na⁺ → dummy) BAR 388.31 ± 2.39,
+  MBAR 388.13 ± 2.27, TI 384.24 ± 1.92 kJ/mol (TI's trapezoid misses 4 kJ/mol at the charged
+  end, where ⟨∂H/∂λ⟩ peaks at 1059 kJ/mol at λ 0.1). ΔG_self +73.83, `dGslv_pbsolv` PB(B) − PB(A)
+  +77.08, C1 +77.59, ΔG_cmp 7.95. ΔG°_slv(Na⁺) = −461.20 ± 2.39 (BAR), −461.02 ± 2.27 (MBAR)
+  kJ/mol, against Kastenholz & Hünenberger's methodology-independent −466.5 ± 1.4 (their method
+  spread 11.6). That is 5 kJ/mol, about 2.7 standard errors, with a different Na⁺ LJ model and
+  20-ps windows. Without the self-term subtraction the value would be −535.0. Wall time 810 s,
+  probe included (15-minute budget). The CH₄ → dummy control (§7) needs no correction.
+- Paper oddities found on the way (not ported): Table III prints L = 3.13 nm for the LS row with
+  N_w = 2048 (the box is 3.94 nm; its B and C1 are 3.94's), Table IV prints A1 = −557.15 for
+  −57.15 (BA, N_w = 1024, R_C = 1.2), and Table V lists C1 = −79.76 (= −ΔΦ_ODL) for every GM and
+  GA row although Eqs. 43–44 depend on R_C and R_I (about −72.7 kJ/mol at R_C = 0.8 nm as we
+  read Eq. 43).
+
+### Not done (left for later)
+
+- gromosXX's other existence checks: perturbing a non-existing angle, improper or proper dihedral
+  (`in_perturbation.cc:643, 882, 1103`) is still not refused.
+- `SCALEDINTERACTIONS` is accepted with NSCALE = 0, where gromosXX errors (its message
+  "Scaling turned on but no SCALEDINTERACTIONS block." sits in the scaling-off branch,
+  `in_perturbation.cc:1421-1427`).
+- FE-11 is a few-kJ/mol chain check, not a converged ΔG: 20-ps windows, 11 λ points (TI biased
+  by 4 kJ/mol), one box and cut-off, and not the paper's Na⁺ parameters.
+
 ## [0.0.65] (2026-10-16)
 
 **A charge-changing gromosXX reference set, lattice sums refused** (1.8 FE-9, FE-8 plain-MD

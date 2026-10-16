@@ -969,6 +969,20 @@ def _charge_correction(
     `gromos.analysis.charge_correction` fills in the defaults."""
     ...
 
+def _rf_self_energy(
+    charges_a: list[float],
+    charges_b: list[float],
+    cutoff: float,
+    eps_rf: float,
+    *,
+    kappa: float,
+    eps_cs: float,
+    four_pi_eps_i: float,
+) -> float:
+    """The GROMOS reaction-field self-energy change of a charge change (kJ/mol);
+    `gromos.analysis.rf_self_energy` fills in the defaults."""
+    ...
+
 def rmsd(
     positions: npt.NDArray[np.float64],
     reference: npt.NDArray[np.float64],
