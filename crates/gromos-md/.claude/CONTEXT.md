@@ -65,7 +65,10 @@ matching gromosXX to reference tolerances.
 - **A-EDS through the recipe (1.8, 0.0.60).** The `AEDS` block runs (FORMS 1-6); `md` writes the
   search state as the final configuration's `AEDSSEARCH` block (FORMS 2-6) and a run with
   NTIAEDSS = 0 continues it. References `aladip_vacuum_aeds_*`; `tests/aeds_runs.rs` checks a
-  two-job search against one job and the refused inputs.
+  two-job search against one job and the refused inputs. Since 0.0.63 the defaults correct D16,
+  D25, D32 (`aladip_vacuum_aeds_*_fixed`, the patched oracle); the native search references set
+  the reproducing `[recipe_overrides]`; `aeds_runs.rs` also checks that a frame's V_mix/V_R*
+  follow from its own columns and that the E_min target is a sampled state.
 
 ## Key files
 ```

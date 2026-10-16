@@ -155,16 +155,33 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   `memory_time` reproduces the wrap); BMAXTYPE 2 with a target state without variance, unless
   the RESTREMIN clamp catches it (division by b_max = 0 at `eds.cc:314`, E_min = −∞, V_R* NaN;
   D15). Pinned by unit tests and `gromos-md/tests/aeds_runs.rs`.
-- **A-EDS bookkeeping** (B, reproduced; `gromos-integrators/src/eds.rs`): the energy columns
-  (`eds_emax`, `eds_emin`, the offsets) are written after the search update, so a frame's
-  `eds_vmix`/`eds_vr` belong to the previous frame's parameters (`eds.cc:368-372`; D16); the
-  FORMS 5/6 offset step is ASTEPS·Δt, a time used as an energy (`:355`; D17); τ ramps over the
-  current run only (`sim.steps()` from 0); state 0 is the default target and the mean of
-  V_i − E_i^R mixes the offsets of different steps (`:246, 252-261`); the FORMS 5/6 prevalences
-  are plain exponentials (`:339-343`, overflow below V_i − E_i^R ≈ −709/β); the boost scales only
-  the EDS part of forces, virial and dV/dλ (`:137-176`). Pinned by the `aladip_vacuum_aeds_*`
+- **A-EDS defects corrected by default** (A; corrected in 0.0.63, each reproduced by a recipe
+  switch; patched oracle `tests/gromosXX_references/patches/D16_*`, `D25_*`, `D32_*`;
+  `gromos-integrators/src/eds.rs`):
+  - the energy columns (`eds_emax`, `eds_emin`, the offsets) written after the search update, so
+    a frame's `eds_vmix`/`eds_vr` belong to the previous frame's printed parameters
+    (`eds.cc:368-372`; D16). Default: the parameters the frame's V_R* used;
+    `aeds.energy_columns = "gromosxx-post-update"` reproduces.
+  - the FORMS 5/6 prevalences as plain exponentials (`:339-343`, NaN and frozen offsets once
+    −β(V_i − E_i^R) > 709.78; D25). Default: log-sum-exp; `aeds.prevalence =
+    "gromosxx-plain-exp"` reproduces (`aladip_vacuum_aeds_f6_ovf`).
+  - a never-visited state 1 as the default E_min target (`:252-261`; D32, its mean 0 a fake G,
+    σ 0 the D15 division). Default: the lowest mean among the states visited more than once,
+    state 1 only when none is; `aeds.target_state = "gromosxx-state1-default"` reproduces.
+  The native search references set the reproducing switches; the `aladip_vacuum_aeds_*_fixed`
+  references pin the defaults against the patched binary; `gromos-run/tests/aeds_replay.rs`
+  replays both. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md` (not yet
+  in `math`).
+- **A-EDS bookkeeping** (B, reproduced, the intent ambiguous; `gromos-integrators/src/eds.rs`):
+  the FORMS 5/6 offset step is ASTEPS·Δt (`:355`; 0.0.60's "D17", dossier D16 bullet 4) — a
+  time if ASTEPS is a step count, an energy if it is the rate Vol. 4 and the tutorial describe;
+  τ ramps over the current run only (`sim.steps()` from 0), as Vol. 2 documents ("t_tot is the
+  total simulation time of the run") while Perthold 2020 ramps over the whole search, for which
+  the input carries no total length; the mean of V_i − E_i^R averages over the offsets of every
+  step (`:246`), Vol. 2's \overline{V_i − E_i^R} with E_i^R moving; the boost scales only the
+  EDS part of forces, virial and dV/dλ (`:137-176`). Pinned by the `aladip_vacuum_aeds_*`
   references (whole block, 9-decimal AEDSSEARCH) and `gromos-run/tests/aeds_replay.rs`
-  (gromosXX's V_i(t) through the pure functions, ≤ 1e-9 relative). Corrections are later work.
+  (gromosXX's V_i(t) through the pure functions, ≤ 1e-9 relative).
 - **TI-EDS inputs gromosXX computes wrongly** (A, refused, not reproduced; `check_ti_eds`,
   `gromos-run/src/prepare.rs`): an atom in both `PERTATOMPARAM` and `MPERTATOM` gets pair code
   6, which no case handles, so its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65,

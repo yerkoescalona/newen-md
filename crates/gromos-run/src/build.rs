@@ -468,6 +468,9 @@ pub fn instantiate(
                         bmax: a.bmax,
                         asteps: a.asteps,
                         bsteps: a.bsteps,
+                        columns: a.energy_columns,
+                        prevalence: a.prevalence,
+                        target: a.target_state,
                     };
                     seq.push(Box::new(Eds::accelerated(
                         params,

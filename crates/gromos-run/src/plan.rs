@@ -112,6 +112,19 @@ pub struct AedsPlan {
     pub bmax: f64,
     pub asteps: u32,
     pub bsteps: u32,
+    /// `Aeds::energy_columns`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub energy_columns: crate::recipe::AedsColumns,
+    /// `Aeds::prevalence`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub prevalence: crate::recipe::AedsPrevalence,
+    /// `Aeds::target_state`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub target_state: crate::recipe::AedsTarget,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 /// Everything `Forcefield` needs, resolved.
@@ -1014,6 +1027,9 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
                 bmax: a.bmax,
                 asteps: a.asteps,
                 bsteps: a.bsteps,
+                energy_columns: a.energy_columns,
+                prevalence: a.prevalence,
+                target_state: a.target_state,
             }),
         });
     }
@@ -2135,6 +2151,9 @@ mod tests {
             bmax: 0.1,
             asteps: 20,
             bsteps: 20,
+            energy_columns: Default::default(),
+            prevalence: Default::default(),
+            target_state: Default::default(),
         });
         r
     }

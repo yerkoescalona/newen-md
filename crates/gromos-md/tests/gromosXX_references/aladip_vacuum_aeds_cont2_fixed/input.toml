@@ -1,0 +1,29 @@
+# [provenance] native gromosXX 247c95c4 + D1, D2, D16, D25, D32 patches, binary .local/gromosXX-patched/md++/BUILD/program/md (branch divergences-fix), item 1.8
+[system]
+name = "aladip_vacuum_aeds_cont2_fixed"
+description = "pins the corrected A-EDS search: aladip vacuum, A-EDS FORM 4 search, job 2 of 2: NTIAEDSS 0 continues the AEDSSEARCH block of aladip_vacuum_aeds_cont1_fixed's final configuration, which overrides the input EMAX 50, EMIN -50, EIR 9 9 9; the memory time restarts at ASTEPS; expected output from native 247c95c4 + the D16, D25, D32 patches (tests/gromosXX_references/patches/)"
+level = 4
+isolates = "job 2 of 2 from aladip_vacuum_aeds_cont1_fixed's patched final configuration (NTIAEDSS 0, input EMAX/EMIN/EIR overridden): the corrected search continues through the AEDSSEARCH block"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum_aeds_cont1_fixed/expected/final.conf"
+parameters = "aladip_vacuum_aeds_cont2_fixed.in"
+pttopo = "../shared/aladip_aeds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): the corrected search (also the default).
+[recipe_overrides]
+"aeds.energy_columns" = "intended"
+"aeds.target_state" = "intended"

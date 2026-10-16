@@ -37,6 +37,10 @@ RunError                                                                 -> ever
   the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the
   configuration's `AEDSSEARCH` block into `Configuration::aeds` (required; with NTIAEDSS = 1
   ignored, `PrepareNote::AedsSearchIgnored`). `Coordinates::aedssearch` carries the block's lines.
+  Since 0.0.63 `Aeds::{energy_columns, prevalence, target_state}` (`"intended"` by default,
+  `"gromosxx-post-update"` / `"gromosxx-plain-exp"` / `"gromosxx-state1-default"` reproduce D16,
+  D25, D32; no `.imd` token, set by `md @recipe_set` or `Recipe.update`) pass through
+  `AedsPlan` to `AedsParams`.
 - **Net charge of a perturbation (1.8, 0.0.59):** `prepare_system` notes the solute's net
   charge in state A and B (`PrepareNote::PerturbationNetCharge`) on every perturbed run and
   `NetChargeChanged` when ΔQ ≠ 0 under a reaction field (NLRELE −1/1/4): a warning, no refusal.

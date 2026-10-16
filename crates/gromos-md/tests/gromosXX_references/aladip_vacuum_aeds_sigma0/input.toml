@@ -21,3 +21,10 @@ final_conf = "expected/final.conf"
 force_abs = 1e-6
 energy_rel = 1e-8
 position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): reproduce gromosXX 247c95c4, whose defects this native
+# reference pins: the columns after the update (D16), state 1 as the default target (D32).
+[recipe_overrides]
+"aeds.energy_columns" = "gromosxx-post-update"
+"aeds.target_state" = "gromosxx-state1-default"

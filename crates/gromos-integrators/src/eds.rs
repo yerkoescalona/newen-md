@@ -23,7 +23,11 @@
 //! window, V_mix − (E_max − E_min)/2 above it, V_mix below it; the EDS part of the forces, virial
 //! and dV/dλ is scaled by 1 − (V_mix − E_min)/(E_max − E_min) inside the window. FORMS 2-6 then
 //! search E_max, E_min and the offsets E_i^R every step ([`search_step`]); the search state lives
-//! in the configuration ([`AedsSearch`], the `AEDSSEARCH` block) so a run continues it.
+//! in the configuration ([`AedsSearch`], the `AEDSSEARCH` block) so a run continues it. Three
+//! gromosXX defects are corrected by default and reproduced on request (item 1.8): the energy
+//! columns written after the update ([`AedsColumns`], D16), the FORM 5/6 prevalences as plain
+//! exponentials ([`AedsPrevalence`], D25) and a never-visited state 1 as the E_min target
+//! ([`AedsTarget`], D32).
 
 use gromos_core::algorithm::{Algorithm, SimulationState};
 pub use gromos_core::configuration::AedsSearch;
@@ -182,6 +186,58 @@ impl AedsForm {
     }
 }
 
+/// The E_max, E_min and offsets an A-EDS energy frame carries (item 1.8 D16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+pub enum AedsColumns {
+    /// The ones this step's V_mix and V_R* were computed with, so a frame's V_R* follows from
+    /// its own e_i, e_ir, E_max and E_min.
+    #[default]
+    Intended,
+    /// gromosXX 247c95c4: the ones after this step's search update (`eds.cc:368-372`), which
+    /// the next step uses.
+    GromosxxPostUpdate,
+}
+
+/// How FORMS 5 and 6 compute the prevalences p_i = e^{x_i}/Σ_j e^{x_j}, x_i = −β(V_i − E_i^R)
+/// (item 1.8 D25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+pub enum AedsPrevalence {
+    /// Every exponent shifted by the largest one (log-sum-exp): finite for any energies.
+    #[default]
+    Intended,
+    /// gromosXX 247c95c4: plain exponentials (`eds.cc:339-343`); once an x_i exceeds ≈ 709.78
+    /// (or all are below ≈ −745) the prevalences are NaN and no offset moves.
+    GromosxxPlainExp,
+}
+
+/// Which state's mean and σ set E_min (G and σ_G, item 1.8 D32).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+pub enum AedsTarget {
+    /// The lowest mean of V_i − E_i^R among the states visited more than once, state 1 among
+    /// them; state 1 when none is.
+    #[default]
+    Intended,
+    /// gromosXX 247c95c4 (`eds.cc:252-261`): state 1 is the starting candidate whatever its
+    /// visit count, so a state 1 never visited (mean 0, σ 0) stays the target until a sampled
+    /// state has a mean ≤ 0.
+    GromosxxState1Default,
+}
+
 /// The fixed settings of an A-EDS search (the `AEDS` block after FORM).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AedsParams {
@@ -195,6 +251,12 @@ pub struct AedsParams {
     pub asteps: u32,
     /// BSTEPS: memory time (steps) at the end of the run.
     pub bsteps: u32,
+    /// The parameters the energy frames carry.
+    pub columns: AedsColumns,
+    /// The FORM 5/6 prevalences.
+    pub prevalence: AedsPrevalence,
+    /// The state that sets G and σ_G.
+    pub target: AedsTarget,
 }
 
 /// The accelerated reference energy V_R* of the mixed energy `v_mix` and the factor that scales
@@ -283,8 +345,9 @@ pub struct StateTrack {
     pub state: usize,
     /// All states have been visited since the last round trip (and the flags were reset).
     pub round_trip: bool,
-    /// The visited state (more than one visit) with the lowest mean of V_i − E_i^R; state 0
-    /// when none qualifies.
+    /// The state with the lowest mean of V_i − E_i^R among those visited more than once (with
+    /// [`AedsTarget::GromosxxState1Default`] state 0 always a candidate); state 0 when none
+    /// qualifies.
     pub target: usize,
     /// The target's mean of V_i − E_i^R (E_min on the first step of a fresh search).
     pub globminavg: f64,
@@ -293,8 +356,9 @@ pub struct StateTrack {
 }
 
 /// State tracking, round trips and the running averages (`eds.cc:223-266`, `check_round_trip`
-/// :731-750). The offsets are the ones just updated, as gromosXX reads them.
-pub fn track_state(s: &mut AedsSearch, vi: &[f64]) -> StateTrack {
+/// :731-750). The offsets are the ones just updated, as gromosXX reads them. The mean of
+/// V_i − E_i^R averages over the offsets of every step it saw, as in gromosXX (`:246`).
+pub fn track_state(s: &mut AedsSearch, vi: &[f64], rule: AedsTarget) -> StateTrack {
     let n = s.num_states();
     let mut state = 0;
     let mut min = vi[0] - s.eir[0];
@@ -322,11 +386,25 @@ pub fn track_state(s: &mut AedsSearch, vi: &[f64]) -> StateTrack {
     s.avgenergy[state] = mean;
     let mut target = 0;
     let mut lowest = s.eiravgenergy[0];
-    for i in 1..n {
-        if lowest >= s.eiravgenergy[i] && s.visitcounts[i] > 1 {
-            target = i;
-            lowest = s.eiravgenergy[i];
-        }
+    match rule {
+        AedsTarget::Intended => {
+            let mut sampled = false;
+            for i in 0..n {
+                if s.visitcounts[i] > 1 && (!sampled || lowest >= s.eiravgenergy[i]) {
+                    target = i;
+                    lowest = s.eiravgenergy[i];
+                    sampled = true;
+                }
+            }
+        },
+        AedsTarget::GromosxxState1Default => {
+            for i in 1..n {
+                if lowest >= s.eiravgenergy[i] && s.visitcounts[i] > 1 {
+                    target = i;
+                    lowest = s.eiravgenergy[i];
+                }
+            }
+        },
     }
     let globminavg = if s.initialise {
         // gromosXX: "prevent rounding error in the first simulation step" (`eds.cc:263-266`)
@@ -408,21 +486,31 @@ pub fn emax_emin_update(
 /// The prevalence-driven offset update of FORMS 5 and 6 (`eds.cc:332-363`): every state holding
 /// at least 1/N of the weight this step has its offset lowered by `step_size`·p_i/(n_rt + 1)
 /// with n_rt the round trips so far, then the offsets are centred on zero. `step_size` is
-/// ASTEPS·Δt — a time used as an energy, as gromosXX does (item 1.8 D17). The prevalences are
-/// plain exponentials, as in gromosXX (`eds.cc:339-343`), not a log-sum-exp: they overflow once
-/// some V_i − E_i^R is below about −709/β.
+/// ASTEPS·Δt, as gromosXX has it (ASTEPS read as a rate per ps; item 1.8, 0.0.60's D17). The
+/// prevalences are a log-sum-exp ([`AedsPrevalence::Intended`]) or gromosXX's plain
+/// exponentials (`eds.cc:339-343`), which overflow once some V_i − E_i^R is below about −709/β.
 pub fn advanced_offset_update(
     s: &mut AedsSearch,
     vi: &[f64],
     v_r: f64,
     beta: f64,
     step_size: f64,
+    prevalence_rule: AedsPrevalence,
     weights: &mut [f64],
 ) {
     let n = s.num_states();
+    let shift = match prevalence_rule {
+        AedsPrevalence::Intended => (0..n)
+            .map(|i| -beta * (vi[i] - s.eir[i]))
+            .fold(f64::NEG_INFINITY, f64::max),
+        AedsPrevalence::GromosxxPlainExp => 0.0,
+    };
     let mut total = 0.0;
     for i in 0..n {
-        weights[i] = (-beta * (vi[i] - s.eir[i])).exp();
+        weights[i] = match prevalence_rule {
+            AedsPrevalence::Intended => (-beta * (vi[i] - s.eir[i]) - shift).exp(),
+            AedsPrevalence::GromosxxPlainExp => (-beta * (vi[i] - s.eir[i])).exp(),
+        };
         total += weights[i];
     }
     let damping = f64::from(s.emaxcounts.wrapping_add(1));
@@ -462,14 +550,15 @@ pub fn search_step(
         let tau = memory_time(p.asteps, p.bsteps, step, nstlim);
         offset_update(p.form, s, vi, v_r, beta, tau);
     }
-    let t = track_state(s, vi);
+    let t = track_state(s, vi, p.target);
     let mut globmin = None;
     if p.form.searches_emax_emin() {
         emax_emin_update(p, s, v_mix, &t)?;
         globmin = Some((t.globminavg, t.globminfluc));
     }
     if p.form.advanced() {
-        advanced_offset_update(s, vi, v_r, beta, f64::from(p.asteps) * dt, scratch);
+        let step_size = f64::from(p.asteps) * dt;
+        advanced_offset_update(s, vi, v_r, beta, step_size, p.prevalence, scratch);
     }
     Ok(globmin)
 }
@@ -604,6 +693,11 @@ impl Eds {
         e.eds_vmix = v_mix;
         e.eds_vr = v_r;
         e.special_total += v_r;
+        if params.columns == AedsColumns::Intended {
+            e.eds_emax = s.emax;
+            e.eds_emin = s.emin;
+            e.eds_eir.clone_from(&s.eir);
+        }
         state.perturbed_energy_derivatives.eds_vr = d_vr;
         state.perturbed_energy_derivatives.special_total += d_vr;
 
@@ -626,12 +720,14 @@ impl Eds {
                 e.eds_globminfluc = fluc;
             }
         }
-        // written after the update, as gromosXX (`eds.cc:368-372`): a frame's E_max, E_min and
-        // offsets are the ones the next step uses (item 1.8 D16)
-        let e = &mut conf.current_mut().energies;
-        e.eds_emax = s.emax;
-        e.eds_emin = s.emin;
-        e.eds_eir.clone_from(&s.eir);
+        if params.columns == AedsColumns::GromosxxPostUpdate {
+            // gromosXX writes them after the update (`eds.cc:368-372`): the ones the next step
+            // uses (item 1.8 D16)
+            let e = &mut conf.current_mut().energies;
+            e.eds_emax = s.emax;
+            e.eds_emin = s.emin;
+            e.eds_eir.clone_from(&s.eir);
+        }
         s.initialise = false;
         Ok(())
     }
@@ -848,22 +944,65 @@ mod tests {
     }
 
     /// Round trips reset the visited flags; the target is the visited state with the lowest mean
-    /// V_i − E_i^R, state 0 by default.
+    /// V_i − E_i^R, state 0 by default. Both rules agree here: state 0 is sampled.
     #[test]
     fn track_state_counts_round_trips_and_picks_the_target() {
-        let mut s = search(2, true);
-        let t = track_state(&mut s, &[5.0, 6.0]);
-        assert_eq!((t.state, t.round_trip, t.target), (0, false, 0));
-        let t = track_state(&mut s, &[7.0, 2.5]);
-        assert_eq!((t.state, t.round_trip), (1, true));
-        assert_eq!(s.emaxcounts, 1);
-        assert_eq!(s.visited, vec![false, false]);
-        // state 1 visited once only: not a target yet
-        assert_eq!(t.target, 0);
-        let t = track_state(&mut s, &[7.0, 1.5]);
-        assert_eq!((t.state, t.target), (1, 1));
-        assert_eq!(t.globminavg, 2.0);
-        assert!((t.globminfluc - (0.5f64).sqrt()).abs() < 1e-15);
+        for rule in [AedsTarget::Intended, AedsTarget::GromosxxState1Default] {
+            let mut s = search(2, true);
+            let t = track_state(&mut s, &[5.0, 6.0], rule);
+            assert_eq!((t.state, t.round_trip, t.target), (0, false, 0));
+            let t = track_state(&mut s, &[7.0, 2.5], rule);
+            assert_eq!((t.state, t.round_trip), (1, true));
+            assert_eq!(s.emaxcounts, 1);
+            assert_eq!(s.visited, vec![false, false]);
+            // state 1 visited once only: not a target yet
+            assert_eq!(t.target, 0);
+            let t = track_state(&mut s, &[7.0, 1.5], rule);
+            assert_eq!((t.state, t.target), (1, 1));
+            assert_eq!(t.globminavg, 2.0);
+            assert!((t.globminfluc - (0.5f64).sqrt()).abs() < 1e-15);
+        }
+    }
+
+    /// D32: a state 0 never visited (mean 0, σ 0) is gromosXX's target while the sampled
+    /// state's mean is above 0; the intended rule takes the sampled state, mean and σ by hand.
+    /// With no state sampled twice both fall back to state 0.
+    #[test]
+    fn target_is_a_sampled_state_not_an_unvisited_state_1() {
+        let energies = [[9.0, 6.0], [9.0, 8.0], [9.0, 4.0]];
+        let mut ours = search(2, true);
+        let mut gxx = search(2, true);
+        let mut last = None;
+        for (k, vi) in energies.iter().enumerate() {
+            let a = track_state(&mut ours, vi, AedsTarget::Intended);
+            let b = track_state(&mut gxx, vi, AedsTarget::GromosxxState1Default);
+            assert_eq!((a.state, b.state), (1, 1));
+            if k == 0 {
+                // one visit of state 1: nothing qualifies, both take state 0
+                assert_eq!((a.target, a.globminavg), (0, 0.0));
+                assert_eq!((b.target, b.globminavg), (0, 0.0));
+            }
+            last = Some((a, b));
+        }
+        let (a, b) = last.unwrap();
+        assert_eq!(ours.visitcounts, vec![0, 3]);
+        // gromosXX: the unvisited state 0, G = 0, σ_G = 0
+        assert_eq!((b.target, b.globminavg, b.globminfluc), (0, 0.0, 0.0));
+        // intended: state 1, G = mean(6, 8, 4) = 6, σ_G = sample σ of (6, 8, 4) = 2
+        assert_eq!(a.target, 1);
+        assert!((a.globminavg - 6.0).abs() < 1e-15, "{}", a.globminavg);
+        assert!((a.globminfluc - 2.0).abs() < 1e-15, "{}", a.globminfluc);
+        // a sampled state with a mean ≤ 0 is the target under both rules
+        let mut ours = search(2, true);
+        let mut gxx = search(2, true);
+        for vi in [[9.0, -1.0], [9.0, -3.0]] {
+            track_state(&mut ours, &vi, AedsTarget::Intended);
+            track_state(&mut gxx, &vi, AedsTarget::GromosxxState1Default);
+        }
+        let a = track_state(&mut ours, &[9.0, -2.0], AedsTarget::Intended);
+        let b = track_state(&mut gxx, &[9.0, -2.0], AedsTarget::GromosxxState1Default);
+        assert_eq!((a.target, b.target), (1, 1));
+        assert_eq!(a.globminavg, b.globminavg);
     }
 
     /// The four E_min branches (`eds.cc:296-325`) and the D15 refusal.
@@ -875,6 +1014,9 @@ mod tests {
             bmax: 1.0,
             asteps: 10,
             bsteps: 10,
+            columns: AedsColumns::Intended,
+            prevalence: AedsPrevalence::Intended,
+            target: AedsTarget::Intended,
         };
         let t = |g: f64| StateTrack {
             state: 0,
@@ -913,15 +1055,78 @@ mod tests {
         let mut s = search(3, true);
         s.eir = vec![0.0, 1.0, -1.0];
         let mut scratch = [0.0; 3];
-        advanced_offset_update(&mut s, &[0.0, 50.0, 50.0], 0.0, beta, 0.04, &mut scratch);
-        assert!(s.eir.iter().sum::<f64>().abs() < 1e-15);
-        let shift = 0.04 * 1.0; // prevalence of state 0 ≈ 1
+        for rule in [AedsPrevalence::Intended, AedsPrevalence::GromosxxPlainExp] {
+            let mut s = s.clone();
+            advanced_offset_update(
+                &mut s,
+                &[0.0, 50.0, 50.0],
+                0.0,
+                beta,
+                0.04,
+                rule,
+                &mut scratch,
+            );
+            assert!(s.eir.iter().sum::<f64>().abs() < 1e-15);
+            let shift = 0.04 * 1.0; // prevalence of state 0 ≈ 1
+            assert!(
+                (s.eir[0] - (-shift - (-shift) / 3.0)).abs() < 1e-9,
+                "{:?}",
+                s.eir
+            );
+            assert!(s.eir[1] - s.eir[2] - 2.0 < 1e-12);
+        }
+    }
+
+    /// D25: the log-sum-exp prevalences equal gromosXX's plain ones (to rounding) wherever those
+    /// are finite, and stay finite where e^{−β(V_i − E_i^R)} overflows (or all underflow): the
+    /// dominant state's offset then moves by the hand-computed step·(1 − 1/N), the others by
+    /// step/N, where gromosXX's NaN prevalences move nothing.
+    #[test]
+    fn log_sum_exp_prevalences_match_where_finite_and_survive_overflow() {
+        let beta = 1.0 / (0.00831441 * 300.0);
+        let step = 0.04;
+        let run = |vi: &[f64], eir: &[f64], rule| {
+            let mut s = search(vi.len(), true);
+            s.eir = eir.to_vec();
+            let mut scratch = vec![0.0; vi.len()];
+            advanced_offset_update(&mut s, vi, 0.0, beta, step, rule, &mut scratch);
+            s
+        };
+        // moderate energies: both finite, equal to rounding
+        for (vi, eir) in [
+            (vec![3.0, -2.0, 1.5], vec![0.0, 0.5, -1.0]),
+            (vec![-700.0, -690.0, -705.0], vec![0.0, 0.0, 0.0]),
+            (vec![15.39, -16.08, 3.5, 0.2], vec![0.0, 10.0, -5.0, 2.0]),
+        ] {
+            let a = run(&vi, &eir, AedsPrevalence::Intended);
+            let b = run(&vi, &eir, AedsPrevalence::GromosxxPlainExp);
+            for (x, y) in a.eir.iter().zip(&b.eir) {
+                assert!((x - y).abs() <= 1e-15 * y.abs().max(1.0), "{x} vs {y}");
+            }
+            assert_eq!(a.framecounts, b.framecounts);
+        }
+        // V_1 − E_1^R = −2000 kJ/mol: −β·(−2000) = 801.8 > 709.78, e^x = ∞
+        let vi = [-2000.0, 0.0, 0.0];
+        assert_eq!((-beta * vi[0]).exp(), f64::INFINITY);
+        let plain = run(&vi, &[0.0; 3], AedsPrevalence::GromosxxPlainExp);
+        assert_eq!(plain.eir, vec![0.0; 3], "gromosXX: frozen");
+        let ours = run(&vi, &[0.0; 3], AedsPrevalence::Intended);
+        let (lead, rest) = (-step * (1.0 - 1.0 / 3.0), step / 3.0);
+        assert!((ours.eir[0] - lead).abs() < 1e-15, "{:?}", ours.eir);
+        assert!((ours.eir[1] - rest).abs() < 1e-15 && (ours.eir[2] - rest).abs() < 1e-15);
+        // all above +745/β: every e^x underflows to 0, 0/0 = NaN in gromosXX
+        let vi = [2000.0, 2010.0, 2030.0];
+        let plain = run(&vi, &[0.0; 3], AedsPrevalence::GromosxxPlainExp);
+        assert_eq!(plain.eir, vec![0.0; 3], "gromosXX: frozen");
+        let ours = run(&vi, &[0.0; 3], AedsPrevalence::Intended);
+        // p_1 = 1/(1 + e^{−10β} + e^{−30β}) = 1 − 1.8e-2
+        let p1 = 1.0 / (1.0 + (-10.0 * beta).exp() + (-30.0 * beta).exp());
         assert!(
-            (s.eir[0] - (-shift - (-shift) / 3.0)).abs() < 1e-9,
+            (ours.eir[0] - -step * p1 * (2.0 / 3.0)).abs() < 1e-15,
             "{:?}",
-            s.eir
+            ours.eir
         );
-        assert!(s.eir[1] - s.eir[2] - 2.0 < 1e-12);
+        assert!(ours.eir.iter().all(|e| e.is_finite()));
     }
 
     /// A state no listed pair names has no weight.

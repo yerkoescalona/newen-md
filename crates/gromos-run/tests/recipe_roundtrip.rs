@@ -202,6 +202,57 @@ fn the_aeds_block_round_trips() {
     assert_eq!(again.aeds, r.aeds);
 }
 
+/// The A-EDS switches (D16, D25, D32) are not `.imd` tokens: absent from the echo while
+/// `"intended"`, set by dotted path, round-tripped through TOML and JSON, and the `.imd` the
+/// recipe writes does not change.
+#[test]
+fn aeds_switches_are_set_by_path_and_echoed_only_when_not_the_default() {
+    use gromos_run::recipe::{AedsColumns, AedsPrevalence, AedsTarget};
+    let text =
+        "SYSTEM\n  1 0\nEND\nAEDS\n 1\n 5 3\n 10.5 -50\n 0 -5 -140\n 0 1 2 3 500 50000\nEND\n";
+    let mut r = RunRecipe::from_imd(&parse_imd_str(text).unwrap())
+        .unwrap()
+        .0;
+    let a = r.aeds.clone().unwrap();
+    assert_eq!(
+        (a.energy_columns, a.prevalence, a.target_state),
+        (
+            AedsColumns::Intended,
+            AedsPrevalence::Intended,
+            AedsTarget::Intended
+        )
+    );
+    let toml = r.to_toml().unwrap();
+    for key in ["energy_columns", "prevalence", "target_state"] {
+        assert!(!toml.contains(key), "{toml}");
+    }
+    let imd = r.to_imd_string(None);
+    r.set("aeds.energy_columns", "gromosxx-post-update")
+        .unwrap();
+    r.set("aeds.prevalence", "gromosxx-plain-exp").unwrap();
+    r.set("aeds.target_state", "gromosxx-state1-default")
+        .unwrap();
+    let a = r.aeds.clone().unwrap();
+    assert_eq!(
+        (a.energy_columns, a.prevalence, a.target_state),
+        (
+            AedsColumns::GromosxxPostUpdate,
+            AedsPrevalence::GromosxxPlainExp,
+            AedsTarget::GromosxxState1Default
+        )
+    );
+    let toml = r.to_toml().unwrap();
+    assert!(
+        toml.contains("energy_columns = \"gromosxx-post-update\""),
+        "{toml}"
+    );
+    assert_eq!(RunRecipe::from_toml(&toml).unwrap(), r);
+    assert_eq!(RunRecipe::from_json(&r.to_json().unwrap()).unwrap(), r);
+    assert_eq!(r.to_imd_string(None), imd);
+    assert!(r.set("aeds.prevalence", "plain").is_err());
+    assert!(r.set("aeds.target", "intended").is_err());
+}
+
 #[test]
 fn factories_build_the_same_runs_as_the_parameter_factories() {
     let nvt = RunRecipe::nvt(0.002, 100, 298.0, "hbonds").unwrap();

@@ -1163,7 +1163,9 @@ ref_test!(aladip_vacuum_eds_pairs, "aladip_vacuum_eds_pairs");
 ref_test!(aladip_vacuum_aeds_below, "aladip_vacuum_aeds_below");
 ref_test!(aladip_vacuum_aeds_inside, "aladip_vacuum_aeds_inside");
 ref_test!(aladip_vacuum_aeds_above, "aladip_vacuum_aeds_above");
-// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block.
+// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block, against the
+// released gromosXX: its defects D16, D25 and D32 reproduced by the `[recipe_overrides]` of each
+// input.toml.
 ref_test!(aladip_vacuum_aeds_f2, "aladip_vacuum_aeds_f2");
 ref_test!(aladip_vacuum_aeds_f4, "aladip_vacuum_aeds_f4");
 ref_test!(aladip_vacuum_aeds_f5, "aladip_vacuum_aeds_f5");
@@ -1173,6 +1175,32 @@ ref_test!(aladip_vacuum_aeds_sigma0, "aladip_vacuum_aeds_sigma0");
 // A search in two jobs: the second continues the first's AEDSSEARCH block (NTIAEDSS 0).
 ref_test!(aladip_vacuum_aeds_cont1, "aladip_vacuum_aeds_cont1");
 ref_test!(aladip_vacuum_aeds_cont2, "aladip_vacuum_aeds_cont2");
+// FORM 6 with E_2^R = 6000: e^{−β(V_2 − E_2^R)} overflows, the released gromosXX freezes the
+// offsets (D25 reproduced).
+ref_test!(aladip_vacuum_aeds_f6_ovf, "aladip_vacuum_aeds_f6_ovf");
+// The same searches against gromosXX with D16, D25 and D32 patched
+// (`tests/gromosXX_references/patches/`): gromos-rs's defaults — the columns a frame's V_R* used,
+// log-sum-exp prevalences, a sampled state as the E_min target.
+ref_test!(aladip_vacuum_aeds_f2_fixed, "aladip_vacuum_aeds_f2_fixed");
+ref_test!(aladip_vacuum_aeds_f4_fixed, "aladip_vacuum_aeds_f4_fixed");
+ref_test!(aladip_vacuum_aeds_f5_fixed, "aladip_vacuum_aeds_f5_fixed");
+ref_test!(aladip_vacuum_aeds_f6_fixed, "aladip_vacuum_aeds_f6_fixed");
+ref_test!(
+    aladip_vacuum_aeds_f6_ovf_fixed,
+    "aladip_vacuum_aeds_f6_ovf_fixed"
+);
+ref_test!(
+    aladip_vacuum_aeds_sigma0_fixed,
+    "aladip_vacuum_aeds_sigma0_fixed"
+);
+ref_test!(
+    aladip_vacuum_aeds_cont1_fixed,
+    "aladip_vacuum_aeds_cont1_fixed"
+);
+ref_test!(
+    aladip_vacuum_aeds_cont2_fixed,
+    "aladip_vacuum_aeds_cont2_fixed"
+);
 
 // ── Energy minimization ──────────────────────────────────────────────────────
 // gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.

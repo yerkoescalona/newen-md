@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use gromos_core::lambdas::InteractionLambda;
 pub use gromos_forces::nonbonded::AtomPairKernel;
+pub use gromos_integrators::eds::{AedsColumns, AedsPrevalence, AedsTarget};
 use gromos_io::imd::{
     AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
     PrecalcLamBlock, PressureParameters, TempBathParameters,
@@ -783,6 +784,25 @@ pub struct Aeds {
     /// BSTEPS: memory time (steps) at the end of each run.
     #[serde(default)]
     pub bsteps: u32,
+    /// The E_max, E_min and offsets the energy frames carry: `"intended"` (default), the ones
+    /// the frame's V_mix and V_R* used, or `"gromosxx-post-update"`, gromosXX 247c95c4's values
+    /// after the search update (`eds.cc:368-372`; 1.8 D16). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub energy_columns: AedsColumns,
+    /// The FORM 5/6 prevalences: `"intended"` (default), a log-sum-exp, or
+    /// `"gromosxx-plain-exp"`, gromosXX 247c95c4's plain exponentials, NaN once one overflows
+    /// (`eds.cc:339-343`; 1.8 D25). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub prevalence: AedsPrevalence,
+    /// The state whose mean and σ set E_min: `"intended"` (default), the lowest mean among the
+    /// states visited more than once, or `"gromosxx-state1-default"`, gromosXX 247c95c4's
+    /// state 1 whatever its visits (`eds.cc:252-261`; 1.8 D32). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub target_state: AedsTarget,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 impl Aeds {
@@ -800,6 +820,9 @@ impl Aeds {
             bmax: b.bmax,
             asteps: b.asteps,
             bsteps: b.bsteps,
+            energy_columns: AedsColumns::default(),
+            prevalence: AedsPrevalence::default(),
+            target_state: AedsTarget::default(),
         }
     }
 

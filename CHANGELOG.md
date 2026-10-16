@@ -5,6 +5,142 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.63] (2026-10-16)
+
+**Three A-EDS defects of gromosXX corrected by default** (1.8): the energy columns are the
+parameters a frame's V_R* used (D16), the FORM 5/6 prevalences are a log-sum-exp (D25), and the
+E_min target is a sampled state (D32). Each has a recipe switch that reproduces gromosXX, and the
+native search references now set it. A patched gromosXX (D16, D25, D32) is the oracle for nine
+new references. Three other oddities stay reproduced because the sources disagree on what was
+meant. 116 references (115 pass, `aladip_gamd` ignored); the 107 earlier ones produce
+byte-identical output to the 0.0.62 binary.
+
+### Added (1.8 — A-EDS corrections)
+
+- **Recipe switches** (`RunRecipe::aeds`, no `.imd` token; `md @recipe_set`, Python
+  `Recipe.update(aeds={...})`, `[recipe_overrides]` in a reference's input.toml):
+  `aeds.energy_columns = "intended" | "gromosxx-post-update"`, `aeds.prevalence = "intended" |
+  "gromosxx-plain-exp"`, `aeds.target_state = "intended" | "gromosxx-state1-default"`. They go
+  through `AedsPlan` to `gromos_integrators::eds::AedsParams` (`AedsColumns`, `AedsPrevalence`,
+  `AedsTarget`). The recipe echo lists them only when they are not `"intended"`.
+- **Patched oracle**: `tests/gromosXX_references/patches/D16_aeds_energy_columns.patch`,
+  `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`, each a few lines of `eds.cc`.
+  Each applies alone to 247c95c4. All three are built into `.local/gromosXX-patched` next to
+  D1 and D2 (`patches/BUILD.md`). With that binary, the four D1/D2 `_fixed` references
+  regenerate byte for byte (`git status` clean).
+- References: `aladip_vacuum_aeds_f6_ovf` (native; FORM 6 with EIR 0 6000 0, where
+  e^{−β(V_2 − E_2^R)} overflows every step and gromosXX's offsets stay at (−2000, 4000, −2000)).
+  Patched oracle: `aladip_vacuum_aeds_f2_fixed`, `_f4_fixed`, `_f5_fixed`, `_f6_fixed`,
+  `_f6_ovf_fixed` (the offsets move, −0.0267 kJ/mol per step for state 2), `_sigma0_fixed`
+  (G and σ_G come from state 2, not from the never-visited state 1's 0) and
+  `_cont1_fixed`/`_cont2_fixed` (the corrected search continued through `AEDSSEARCH`). They
+  are registered in both suites.
+- Tests independent of the patched oracle:
+  - `eds.rs::log_sum_exp_prevalences_match_where_finite_and_survive_overflow`: equal to the
+    plain formula to 1e-15 where it is finite; the hand-computed step where it overflows or
+    underflows.
+  - `eds.rs::target_is_a_sampled_state_not_an_unvisited_state_1`: V_2 = 6, 8, 4 gives
+    G = 6, σ_G = 2, where gromosXX gives 0, 0.
+  - `aeds_runs.rs::a_frame_carries_the_parameters_its_reference_energy_used`: V_mix and V_R*
+    rebuilt from a frame's own columns fit within 1e-7 by default; with gromosXX's columns
+    only the previous frame's fit, and the other choice misses by > 1e-3.
+  - `aeds_runs.rs::the_e_min_target_is_a_sampled_state`: the RESTREMIN 0 input that gromosXX
+    turns into −∞ and then NaN runs, and G is the running mean of V_2.
+  - `recipe_roundtrip.rs::aeds_switches_are_set_by_path_and_echoed_only_when_not_the_default`.
+  - `aeds_replay.rs` replays the `_fixed` references under the intended rules (≤ 8.0e-10
+    relative) and `_f6_ovf` under the released ones.
+
+### Changed (default behaviour)
+
+- **Default A-EDS search output differs from 0.0.60-0.0.62** for FORMS 2-6. FORM 1 is
+  unchanged.
+  - `eds_emax`, `eds_emin` and the `# eds` offsets of a frame are now the values before that
+    step's update, i.e. the ones its `eds_vmix`/`eds_vr` used. Frame 0 shows the input (or
+    initialised) values.
+  - FORMS 3/4/5: G and σ_G (and so E_min) come from a state visited more than once wherever
+    gromosXX would pick a state 1 that was never visited.
+  - FORMS 5/6: prevalences differ at rounding level, and are finite where gromosXX's are NaN.
+  - The final `AEDSSEARCH` block is still the state after the last update, so a run continues
+    as before.
+- To reproduce 0.0.62 exactly, set the switches. The seven native search references now carry
+  them in their input.toml:
+
+  | reference | switches set |
+  |---|---|
+  | `aladip_vacuum_aeds_f2` | `energy_columns` |
+  | `aladip_vacuum_aeds_f4` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_f5` | `energy_columns`, `prevalence`, `target_state` |
+  | `aladip_vacuum_aeds_f6` | `energy_columns`, `prevalence` |
+  | `aladip_vacuum_aeds_sigma0` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_cont1` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_cont2` | `energy_columns`, `target_state` |
+
+  `_below`, `_inside` and `_above` (FORM 1) need none. Measured: without its switches, each of
+  the seven fails, through `energy_columns` (all seven) and `target_state` (f4, f5, sigma0,
+  cont1). `prevalence` alone stays within tolerance on f5/f6 and is set for bit-identity.
+- `track_state` takes the target rule, and `advanced_offset_update` the prevalence rule.
+  `AedsParams` has three new fields.
+- `aeds_runs.rs`: the D15 refusal (BMAXTYPE 2, σ = 0) is now reached with
+  `aeds.target_state = gromosxx-state1-default`. Under the intended target the same input runs.
+  D15 stays refused for whichever target has no variance.
+
+### Corrected gromosXX defects
+
+- **D16** (`eds.cc:368-372`, dossier D16 bullet 1): A-EDS energy columns were written after
+  the search update. The LiveCoMS t_05 `scripts/search.py` rebuilds V_i* and V_R* from the
+  same frame's `e{i}`, `e{i}r`, `eds_emin`, `eds_emax` and `eds_vr`, which only works with the
+  pre-update columns. `eds_globmin`/`eds_globminfluc` stay this step's statistics.
+- **D25** (`eds.cc:339-343`, dossier D25): FORM 5/6 prevalences were plain exponentials. They
+  give NaN once −β(V_i − E_i^R) > 709.78 (V_i − E_i^R < −1770.6 kJ/mol at 300 K), or when all
+  are below −745; the offsets then freeze silently. The log-sum-exp is the same real number.
+- **D32** (`eds.cc:252-261`, new row): state 1 was the starting candidate for the E_min target
+  whatever its visit count. A never-visited state 1 (mean 0, σ 0) then stays the target while
+  every sampled state has a mean > 0. That gives a fake G and, with BMAXTYPE 2, the b_max = 0
+  of D15. Vol. 2 takes the minimum over the averages of sampled states. The "more than one
+  visit" rule gromosXX applies to states 2..N now applies to state 1 too. When no state
+  qualifies, state 1 is still used, as in gromosXX: no source says what should happen there.
+
+### Still reproduced (intended behaviour ambiguous)
+
+- **FORM 5/6 offset step ASTEPS·Δt** (`:355`; 0.0.60 called it "D17", dossier D16 bullet 4).
+  It is an energy if ASTEPS is a rate in kJ mol⁻¹ ps⁻¹: Vol. 4 says "determines the changing
+  rate of the offset" and LiveCoMS t_05 says "a higher number means a faster change". It is
+  a units error if ASTEPS is the step count it is in FORMS 2/4. No paper describes FORMS 5/6.
+- **τ ramp per job** (`:186`). Vol. 2 says "t_tot is the total simulation time of the run",
+  which is what gromosXX does. Perthold, Petrov & Oostenbrink (JCIM 2020) ramp "over the
+  nonequilibrium parameter search". A whole-search ramp needs a total length and an elapsed
+  step count, which neither the input nor `AEDSSEARCH` carries.
+- **The mean of V_i − E_i^R over moving offsets** (`:246`). Vol. 2 writes the average of
+  V_i − E_i^R without saying which E_i^R. ⟨V_i⟩ − E_i^R(now) is the other reading, and it
+  matches FORMS 2/4/5 (σ is that of V_i).
+
+### Verified
+
+- References: 115 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed; `aeds_runs` 4 passed; `aeds_replay` 7 passed.
+- All 107 earlier references, with the reproducing switches in their input.toml, give
+  byte-identical output to the 0.0.62 binary (built from `git archive HEAD`). That covers 468
+  files, every one except `<tre>.recipe.toml`, with the version and the reference path in the
+  provenance lines normalised. `aladip_gamd`'s `gamd_*.dat` were compared in separate working
+  directories.
+- Each `_fixed` reference fails when the switch for a correction it exercises is set to
+  gromosXX's value: `energy_columns` for all but `_sigma0_fixed` (its E_max/E_min never move),
+  `target_state` for `_f4`, `_f5`, `_sigma0`, `_cont1`, and `prevalence` for `_f6_ovf`.
+  `aladip_vacuum_aeds_f6_ovf` fails with the intended prevalences.
+- core, io, run, forces, integrators: 690 passed, 5 ignored. Clippy on integrators, run, md
+  and pyo3-gromos shows the same warnings as 0.0.62 (the two known doc-list ones). `cargo fmt
+  --check` is clean, and so are `cargo check --tests --workspace`, the G6/G11 greps,
+  `pytest` (915 passed / 86 skipped) and stubtest.
+
+### Not done (left for later)
+
+- The three ambiguous items above (a decision each), and their Lean statements.
+- The Lean statements of D16, D25 and D32 are drafted in
+  `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md`, not in the `math` repository.
+- No FORM 1 `_fixed` reference: none of the three corrections touches FORM 1.
+- No `_fixed` reference isolates a single patch: each is generated with all five patches, so
+  the unit tests above isolate the corrections.
+
 ## [0.0.62] (2026-10-16)
 
 **BAR and MBAR of λ windows run from Python** (1.8 step 5): a window run with `PRECALCLAM` keeps

@@ -35,7 +35,10 @@ Berendsen barostat, COM removal.
   search through the pure functions `memory_time`, `initialise_search`, `offset_update`,
   `track_state`, `emax_emin_update`, `advanced_offset_update` (`search_step`), on the
   configuration's `AedsSearch` (the `AEDSSEARCH` block); reference-tested and replayed against
-  gromosXX (`gromos-run/tests/aeds_replay.rs`)
+  gromosXX (`gromos-run/tests/aeds_replay.rs`). Since 0.0.63 three gromosXX defects are corrected
+  by default, each reproduced on request through `AedsParams`: `AedsColumns` (D16, the energy
+  columns before the update), `AedsPrevalence` (D25, log-sum-exp prevalences), `AedsTarget` (D32,
+  a sampled state as the E_min target)
 - GaMD / REMD: **stubs only, untested**
 
 ## Key files

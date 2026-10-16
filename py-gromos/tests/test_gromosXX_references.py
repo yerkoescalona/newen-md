@@ -242,6 +242,16 @@ AEDS_SYSTEMS = [
     "aladip_vacuum_aeds_sigma0",
     "aladip_vacuum_aeds_cont1",
     "aladip_vacuum_aeds_cont2",
+    "aladip_vacuum_aeds_f6_ovf",
+    # the same against gromosXX with D16, D25 and D32 patched (patches/): gromos-rs's defaults
+    "aladip_vacuum_aeds_f2_fixed",
+    "aladip_vacuum_aeds_f4_fixed",
+    "aladip_vacuum_aeds_f5_fixed",
+    "aladip_vacuum_aeds_f6_fixed",
+    "aladip_vacuum_aeds_f6_ovf_fixed",
+    "aladip_vacuum_aeds_sigma0_fixed",
+    "aladip_vacuum_aeds_cont1_fixed",
+    "aladip_vacuum_aeds_cont2_fixed",
 ]
 
 REFERENCE_SYSTEMS = [
@@ -358,7 +368,9 @@ REFERENCE_SYSTEMS = [
     "aladip_eds_solv_ti_groups",
     "aladip_eds_solv_ti_multis_fixed",
     # Accelerated EDS (1.8): FORM 1 at three window placements, the searches (FORMS 2, 4, 5,
-    # 6, and 3 with a zero-variance target held by RESTREMIN 1), a search over two jobs
+    # 6, and 3 with a zero-variance target held by RESTREMIN 1), a search over two jobs, FORM 6
+    # with overflowing prevalences; the released gromosXX (its D16, D25, D32 reproduced by the
+    # recipe overrides) and the patched one
     *AEDS_SYSTEMS,
 ]
 
@@ -537,8 +549,9 @@ def _parse_expected_aeds(tre_path):
 @pytest.mark.parametrize("system_name", AEDS_SYSTEMS)
 def test_reference_aeds_search(system_name):
     """`Simulation.eds_vmix` / `eds_emax` / `eds_emin` / `eds_eir` every frame are gromosXX's
-    slots 34, 36, 37 and offset column (written after the search update); the continuation job
-    reads its start state from the configuration's AEDSSEARCH block."""
+    slots 34, 36, 37 and offset column (the released binary's written after the search update,
+    the patched one's before it, as the recipe overrides say); the continuation jobs read their
+    start state from the configuration's AEDSSEARCH block."""
     system_dir = REF_DIR / system_name
     expected = _parse_expected_aeds(system_dir / "expected" / "energies.tre")
     sim = _create_simulation(system_dir)

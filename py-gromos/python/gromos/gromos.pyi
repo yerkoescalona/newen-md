@@ -460,7 +460,10 @@ class Recipe:
     def aeds(self) -> dict[str, Any] | None:
         """The ``AEDS`` block (``enabled``, ``form``, ``num_states``, ``emax``, ``emin``,
         ``eir``, ``ntiaedss``, ``restremin``, ``bmaxtype``, ``bmax``, ``asteps``, ``bsteps``), or
-        ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``."""
+        ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``.
+        ``energy_columns``, ``prevalence`` and ``target_state`` (no ``.imd`` block; present only
+        when not ``"intended"``) reproduce gromosXX's A-EDS defects (``"gromosxx-post-update"``,
+        ``"gromosxx-plain-exp"``, ``"gromosxx-state1-default"``)."""
         ...
     @property
     def outputs(self) -> dict[str, Any]: ...

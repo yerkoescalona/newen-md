@@ -14,8 +14,9 @@ the comparison to frame 0's EDS end-state energies (and V_R), for references who
 from a defective gromosXX branch.
 `README-livecoms.md` covers the three systems that came from real LiveCoMS tutorial input.
 An optional `[recipe_overrides]` table in `input.toml` sets recipe fields no `.imd` block carries
-(`"perturbation.atom_pair_kernel" = "gromosxx-shifted"`); both runners apply it (`md @recipe_set
-key=value`, `Recipe.update`).
+(`"perturbation.atom_pair_kernel" = "gromosxx-shifted"`, the A-EDS `"aeds.energy_columns"`,
+`"aeds.prevalence"`, `"aeds.target_state"`); both runners apply it (`md @recipe_set key=value`,
+`Recipe.update`).
 
 ## Status
 
@@ -110,9 +111,11 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_eds_multis | 12 | the FORM 2 run on the released gromosXX: only frame 0's end-state energies are compared — its force weights are defective (zero-seeded log-sum-exp, missing `− max`, pairs (0, j≥2) skipped, which also makes its V_R wrong for N ≥ 3), so its forces and trajectory are not those of its V_R (`compare` in `input.toml`) (1.8) | **PASS** |
 | 4   | aladip_vacuum_eds_pairs | 12 | the FORM 3 run on the released gromosXX: frame 0's end-state energies and V_R (right for any N); forces and trajectory not compared for the same reason (1.8) | **PASS** |
 | 4   | aladip_vacuum_aeds_below / _inside / _above | 12 | A-EDS FORM 1 over the two end states of `../shared/aladip_eds2.mpt`, EIR 0 10, (EMAX, EMIN) = (50, −10) / (40, −60) / (−40, −80): V_mix below, inside and above the window — V_mix (slot 34), V_R* (35), E_max/E_min (36/37), the offset column, the EDS forces and virial scaled by the boost factor inside (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_f2 / _f4 / _f5 / _f6 | 12 | A-EDS searches over three gentle end states (`../shared/aladip_aeds3.mpt`, N4/H5 charges), EIR 0 0 −3, from Maxwell-Boltzmann velocities, 300 steps (FORM 5: 250): FORM 2 offsets (τ 20 → 50 steps), FORM 4 offsets + E_max/E_min (all four E_min branches, 16 round trips), FORM 5 and 6 prevalence-driven offsets; slots 34-39 and the offsets every frame, and the final AEDSSEARCH block (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_sigma0 | 12 | A-EDS FORM 3, BMAXTYPE 2, EIR −20 0: the never-visited default target state 1 has no variance (b_max = 0); RESTREMIN 1 holds E_min at its fake mean 0 (with RESTREMIN 0 gromosXX divides by zero; refused) (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_cont1 / _cont2 | 12 | an A-EDS FORM 4 search in two jobs of 100 steps: job 2 starts from job 1's native final configuration, NTIAEDSS 0, its AEDSSEARCH block overriding the input EMAX 50, EMIN −50, EIR 9 9 9 (1.8) | **PASS** |
+| 4   | aladip_vacuum_aeds_f2 / _f4 / _f5 / _f6 | 12 | A-EDS searches over three gentle end states (`../shared/aladip_aeds3.mpt`, N4/H5 charges), EIR 0 0 −3, from Maxwell-Boltzmann velocities, 300 steps (FORM 5: 250): FORM 2 offsets (τ 20 → 50 steps), FORM 4 offsets + E_max/E_min (all four E_min branches, 16 round trips), FORM 5 and 6 prevalence-driven offsets; slots 34-39 and the offsets every frame, and the final AEDSSEARCH block; run with the overrides reproducing gromosXX's D16 (and D25/D32 where the FORM reaches them) (1.8) | **PASS** |
+| 4   | aladip_vacuum_aeds_sigma0 | 12 | A-EDS FORM 3, BMAXTYPE 2, EIR −20 0: the never-visited default target state 1 has no variance (b_max = 0); RESTREMIN 1 holds E_min at its fake mean 0 (with RESTREMIN 0 gromosXX divides by zero; refused); run with the D16/D32 reproducing overrides (1.8) | **PASS** |
+| 4   | aladip_vacuum_aeds_cont1 / _cont2 | 12 | an A-EDS FORM 4 search in two jobs of 100 steps: job 2 starts from job 1's native final configuration, NTIAEDSS 0, its AEDSSEARCH block overriding the input EMAX 50, EMIN −50, EIR 9 9 9; run with the D16/D32 reproducing overrides (1.8) | **PASS** |
+| 4   | aladip_vacuum_aeds_f6_ovf | 12 | A-EDS FORM 6 with EIR 0 6000 0, 100 steps: e^{−β(V_2 − E_2^R)} overflows every step, the released gromosXX's prevalences are NaN and its offsets stay at the step-0 centring (−2000, 4000, −2000); run with the reproducing overrides (1.8 D25) | **PASS** |
+| 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | the same runs, expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0); gromos-rs's defaults (1.8, 0.0.63) | **PASS** |
 
 **45 of 45 tests pass** (2026-08-30; nothing ignored). Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

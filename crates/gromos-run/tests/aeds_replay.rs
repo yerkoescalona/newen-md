@@ -3,13 +3,14 @@
 //! give the V_mix and V_R* it printed for every frame (computed with the parameters of the frame
 //! before: the columns are written after the update) and the E_max, E_min, G, σ_G and offsets
 //! it printed after the update, and end in its final AEDSSEARCH block. This pins the search
-//! bookkeeping independently of the MD.
+//! bookkeeping independently of the MD. The `_fixed` references (gromosXX with the D16, D25
+//! and D32 patches) replay under the intended rules, their columns before the update.
 
 use std::path::{Path, PathBuf};
 
 use gromos_integrators::eds::{
-    boosted_reference, initialise_search, reference_hamiltonian, search_step, AedsForm, AedsParams,
-    AedsSearch, EdsForm,
+    boosted_reference, initialise_search, reference_hamiltonian, search_step, AedsColumns,
+    AedsForm, AedsParams, AedsPrevalence, AedsSearch, AedsTarget, EdsForm,
 };
 use gromos_io::coordinate::{parse_aedssearch, read_coordinates};
 use gromos_io::imd::read_imd_file;
@@ -80,8 +81,21 @@ fn close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol * b.abs().max(1.0)
 }
 
-/// Replay one reference; returns the largest relative deviation seen.
-fn replay(name: &str) -> f64 {
+/// gromosXX 247c95c4 as released.
+const RELEASED: (AedsColumns, AedsPrevalence, AedsTarget) = (
+    AedsColumns::GromosxxPostUpdate,
+    AedsPrevalence::GromosxxPlainExp,
+    AedsTarget::GromosxxState1Default,
+);
+/// gromosXX with the D16, D25 and D32 patches: gromos-rs's defaults.
+const PATCHED: (AedsColumns, AedsPrevalence, AedsTarget) = (
+    AedsColumns::Intended,
+    AedsPrevalence::Intended,
+    AedsTarget::Intended,
+);
+
+/// Replay one reference under `rules`; returns the largest relative deviation seen.
+fn replay(name: &str, rules: (AedsColumns, AedsPrevalence, AedsTarget)) -> f64 {
     let dir = refs().join(name);
     let imd = read_imd_file(dir.join(format!("{name}.in"))).unwrap();
     let a = imd.aeds.clone().expect("AEDS block");
@@ -96,6 +110,9 @@ fn replay(name: &str) -> f64 {
         bmax: a.bmax,
         asteps: a.asteps,
         bsteps: a.bsteps,
+        columns: rules.0,
+        prevalence: rules.1,
+        target: rules.2,
     };
     let mut s = AedsSearch::new(a.emax, a.emin, a.eir.clone(), !a.restremin);
     let printed = frames(&dir.join("expected/energies.tre"));
@@ -122,6 +139,7 @@ fn replay(name: &str) -> f64 {
         let (v_r, _) = boosted_reference(v_mix, s.emax, s.emin);
         check("eds_vmix", k, v_mix, f.e(34));
         check("eds_vr", k, v_r, f.e(35));
+        let before = (s.emax, s.emin, s.eir.clone());
         let globmin = search_step(
             &params,
             &mut s,
@@ -136,14 +154,18 @@ fn replay(name: &str) -> f64 {
         )
         .unwrap();
         s.initialise = false;
-        check("eds_emax", k, s.emax, f.e(36));
-        check("eds_emin", k, s.emin, f.e(37));
+        let (emax, emin, eir) = match params.columns {
+            AedsColumns::Intended => before,
+            AedsColumns::GromosxxPostUpdate => (s.emax, s.emin, s.eir.clone()),
+        };
+        check("eds_emax", k, emax, f.e(36));
+        check("eds_emin", k, emin, f.e(37));
         if let Some((g, fluc)) = globmin {
             check("eds_globmin", k, g, f.e(38));
             check("eds_globminfluc", k, fluc, f.e(39));
         }
         for (i, r) in f.eds.iter().enumerate() {
-            check(&format!("e{}r", i + 1), k, s.eir[i], r[3]);
+            check(&format!("e{}r", i + 1), k, eir[i], r[3]);
         }
     }
     let fin = read_coordinates(dir.join("expected/final.conf")).unwrap();
@@ -188,25 +210,52 @@ fn replay(name: &str) -> f64 {
 
 #[test]
 fn form2_offset_search_replays_gromosxx() {
-    eprintln!("f2 worst {:.1e}", replay("aladip_vacuum_aeds_f2"));
+    eprintln!("f2 worst {:.1e}", replay("aladip_vacuum_aeds_f2", RELEASED));
 }
 
 #[test]
 fn form4_full_search_replays_gromosxx() {
-    eprintln!("f4 worst {:.1e}", replay("aladip_vacuum_aeds_f4"));
+    eprintln!("f4 worst {:.1e}", replay("aladip_vacuum_aeds_f4", RELEASED));
 }
 
 #[test]
 fn form5_advanced_search_replays_gromosxx() {
-    eprintln!("f5 worst {:.1e}", replay("aladip_vacuum_aeds_f5"));
+    eprintln!("f5 worst {:.1e}", replay("aladip_vacuum_aeds_f5", RELEASED));
 }
 
 #[test]
 fn form6_advanced_offsets_replay_gromosxx() {
-    eprintln!("f6 worst {:.1e}", replay("aladip_vacuum_aeds_f6"));
+    eprintln!("f6 worst {:.1e}", replay("aladip_vacuum_aeds_f6", RELEASED));
 }
 
 #[test]
 fn form3_zero_variance_clamp_replays_gromosxx() {
-    eprintln!("sigma0 worst {:.1e}", replay("aladip_vacuum_aeds_sigma0"));
+    eprintln!(
+        "sigma0 worst {:.1e}",
+        replay("aladip_vacuum_aeds_sigma0", RELEASED)
+    );
+}
+
+#[test]
+fn form6_overflow_freezes_the_released_offsets() {
+    eprintln!(
+        "f6_ovf worst {:.1e}",
+        replay("aladip_vacuum_aeds_f6_ovf", RELEASED)
+    );
+}
+
+/// The patched oracle (D16, D25, D32) under gromos-rs's default rules: the columns are the ones
+/// the frame's V_mix and V_R* used, so the replay's pre-update values must match.
+#[test]
+fn patched_searches_replay_under_the_intended_rules() {
+    for name in [
+        "aladip_vacuum_aeds_f2_fixed",
+        "aladip_vacuum_aeds_f4_fixed",
+        "aladip_vacuum_aeds_f5_fixed",
+        "aladip_vacuum_aeds_f6_fixed",
+        "aladip_vacuum_aeds_f6_ovf_fixed",
+        "aladip_vacuum_aeds_sigma0_fixed",
+    ] {
+        eprintln!("{name} worst {:.1e}", replay(name, PATCHED));
+    }
 }
