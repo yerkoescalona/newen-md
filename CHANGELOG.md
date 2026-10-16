@@ -5,6 +5,84 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.61] (2026-10-16)
+
+**Slow growth** (1.8): PERTURBATION DLAMT ≠ 0 runs instead of being refused — λ moves by
+DLAMT·Δt after every step and the masses and every perturbed term follow it, as gromosXX's
+`Slow_Growth` does, including its output bookkeeping and its unbounded λ. Five new references;
+106 pass, the 101 earlier ones (and `aladip_gamd`) byte-identical to 0.0.60.
+
+### Added (1.8 — slow growth)
+
+- **`gromos_run::advance_lambda(&recipe, &mut topology)`**: gromosXX `Slow_Growth::apply`
+  (`slow_growth.cc:43-53`), λ += DLAMT·Δt then `Topology::update_for_lambda` (individual λ and
+  perturbed masses); a no-op unless NTG = 1 and DLAMT ≠ 0 (`create_md_sequence.cc:279-286`). It
+  changes the topology, so it is not an algorithm of the sequence: `md` and `Simulation` call it
+  after every step (`start`'s included), at gromosXX's place — after the forces, integration,
+  constraints, kinetic energy and barostat of the step, before the next one. `md` skips it on the
+  step the minimiser stops at, whose gromosXX sequence ends early.
+- **Output** as gromosXX: the `.trg` prints the λ the step ran at (`topo.old_lambda()`,
+  `out_configuration.cc:1726`), the final configuration's `PERTDATA` the λ after the last step,
+  which a run with NRDGL = 1 continues from.
+- Refusals (`check_slow_growth`, `gromos-run/src/plan.rs`), the features gromosXX never unlocks
+  against `slow_growth` (`check_parameter.cc:387-388`; the unlocks at `:1603, 2530, 2594, 2748,
+  2819, 4217, 4489` are commented out): LAMBDAS with NTIL on, PRECALCLAM, EDS, A-EDS, lattice sums
+  (NLRELE 2/3), the shifted reaction field (NLRELE 4), conjugate gradients (NTEM ≥ 2), GAMD,
+  position constraints (NTPOR 3). DLAMT < 0 is refused whatever NTG says (gromosXX's `>=0` range,
+  `in_parameter.cc:879`); DLAMT ≠ 0 with NTG = 0 stays inert, as in gromosXX.
+- References (native gromosXX, whole-block energies, `.trg`, forces, trajectory, final
+  configuration with its `PERTDATA`): `aladip_vacuum_fep_slowgrowth` (RLAM 0.125, DLAMT 2/ps,
+  100 steps: masses, perturbed bonded and nonbonded terms at a moving λ), `_shake` (perturbed
+  SHAKE lengths, two energy groups), `_cont` (NRDGL = 1 from the first one's native final
+  configuration, DLAMT 6/ps, 50 steps, λ 0.525 → 1.125), `ch4_water_fep_slowgrowth` (in 999 SPC,
+  λ 0.25 → 0.75 over 50 steps), `aladip_vacuum_em_slowgrowth` (steepest descent: λ moves on 12 of
+  the 13 steps).
+
+### Fixed
+
+- A minimisation that converges writes its last `.tre` frame twice, as gromosXX; with NTG = 1 it
+  now writes the last `.trg` frame twice too (on the NTWG schedule of the previous step,
+  `out_configuration.cc:638-641`), which `md` left out. No earlier reference minimises a perturbed
+  system.
+
+### Reproduced gromosXX defects
+
+- **λ has no upper bound** (A): RLAM is checked to [0, 1] (`in_parameter.cc:878`), the running λ
+  (`slow_growth.cc:49-50`) and a PERTDATA λ (`in_configuration.cc:2358-2370`) are not, so a run
+  with RLAM + DLAMT·NSTLIM·Δt > 1 extrapolates every term and mass past state B without a
+  warning. Reproduced and pinned by `aladip_vacuum_fep_slowgrowth_cont`.
+- **The `.tre` mass belongs to the next λ** (B): gromosXX writes a step's energies at the start
+  of the next step, after `Slow_Growth`, and sums the masses then (`out_configuration.cc:1786`),
+  so `VOLUMEPRESSURE03`'s mass of frame n is Σ m(λ_{n+1}) while every other number is frame n's.
+  Reproduced (`md` writes after `advance_lambda`).
+- **The repeated converged `.trg` frame of a minimisation** (B) prints the previous step's λ
+  (`old_lambda`, no `Slow_Growth` on the stopping step) next to derivatives evaluated at the
+  current λ. Reproduced, pinned by `aladip_vacuum_em_slowgrowth`.
+
+### Not reproduced gromosXX defects
+
+- **"CUMULATIVE DG" without Δt** (A): the `.omd` slow-growth free energy accumulates
+  DLAMT·∂H/∂λ per step (`average.cc:425`) and prints the sum undivided (`:663`), not
+  DLAMT·Δt·∂H/∂λ: a ΔG 1/Δt too large (500× at Δt = 0.002; −615.5 instead of −1.231 kJ/mol
+  over the first 20 steps of `aladip_vacuum_fep_slowgrowth`'s run, checked against its `.trg`).
+  gromos-rs writes no `.omd` averages; integrate the `.trg` instead.
+
+### Verified
+
+- References: 106 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed; `aeds_runs` 2 passed. The 101 earlier references and
+  `aladip_gamd` produce byte-identical output to the 0.0.60 binary (every output file, the
+  version in the provenance line normalised; stdout/stderr up to timings and paths).
+- core, io, run, forces, integrators: 570 tests green; clippy no new warnings; `cargo fmt
+  --check` clean; `pytest` 831 passed / 77 skipped; stubtest clean; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- The correction of the unbounded λ (a clamp or a refusal of RLAM + DLAMT·NSTLIM·Δt > 1).
+- The `.omd` energy and dH/dλ averages, slow growth's cumulative ΔG among them.
+- `LambdaController` (`gromos-integrators/src/fep.rs`, used only by the replica code) clamps λ to
+  [0, 1] and is not what `md` runs; its header still names `slow_growth.cc`.
+
 ## [0.0.60] (2026-10-16)
 
 **Accelerated EDS** (1.8): the `AEDS` block (FORMS 1-6) runs through the recipe instead of being

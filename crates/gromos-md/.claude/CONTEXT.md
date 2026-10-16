@@ -12,6 +12,11 @@ All lower crates (gromos-core, gromos-forces, gromos-integrators, gromos-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Slow growth (1.8, 0.0.61):** `md` calls `gromos_run::advance_lambda` after each step (not on
+  the step the minimiser stops at), writes the λ the step ran at into the `.trg` (`old_lambda`)
+  and, on a converged minimisation, the repeated `.trg` frame next to the repeated `.tre` one.
+  References `aladip_vacuum_fep_slowgrowth{,_shake,_cont}`, `ch4_water_fep_slowgrowth`,
+  `aladip_vacuum_em_slowgrowth`.
 - **Net charge (1.8, 0.0.59):** `md` prints `Perturbation net charge: A … B … (ΔQ = …)` on a
   perturbed run and warns when ΔQ ≠ 0 under a reaction field (`fep_null_perturbation` pins
   ΔQ = 0 and no warning for the null perturbation).

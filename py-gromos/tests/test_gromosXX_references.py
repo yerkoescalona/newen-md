@@ -335,6 +335,14 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_pairpert_precalc",
     "aladip_vacuum_fep_pairpert_precalc_fixed",
     "ch4_water_fep_precalc_twinrange",
+    # Slow growth (DLAMT != 0): lambda += DLAMT*dt after every step, masses and perturbed terms
+    # following it; with perturbed SHAKE, continued with NRDGL = 1 past lambda = 1, in solvent,
+    # and under steepest descent
+    "aladip_vacuum_fep_slowgrowth",
+    "aladip_vacuum_fep_slowgrowth_shake",
+    "aladip_vacuum_fep_slowgrowth_cont",
+    "ch4_water_fep_slowgrowth",
+    "aladip_vacuum_em_slowgrowth",
     "aladip_solvated_epsrf0",
     "aladip_solvated_rcrf",
     # EDS through the recipe (1.8): FORM 1 against the released gromosXX, FORMS 2/3 against
@@ -384,8 +392,9 @@ EDS_SYSTEMS = {
 # trajectories (the `md` binary does the same since 0.0.34 and the Rust suite
 # passes); `Simulation` has no "converged, stop" step, so its position frame 6
 # is the state after one more (no-op) minimisation step, not the repeat.
-# Energies and forces validate; only positions are excluded here.
-POSITION_MISMATCH_SYSTEMS = {"aladip_trunc_oct", "aladip_vacuum_em"}
+# Energies and forces validate; only positions are excluded here. `aladip_vacuum_em_slowgrowth`:
+# the same minimisation with slow growth, the same repeated frame.
+POSITION_MISMATCH_SYSTEMS = {"aladip_trunc_oct", "aladip_vacuum_em", "aladip_vacuum_em_slowgrowth"}
 
 # Systems whose gromos-rs result is known to be WRONG against a correct reference — an engine
 # defect, not a binding gap. `strict=True` so the fix is noticed and the entry removed.

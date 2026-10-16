@@ -1062,15 +1062,18 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
     if let Some(pc) = p.precalclam.filter(|pc| pc.nr_lambdas > 0) {
         check_precalclam(recipe, &pc)?;
     }
+    // gromosXX reads DLAMT with the range ">=0" whatever NTG says (`in_parameter.cc:879`)
+    if p.dlamt.is_nan() || p.dlamt < 0.0 {
+        return Err(RunError::Recipe(format!(
+            "PERTURBATION DLAMT = {}: must be >= 0",
+            p.dlamt
+        )));
+    }
     if p.enabled == 0 {
         return Ok(());
     }
     if p.dlamt != 0.0 {
-        return Err(RunError::Recipe(format!(
-            "PERTURBATION DLAMT = {}: slow growth (λ changing during the run) is not \
-             implemented; set DLAMT = 0",
-            p.dlamt
-        )));
+        check_slow_growth(recipe)?;
     }
     if p.nscale != 0 {
         return Err(RunError::Recipe(format!(
@@ -1092,6 +1095,51 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+/// Slow growth (NTG = 1, DLAMT > 0): the features gromosXX never unlocks against its
+/// `slow_growth` flag (`check_parameter.cc:387-388`; the unlocks at `:1603`, `:2530`, `:2594`,
+/// `:2748`, `:2819`, `:4217` and `:4489` are commented out; GAMD, the shifted reaction field and
+/// position constraints have none) that a recipe can express.
+fn check_slow_growth(recipe: &RunRecipe) -> Result<(), RunError> {
+    let refuse = |what: &str| {
+        Err(RunError::Recipe(format!(
+            "slow growth (PERTURBATION DLAMT = {}) together with {what}: gromosXX refuses this \
+             combination",
+            recipe.perturbation.dlamt
+        )))
+    };
+    if ntil_on(recipe) {
+        return refuse("individual λ (LAMBDAS with NTIL on)");
+    }
+    if recipe
+        .perturbation
+        .precalclam
+        .is_some_and(|pc| pc.nr_lambdas > 0)
+    {
+        return refuse("PRECALCLAM (NRLAM > 0)");
+    }
+    if eds_on(recipe) {
+        return refuse("EDS");
+    }
+    if recipe.aeds.as_ref().is_some_and(|a| a.enabled) {
+        return refuse("A-EDS");
+    }
+    match recipe.forcefield.electrostatics.electrostatics {
+        2 | 3 => return refuse("lattice-sum electrostatics (NLRELE 2/3)"),
+        4 => return refuse("the shifted reaction field (NLRELE 4)"),
+        _ => {},
+    }
+    if recipe.minimisation.method >= 2 {
+        return refuse("the conjugate-gradient minimiser (NTEM >= 2)");
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return refuse("Gaussian accelerated MD (GAMD)");
+    }
+    if recipe.forcefield.restraints.position.mode == 3 {
+        return refuse("position constraints (NTPOR = 3)");
     }
     Ok(())
 }
@@ -1790,12 +1838,71 @@ mod tests {
     }
 
     #[test]
-    fn slow_growth_and_scaled_interactions_are_refused() {
+    fn slow_growth_refuses_what_gromosxx_refuses() {
+        use crate::recipe::PrecalcLam;
+        let slow = |r: &RunRecipe, what: &str| {
+            let m = refusal(r);
+            m.contains("slow growth") && m.contains(what)
+        };
+        let mut r = perturbed_recipe(false);
+        r.perturbation.dlamt = 0.001;
+        assert!(check_perturbation(&r).is_ok());
+        r.minimisation.method = 1;
+        assert!(
+            check_perturbation(&r).is_ok(),
+            "steepest descent is unlocked"
+        );
+        r.minimisation.method = 2;
+        assert!(slow(&r, "conjugate-gradient"), "{}", refusal(&r));
+        r.minimisation.method = 0;
+        for (nlrele, what) in [
+            (2, "lattice-sum"),
+            (3, "lattice-sum"),
+            (4, "shifted reaction"),
+        ] {
+            let mut e = r.clone();
+            e.forcefield.electrostatics.electrostatics = nlrele;
+            assert!(slow(&e, what), "{}", refusal(&e));
+        }
+        let mut e = r.clone();
+        e.forcefield.restraints.position.mode = 3;
+        assert!(slow(&e, "NTPOR = 3"), "{}", refusal(&e));
+        let mut e = r.clone();
+        e.passthrough.insert("GAMD".into(), vec![]);
+        assert!(slow(&e, "GAMD"), "{}", refusal(&e));
+        let mut e = r.clone();
+        e.eds = Some(eds_recipe(1, 2));
+        assert!(slow(&e, "EDS"), "{}", refusal(&e));
+        let mut e = r.clone();
+        e.aeds = aeds_run(1).aeds;
+        assert!(slow(&e, "A-EDS"), "{}", refusal(&e));
+        let mut e = r.clone();
+        e.outputs.energy_every = 1;
+        e.outputs.ntwg = 1;
+        e.perturbation.precalclam = Some(PrecalcLam {
+            nr_lambdas: 3,
+            min_lambda: 0.0,
+            max_lambda: 1.0,
+        });
+        assert!(slow(&e, "PRECALCLAM"), "{}", refusal(&e));
+        let mut e = perturbed_recipe(true);
+        e.perturbation.dlamt = 0.001;
+        assert!(slow(&e, "individual λ"), "{}", refusal(&e));
+        // gromosXX's range check on DLAMT holds whatever NTG says
+        r.perturbation.dlamt = -0.001;
+        assert!(refusal(&r).contains(">= 0"), "{}", refusal(&r));
+        r.perturbation.enabled = 0;
+        assert!(refusal(&r).contains(">= 0"), "{}", refusal(&r));
+        // and without perturbation slow growth is inert
+        r.perturbation.dlamt = 0.001;
+        r.forcefield.electrostatics.electrostatics = 2;
+        assert!(check_perturbation(&r).is_ok());
+    }
+
+    #[test]
+    fn scaled_interactions_are_refused() {
         let mut r = perturbed_recipe(false);
         assert!(check_perturbation(&r).is_ok());
-        r.perturbation.dlamt = 0.001;
-        assert!(refusal(&r).contains("slow growth"), "{}", refusal(&r));
-        r.perturbation.dlamt = 0.0;
         r.perturbation.nscale = 1;
         assert!(
             refusal(&r).contains("SCALEDINTERACTIONS"),

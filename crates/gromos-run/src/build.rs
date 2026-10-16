@@ -829,6 +829,26 @@ pub fn start(
         })
 }
 
+/// Slow growth: after every step ([`start`]'s included), λ += DLAMT·Δt and the individual λ
+/// and perturbed masses follow ([`Topology::update_for_lambda`]). A no-op unless the run is
+/// perturbed (NTG = 1) with DLAMT ≠ 0.
+///
+/// gromosXX `Slow_Growth::apply` (`slow_growth.cc:43-53`), pushed after the barostat and before
+/// the energy totals (`create_md_sequence.cc:279-286`): the step's forces, integration,
+/// constraints and kinetic energy used the old λ, the next step uses the new one. λ is not
+/// bounded: it passes 1 when RLAM + DLAMT·NSTLIM·Δt > 1, as in gromosXX. The step's outputs
+/// carry the old λ (`.trg`, gromosXX `topo.old_lambda()`), except the `.tre` mass, summed over
+/// the masses already at the new λ (`out_configuration.cc:1786`); the final configuration's
+/// `PERTDATA` holds the new λ.
+pub fn advance_lambda(recipe: &RunRecipe, topo: &mut Topology) {
+    let p = &recipe.perturbation;
+    if p.enabled == 0 || p.dlamt == 0.0 {
+        return;
+    }
+    topo.lambda += p.dlamt * recipe.control.dt;
+    topo.update_for_lambda();
+}
+
 #[cfg(test)]
 mod tests {
     //! The recipe path must be **bit-identical** to the step-1 builder it replaced, on every
@@ -1110,8 +1130,38 @@ mod tests {
     }
 
     #[test]
+    fn slow_growth_moves_lambda_and_the_masses_without_a_bound() {
+        // gromosXX slow_growth.cc:49-52; atom 1 (CB) is 15.035 in A, 12.035 in B
+        let dir = refs().join("aladip_vacuum_fep");
+        let loaded = load(&dir).expect("reference");
+        let mut topo = (loaded.prepare)().topology;
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        assert_eq!(
+            (recipe.perturbation.lambda, recipe.control.dt),
+            (0.125, 0.002)
+        );
+        advance_lambda(&recipe, &mut topo);
+        assert_eq!(topo.lambda, 0.125, "DLAMT = 0: nothing moves");
+        recipe.perturbation.dlamt = 2.0;
+        let mut expected = 0.125;
+        for _ in 0..3 {
+            advance_lambda(&recipe, &mut topo);
+            expected += 2.0 * 0.002;
+        }
+        assert_eq!(topo.lambda, expected);
+        assert_eq!(topo.mass[0], (1.0 - expected) * 15.035 + expected * 12.035);
+        topo.lambda = 0.999;
+        advance_lambda(&recipe, &mut topo);
+        assert_eq!(topo.lambda, 0.999 + 2.0 * 0.002, "no clamp at 1");
+        recipe.perturbation.enabled = 0;
+        let before = topo.lambda;
+        advance_lambda(&recipe, &mut topo);
+        assert_eq!(topo.lambda, before, "NTG = 0: inert");
+    }
+
+    #[test]
     fn a_plan_from_another_recipe_still_meets_the_recipes_refusals() {
-        // `Simulation(system, recipe, plan=…)`: the plan was made from a recipe without DLAMT
+        // `Simulation(system, recipe, plan=…)`: the plan was made from a recipe without NSCALE
         let dir = refs().join("aladip_vacuum_fep");
         let loaded = load(&dir).expect("reference");
         let prepared = (loaded.prepare)();
@@ -1119,12 +1169,12 @@ mod tests {
         recipe.inputs = loaded.inputs.clone();
         let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
         assert!(build_sequence_from_plan(&recipe, plan.clone(), &prepared).is_ok());
-        let mut slow_growth = recipe.clone();
-        slow_growth.perturbation.dlamt = 0.01;
-        let err = build_sequence_from_plan(&slow_growth, plan, &prepared)
+        let mut scaled = recipe.clone();
+        scaled.perturbation.nscale = 1;
+        let err = build_sequence_from_plan(&scaled, plan, &prepared)
             .err()
             .expect("refused");
-        assert!(err.to_string().contains("slow growth"), "{err}");
+        assert!(err.to_string().contains("NSCALE"), "{err}");
     }
 
     #[test]

@@ -54,8 +54,9 @@ pub mod prepare;
 pub mod recipe;
 
 pub use build::{
-    build_sequence_from_imd, build_sequence_from_plan, build_sequence_from_recipe, instantiate,
-    periodicity_of, start, BarostatSummary, BuildSummary, Built, Instantiated, ThermostatSummary,
+    advance_lambda, build_sequence_from_imd, build_sequence_from_plan, build_sequence_from_recipe,
+    instantiate, periodicity_of, start, BarostatSummary, BuildSummary, Built, Instantiated,
+    ThermostatSummary,
 };
 pub use bundle::{load_bundle, read_imd, write_bundle, RunBundle};
 pub use constraints::ConstraintSelection;

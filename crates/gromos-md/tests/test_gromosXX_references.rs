@@ -1108,6 +1108,24 @@ ref_test!(
     "ch4_water_fep_precalc_twinrange"
 );
 
+// Slow growth (DLAMT ≠ 0): λ += DLAMT·Δt after every step, the masses and every perturbed term
+// following it; the .trg carries the λ the step ran at, the .tre mass the masses at the next λ,
+// the final PERTDATA the λ after the last step. With perturbed SHAKE; and continued from the
+// first run's final configuration (NRDGL = 1), λ running past 1 unbounded.
+ref_test!(aladip_vacuum_fep_slowgrowth, "aladip_vacuum_fep_slowgrowth");
+ref_test!(
+    aladip_vacuum_fep_slowgrowth_shake,
+    "aladip_vacuum_fep_slowgrowth_shake"
+);
+ref_test!(
+    aladip_vacuum_fep_slowgrowth_cont,
+    "aladip_vacuum_fep_slowgrowth_cont"
+);
+// In solvent: soft-core pairs at a moving λ in a periodic box with solvent SHAKE.
+ref_test!(ch4_water_fep_slowgrowth, "ch4_water_fep_slowgrowth");
+// Slow growth under steepest descent: λ moves on every step but the one the minimiser stops at.
+ref_test!(aladip_vacuum_em_slowgrowth, "aladip_vacuum_em_slowgrowth");
+
 // ── EDS (1.8) ────────────────────────────────────────────────────────────────
 // Enveloping distribution sampling through the recipe: per-state nonbonded terms, the reference
 // Hamiltonian V_R and the mixed forces, whole-block. FORM 1 against the released gromosXX.

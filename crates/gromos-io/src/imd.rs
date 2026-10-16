@@ -178,7 +178,7 @@ pub struct ImdParameters {
     pub nrdgl: i32,
     /// RLAM: starting lambda value
     pub rlam: f64,
-    /// DLAMT: lambda change per step
+    /// DLAMT: rate of λ change in ps⁻¹ (slow growth adds DLAMT·Δt per step)
     pub dlamt: f64,
     /// ALPHLJ: LJ soft-core alpha
     pub alphlj: f64,

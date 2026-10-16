@@ -10,6 +10,9 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Slow growth (1.8, 0.0.61):** `Simulation` calls `gromos_run::advance_lambda` after the
+  constructor's step 0 and after every `step`/`run` step, as `md` does (no "converged" stop, so
+  under steepest descent λ also moves on the step `md` stops at).
 - `System`, `Recipe`/`Term`/`Algorithm`/`Plan`, `Simulation(system, recipe[, plan=])` ✓ (3.9,
   2026-08-29); `InputParameters` and the `AlgorithmSequence.*` presets are deprecation shims
 - `sim.run(steps, ene_freq)` → numpy array; energy decomposition (bond/angle/dihedral/improper/lj/coulomb) ✓ (P3.3)

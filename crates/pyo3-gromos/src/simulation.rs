@@ -43,8 +43,8 @@ use gromos_io::{
 use gromos_run::plan::AlgorithmSpec;
 use gromos_run::recipe::{PassthroughPolicy, RunRecipe};
 use gromos_run::{
-    build_sequence_from_plan, build_sequence_from_recipe, load_bundle, prepare_system, start,
-    Coordinates,
+    advance_lambda, build_sequence_from_plan, build_sequence_from_recipe, load_bundle,
+    prepare_system, start, Coordinates,
 };
 
 use super::parameters::{deprecated, PyInputParameters};
@@ -241,7 +241,7 @@ fn build_from_recipe(
         ..
     } = built;
     let gromos_run::Prepared {
-        topology: topo,
+        topology: mut topo,
         configuration: mut conf,
         ..
     } = prepared;
@@ -250,6 +250,7 @@ fn build_from_recipe(
 
     let mut sim_state = SimulationState::new(dt, recipe.control.steps);
     start(&mut md_sequence, &topo, &mut conf, &sim_state).map_err(run_err)?;
+    advance_lambda(&recipe, &mut topo);
     sim_state.advance();
 
     Ok(PySimulation {
@@ -424,6 +425,7 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
+            advance_lambda(&self.recipe, &mut self.topology);
             self.sim_state.advance();
         }
         Ok(())
@@ -458,6 +460,7 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
+            advance_lambda(&self.recipe, &mut self.topology);
             self.sim_state.advance();
             if (i + 1) % ene_freq == 0 {
                 rows.push(self.energy_row());

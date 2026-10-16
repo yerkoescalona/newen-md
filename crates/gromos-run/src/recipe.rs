@@ -537,7 +537,7 @@ pub struct Perturbation {
     pub nrdgl: i32,
     /// RLAM
     pub lambda: f64,
-    /// DLAMT
+    /// DLAMT, ps⁻¹: slow growth, λ += DLAMT·Δt after every step (`advance_lambda`)
     pub dlamt: f64,
     /// ALPHLJ
     pub alpha_lj: f64,

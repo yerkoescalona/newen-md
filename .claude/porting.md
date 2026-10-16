@@ -170,8 +170,8 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   6, which no case handles, so its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65,
   641-643`; dossier D18); a `PERTATOMPAIR` pair with an EDS atom is computed with the topology
   type and charge in every end state (`perturbed_nonbonded_pair.cc` has no EDS branch; D19).
-  PRECALCLAM, slow growth (DLAMT ≠ 0) and NSCALE ≠ 0 stay refused with EDS as without it
-  (gromosXX locks the first two against EDS, `check_parameter.cc:4271, 2528-2530`).
+  PRECALCLAM and slow growth (DLAMT ≠ 0) stay refused with EDS (gromosXX locks both against EDS,
+  `check_parameter.cc:4271, 2528-2530`), NSCALE ≠ 0 with or without it.
 - **TI-EDS pair ownership** (deliberate difference, same terms): gromosXX's perturbed atom owns
   an excluded or 1-4 EDS–perturbed pair (`PERTATOMPARAM` takes the pair before `MPERTATOM` looks,
   `in_perturbation.cc:1363-1391, 1748-1777`; case 4 at `perturbed_nonbonded_innerloop.cc:2277-2341,
@@ -180,6 +180,21 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   order, so agreement is to rounding, not bit for bit (pinned at energy_rel 1e-10 /
   force_abs 1e-8 by `aladip_eds_solv_ti`, `_groups`, `_multis_fixed`; every printed number
   equal). FORMS 2 and 3 book Σ p_i ∂V_i/∂λ as FORM 1 does (the released gromosXX books 0, D2).
+- **Slow growth** (DLAMT ≠ 0; reproduced, `gromos_run::advance_lambda`, called after every step
+  by `md` and `Simulation`). gromosXX adds DLAMT·Δt to λ at the end of each step and re-evaluates
+  the individual λ and the perturbed masses (`slow_growth.cc:43-53`, pushed after the barostat,
+  `create_md_sequence.cc:279-286`); not on the step the minimiser stops at. Its bookkeeping (B):
+  the `.trg` prints the λ the step ran at (`topo.old_lambda()`, `out_configuration.cc:1726`), the
+  `.tre` mass the masses at the next λ (`:1786`, written after `Slow_Growth`), PERTDATA the λ
+  after the last step; the repeated converged `.trg` frame of a minimisation prints the previous
+  step's λ next to derivatives taken at the current one. λ has no upper bound (A): RLAM is
+  checked to [0, 1] (`in_parameter.cc:878`), the running λ and a PERTDATA λ are not, so a run
+  extrapolates past the end state with no warning. Reproduced (`aladip_vacuum_fep_slowgrowth_cont`
+  runs to λ = 1.125). gromosXX's own locks are refused (`check_slow_growth`, `plan.rs`): LAMBDAS
+  with NTIL on, PRECALCLAM, EDS, A-EDS, lattice sums, NLRELE 4, conjugate gradients, GAMD,
+  NTPOR 3. Not ported (A): the `.omd` "CUMULATIVE DG" sums DLAMT·∂H/∂λ without the Δt
+  (`average.cc:425, 663`), a ΔG 1/Δt too large (−615.5 instead of −1.231 kJ/mol over 20 steps of
+  `aladip_vacuum_fep_slowgrowth`'s run); gromos-rs writes no `.omd` averages.
 - **Constraint virial under the molecular virial** (C, ours, reconciled). gromosXX adds the
   SHAKE/SETTLE virial only for the atomic virial (`shake.h:380`, `settle.cc:397`); gromos-rs added
   it under every virial type, so the barostat saw −1500 instead of +28 kJ mol⁻¹ nm⁻³. Now gated

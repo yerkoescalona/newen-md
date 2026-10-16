@@ -27,6 +27,11 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
+  `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
+  DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)
+  call it after every step, `start`'s included. `check_slow_growth` (`plan.rs`) refuses gromosXX's
+  locks; DLAMT < 0 is refused whatever NTG says.
 - **A-EDS (1.8, 0.0.60):** `RunRecipe::aeds` (the `AEDS` block), `check_aeds` (refusals, called
   from `check_eds`), `EdsPlan::aeds` (FORM 1, s = 1, the search settings). `prepare_system` takes
   the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the

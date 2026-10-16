@@ -29,7 +29,7 @@ use gromos::{
     validation::validate_energy,
 };
 use gromos_run::{
-    build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
+    advance_lambda, build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
     PassthroughPolicy, PrepareNote, Prepared, RunError, RunInputs, RunOptions,
 };
 use std::env;
@@ -684,7 +684,7 @@ fn main() {
         }
     }
     let Prepared {
-        topology: topo,
+        topology: mut topo,
         configuration: mut conf,
         ..
     } = prepared;
@@ -965,6 +965,9 @@ fn main() {
     let mut minimization_converged = false;
     let mut prev_min_energy = f64::MAX;
     let mut actual_steps: usize = 0;
+    // gromosXX `topo.old_lambda()`, what the `.trg` prints: λ before the last slow-growth step
+    // (the λ the step ran at, or on the step the minimiser stops at, the one before it).
+    let mut old_lambda = topo.lambda;
 
     // Per-algorithm breakdown, comparable to the gromosXX TIMING block.
     // Costs two clock reads per algorithm per step, so it is opt-in via @verb.
@@ -1145,8 +1148,24 @@ fn main() {
                     eprintln!("Error writing final energy frame: {}", e);
                 }
             }
+            // and the converged dH/dλ, on the NTWG schedule of the previous step
+            // (`out_configuration.cc:638-641`)
+            if let Some(fw) = free_energy_writer.as_mut() {
+                let last = step.saturating_sub(1);
+                if due(last, imd.ntwg) {
+                    let d = &conf.old().perturbed_energy_derivatives;
+                    if let Err(e) = fw.write_derivatives(last, last as f64 * dt, old_lambda, d) {
+                        eprintln!("Error writing final free-energy frame: {}", e);
+                    }
+                }
+            }
             break;
         }
+
+        // Slow growth closes the step (gromosXX `Slow_Growth`, last in the sequence before the
+        // energy totals; skipped on the step the minimiser stops at, whose sequence ends early).
+        old_lambda = topo.lambda;
+        advance_lambda(&recipe, &mut topo);
 
         // Log progress
         if due(step, nstlog) {
@@ -1221,7 +1240,7 @@ fn main() {
         if let Some(ref mut fw) = free_energy_writer {
             if due(step, imd.ntwg) && step < n_steps {
                 let d = &conf.old().perturbed_energy_derivatives;
-                if let Err(e) = fw.write_derivatives(step, time, topo.lambda, d) {
+                if let Err(e) = fw.write_derivatives(step, time, old_lambda, d) {
                     eprintln!("Error writing free-energy trajectory: {}", e);
                 }
             }
