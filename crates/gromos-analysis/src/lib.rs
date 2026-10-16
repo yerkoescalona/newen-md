@@ -21,6 +21,7 @@ pub mod distribution;
 pub mod eds;
 pub mod energy_sequence;
 pub mod fit;
+pub mod free_energy;
 pub mod gyration;
 pub mod hbond;
 pub mod lnexp;

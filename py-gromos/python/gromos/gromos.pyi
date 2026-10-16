@@ -948,6 +948,26 @@ def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:
     the log; `gromos.analysis.dgslv_pbsolv` builds `argv` from keywords."""
     ...
 
+def _charge_correction(
+    scheme: str,
+    charge_a: float,
+    charge_b: float,
+    box_edge: float,
+    cutoff: float,
+    eps_rf: float,
+    solvent: str,
+    *,
+    eps_solvent: float,
+    eps_model: float | None,
+    ion_radius: float,
+    density: float,
+    quadrupole_trace: float | None,
+    four_pi_eps_i: float,
+) -> dict[str, float]:
+    """The analytic charging-free-energy correction terms (kJ/mol);
+    `gromos.analysis.charge_correction` fills in the defaults."""
+    ...
+
 def rmsd(
     positions: npt.NDArray[np.float64],
     reference: npt.NDArray[np.float64],
