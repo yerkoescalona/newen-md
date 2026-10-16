@@ -30,7 +30,15 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
-from .gromos import _bar, _dgslv_pbsolv, _ext_ti_ana, _ext_ti_merge, _mbar, _ti_trapezoid
+from .gromos import (
+    _bar,
+    _charge_correction,
+    _dgslv_pbsolv,
+    _ext_ti_ana,
+    _ext_ti_merge,
+    _mbar,
+    _ti_trapezoid,
+)
 
 
 def _find_gromos_bin() -> Path:
@@ -1180,6 +1188,114 @@ def dgslv_pbsolv(
     return _dgslv_pbsolv(argv)
 
 
+def charge_correction(
+    delta_q: float,
+    box_edge: float,
+    cutoff: float | None,
+    eps_rf: float | None,
+    solvent: str = "SPC",
+    *,
+    scheme: str = "RF",
+    charge_a: float = 0.0,
+    ion_radius: float = 0.2,
+    eps_solvent: float = 78.0,
+    eps_model: float | None = None,
+    density: float = 33.427,
+    quadrupole_trace: float | None = None,
+    four_pi_eps_i: float = 138.9354,
+) -> dict[str, float]:
+    r"""
+    Analytic correction terms for the charging free energy of an ion under periodic boundary
+    conditions (Kastenholz & Hünenberger, J. Chem. Phys. 124, 224501 (2006)): the companions
+    of ``dgslv_pbsolv``.
+
+    The charge goes from ``charge_a`` to ``charge_a + delta_q`` on a sphere of radius
+    ``ion_radius`` in a cubic box. Every term is *added* to the raw ΔG of that change (TI, BAR or
+    MBAR); each is term(q_B) − term(q_A).
+
+    .. math::
+
+        \Delta G^\mathrm{cor} = \Delta G + \Delta G_{A1} + \Delta G_{A2} + \Delta G_B
+        + \Delta G_{C1} + \Delta G_{C2}
+
+    Parameters
+    ----------
+    delta_q : float
+        Charge change q_B − q_A (e).
+    box_edge : float
+        Edge L of the cubic box (nm).
+    cutoff : float or None
+        Cut-off R_C (nm); not used (may be None) for ``scheme="LS"``.
+    eps_rf : float or None
+        Reaction-field permittivity (GROMOS EPSRF; 0 is a conducting boundary); used by the
+        reaction-field schemes only.
+    solvent : str
+        ``"SPC"``, ``"SPC/E"``, ``"TIP3P"`` or ``"TIP4P"``: gives the quadrupole-moment trace γ
+        and, for SPC, the model permittivity 66.6.
+    scheme : str
+        ``"RF"`` or ``"BM"`` (Barker–Watts reaction field, molecular cut-off: GROMOS's reaction
+        field with charge groups), ``"BA"`` (atomic cut-off), ``"CM"`` (plain Coulomb cut-off) or
+        ``"LS"`` (lattice sum, tinfoil).
+    charge_a : float
+        Charge before the change (e).
+    ion_radius : float
+        R_I (nm); the paper's 0.2 nm for Na⁺ by default.
+    eps_solvent : float
+        Solvent permittivity of A1 and B (the paper: 78.0, water at 298 K).
+    eps_model : float or None
+        Permittivity of the solvent model in A2 (the paper: 66.6 for SPC, the default for SPC);
+        required for the other models with a cut-off scheme.
+    density : float
+        Solvent number density (nm⁻³), water at 1 g cm⁻³ by default.
+    quadrupole_trace : float or None
+        γ (e nm²) in place of the model's; not with ``"LS"``, whose C2 is an SPC fit.
+    four_pi_eps_i : float
+        1/(4πε₀) in kJ mol⁻¹ nm e⁻² (gromos-core's value by default).
+
+    Returns
+    -------
+    dict
+        ``a1`` (Born beyond the cut-off, Eq. 25), ``a2`` (polarisation inside the cut-off,
+        Eqs. 26–29), ``b`` (finite size and periodicity, Eq. 32 or the fit of Eq. 33), ``c1``
+        (summation scheme, from γ, Eqs. 34–42), ``c2`` (interface, Eq. 47 for LS, 0 otherwise),
+        all kJ/mol; ``total`` = their sum; ``beyond_pb`` = ``c1 + c2``; ``delta_phi_odl``
+        (kJ mol⁻¹ e⁻¹) and ``quadrupole_trace`` (e nm²).
+
+    Notes
+    -----
+    ``dgslv_pbsolv``'s correction already holds the polarisation terms (``b`` for LS,
+    ``a1 + a2 + b`` for a reaction field) for the real solute shape: add ``beyond_pb`` to it,
+    not ``total``. ``total`` replaces both for a spherical ion. A1, A2 and B scale with
+    q_B² − q_A², C1 and C2 with q_B − q_A. A2 solves the paper's radial integral equation
+    numerically (about 10 ms).
+
+    Examples
+    --------
+    >>> c = gromos.analysis.charge_correction(1.0, 3.9433, 1.4, 66.6)  # Na+ in 2048 SPC, BM
+    >>> round(c["a1"], 2), round(c["c1"], 2)
+    (-48.98, -77.75)
+    """
+    if scheme.upper() != "LS" and cutoff is None:
+        raise ValueError(f"scheme {scheme} needs a cutoff")
+    if scheme.upper() in ("RF", "BM", "BA") and eps_rf is None:
+        raise ValueError(f"scheme {scheme} needs eps_rf")
+    return _charge_correction(
+        scheme,
+        float(charge_a),
+        float(charge_a + delta_q),
+        float(box_edge),
+        0.0 if cutoff is None else float(cutoff),
+        1.0 if eps_rf is None else float(eps_rf),
+        solvent,
+        eps_solvent=float(eps_solvent),
+        eps_model=None if eps_model is None else float(eps_model),
+        ion_radius=float(ion_radius),
+        density=float(density),
+        quadrupole_trace=None if quadrupole_trace is None else float(quadrupole_trace),
+        four_pi_eps_i=float(four_pi_eps_i),
+    )
+
+
 def m_widom(trajectory: str, topology: str, output: str | None = None) -> dict:
     """
     Calculate excess chemical potential using Widom insertion.
@@ -1500,6 +1616,7 @@ __all__ = [
     "int_ener",
     # Free Energy
     "bar",
+    "charge_correction",
     "dgslv_pbsolv",
     "ext_ti_ana",
     "ext_ti_merge",

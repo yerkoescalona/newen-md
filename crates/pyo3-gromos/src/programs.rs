@@ -612,6 +612,71 @@ fn _ext_ti_merge(py: Python<'_>, argv: Vec<String>) -> PyResult<Bound<'_, PyDict
     Ok(d)
 }
 
+/// The analytic charging-free-energy correction terms
+/// (`gromos_analysis::free_energy::charge_correction`): a dict of the terms in kJ/mol.
+#[pyfunction]
+#[pyo3(signature = (
+    scheme, charge_a, charge_b, box_edge, cutoff, eps_rf, solvent, *, eps_solvent, eps_model,
+    ion_radius, density, quadrupole_trace, four_pi_eps_i
+))]
+#[allow(clippy::too_many_arguments)]
+fn _charge_correction<'py>(
+    py: Python<'py>,
+    scheme: &str,
+    charge_a: f64,
+    charge_b: f64,
+    box_edge: f64,
+    cutoff: f64,
+    eps_rf: f64,
+    solvent: &str,
+    eps_solvent: f64,
+    eps_model: Option<f64>,
+    ion_radius: f64,
+    density: f64,
+    quadrupole_trace: Option<f64>,
+    four_pi_eps_i: f64,
+) -> PyResult<Bound<'py, PyDict>> {
+    use gromos_analysis::free_energy::charge_correction as cc;
+    use pyo3::exceptions::PyValueError;
+
+    let solvent = *cc::SolventModel::find(solvent).ok_or_else(|| {
+        let known: Vec<_> = cc::SOLVENTS.iter().map(|m| m.name).collect();
+        PyValueError::new_err(format!(
+            "unknown solvent '{solvent}' ({})",
+            known.join(", ")
+        ))
+    })?;
+    let input = cc::ChargeCorrectionInput {
+        scheme: scheme.parse().map_err(PyValueError::new_err)?,
+        charge_a,
+        charge_b,
+        box_edge,
+        cutoff,
+        eps_rf,
+        eps_solvent,
+        eps_model,
+        ion_radius,
+        density,
+        solvent,
+        quadrupole_trace,
+        four_pi_eps_i,
+    };
+    let c = py
+        .allow_threads(|| cc::charge_correction(&input))
+        .map_err(PyValueError::new_err)?;
+    let d = PyDict::new_bound(py);
+    d.set_item("a1", c.a1)?;
+    d.set_item("a2", c.a2)?;
+    d.set_item("b", c.b)?;
+    d.set_item("c1", c.c1)?;
+    d.set_item("c2", c.c2)?;
+    d.set_item("total", c.total())?;
+    d.set_item("beyond_pb", c.beyond_pb())?;
+    d.set_item("delta_phi_odl", c.delta_phi_odl)?;
+    d.set_item("quadrupole_trace", c.quadrupole_trace)?;
+    Ok(d)
+}
+
 /// MBAR (`gromos_analysis::programs::mbar::mbar`) on potentials `u_kn` in kJ/mol (K × N, the
 /// samples of state 0 first) at `temperature`: free energies and their errors in kJ/mol.
 #[pyfunction]
@@ -925,6 +990,7 @@ pub fn register_programs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_precalc_bar, m)?)?;
     m.add_function(wrap_pyfunction!(_precalc_mbar, m)?)?;
     m.add_function(wrap_pyfunction!(_dgslv_pbsolv, m)?)?;
+    m.add_function(wrap_pyfunction!(_charge_correction, m)?)?;
     m.add_function(wrap_pyfunction!(_run_program, m)?)?;
     m.add_function(wrap_pyfunction!(_programs, m)?)?;
     m.add_function(wrap_pyfunction!(_sim_box, m)?)?;

@@ -158,6 +158,70 @@ corrected = dg + pb("B") - pb("A")
 (about −242 kJ/mol), and a correction of −77.98 kJ/mol whose parts agree with gromos++'s
 `dGslv_pbsolv` on the same state to 0.01 kJ/mol.
 
+## Correcting a charge change
+
+Kastenholz and Hünenberger (J. Chem. Phys. 124, 224501 (2006)) split what a periodic, cut-off
+simulation gets wrong about charging an ion into five terms, each added to the raw ΔG:
+
+| term | what it corrects | where it comes from |
+|------|------------------|---------------------|
+| A1 | no ion–solvent interaction beyond the cut-off | `dgslv_pbsolv` (and `charge_correction`, for a sphere) |
+| A2 | wrong solvent polarisation inside the cut-off | `dgslv_pbsolv` (and `charge_correction`, for a sphere) |
+| B | finite box, periodic copies of the ion | `dgslv_pbsolv` (and `charge_correction`, for a sphere) |
+| C1 | the potential summed atom by atom: the solvent's quadrupole-moment trace | `charge_correction` only |
+| C2 | the interface potential (lattice sums; 0 with a cut-off) | `charge_correction` only |
+
+`dGslv_pbsolv` is continuum electrostatics on the real solute: it gives the polarisation terms,
+A1 + A2 + B under a reaction field (B alone for a lattice sum), and no continuum sees C1 or C2,
+which come from the discrete solvent molecules. `gromos.analysis.charge_correction` returns all
+five for a spherical ion, their sum `total`, and `beyond_pb` = C1 + C2, the part to add on top of
+`dGslv_pbsolv`. The full chain for the CH4 → CH4⁺ windows and `pb()` above:
+
+```python
+dg, error = windows.bar(skip=20)          # raw ΔG: windows.ti(...) or windows.mbar(...) alike
+pb_correction = pb("B") - pb("A")         # A1 + A2 + B for the real solute
+es = base.forcefield["electrostatics"]
+cc = analysis.charge_correction(
+    plus.delta_charge,                    # Q_B − Q_A (e)
+    3.106,                                # box edge (nm): ch4_spc.cnf's cubic box
+    es["rf_cutoff"],
+    es["epsilon_rf"],
+    "SPC",
+    charge_a=plus.net_charge_a,
+    ion_radius=0.2,                       # nm; the terms barely move within ±0.05 nm
+)
+corrected = dg + pb_correction + cc["beyond_pb"]
+```
+
+For an ion small enough to be a sphere, `dg + cc["total"]` is the same correction without the
+Poisson–Boltzmann solves. The terms, with the paper's equation numbers (its Sec. II):
+
+- **A1** = −(8πε₀)⁻¹ q² (1 − ε_S⁻¹)/R_C (Eq. 25), ε_S = `eps_solvent` (78, water).
+- **A2** solves the paper's radial integral equation for the polarisation inside the cut-off
+  (Eqs. 26–29, kernels A3 and A6) with ε_S = `eps_model`, the model's permittivity (66.6 for
+  SPC; give it for the other models).
+- **B** is Eq. 32 for a lattice sum and the paper's fit to continuum electrostatics for a cut-off
+  (Eq. 33, fitted for ε_S = 78 and L/(2R_C) up to 1.7).
+- **C1** = −q ΔΦ_ODL times a scheme factor (Eqs. 37, 41, 42), ΔΦ_ODL = ρ γ/(6ε₀) (Eq. 34), with
+  γ = Σ qᵢ rᵢ² over the solvent's charges around its oxygen: 0.0082 e nm² for SPC (ΔΦ_ODL =
+  79.76 kJ mol⁻¹ e⁻¹ at 1 g cm⁻³), 0.008476 for SPC/E, 0.007641 for TIP3P, 0.009295 for TIP4P.
+- **C2** is 0 with a cut-off (Eq. 46) and the paper's SPC fit for lattice sums (Eq. 47; other
+  solvents are refused).
+
+A1, A2 and B are quadratic in the charge and C1, C2 linear, so a change q_A → q_B scales them
+with q_B² − q_A² and q_B − q_A (`charge_a` is q_A). `scheme="RF"` (or `"BM"`) is GROMOS's
+reaction field with charge groups; `"BA"` an atomic cut-off, `"CM"` a plain Coulomb cut-off,
+`"LS"` a lattice sum with tinfoil boundaries. `eps_rf=0` is a conducting boundary, as EPSRF 0 is
+in the engine. The corrected value is intrinsic: it excludes the surface term q Δχ° (the paper's
+Eq. 49, +70.3 q kJ/mol for SPC), the cavity and the standard-state terms.
+
+`tests/test_charge_correction.py` and the Rust tests check every term against the paper's
+Tables III and IV (Na⁺ in SPC, R_I = 0.2 nm, ten lattice-sum boxes, CM/BM/BA at R_C = 0.8–1.6
+nm): A1, C1 and the lattice-sum terms to 0.01 kJ/mol, B with a cut-off to 0.02, A2 under the
+reaction field to 0.06. A2 for the plain cut-off is the exception: our converged solve lies
+0.07–0.25 kJ/mol below the table, the gap shrinking as R_C grows, most likely the table's own
+discretisation.
+
 ## Checked against gromosXX
 
 `tests/test_free_energy.py` runs the CH4 → dummy windows at λ = 0, 0.25, 0.5, 0.75 and 1
@@ -170,3 +234,13 @@ frame, energies and derivatives (relative 1e-9, the printed precision). Nine CH4
 nine-point grid (300 steps each) give `bar()` and `mbar()` equal to `analysis.bar` and
 `analysis.mbar` on the same frames (1e-10), and TI, BAR and MBAR within twice their combined
 errors of each other.
+
+!!! warning "Open question: the reaction-field self-energy"
+    gromos-rs, like gromosXX, books a reaction-field self term
+    −½ q² FPEPSI (1 − C_rf/2)/R_c for every charged atom, so the raw TI/BAR/MBAR
+    ΔG of a charge change already contains part of the continuum response that
+    the A1 term describes. Kastenholz & Hünenberger's raw ΔG excludes self-energy
+    terms. Whether the GROMOS convention requires dropping that term before the
+    correction, or whether `dgslv_pbsolv` accounts for it, is being checked
+    against Reif, Hünenberger & Oostenbrink's application of the scheme to the
+    GROMOS reaction field. Until then the chain above may be off by that term.
