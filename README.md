@@ -151,6 +151,12 @@ gates; `INSTALL.md` lists the toolchain and the optional QM/ML layers.
   reference suite), `gromos-analysis` / `gromos-tools` (ports of gromos++ programs)
 - **py-gromos** (`py-gromos/`, `crates/pyo3-gromos`): Python bindings — `System`, `Recipe`, `Plan`,
   `Term`, `Simulation`
+- **Free-energy driver** (`gromos.free_energy`): perturbations from a `.ptp` or made in Python
+  (`Perturbation.from_ptp` / `.mutate`), λ windows (`LambdaSchedule`, `run_windows` in worker
+  processes) and TI, BAR and MBAR on them ([user guide](py-gromos/docs/user-guide/free-energy.md))
+- **gromos++ analysis ports** (`crates/gromos-analysis`, `gromos.analysis`): the gromos++ analysis
+  programs as binaries and library calls (`ene_ana`, `rdf`, `ext_ti_ana`, `bar`, `dfmult`,
+  `dGslv_pbsolv`, …), with reference tests against gromos++ output in `crates/gromos-analysis/tests/`
 
 #### How a run is described
 

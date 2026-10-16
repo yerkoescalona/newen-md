@@ -142,14 +142,35 @@ finite-size correction, matching gromos++ on the same state. Slow growth that ta
 - The definition of done's other parts outside step 5: EDS through the recipe is in (0.0.60), the
   plain-FEP benchmark ratios were not re-measured here (no engine change).
 
+### Item 1.8 close-out
+
+- **Step-6 gate, `eds_update_1`** (2026-10-16, the 0.0.63 tree): gromos++ `ene_ana @prop eds_vr
+  e1..eN` → `eds_update_1` (the unpatched gromos++ build, `md++/data/ene_ana.md++.lib`) on
+  gromos-rs's and gromosXX's `.tre` of `aladip_vacuum_eds`, `aladip_vacuum_eds3`,
+  `aladip_vacuum_eds_multis_fixed`, `aladip_vacuum_eds_pairs_fixed` and `two_waters_eds` (FORMS
+  1/2/3, two to four states): stdout, stderr and `tree_new.dat` byte-identical, and the
+  `ene_ana` series already byte-identical. The series are 10 frames long, so this shows the
+  pipeline is the same, not converged parameters; no A-EDS reference is covered.
+- **Step-3 gate (4)**: BENCHMARKING.md §7 now gives TI, BAR and MBAR for CH4 → dummy on both
+  engines, 11 windows × 20 ps, n = 3 replicas (mean ± sample std, gromos-rs / gromosXX): TI
+  −8.35 ± 2.09 / −10.76 ± 2.63, BAR −8.37 ± 2.11 / −10.56 ± 2.03, MBAR −8.43 ± 2.14 /
+  −10.69 ± 2.02 kJ/mol. The three estimators agree within every replica (largest difference 0.65
+  of the combined error), the engines within the replica spread (1.2–1.3 standard errors of the
+  difference). NTWG 10 is a multiple of NSNB 5, so the D34 gap does not arise. The single-run
+  errors are about half the replica std (MBAR's a tenth). Raw outputs and commands:
+  `~/.cache/gromos-rs-item-1.8/bench_fe/`.
+- **A4**: pymbar was never added as a py-gromos dependency. The MBAR gate (step 3 (3)) compares
+  against a fixture pymbar 4.0.3 dumped once (`crates/gromos-analysis/tests/data/mbar/`, made by
+  `make_reference.py` with pymbar installed by hand).
+
 ## [0.0.63] (2026-10-16)
 
 **Three A-EDS defects of gromosXX corrected by default** (1.8): the energy columns are the
 parameters a frame's V_R* used (D16), the FORM 5/6 prevalences are a log-sum-exp (D25), and the
 E_min target is a sampled state (D32). Each has a recipe switch that reproduces gromosXX, and the
 native search references now set it. A patched gromosXX (D16, D25, D32) is the oracle for nine
-new references. Three other oddities stay reproduced because the sources disagree on what was
-meant. 116 references (115 pass, `aladip_gamd` ignored); the 107 earlier ones produce
+new references. Three other behaviours stay reproduced: the GROMOS manuals document them, so
+they are not defects. 116 references (115 pass, `aladip_gamd` ignored); the 107 earlier ones produce
 byte-identical output to the 0.0.62 binary.
 
 ### Added (1.8 — A-EDS corrections)
@@ -237,9 +258,10 @@ byte-identical output to the 0.0.62 binary.
   visit" rule gromosXX applies to states 2..N now applies to state 1 too. When no state
   qualifies, state 1 is still used, as in gromosXX: no source says what should happen there.
 
-### Still reproduced (intended behaviour ambiguous)
+### Reproduced behaviour (documented in GROMOS Vol. 2, not defects)
 
-- **FORM 5/6 offset step ASTEPS·Δt** (`:355`; 0.0.60 called it "D17", dossier D16 bullet 4).
+- **FORM 5/6 offset step ASTEPS·Δt** (`:355`, D33; 0.0.60 first called it "D17", which is the
+  dossier's extended-TI 1-4 scaling).
   It is an energy if ASTEPS is a rate in kJ mol⁻¹ ps⁻¹: Vol. 4 says "determines the changing
   rate of the offset" and LiveCoMS t_05 says "a higher number means a faster change". It is
   a units error if ASTEPS is the step count it is in FORMS 2/4. No paper describes FORMS 5/6.
@@ -271,7 +293,8 @@ byte-identical output to the 0.0.62 binary.
 
 ### Not done (left for later)
 
-- The three ambiguous items above (a decision each), and their Lean statements.
+- The three reproduced behaviours above are kept as documented; a correction switch (and a Lean
+  statement) only if a source shows one of them to be a defect.
 - The Lean statements of D16, D25 and D32 are drafted in
   `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md`, not in the `math` repository.
 - No FORM 1 `_fixed` reference: none of the three corrections touches FORM 1.
@@ -517,17 +540,25 @@ searches, and the `AEDSSEARCH` state a chained search continues from — reprodu
   same frame prints already updated. A reweighting script that rebuilds V_R* from the columns
   (e.g. the LiveCoMS t_05 `search.py`) must use the previous frame's `e{i}r`, `eds_emax`,
   `eds_emin`. Reproduced (`gromos-integrators/src/eds.rs`, `apply_accelerated`).
-- **FORMS 5/6 offset step ASTEPS·Δt** (D17, `eds.cc:355`): a time in ps used as kJ/mol, so the
-  learning rate depends on the time step and ASTEPS means a memory time in FORMS 2/4 but a rate
-  in 5/6. Reproduced (`search_step`).
-- **The memory-time ramp restarts in every job** (`sim.steps()` from 0, `eds.cc:186`): a chained
-  search has a saw-tooth τ; with ASTEPS = BSTEPS a chained search equals a single one.
 - **State 1 is the default target** even if never visited (its mean V_i − E_i^R then 0, a fake G,
-  `eds.cc:252-261`); the mean of V_i − E_i^R mixes the offsets of different steps (`:246`) while
-  σ is that of V_i.
+  `eds.cc:252-261`).
 - **Prevalences without log-sum-exp** (new, inferred from `eds.cc:339-343`, not probed): FORMS 5/6
   compute e^{−β(V_i − E_i^R)} directly, so a state with V_i − E_i^R below about −1770 kJ/mol at
   300 K overflows to ∞ and the offsets become NaN.
+
+### Reproduced behaviour (documented in GROMOS Vol. 2, not defects)
+
+The sources are quoted under 0.0.63.
+
+- **FORMS 5/6 offset step ASTEPS·Δt** (D33, `eds.cc:355`; not the dossier's D17, which is the
+  extended-TI 1-4 scaling): an energy if ASTEPS is the rate in kJ mol⁻¹ ps⁻¹
+  that Vol. 4 and LiveCoMS t_05 describe, a time if it is the step count it is in FORMS 2/4.
+  Reproduced (`search_step`).
+- **The memory-time ramp restarts in every job** (`sim.steps()` from 0, `eds.cc:186`), as Vol. 2's
+  "total simulation time of the run": a chained search has a saw-tooth τ; with ASTEPS = BSTEPS a
+  chained search equals a single one.
+- **The mean of V_i − E_i^R averages over the offsets of every step** (`:246`), Vol. 2's
+  \overline{V_i − E_i^R} with E_i^R moving, while σ is that of V_i.
 
 ### Verified
 
@@ -550,7 +581,7 @@ searches, and the `AEDSSEARCH` state a chained search continues from — reprodu
 
 ### Not done (left for later)
 
-- The corrections of D16 and D17 (a switch writing the pre-update parameters, an offset step in
+- The corrections of D16 and D33 (a switch writing the pre-update parameters, an offset step in
   energy units) and of the per-job τ ramp; a log-sum-exp for the FORM 5/6 prevalences.
 - `AEDSSEARCH` in trajectory frames (gromosXX writes it only into the final configuration, so a
   crashed search loses its state); the Python front-end reads the block but writes no final

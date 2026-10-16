@@ -28,12 +28,11 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **37/40 reference tests passing** (3 ignored: `aladip_vacuum_fep` known FEP mismatch,
-  `aladip_vacuum_em` EM frame-count off-by-one, `water_216_nve_nobath` — a *correct* reference the
-  engine fails because the IMD parser turns an absent MULTIBATH block into a Berendsen bath, 3.9 A18 — the full matrix is below)
+- **116 reference tests registered, 115 passing** in `tests/test_gromosXX_references.rs` (1
+  ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
-  9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic — all
-  37 active reference systems still use `standard`.
+  9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
+  every active reference system uses `standard` except `water_1000_spc_gridcell`.
 - `test_provider_reference.rs` / `test_orchestrator_reference.rs` — gromosXX-reference tests for the
   `PotentialProvider`/`ProviderOrchestrator` seam (2.6/P2.8-2), not the main `md` binary path.
   `schnet_nve_loop.rs` (feature `ml`) — real leapfrog loop driving `SchNetInteraction`;
@@ -91,8 +90,8 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 
 ## Reference systems
 
-The per-system status matrix — which of the 45 levels pass and what each isolates — lives with the
-systems themselves: `tests/gromosXX_references/README.md`.
+The per-system status matrix — which of the 116 registered systems pass and what each isolates —
+lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test
 1. Create `tests/gromosXX_references/<name>/` with the `.imd` and an `input.toml` (copy a sibling's;

@@ -20,14 +20,17 @@ The gromosXX reference suite (`crates/gromos-md/tests/gromosXX_references/`) is 
 ## The oracle only covers wired paths
 
 This is the core risk. The reference suite catches divergence **only** for features that are wired
-and tested. Every *unwired* path (e.g. triclinic boundaries, FEP, grid pairlists, Nosé-Hoover,
-EDS/GaMD, lattice-sum/PME) is un-audited surface where two failure modes hide:
+and tested. Every *unwired* path (e.g. triclinic boundaries, grid pairlists, Nosé-Hoover, GaMD,
+lattice-sum/PME) is un-audited surface where two failure modes hide:
 
 - **Inherited C++ bugs** — you faithfully port a defect.
 - **Silent divergence** — your "cleaner" reimplementation disagrees with GROMOS and nothing notices
   until the feature is wired.
 
 (A live example already in the tree: the triclinic nearest-image — see 1.4.)
+
+FEP (fixed λ, `LAMBDAS`, `PRECALCLAM`, slow growth), EDS and A-EDS left this list in 1.8: they run
+through the recipe and are pinned by native and patched-oracle references.
 
 So the standing rule: **write the gromosXX reference test *before* wiring an unwired path, not
 after.** The test is what converts un-audited surface into oracle-covered surface.
@@ -174,8 +177,9 @@ Each entry: what gromosXX does, which bucket, what gromos-rs does.
   references pin the defaults against the patched binary; `gromos-run/tests/aeds_replay.rs`
   replays both. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md` (not yet
   in `math`).
-- **A-EDS bookkeeping** (B, reproduced, the intent ambiguous; `gromos-integrators/src/eds.rs`):
-  the FORMS 5/6 offset step is ASTEPS·Δt (`:355`; 0.0.60's "D17", dossier D16 bullet 4) — a
+- **A-EDS bookkeeping** (B, reproduced behaviour documented in GROMOS Vol. 2, not defects;
+  `gromos-integrators/src/eds.rs`): the FORMS 5/6 offset step is ASTEPS·Δt (`:355`; D33, not the
+  dossier's D17, which is the extended-TI 1-4 scaling) — a
   time if ASTEPS is a step count, an energy if it is the rate Vol. 4 and the tutorial describe;
   τ ramps over the current run only (`sim.steps()` from 0), as Vol. 2 documents ("t_tot is the
   total simulation time of the run") while Perthold 2020 ramps over the whole search, for which

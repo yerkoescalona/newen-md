@@ -117,7 +117,7 @@ Run them: `cargo test -p gromos-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_aeds_f6_ovf | 12 | A-EDS FORM 6 with EIR 0 6000 0, 100 steps: e^{−β(V_2 − E_2^R)} overflows every step, the released gromosXX's prevalences are NaN and its offsets stay at the step-0 centring (−2000, 4000, −2000); run with the reproducing overrides (1.8 D25) | **PASS** |
 | 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | the same runs, expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0); gromos-rs's defaults (1.8, 0.0.63) | **PASS** |
 
-**45 of 45 tests pass** (2026-08-30; nothing ignored). Plus gromosXX's own regression oracle,
+**115 of 116 registered tests pass** (2026-10-16; `aladip_gamd` ignored). Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,
 aladip_special}.t.cc` per-term energies (bonded, perturbed, soft-core, both reaction-field
 variants, atomic cutoff, distance restraints, λ-derivatives) — 7 pass against the *current*
