@@ -4,7 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "gromos"
-version = "0.1.0"
+# maturin takes the version from py-gromos/Cargo.toml, i.e. the workspace version.
+dynamic = ["version"]
 description = "Python bindings for GROMOS-RS molecular dynamics engine"
 authors = [
     {name = "GROMOS Developers"}

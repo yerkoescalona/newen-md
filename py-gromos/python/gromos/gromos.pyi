@@ -202,7 +202,8 @@ class Topology:
     def apply_perturbation(self, pttopo_file: str) -> tuple[float, float]:
         """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs and its MPERTATOM EDS
         end states (what `md @pttopo` does with NTG != 0 / EDS = 1). Call before solvate() and
-        before building a Simulation. Returns the solute's net charge (e) in state A and B."""
+        before building a Simulation. Returns the solute's net charge (e) in state A and B.
+        Raises ValueError when a perturbed bond is not a bond of the topology."""
         ...
     def __repr__(self) -> str: ...
     def __len__(self) -> int: ...

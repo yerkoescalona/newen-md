@@ -36,6 +36,16 @@ warns: the ΔG of a charge change carries a finite-size artefact and needs a cor
 (`gromos.analysis.dgslv_pbsolv`, below). `pt_top` and `make_pt_top` print each perturbed
 molecule's net charge in both states as well.
 
+A `.ptp` that perturbs a bond the topology does not have is refused (`ValueError`, gromosXX's
+"Perturbation of a non-existing bond"), and so are the pre-2005 `…03` block names (`PERTBOND03`,
+`PERTATOM03`, …) and any block the reader does not apply (`PERTCONSTRAINT03`, `PERTPOLPARAM`),
+as gromosXX refuses the blocks it does not read. In the soft-core blocks type 0 is a term absent
+in that state: `PERTBONDSOFT` with state-A type 0 makes a bond.
+
+Slow growth (`perturbation={"dlamt": …}`, PERTURBATION DLAMT ≠ 0) runs: λ moves by DLAMT·Δt
+after every step, and `Simulation` warns (`UserWarning`) when that takes λ out of [0, 1].
+NSCALE ≠ 0 (the `.ptp` SCALEDINTERACTIONS block) is refused.
+
 ### Making a perturbation: `Perturbation`
 
 `gromos.free_energy.Perturbation` holds a `.ptp` and the solute's net charge in its two states.

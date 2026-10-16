@@ -614,7 +614,7 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
 ///   K_soft = (1-λ)·K_A/S_A + λ·K_B/S_B           (for energy)
 ///   E = 0.5·K_soft·diff²
 ///   diff = b - b0(λ),   b0(λ) = (1-λ)·b0_A + λ·b0_B
-/// When b_type=None (state B absent): K_B=0, b0_B=b0_A.
+/// A state whose type is `None` (bond absent in it) has K = 0 and the other state's b0.
 pub fn calculate_soft_bond_forces(
     topo: &Topology,
     conf: &Configuration,
@@ -648,14 +648,12 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
 
     for sb in &topo.perturbed_solute.soft_bonds {
         let (lambda, lambda_derivative) = lam.at(sb.i);
-        let pa = &topo.bond_parameters[sb.a_type];
-        let (k_a, r0_a) = (pa.k_harmonic, pa.r0);
-        let (k_b, r0_b) = match sb.b_type {
-            Some(bt) => (
-                topo.bond_parameters[bt].k_harmonic,
-                topo.bond_parameters[bt].r0,
-            ),
-            None => (0.0, r0_a), // absent in state B
+        let state = |t: Option<usize>| t.map(|t| &topo.bond_parameters[t]);
+        let ((k_a, r0_a), (k_b, r0_b)) = match (state(sb.a_type), state(sb.b_type)) {
+            (Some(a), Some(b)) => ((a.k_harmonic, a.r0), (b.k_harmonic, b.r0)),
+            (Some(a), None) => ((a.k_harmonic, a.r0), (0.0, a.r0)), // absent in state B
+            (None, Some(b)) => ((0.0, b.r0), (b.k_harmonic, b.r0)), // absent in state A
+            (None, None) => continue,
         };
 
         let r0 = (1.0 - lambda) * r0_a + lambda * r0_b;
@@ -712,7 +710,7 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
 ///
 /// Same soft-core formulation as soft bonds but on cosθ:
 ///   diff = cosθ - cos0(λ),  cos0(λ) = (1-λ)·cos0_A + λ·cos0_B
-/// When b_type=None: K_B=0, cos0_B=cos0_A.
+/// A state whose type is `None` has K = 0 and the other state's cos0.
 pub fn calculate_soft_angle_forces(
     topo: &Topology,
     conf: &Configuration,
@@ -746,14 +744,17 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
 
     for sa in &topo.perturbed_solute.soft_angles {
         let (lambda, lambda_derivative) = lam.at(sa.i);
-        let pa = &topo.angle_parameters[sa.a_type];
-        let (k_a, cos0_a) = (pa.k_cosine, pa.theta0.cos());
-        let (k_b, cos0_b) = match sa.b_type {
-            Some(bt) => (
-                topo.angle_parameters[bt].k_cosine,
-                topo.angle_parameters[bt].theta0.cos(),
-            ),
-            None => (0.0, cos0_a),
+        let state = |t: Option<usize>| {
+            t.map(|t| {
+                let p = &topo.angle_parameters[t];
+                (p.k_cosine, p.theta0.cos())
+            })
+        };
+        let ((k_a, cos0_a), (k_b, cos0_b)) = match (state(sa.a_type), state(sa.b_type)) {
+            (Some(a), Some(b)) => (a, b),
+            (Some(a), None) => (a, (0.0, a.1)),
+            (None, Some(b)) => ((0.0, b.1), b),
+            (None, None) => continue,
         };
 
         let cos0 = (1.0 - lambda) * cos0_a + lambda * cos0_b;
@@ -817,7 +818,7 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
 ///
 /// Same soft-core formulation as soft bonds but on the improper angle ζ (radians):
 ///   diff = ζ - q0(λ),  q0(λ) = (1-λ)·q0_A + λ·q0_B
-/// When b_type=None: K_B=0, q0_B=q0_A.
+/// A state whose type is `None` has K = 0 and the other state's q0.
 pub fn calculate_soft_improper_forces(
     topo: &Topology,
     conf: &Configuration,
@@ -851,14 +852,17 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
 
     for si in &topo.perturbed_solute.soft_impropers {
         let (lambda, lambda_derivative) = lam.at(si.i);
-        let pa = &topo.improper_dihedral_parameters[si.a_type];
-        let (k_a, q0_a) = (pa.k, pa.q0);
-        let (k_b, q0_b) = match si.b_type {
-            Some(bt) => (
-                topo.improper_dihedral_parameters[bt].k,
-                topo.improper_dihedral_parameters[bt].q0,
-            ),
-            None => (0.0, q0_a),
+        let state = |t: Option<usize>| {
+            t.map(|t| {
+                let p = &topo.improper_dihedral_parameters[t];
+                (p.k, p.q0)
+            })
+        };
+        let ((k_a, q0_a), (k_b, q0_b)) = match (state(si.a_type), state(si.b_type)) {
+            (Some(a), Some(b)) => (a, b),
+            (Some(a), None) => (a, (0.0, a.1)),
+            (None, Some(b)) => ((0.0, b.1), b),
+            (None, None) => continue,
         };
 
         let q0 = (1.0 - lambda) * q0_a + lambda * q0_b;
@@ -1429,6 +1433,94 @@ mod tests {
             "forces not conserved at λ=1: {}",
             total.length()
         );
+    }
+
+    // ── Soft terms absent in state A ─────────────────────────────────────────
+
+    /// A soft term absent in state A (type 0 in the file) is the mirror of one absent in state
+    /// B: K = 0 and the other state's equilibrium value, so at λ it equals the other at 1 − λ,
+    /// with dE/dλ of opposite sign, and it vanishes at λ = 0.
+    #[test]
+    fn soft_terms_absent_in_state_a_mirror_those_absent_in_state_b() {
+        use gromos_core::topology::{SoftAngle, SoftBond, SoftImproper};
+
+        let mut topo = Topology::new();
+        topo.moltypes[0]
+            .atoms
+            .extend([atom(), atom(), atom(), atom()]);
+        topo.resize_atom_arrays();
+        topo.bond_parameters.push(BondParameters {
+            k_quartic: 0.0,
+            k_harmonic: 3.0e5,
+            r0: 0.15,
+        });
+        topo.angle_parameters.push(AngleParameters {
+            k_cosine: 400.0,
+            k_harmonic: 0.0,
+            theta0: 1.9,
+        });
+        topo.improper_dihedral_parameters
+            .push(ImproperDihedralParameters { k: 0.05, q0: 0.1 });
+        let mut conf = Configuration::new(4, 1, 1);
+        let pos = &mut conf.current_mut().pos;
+        pos[0] = Vec3::new(0.0, 0.0, 0.0);
+        pos[1] = Vec3::new(0.17, 0.0, 0.0);
+        pos[2] = Vec3::new(0.22, 0.14, 0.0);
+        pos[3] = Vec3::new(0.35, 0.16, 0.08);
+
+        let with = |a: Option<usize>, b: Option<usize>| {
+            let mut t = topo.clone();
+            let ps = &mut t.perturbed_solute;
+            ps.soft_bonds.push(SoftBond {
+                i: 0,
+                j: 1,
+                a_type: a,
+                b_type: b,
+                alpha: 1.5,
+            });
+            ps.soft_angles.push(SoftAngle {
+                i: 0,
+                j: 1,
+                k: 2,
+                a_type: a,
+                b_type: b,
+                alpha: 1.5,
+            });
+            ps.soft_impropers.push(SoftImproper {
+                i: 0,
+                j: 1,
+                k: 2,
+                l: 3,
+                a_type: a,
+                b_type: b,
+                alpha: 1.5,
+            });
+            t
+        };
+        let made = with(None, Some(0));
+        let broken = with(Some(0), None);
+        type Kernel = fn(&Topology, &Configuration, &Periodicity, f64, f64) -> ForceEnergyLambda;
+        let kernels: [(&str, Kernel); 3] = [
+            ("bond", calculate_soft_bond_forces),
+            ("angle", calculate_soft_angle_forces),
+            ("improper", calculate_soft_improper_forces),
+        ];
+        for (name, f) in kernels {
+            assert_eq!(f(&made, &conf, &vacuum(), 0.0, 1.0).energy, 0.0, "{name}");
+            for lambda in [0.2, 0.5, 0.9] {
+                let m = f(&made, &conf, &vacuum(), lambda, 1.0);
+                let b = f(&broken, &conf, &vacuum(), 1.0 - lambda, 1.0);
+                assert!(m.energy > 0.0, "{name} λ={lambda}");
+                assert!((m.energy - b.energy).abs() < 1e-12, "{name} λ={lambda}");
+                assert!(
+                    (m.lambda_derivative + b.lambda_derivative).abs() < 1e-12,
+                    "{name} λ={lambda}"
+                );
+                for (fm, fb) in m.forces.iter().zip(&b.forces) {
+                    assert!((*fm - *fb).length() < 1e-9, "{name} λ={lambda}");
+                }
+            }
+        }
     }
 
     // ── GROMOS reference values (aladip_special.t.cc) ─────────────────────
