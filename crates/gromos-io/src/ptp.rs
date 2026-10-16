@@ -11,10 +11,8 @@
 //! - `PERTIMPROPERDIH` / `PERTIMPROPERDIHH` — perturbed improper dihedral types
 //! - `PERTPROPERDIH`  / `PERTPROPERDIHH`   — perturbed proper dihedral types
 //! - `MPERTATOM`      — the end states of an EDS run (type and charge of each atom per state)
-//!
-//! The soft-variant blocks (PERTBONDSOFT, PERTANGLESOFT, PERTIMPROPERDIHSOFT) are
-//! skipped for now — they describe bonds/angles/impropers that are absent in one
-//! state (force constant = 0 in state A or B) and require soft-core treatment.
+//! - `PERTBONDSOFT` / `PERTANGLESOFT` / `PERTIMPROPERDIHSOFT` — soft-core terms, type 0 for a
+//!   term absent in that state (made or broken)
 
 use std::collections::HashMap;
 use std::fs;
@@ -131,6 +129,24 @@ pub fn parse_mpertatom(lines: &[String]) -> Result<EdsPerturbation, IoError> {
     })
 }
 
+/// The blocks [`parse_pttopo`] applies.
+const READ_BLOCKS: [&str; 14] = [
+    "PERTATOMPAIR",
+    "PERTATOMPARAM",
+    "PERTBONDSTRETCHH",
+    "PERTBONDSTRETCH",
+    "PERTBONDANGLEH",
+    "PERTBONDANGLE",
+    "PERTIMPROPERDIHH",
+    "PERTIMPROPERDIH",
+    "PERTPROPERDIHH",
+    "PERTPROPERDIH",
+    "PERTBONDSOFT",
+    "PERTANGLESOFT",
+    "PERTIMPROPERDIHSOFT",
+    "MPERTATOM",
+];
+
 /// Read a GROMOS perturbation topology file (`.pttopo`).
 ///
 /// Atoms are 1-indexed in the file; returned structs use 0-indexed atoms.
@@ -145,6 +161,42 @@ pub fn read_pttopo<P: AsRef<Path>>(path: P) -> Result<PerturbedTopology, IoError
 pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     // Split into named blocks: block_name → Vec<non-comment lines>
     let blocks = parse_blocks(content);
+
+    // The pre-2005 block names are errors in gromosXX (`in_perturbation.cc:164-170`, 580-586,
+    // 817-823, 1149-1156, 1245-1252). PERTDIHEDRAL03 has no rename message there: it is never
+    // read, so the unread-block check (`in_perturbation.cc:1809-1813`) refuses it.
+    for (old, new) in [
+        ("PERTBOND03", "PERTBONDSTRETCH"),
+        ("PERTBANGLE03", "PERTBONDANGLE"),
+        ("PERTIMPDIHEDRAL03", "PERTIMPROPERDIH"),
+        ("PERTATOMPAIR03", "PERTATOMPAIR"),
+        ("PERTATOM03", "PERTATOMPARAM"),
+    ] {
+        if blocks.contains_key(old) {
+            return Err(IoError::ParseError(format!(
+                "The {old} block was renamed to {new}."
+            )));
+        }
+    }
+    if blocks.contains_key("LAMBDADEP") {
+        return Err(IoError::ParseError(
+            "LAMBDADEP block in perturbation topology is deprecated. Use LAMBDAS block in the \
+             input file"
+                .to_string(),
+        ));
+    }
+    // Every other block this reader does not apply is refused, as gromosXX refuses the blocks
+    // it does not read (`in_perturbation.cc:1803-1820`). gromosXX does read PERTCONSTRAINT03
+    // (NTC ≠ 1) and PERTPOLPARAM, which gromos-rs does not model. SCALEDINTERACTIONS passes:
+    // the run refuses NSCALE ≠ 0 instead (`check_perturbation`, gromos-run).
+    let mut unread: Vec<&String> = blocks
+        .keys()
+        .filter(|b| !READ_BLOCKS.contains(&b.as_str()) && b.as_str() != "SCALEDINTERACTIONS")
+        .collect();
+    unread.sort();
+    if let Some(b) = unread.first() {
+        return Err(IoError::ParseError(format!("block {b} not supported!")));
+    }
 
     let mut names: Vec<String> = blocks.keys().cloned().collect();
     names.sort();
@@ -161,105 +213,99 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     // ── PERTATOMPAIR ─────────────────────────────────────────────────────────
     // Must be read before PERTATOMPARAM (GROMOS convention — exclusion fixup).
     // Format: count \n i j A_type B_type \n ...   (all 1-indexed)
-    for bname in &["PERTATOMPAIR", "PERTATOMPAIR03"] {
-        if let Some(lines) = blocks.get(*bname) {
-            let (count, data) = split_count(lines)?;
-            for line in &data {
-                let v = tokenize(line);
-                if v.len() < 4 {
-                    continue;
-                }
-                let i = parse_usize(v[0])? - 1; // 1-indexed in file → 0-indexed
-                let j = parse_usize(v[1])? - 1;
-                // Interaction types as in the file: 0 excluded, 1 normal, 2 1-4
-                let pair_type = |s: &str| {
-                    s.parse::<i64>()
-                        .ok()
-                        .and_then(PairInteraction::from_code)
-                        .ok_or_else(|| {
-                            IoError::ParseError(format!(
-                                "PERTATOMPAIR: interaction type must be 0, 1 or 2, got {s}"
-                            ))
-                        })
-                };
-                let a_type = pair_type(v[2])?;
-                let b_type = pair_type(v[3])?;
-                let (i, j) = if i <= j { (i, j) } else { (j, i) };
-                ps.atom_pairs.push(PerturbedAtomPair {
-                    i,
-                    j,
-                    a_type,
-                    b_type,
-                });
+    if let Some(lines) = blocks.get("PERTATOMPAIR") {
+        let (count, data) = split_count(lines)?;
+        for line in &data {
+            let v = tokenize(line);
+            if v.len() < 4 {
+                continue;
             }
-            if ps.atom_pairs.len() != count {
-                log::warn!(
-                    "PERTATOMPAIR: expected {count} pairs, got {}",
-                    ps.atom_pairs.len()
-                );
-            }
-            break;
+            let i = parse_usize(v[0])? - 1; // 1-indexed in file → 0-indexed
+            let j = parse_usize(v[1])? - 1;
+            // Interaction types as in the file: 0 excluded, 1 normal, 2 1-4
+            let pair_type = |s: &str| {
+                s.parse::<i64>()
+                    .ok()
+                    .and_then(PairInteraction::from_code)
+                    .ok_or_else(|| {
+                        IoError::ParseError(format!(
+                            "PERTATOMPAIR: interaction type must be 0, 1 or 2, got {s}"
+                        ))
+                    })
+            };
+            let a_type = pair_type(v[2])?;
+            let b_type = pair_type(v[3])?;
+            let (i, j) = if i <= j { (i, j) } else { (j, i) };
+            ps.atom_pairs.push(PerturbedAtomPair {
+                i,
+                j,
+                a_type,
+                b_type,
+            });
+        }
+        if ps.atom_pairs.len() != count {
+            log::warn!(
+                "PERTATOMPAIR: expected {count} pairs, got {}",
+                ps.atom_pairs.len()
+            );
         }
     }
 
     // ── PERTATOMPARAM ────────────────────────────────────────────────────────
     // Format: count \n seq res name a_iac a_mass a_charge b_iac b_mass b_charge lj_soft crf_soft
     // All IAC values 1-indexed; seq is 1-indexed atom number.
-    for bname in &["PERTATOMPARAM", "PERTATOM03"] {
-        if let Some(lines) = blocks.get(*bname) {
-            let (count, data) = split_count(lines)?;
-            let mut max_seq = 0usize;
-            for line in &data {
-                let v = tokenize(line);
-                if v.len() < 11 {
-                    continue;
-                }
-                let seq = parse_usize(v[0])? - 1; // 0-indexed
-                                                  // v[1] = residue, v[2] = name — skip
-                let a_iac = parse_usize(v[3])? - 1; // 0-indexed
-                let a_mass = parse_f64(v[4])?;
-                let a_charge = parse_f64(v[5])?;
-                let b_iac = parse_usize(v[6])? - 1;
-                let b_mass = parse_f64(v[7])?;
-                let b_charge = parse_f64(v[8])?;
-                let lj_soft = parse_f64(v[9])?;
-                let crf_soft = parse_f64(v[10])?;
-                max_seq = max_seq.max(seq);
-                ps.atoms.push(PerturbedAtom {
-                    seq,
-                    a_iac,
-                    a_mass,
-                    a_charge,
-                    b_iac,
-                    b_mass,
-                    b_charge,
-                    lj_soft,
-                    crf_soft,
-                });
+    if let Some(lines) = blocks.get("PERTATOMPARAM") {
+        let (count, data) = split_count(lines)?;
+        let mut max_seq = 0usize;
+        for line in &data {
+            let v = tokenize(line);
+            if v.len() < 11 {
+                continue;
             }
-            if ps.atoms.len() != count {
-                log::warn!(
-                    "PERTATOMPARAM: expected {count} atoms, got {}",
-                    ps.atoms.len()
-                );
+            let seq = parse_usize(v[0])? - 1; // 0-indexed
+                                              // v[1] = residue, v[2] = name — skip
+            let a_iac = parse_usize(v[3])? - 1; // 0-indexed
+            let a_mass = parse_f64(v[4])?;
+            let a_charge = parse_f64(v[5])?;
+            let b_iac = parse_usize(v[6])? - 1;
+            let b_mass = parse_f64(v[7])?;
+            let b_charge = parse_f64(v[8])?;
+            let lj_soft = parse_f64(v[9])?;
+            let crf_soft = parse_f64(v[10])?;
+            max_seq = max_seq.max(seq);
+            ps.atoms.push(PerturbedAtom {
+                seq,
+                a_iac,
+                a_mass,
+                a_charge,
+                b_iac,
+                b_mass,
+                b_charge,
+                lj_soft,
+                crf_soft,
+            });
+        }
+        if ps.atoms.len() != count {
+            log::warn!(
+                "PERTATOMPARAM: expected {count} atoms, got {}",
+                ps.atoms.len()
+            );
+        }
+        // Build is_perturbed: size = max_seq + 1 (will be resized by caller if needed)
+        let n = max_seq + 1;
+        result.n_atoms_hint = n;
+        result.is_perturbed = vec![false; n];
+        for a in &ps.atoms {
+            if a.seq < result.is_perturbed.len() {
+                result.is_perturbed[a.seq] = true;
             }
-            // Build is_perturbed: size = max_seq + 1 (will be resized by caller if needed)
-            let n = max_seq + 1;
-            result.n_atoms_hint = n;
-            result.is_perturbed = vec![false; n];
-            for a in &ps.atoms {
-                if a.seq < result.is_perturbed.len() {
-                    result.is_perturbed[a.seq] = true;
-                }
-            }
-            break;
         }
     }
 
     // ── PERTBONDSTRETCHH / PERTBONDSTRETCH ───────────────────────────────────
     // Format: count \n i j A_type B_type   (1-indexed). The H block first, as gromosXX reads
     // them (`in_perturbation.cc:172-175`): with NTC = 3 this is the perturbed SHAKE order.
-    for bname in &["PERTBONDSTRETCHH", "PERTBONDSTRETCH", "PERTBOND03"] {
+    for bname in &["PERTBONDSTRETCHH", "PERTBONDSTRETCH"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
             let before = ps.bonds.len();
@@ -291,7 +337,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
 
     // ── PERTBONDANGLEH / PERTBONDANGLE ───────────────────────────────────────
     // Format: count \n i j k A_type B_type (H block first, `in_perturbation.cc:590-591`)
-    for bname in &["PERTBONDANGLEH", "PERTBONDANGLE", "PERTBANGLE03"] {
+    for bname in &["PERTBONDANGLEH", "PERTBONDANGLE"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
             let before = ps.angles.len();
@@ -324,7 +370,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
 
     // ── PERTIMPROPERDIHH / PERTIMPROPERDIH ───────────────────────────────────
     // Format: count \n i j k l A_type B_type (H block first, `in_perturbation.cc:827-828`)
-    for bname in &["PERTIMPROPERDIHH", "PERTIMPROPERDIH", "PERTIMPDIHEDRAL03"] {
+    for bname in &["PERTIMPROPERDIHH", "PERTIMPROPERDIH"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
             let before = ps.improper_dihedrals.len();
@@ -359,7 +405,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
 
     // ── PERTPROPERDIHH / PERTPROPERDIH ───────────────────────────────────────
     // Format: count \n i j k l A_type B_type (H block first, `in_perturbation.cc:1058-1059`)
-    for bname in &["PERTPROPERDIHH", "PERTPROPERDIH", "PERTDIHEDRAL03"] {
+    for bname in &["PERTPROPERDIHH", "PERTPROPERDIH"] {
         if let Some(lines) = blocks.get(*bname) {
             let (count, data) = split_count(lines)?;
             let before = ps.proper_dihedrals.len();
@@ -393,7 +439,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     }
 
     // ── PERTBONDSOFT ─────────────────────────────────────────────────────────
-    // Format: count \n i j A_type B_type alpha   (1-indexed; B_type=0 → absent in state B)
+    // Format: count \n i j A_type B_type alpha   (1-indexed; type 0 → absent in that state)
     // Uses harmonic bond parameters (k_harmonic). Alpha is the softness parameter.
     if let Some(lines) = blocks.get("PERTBONDSOFT") {
         let (count, data) = split_count(lines)?;
@@ -404,9 +450,17 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
             }
             let i = parse_usize(v[0])? - 1;
             let j = parse_usize(v[1])? - 1;
-            let a_type = parse_usize(v[2])? - 1;
-            let b_raw = parse_usize(v[3])?;
-            let b_type = if b_raw == 0 { None } else { Some(b_raw - 1) };
+            let (a_type, b_type) = soft_types(v[2], v[3], "bond", "PERTBONDSOFT")?;
+            // gromosXX's warnings for a bond made or broken (`in_perturbation.cc:444, 448`)
+            if a_type.is_none() {
+                log::warn!(
+                    "You are making a bond, make sure you adapt the excluded atoms to this change."
+                );
+            } else if b_type.is_none() {
+                log::warn!(
+                    "You are breaking a bond, make sure you adapt the excluded atoms to this change."
+                );
+            }
             let alpha = parse_f64(v[4])?;
             ps.soft_bonds.push(SoftBond {
                 i,
@@ -425,7 +479,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     }
 
     // ── PERTANGLESOFT ────────────────────────────────────────────────────────
-    // Format: count \n i j k A_type B_type alpha   (1-indexed; B_type=0 → absent in state B)
+    // Format: count \n i j k A_type B_type alpha   (1-indexed; type 0 → absent in that state)
     // Uses cos-harmonic angle parameters.
     if let Some(lines) = blocks.get("PERTANGLESOFT") {
         let (count, data) = split_count(lines)?;
@@ -437,9 +491,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
             let i = parse_usize(v[0])? - 1;
             let j = parse_usize(v[1])? - 1;
             let k = parse_usize(v[2])? - 1;
-            let a_type = parse_usize(v[3])? - 1;
-            let b_raw = parse_usize(v[4])?;
-            let b_type = if b_raw == 0 { None } else { Some(b_raw - 1) };
+            let (a_type, b_type) = soft_types(v[3], v[4], "angle", "PERTANGLESOFT")?;
             let alpha = parse_f64(v[5])?;
             ps.soft_angles.push(SoftAngle {
                 i,
@@ -459,7 +511,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
     }
 
     // ── PERTIMPROPERDIHSOFT ──────────────────────────────────────────────────
-    // Format: count \n i j k l A_type B_type alpha  (1-indexed; B_type=0 → absent in state B)
+    // Format: count \n i j k l A_type B_type alpha  (1-indexed; type 0 → absent in that state)
     if let Some(lines) = blocks.get("PERTIMPROPERDIHSOFT") {
         let (count, data) = split_count(lines)?;
         for line in &data {
@@ -471,9 +523,7 @@ pub fn parse_pttopo(content: &str) -> Result<PerturbedTopology, IoError> {
             let j = parse_usize(v[1])? - 1;
             let k = parse_usize(v[2])? - 1;
             let l = parse_usize(v[3])? - 1;
-            let a_type = parse_usize(v[4])? - 1;
-            let b_raw = parse_usize(v[5])?;
-            let b_type = if b_raw == 0 { None } else { Some(b_raw - 1) };
+            let (a_type, b_type) = soft_types(v[4], v[5], "improper", "PERTIMPROPERDIHSOFT")?;
             let alpha = parse_f64(v[6])?;
             ps.soft_impropers.push(SoftImproper {
                 i,
@@ -542,6 +592,25 @@ fn parse_blocks(content: &str) -> HashMap<String, Vec<String>> {
         }
     }
     blocks
+}
+
+/// The state A and B types of a soft-bonded line (1-based in the file, 0 = absent in that
+/// state, as gromosXX reads them, `in_perturbation.cc:435-449, 765-777, 1003-1015`). Both 0 is
+/// gromosXX's "Conversion from bond type 0 to bond type 0" error.
+fn soft_types(
+    a: &str,
+    b: &str,
+    term: &str,
+    block: &str,
+) -> Result<(Option<usize>, Option<usize>), IoError> {
+    let a = parse_usize(a)?.checked_sub(1);
+    let b = parse_usize(b)?.checked_sub(1);
+    if a.is_none() && b.is_none() {
+        return Err(IoError::ParseError(format!(
+            "Conversion from {term} type 0 to {term} type 0 in {block} block."
+        )));
+    }
+    Ok((a, b))
 }
 
 /// Split block lines into (count, data_lines): first line is count, rest are data.
@@ -921,6 +990,164 @@ END
         assert!(parse("x 2\nA B\n").contains("NJLA NPTB"));
         assert!(parse("1 2\nA B\n1 CB 0 0.0 11 1.0").contains("IAC"));
         assert!(parse("1 2\nA\n").contains("state names"));
+    }
+
+    /// The pre-2005 block names were read as their successors; gromosXX refuses them.
+    #[test]
+    fn renamed_03_blocks_are_refused() {
+        for (block, body, msg) in [
+            (
+                "PERTBOND03",
+                "1\n1 2 1 2",
+                "The PERTBOND03 block was renamed to PERTBONDSTRETCH.",
+            ),
+            (
+                "PERTBANGLE03",
+                "1\n1 2 3 1 2",
+                "The PERTBANGLE03 block was renamed to PERTBONDANGLE.",
+            ),
+            (
+                "PERTIMPDIHEDRAL03",
+                "1\n1 2 3 4 1 2",
+                "The PERTIMPDIHEDRAL03 block was renamed to PERTIMPROPERDIH.",
+            ),
+            (
+                "PERTATOMPAIR03",
+                "1\n1 4 1 0",
+                "The PERTATOMPAIR03 block was renamed to PERTATOMPAIR.",
+            ),
+            (
+                "PERTATOM03",
+                "1\n1 1 CB 1 15.0 0.0 2 15.0 0.0 1.0 1.0",
+                "The PERTATOM03 block was renamed to PERTATOMPARAM.",
+            ),
+            (
+                "PERTDIHEDRAL03",
+                "1\n1 2 3 4 1 2",
+                "block PERTDIHEDRAL03 not supported!",
+            ),
+        ] {
+            let text = format!("TITLE\nold\nEND\n{block}\n{body}\nEND\n");
+            let e = parse_pttopo(&text).unwrap_err().to_string();
+            assert!(e.contains(msg), "{block}: {e}");
+        }
+    }
+
+    /// A block the reader does not apply used to be dropped silently; it is refused now, as
+    /// gromosXX refuses the blocks it does not read. SCALEDINTERACTIONS is left to the NSCALE
+    /// check of the run.
+    #[test]
+    fn unread_blocks_are_refused() {
+        let with = |block: &str| {
+            parse_pttopo(&format!(
+                "TITLE\nt\nEND\nPERTBONDSTRETCH\n0\nEND\n{block}\n1\n1 2 1 2\nEND\n"
+            ))
+        };
+        for block in ["PERTCONSTRAINT03", "PERTPOLPARAM", "PERTATOM", "PERTFOO"] {
+            let e = with(block).unwrap_err().to_string();
+            assert!(e.contains(&format!("block {block} not supported!")), "{e}");
+        }
+        assert!(with("LAMBDADEP")
+            .unwrap_err()
+            .to_string()
+            .contains("LAMBDADEP block in perturbation topology is deprecated."));
+        assert!(with("SCALEDINTERACTIONS").is_ok());
+    }
+
+    /// Type 0 in a soft block is a term absent in that state (made or broken); it used to
+    /// underflow in state A. Both 0 is refused, as gromosXX does.
+    #[test]
+    fn soft_blocks_read_type_0_as_an_absent_state() {
+        let read = |block: &str, atoms: &str, types: &str| {
+            parse_pttopo(&format!("{block}\n1\n{atoms} {types} 1.5\nEND\n"))
+        };
+        for (a, b, want) in [("0", "3", (None, Some(2))), ("3", "0", (Some(2), None))] {
+            let types = format!("{a} {b}");
+            let p = read("PERTBONDSOFT", "1 2", &types)
+                .unwrap()
+                .perturbed_solute;
+            assert_eq!((p.soft_bonds[0].a_type, p.soft_bonds[0].b_type), want);
+            let p = read("PERTANGLESOFT", "1 2 3", &types)
+                .unwrap()
+                .perturbed_solute;
+            assert_eq!((p.soft_angles[0].a_type, p.soft_angles[0].b_type), want);
+            let p = read("PERTIMPROPERDIHSOFT", "1 2 3 4", &types)
+                .unwrap()
+                .perturbed_solute;
+            assert_eq!(
+                (p.soft_impropers[0].a_type, p.soft_impropers[0].b_type),
+                want
+            );
+        }
+        for (block, atoms, term) in [
+            ("PERTBONDSOFT", "1 2", "bond"),
+            ("PERTANGLESOFT", "1 2 3", "angle"),
+            ("PERTIMPROPERDIHSOFT", "1 2 3 4", "improper"),
+        ] {
+            let e = read(block, atoms, "0 0").unwrap_err().to_string();
+            assert!(
+                e.contains(&format!(
+                    "Conversion from {term} type 0 to {term} type 0 in {block} block."
+                )),
+                "{e}"
+            );
+        }
+    }
+
+    /// A perturbed or soft bond must be a bond of the topology, matched on the ordered pair
+    /// as gromosXX's `bondMatcher` does.
+    #[test]
+    fn perturbation_of_a_non_existing_bond_is_refused() {
+        use gromos_core::topology::{Bond, MolTypeAtom};
+
+        let topology = || {
+            let mut t = Topology::new();
+            for k in 0..3 {
+                t.moltypes[0].atoms.push(MolTypeAtom {
+                    name: format!("A{}", k + 1),
+                    residue_nr: 1,
+                    residue_name: "TEST".to_string(),
+                    iac: 0,
+                    mass: 1.0,
+                    charge: 0.0,
+                    is_perturbed: false,
+                    is_polarisable: false,
+                    is_coarse_grained: false,
+                });
+            }
+            t.moltypes[0].bonds.push(Bond {
+                i: 0,
+                j: 1,
+                bond_type: 0,
+                hydrogen: false,
+            });
+            t.resize_atom_arrays();
+            t
+        };
+        let apply = |block: &str, line: &str| {
+            let pt = parse_pttopo(&format!("{block}\n1\n{line}\nEND\n")).unwrap();
+            topology().apply_perturbation(pt.perturbed_solute, pt.is_perturbed)
+        };
+        assert!(apply("PERTBONDSTRETCH", "1 2 1 2").is_ok());
+        assert!(apply("PERTBONDSOFT", "1 2 1 2 1.0").is_ok());
+        assert!(
+            apply("PERTBONDSOFT", "2 3 0 1 1.0").is_ok(),
+            "a bond being made"
+        );
+        for (block, line) in [
+            ("PERTBONDSTRETCH", "1 3 1 2"),
+            ("PERTBONDSTRETCH", "2 1 1 2"),
+            ("PERTBONDSTRETCHH", "2 3 1 2"),
+            ("PERTBONDSOFT", "2 3 1 2 1.0"),
+        ] {
+            let e = apply(block, line).unwrap_err();
+            assert!(
+                e.starts_with(&format!(
+                    "Perturbation of a non-existing bond in {block} block."
+                )),
+                "{block} {line}: {e}"
+            );
+        }
     }
 
     #[test]

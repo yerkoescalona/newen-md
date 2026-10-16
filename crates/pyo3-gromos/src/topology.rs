@@ -145,6 +145,9 @@ impl PyTopology {
     /// Returns:
     ///     (net_charge_a, net_charge_b): the solute's net charge (e) in state A and B; a
     ///     difference under a reaction field means ΔG needs a finite-size correction.
+    ///
+    /// Raises:
+    ///     ValueError: a PERTBONDSTRETCH(H) or PERTBONDSOFT bond is not a bond of the topology.
     fn apply_perturbation(&mut self, pttopo_file: &str) -> PyResult<(f64, f64)> {
         let pt = gromos_io::ptp::read_pttopo(pttopo_file).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyIOError, _>(format!(
@@ -154,7 +157,8 @@ impl PyTopology {
         })?;
         let q = self
             .inner
-            .apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
+            .apply_perturbation(pt.perturbed_solute, pt.is_perturbed)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         if let Some(m) = pt.eds {
             self.inner
                 .apply_eds_perturbation(m.num_states, m.state_names, m.atoms)

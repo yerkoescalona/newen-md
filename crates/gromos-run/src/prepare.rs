@@ -183,7 +183,9 @@ pub fn prepare_system(
             })?;
             check_eds_perturbation(eds, &pt, imd.ntg != 0)?;
             if imd.ntg != 0 {
-                topology.apply_perturbation(pt.perturbed_solute.clone(), pt.is_perturbed.clone());
+                topology
+                    .apply_perturbation(pt.perturbed_solute.clone(), pt.is_perturbed.clone())
+                    .map_err(RunError::Inconsistent)?;
                 let p = &topology.perturbed_solute;
                 notes.push(PrepareNote::PerturbationLoaded {
                     atoms: p.atoms.len(),

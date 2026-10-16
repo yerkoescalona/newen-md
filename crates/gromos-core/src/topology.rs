@@ -593,15 +593,16 @@ impl Solute {
 
 /// Soft-core perturbed harmonic bond (PERTBONDSOFT).
 /// Used when a bond is absent in one state (K=0), requiring soft-core treatment.
-/// `b_type = None` means the bond is absent in state B (K_B = 0, r0_B = r0_A).
+/// A type `None` means the bond is absent in that state: K = 0 and the other state's r0
+/// (gromosXX `perturbed_soft_bond_interaction.cc:249-263`). At most one of the two is `None`.
 #[derive(Debug, Clone)]
 pub struct SoftBond {
     /// First atom index.
     pub i: usize,
     /// Second atom index.
     pub j: usize,
-    /// State A bond type index (uses `k_harmonic`).
-    pub a_type: usize,
+    /// State A bond type index (uses `k_harmonic`); `None` means K_A=0, r0_A=r0_B.
+    pub a_type: Option<usize>,
     /// State B bond type index; `None` means K_B=0, r0_B=r0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -609,7 +610,7 @@ pub struct SoftBond {
 }
 
 /// Soft-core perturbed cos-harmonic angle (PERTANGLESOFT).
-/// `b_type = None` means the angle is absent in state B (K_B = 0, cos0_B = cos0_A).
+/// A type `None` means the angle is absent in that state: K = 0 and the other state's cos0.
 #[derive(Debug, Clone)]
 pub struct SoftAngle {
     /// First atom index.
@@ -618,8 +619,8 @@ pub struct SoftAngle {
     pub j: usize,
     /// Third atom index.
     pub k: usize,
-    /// State A angle type index.
-    pub a_type: usize,
+    /// State A angle type index; `None` means K_A=0, cos0_A=cos0_B.
+    pub a_type: Option<usize>,
     /// State B angle type index; `None` means K_B=0, cos0_B=cos0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -627,7 +628,7 @@ pub struct SoftAngle {
 }
 
 /// Soft-core perturbed improper dihedral (PERTIMPROPERDIHSOFT).
-/// `b_type = None` means the improper is absent in state B (K_B = 0, q0_B = q0_A).
+/// A type `None` means the improper is absent in that state: K = 0 and the other state's q0.
 #[derive(Debug, Clone)]
 pub struct SoftImproper {
     /// First atom index.
@@ -638,8 +639,8 @@ pub struct SoftImproper {
     pub k: usize,
     /// Fourth atom index.
     pub l: usize,
-    /// State A improper dihedral type index.
-    pub a_type: usize,
+    /// State A improper dihedral type index; `None` means K_A=0, q0_A=q0_B.
+    pub a_type: Option<usize>,
     /// State B improper dihedral type index; `None` means K_B=0, q0_B=q0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -1424,14 +1425,55 @@ impl Topology {
     ///
     /// Call after `build_topology()` and before `solvate()`; applying twice replaces the
     /// previous perturbation's terms but cannot restore bonds or exclusions already removed.
-    /// Returns the solute's net charge in the two states ([`Topology::perturbation_net_charge`]).
+    /// Returns the solute's net charge in the two states ([`Topology::perturbation_net_charge`]),
+    /// or an error, leaving the topology unchanged, when a perturbed or soft bond is not a bond
+    /// of the topology.
     pub fn apply_perturbation(
         &mut self,
         perturbed_solute: PerturbedSolute,
         is_perturbed: Vec<bool>,
-    ) -> NetCharge {
+    ) -> Result<NetCharge, String> {
+        self.check_perturbed_bonds_exist(&perturbed_solute)?;
         self.merge_perturbation(perturbed_solute, is_perturbed);
-        self.perturbation_net_charge()
+        Ok(self.perturbation_net_charge())
+    }
+
+    /// gromosXX's "Perturbation of a non-existing bond" errors (`in_perturbation.cc:232-247`,
+    /// 271-286, 420-425). Its match is on the ordered pair, so `j i` does not find bond `i j`.
+    /// gromosXX looks in the distance constraints instead when NTC = 3 (and, for PERTBONDSOFT,
+    /// always in both); every BONDH/BONDS bond of the topology counts here.
+    fn check_perturbed_bonds_exist(&self, ps: &PerturbedSolute) -> Result<(), String> {
+        use std::collections::HashSet;
+
+        let bonds: HashSet<(usize, usize)> = self
+            .moltypes
+            .first()
+            .map(|m| m.bonds.iter().map(|b| (b.i, b.j)).collect())
+            .unwrap_or_default();
+        let missing = |i: usize, j: usize, block: &str| {
+            Err(format!(
+                "Perturbation of a non-existing bond in {block} block. (atoms {} {})",
+                i + 1,
+                j + 1
+            ))
+        };
+        for b in &ps.bonds {
+            if !bonds.contains(&(b.i, b.j)) {
+                let block = if b.hydrogen {
+                    "PERTBONDSTRETCHH"
+                } else {
+                    "PERTBONDSTRETCH"
+                };
+                return missing(b.i, b.j, block);
+            }
+        }
+        // A soft bond absent in state A is a bond being made: it need not exist.
+        for b in ps.soft_bonds.iter().filter(|b| b.a_type.is_some()) {
+            if !bonds.contains(&(b.i, b.j)) {
+                return missing(b.i, b.j, "PERTBONDSOFT");
+            }
+        }
+        Ok(())
     }
 
     /// The solute's per-atom charges in state A and state B: the topology's charges with each
@@ -2064,7 +2106,7 @@ mod tests {
                 b_type: PairInteraction::Excluded,
             });
         }
-        topo.apply_perturbation(ps, vec![false; 4]);
+        topo.apply_perturbation(ps, vec![false; 4]).unwrap();
 
         assert_eq!(topo.exclusions, vec![vec![1], vec![0, 2], vec![1], vec![]]);
         assert!(topo.one_four_pairs.iter().all(Vec::is_empty));

@@ -325,7 +325,9 @@ fn parse_ptp(text: &str) -> PyResult<gromos_io::ptp::PerturbedTopology> {
 fn _ptp_net_charge(topology: &PyTopology, text: &str) -> PyResult<(f64, f64)> {
     let pt = parse_ptp(text)?;
     let mut topo = topology.inner.clone();
-    let q = topo.apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
+    let q = topo
+        .apply_perturbation(pt.perturbed_solute, pt.is_perturbed)
+        .map_err(verb_err)?;
     Ok((q.a, q.b))
 }
 
