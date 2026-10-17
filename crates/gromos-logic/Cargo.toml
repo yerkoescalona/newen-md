@@ -1,0 +1,10 @@
+[package]
+name = "gromos-logic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Small integer decision functions of GROMOS-RS, each mirrored by a Lean model in spec/ and checked against it (Lean theorem, Aeneas refinement, exhaustive test)."
+
+# Kept to the Rust subset Charon and Aeneas translate: no dependencies, no floats, no unsafe.
+[dependencies]

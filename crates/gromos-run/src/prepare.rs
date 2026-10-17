@@ -746,9 +746,9 @@ fn validate(
 /// output step exactly when neither of NSNB and NTWG divides the other.
 pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> {
     let precalc = imd.ntg != 0 && imd.precalclam.is_some_and(|b| b.nr_lambdas > 0);
-    let twin_range = imd.rcutp < imd.rcutl - 1e-10 && imd.nsnb > 1;
+    let twin_range = imd.rcutp < imd.rcutl - 1e-10;
     let (nsnb, ntwg) = (imd.nsnb, imd.ntwg);
-    (precalc && twin_range && ntwg > 0 && ntwg % nsnb != 0 && nsnb % ntwg != 0)
+    (precalc && twin_range && gromos_logic::schedule::output_misses_longrange(nsnb, ntwg))
         .then_some((nsnb, ntwg))
 }
 
