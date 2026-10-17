@@ -1,5 +1,7 @@
 # spec/ — Lean specifications of gromos-rs logic
 
+Full explanation (why, how the pieces fit, guarantees, adding a function): [docs/src/verification/index.md](../docs/src/verification/index.md).
+
 A pilot on one function: `output_misses_longrange(nsnb, ntwg)` in
 `crates/gromos-logic/src/schedule.rs`. It answers: with a twin-range pairlist updated every
 `nsnb` steps and free-energy output every `ntwg` steps, does some output step reuse long-range
