@@ -10,6 +10,12 @@ require aeneas from git
 
 package «gromos-spec»
 
+/-- The physics and bookkeeping of GROMOS, organised like the physics. Imports neither
+`GromosSpec` nor Aeneas. -/
+@[default_target] lean_lib GromosTheory
+
+/-- What gromos-rs computes: models of `crates/gromos-logic`, bridges to `GromosTheory`, and the
+Aeneas refinement proofs. -/
 @[default_target] lean_lib GromosSpec
 
 /-- Writes `vectors/schedule.json`: the Lean model on the grid the Rust test sweeps. -/

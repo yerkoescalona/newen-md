@@ -76,6 +76,13 @@ connected by a check done with a different tool:
 The proofs cover all inputs but look at Lean code. The test looks at the compiled binary but only
 at a finite grid of inputs. Together they leave very little room for a mistake to hide.
 
+The Lean side is two libraries of one project. The meaning lives in `GromosTheory`
+(`spec/GromosTheory/`): the physics and bookkeeping of a GROMOS run, organised like the physics
+(this pilot's meaning is in `Dynamics/Schedule.lean`), and it never imports the code's
+specification. The model and the bridge theorem linking it to the meaning live in `GromosSpec`
+(`spec/GromosSpec/`), one file per module of `crates/gromos-logic`, next to the refinement proofs.
+The same definitions can then judge gromos-rs here and gromosXX in the divergence dossier.
+
 ## Two kinds of code, two techniques
 
 Not all code can be verified the same way. gromos-rs splits it in two.
@@ -187,7 +194,8 @@ pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> 
 
 ### The meaning, in Lean
 
-`spec/GromosSpec/Schedule.lean` first states what the question *means*, without any formula:
+`spec/GromosTheory/Dynamics/Schedule.lean` states what the question *means*, without any formula
+and without any reference to gromos-rs:
 
 ```lean
 /-- The pairlist step whose long-range interactions step `s` reuses: the last multiple of `nsnb`
@@ -200,7 +208,7 @@ def RowsComplete (nsnb ntwg : Nat) : Prop :=
   ∀ s, ntwg ∣ s → ntwg ∣ pairlistStep nsnb s
 
 /-- Some output step reuses a pairlist step that was not an output step: that row misses its
-long-range part. This is what the Rust doc comment says the function decides. -/
+long-range part. -/
 def Misses (nsnb ntwg : Nat) : Prop :=
   ∃ s, ntwg ∣ s ∧ ¬ ntwg ∣ pairlistStep nsnb s
 ```
@@ -212,7 +220,8 @@ that `s` reuses (that pairlist step was not an output step)."
 
 `RowsComplete` is the healthy case, read the same way: "for every step `s`, if `s` is an output
 step then its pairlist step is an output step too." `Misses` is exactly its negation (the file
-proves that as `misses_iff_not_complete`).
+proves that as `misses_iff_not_complete`). `Misses` is what the Rust doc comment says the function
+decides.
 
 This is a direct transcription of the physics in the previous section. It says nothing about
 divisibility of `nsnb` and `ntwg`, and it ranges over infinitely many steps, so you cannot run it.
@@ -220,7 +229,8 @@ It is the thing we want to be true.
 
 ### The model and the theorem `missesModel_iff`
 
-Next comes the model: a Lean function written branch for branch like the Rust.
+Next comes the model, in `spec/GromosSpec/Schedule.lean`: a Lean function written branch for
+branch like the Rust.
 
 ```lean
 /-- Closed form of `output_misses_longrange`, written as the Rust code is:
@@ -242,10 +252,11 @@ Read aloud: "for every pair of natural numbers `nsnb` and `ntwg`, the model retu
 only if some output step misses its long-range part." There are no hypotheses: it holds for zero,
 for one, for every size.
 
-The proof (the lines after `by`) rests on a lemma, `rows_complete_iff`: for positive `nsnb` and
-`ntwg`, every output step reuses an output pairlist step exactly when `nsnb` divides `ntwg` or
-`ntwg` divides `nsnb`. When neither divides the other, the proof exhibits the failing step: if
-`nsnb < ntwg` it is step `ntwg` itself; if `ntwg < nsnb` it is the first output step after `nsnb`.
+The proof (the lines after `by`) rests on a lemma of the theory, `rows_complete_iff`: for
+positive `nsnb` and `ntwg`, every output step reuses an output pairlist step exactly when `nsnb`
+divides `ntwg` or `ntwg` divides `nsnb`. When neither divides the other, the proof exhibits the
+failing step: if `nsnb < ntwg` it is step `ntwg` itself; if `ntwg < nsnb` it is the first output
+step after `nsnb`.
 
 The small values needed care, and this is a typical place for specification work to pay off. The
 divisibility argument only makes sense for positive periods, so the edge cases are proven
@@ -319,7 +330,8 @@ Chaining this with `missesModel_iff` gives the statement we wanted from the star
 /-- **Rust = meaning**: the Rust function returns `true` exactly when some output step reuses a
 pairlist step that was not an output step. -/
 theorem output_misses_longrange_iff (nsnb ntwg : Usize) :
-    output_misses_longrange nsnb ntwg = ok true ↔ Schedule.Misses nsnb.val ntwg.val := by
+    output_misses_longrange nsnb ntwg = ok true ↔
+      GromosTheory.Dynamics.Schedule.Misses nsnb.val ntwg.val := by
   rw [output_misses_longrange_eq, Result.ok.injEq, Schedule.missesModel_iff]
 ```
 
@@ -526,10 +538,11 @@ installed binary.
    `crates/gromos-logic` and gets an Aeneas proof. Floating point: it stays in its kernel crate and
    gets a Lean model plus a differential test.
 
-2. **Write the Lean first.** Before the Rust, write in `spec/GromosSpec/<Module>.lean`:
-   - the meaning, a `Prop` over all inputs, transcribed from the physics or the GROMOS manual and
-     containing no algorithm;
-   - the model, a Lean function shaped like the Rust you intend to write;
+2. **Write the Lean first.** Before the Rust, write:
+   - in `spec/GromosTheory/<Area>/<Topic>.lean`, placed by its physics, the meaning: a `Prop` over
+     all inputs, transcribed from the physics or the GROMOS manual and containing no algorithm;
+   - in `spec/GromosSpec/<Module>.lean`, the model, a Lean function shaped like the Rust you
+     intend to write;
    - a theorem `model ↔ meaning` (or, for a float model, the properties the model must have).
 
    This is verification-guided development, model first: writing the meaning before the code is
@@ -547,8 +560,8 @@ installed binary.
    rust = "crates/gromos-logic/src/schedule.rs::output_misses_longrange"
    used_by = ["crates/gromos-run/src/prepare.rs::precalclam_longrange_gaps"]
    origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
-   # Layer 1, model = meaning (core Lean, no Mathlib)
-   meaning = "GromosSpec.Schedule.Misses"
+   # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in GromosTheory
+   theory = "GromosTheory.Dynamics.Schedule.Misses"
    model = "GromosSpec.Schedule.missesModel"
    theorem = "GromosSpec.Schedule.missesModel_iff"
    # Layer 2, Rust = model (Aeneas)

@@ -12,7 +12,7 @@ zero) and `ok b` for a normal return of `b`.
 
 The theorems below say: for every pair of `usize` inputs the Rust function returns normally
 (it never panics) and returns exactly `missesModel`, hence (with `Schedule.missesModel_iff`)
-exactly the meaning `Misses`.
+exactly `Misses` of `GromosTheory/Dynamics/Schedule.lean`.
 -/
 
 open Aeneas Aeneas.Std Aeneas.Std.WP Result
@@ -51,7 +51,8 @@ theorem output_misses_longrange_eq (nsnb ntwg : Usize) :
 /-- **Rust = meaning**: the Rust function returns `true` exactly when some output step reuses a
 pairlist step that was not an output step. -/
 theorem output_misses_longrange_iff (nsnb ntwg : Usize) :
-    output_misses_longrange nsnb ntwg = ok true ↔ Schedule.Misses nsnb.val ntwg.val := by
+    output_misses_longrange nsnb ntwg = ok true ↔
+      GromosTheory.Dynamics.Schedule.Misses nsnb.val ntwg.val := by
   rw [output_misses_longrange_eq, Result.ok.injEq, Schedule.missesModel_iff]
 
 end GromosSpec.Refinement

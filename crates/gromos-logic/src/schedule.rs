@@ -1,4 +1,6 @@
 //! Step schedules: which MD steps do what.
+//!
+//! Theory: `spec/GromosTheory/Dynamics/Schedule.lean`; model and bridge: `spec/GromosSpec/Schedule.lean`.
 
 /// Whether some free-energy output step (every `ntwg` steps) follows a pairlist step (every
 /// `nsnb` steps) that was not itself an output step.

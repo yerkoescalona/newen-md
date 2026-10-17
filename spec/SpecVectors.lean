@@ -10,7 +10,7 @@ def grid : Nat := 200
 
 /-- Row `nsnb` as a string of `0`/`1`, one character per `ntwg = 1..grid`. -/
 def row (nsnb : Nat) : String :=
-  String.mk ((List.range grid).map fun i => if missesModel nsnb (i + 1) then '1' else '0')
+  String.ofList ((List.range grid).map fun i => if missesModel nsnb (i + 1) then '1' else '0')
 
 def scheduleJson : String :=
   let rows := (List.range grid).map fun i => s!"    \"{row (i + 1)}\""

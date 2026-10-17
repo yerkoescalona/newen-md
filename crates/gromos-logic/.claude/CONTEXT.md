@@ -67,24 +67,28 @@ spec/GromosTheory/                       physics-shaped (target unless noted)
 ├── Foundations/   units, constants
 ├── StatMech/      canonical ensemble, free energy (Zwanzig, TI identity), BAR, MBAR
 ├── Interactions/  bonded, Lennard-Jones, Coulomb, reaction field, soft-core, λ-mixing
-├── Dynamics/      leap-frog, constraints, thermostats (incl. equipartition and dof), barostats
+├── Dynamics/      leap-frog, constraints, thermostats (incl. equipartition and dof), barostats;
+│                  pairlist and output steps (now: Schedule.lean)
 ├── EnhancedSampling/  EDS, A-EDS
 └── Corrections/   Kastenholz–Hünenberger charging terms
 ```
 
 ## Status
 - **Pilot (2026-10-17):** `schedule::output_misses_longrange`, the integer core of
-  `gromos-run::precalclam_longrange_gaps` (D34). Meaning, model and `missesModel_iff` in
-  `spec/GromosSpec/Schedule.lean`; Aeneas refinement `output_misses_longrange_iff` in
-  `spec/GromosSpec/Refinement.lean`; exhaustive test `tests/schedule_spec.rs` (1 ≤ nsnb, ntwg ≤ 200,
-  against a step-by-step simulation and Lean-generated vectors). 119/120 gromosXX references
-  unchanged. The meaning still sits in `GromosSpec`; it moves to `GromosTheory` when that library
-  is created.
+  `gromos-run::precalclam_longrange_gaps` (D34). Meaning (`pairlistStep`, `RowsComplete`,
+  `Misses`, `rows_complete_iff`) in `spec/GromosTheory/Dynamics/Schedule.lean`; model and bridge
+  `missesModel_iff` in `spec/GromosSpec/Schedule.lean`; Aeneas refinement
+  `output_misses_longrange_iff` in `spec/GromosSpec/Refinement.lean`; exhaustive test
+  `tests/schedule_spec.rs` (1 ≤ nsnb, ntwg ≤ 200, against a step-by-step simulation and
+  Lean-generated vectors). 119/120 gromosXX references unchanged.
+- **GromosTheory (2026-10-17):** created as a second default library of the `spec/` Lake project,
+  core Lean only (imports neither `GromosSpec` nor Aeneas); the pilot's meaning moved there with
+  no change to any statement beyond its namespace. `SPEC.toml` names it in the `theory` field.
 - **Toolchain:** Lean v4.35.0 and Mathlib v4.35.0, fixed by the Aeneas Lean library; Aeneas +
   Charon from release `nightly-2026.10.17-e62dd83` (`~/.local/aeneas`), Charon on Rust
   `nightly-2026-09-17`. `GromosTheory` must use the same toolchain.
 
 ## Key files
-`src/schedule.rs`, `tests/schedule_spec.rs`, `spec/GromosSpec/{Schedule,Refinement}.lean`,
-`spec/GromosSpec/Extracted/GromosLogic.lean` (generated), `spec/scripts/extract.sh`,
-`spec/SPEC.toml`, `docs/src/verification/index.md`.
+`src/schedule.rs`, `tests/schedule_spec.rs`, `spec/GromosTheory/Dynamics/Schedule.lean`,
+`spec/GromosSpec/{Schedule,Refinement}.lean`, `spec/GromosSpec/Extracted/GromosLogic.lean`
+(generated), `spec/scripts/extract.sh`, `spec/SPEC.toml`, `docs/src/verification/index.md`.
