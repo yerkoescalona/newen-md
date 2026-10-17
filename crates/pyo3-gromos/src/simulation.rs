@@ -26,7 +26,7 @@
 //! `posresspec=`/`refpos=`/`ml_*=` keyword arguments and `Simulation.from_sequence` — still
 //! work for one deprecation cycle, warn, and are translated into a recipe.
 
-use numpy::PyArray2;
+use numpy::{PyArray1, PyArray2};
 use pyo3::prelude::*;
 
 use gromos_core::{
@@ -43,8 +43,8 @@ use gromos_io::{
 use gromos_run::plan::AlgorithmSpec;
 use gromos_run::recipe::{PassthroughPolicy, RunRecipe};
 use gromos_run::{
-    build_sequence_from_plan, build_sequence_from_recipe, load_bundle, prepare_system, start,
-    Coordinates,
+    advance_lambda, build_sequence_from_plan, build_sequence_from_recipe, load_bundle,
+    prepare_system, start, Coordinates,
 };
 
 use super::parameters::{deprecated, PyInputParameters};
@@ -61,6 +61,10 @@ struct Parts {
     positions: Vec<Vec3>,
     velocities: Vec<Vec3>,
     box_dims: Vec3,
+    /// λ of the configuration file's PERTDATA block (NRDGL=1).
+    pertdata: Option<f64>,
+    /// The configuration file's AEDSSEARCH block (NTIAEDSS = 0).
+    aedssearch: Option<Vec<String>>,
 }
 
 impl Parts {
@@ -71,6 +75,8 @@ impl Parts {
             positions: conf.pos_data.clone(),
             velocities: conf.vel_data.clone(),
             box_dims: conf.box_dims,
+            pertdata: conf.pertdata,
+            aedssearch: conf.aedssearch.clone(),
         }
     }
 
@@ -99,6 +105,8 @@ impl Parts {
             positions: coord_data.positions,
             velocities: coord_data.velocities,
             box_dims: coord_data.box_dims,
+            pertdata: coord_data.pertdata,
+            aedssearch: coord_data.aedssearch,
         })
     }
 
@@ -107,6 +115,8 @@ impl Parts {
             positions: self.positions,
             velocities: self.velocities,
             box_dims: self.box_dims,
+            pertdata: self.pertdata,
+            aedssearch: self.aedssearch,
         };
         (self.topo, self.physical_constants, coords)
     }
@@ -206,6 +216,28 @@ fn apply_legacy_kwargs(
     Ok(())
 }
 
+/// λ outside [0, 1] as a Python `UserWarning` (`gromos_run::lambda_warning`).
+fn warn_lambda(py: Python<'_>, after_step: Option<usize>, lambda: f64) -> PyResult<()> {
+    warn_user(py, &gromos_run::lambda_warning(after_step, lambda))
+}
+
+fn warn_user(py: Python<'_>, text: &str) -> PyResult<()> {
+    PyErr::warn_bound(
+        py,
+        &py.get_type_bound::<pyo3::exceptions::PyUserWarning>(),
+        text,
+        1,
+    )
+}
+
+/// The `PrecalclamLongRangeGaps` warning a run of `recipe` raises, or `None`
+/// (`gromos.free_energy` warns once for a set of windows with it).
+#[pyfunction]
+fn _precalclam_longrange_warning(recipe: PyRef<PyRecipe>) -> Option<String> {
+    gromos_run::precalclam_longrange_gaps(&recipe.inner.to_imd())
+        .map(|(nsnb, ntwg)| gromos_run::precalclam_longrange_warning(nsnb, ntwg))
+}
+
 /// The one way a `Simulation` comes into being: prepare the system, build (or take) the
 /// plan, instantiate it, run `init` + step 0.
 fn build_from_recipe(
@@ -218,6 +250,19 @@ fn build_from_recipe(
     let (topo, physical_constants, coords) = parts.into_pieces();
     let prepared =
         prepare_system(&imd, topo, physical_constants, coords, &recipe.inputs).map_err(run_err)?;
+    for note in &prepared.notes {
+        match note {
+            gromos_run::PrepareNote::LambdaOutOfRange { lambda } => {
+                Python::with_gil(|py| warn_lambda(py, None, *lambda))?
+            },
+            gromos_run::PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg } => {
+                Python::with_gil(|py| {
+                    warn_user(py, &gromos_run::precalclam_longrange_warning(*nsnb, *ntwg))
+                })?
+            },
+            _ => {},
+        }
+    }
     let built = match plan {
         Some(plan) => build_sequence_from_plan(&recipe, plan, &prepared),
         None => build_sequence_from_recipe(&recipe, &prepared),
@@ -231,7 +276,7 @@ fn build_from_recipe(
         ..
     } = built;
     let gromos_run::Prepared {
-        topology: topo,
+        topology: mut topo,
         configuration: mut conf,
         ..
     } = prepared;
@@ -240,6 +285,9 @@ fn build_from_recipe(
 
     let mut sim_state = SimulationState::new(dt, recipe.control.steps);
     start(&mut md_sequence, &topo, &mut conf, &sim_state).map_err(run_err)?;
+    if let Some(lambda) = advance_lambda(&recipe, &mut topo) {
+        Python::with_gil(|py| warn_lambda(py, Some(sim_state.step), lambda))?;
+    }
     sim_state.advance();
 
     Ok(PySimulation {
@@ -404,7 +452,7 @@ impl PySimulation {
     ///
     /// Example:
     ///     sim.step(1000)  # advance 1000 steps
-    fn step(&mut self, n_steps: usize) -> PyResult<()> {
+    fn step(&mut self, py: Python<'_>, n_steps: usize) -> PyResult<()> {
         for _ in 0..n_steps {
             self.md_sequence
                 .run_step(&self.topology, &mut self.configuration, &self.sim_state)
@@ -414,6 +462,9 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
+            if let Some(lambda) = advance_lambda(&self.recipe, &mut self.topology) {
+                warn_lambda(py, Some(self.sim_state.step), lambda)?;
+            }
             self.sim_state.advance();
         }
         Ok(())
@@ -448,6 +499,9 @@ impl PySimulation {
                         self.sim_state.step, e
                     ))
                 })?;
+            if let Some(lambda) = advance_lambda(&self.recipe, &mut self.topology) {
+                warn_lambda(py, Some(self.sim_state.step), lambda)?;
+            }
             self.sim_state.advance();
             if (i + 1) % ene_freq == 0 {
                 rows.push(self.energy_row());
@@ -626,22 +680,130 @@ impl PySimulation {
         Ok(d)
     }
 
-    /// dH/dλ (kJ/mol) at the last step — the thermodynamic-integration integrand; 0 unless the
-    /// recipe's `perturbation` is enabled (a `pttopo` in `inputs`, `NTG=1`).
+    /// dH/dλ (kJ/mol) at the last step — the thermodynamic-integration integrand: the whole
+    /// derivative (kinetic, potential, constraints and restraints; gromosXX `energy.cc:597`),
+    /// what the first value of a `.trg` frame holds. 0 unless the recipe's `perturbation` is
+    /// enabled (a `pttopo` in `inputs`, `NTG=1`).
     #[getter]
     fn dhdl(&self) -> f64 {
-        self.configuration.old().energies.dhdl_total
+        self.configuration
+            .old()
+            .perturbed_energy_derivatives
+            .total()
     }
 
-    /// dH/dλ split by term at the last step: `{"lj", "crf", "bonded"}` (kJ/mol).
+    /// dH/dλ split by term at the last step (kJ/mol): `lj`, `crf`, `bonded`, `kinetic` (the
+    /// λ-dependent masses), `constraints` (perturbed SHAKE), `distanceres` (perturbed
+    /// distance restraints) and `eds` (∂V_R/∂λ of an EDS run with perturbed atoms, `.trg` slot
+    /// 35).
     #[getter]
     fn dhdl_terms<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
-        let e = &self.configuration.old().energies;
+        let e = &self.configuration.old().perturbed_energy_derivatives;
         let d = pyo3::types::PyDict::new_bound(py);
-        d.set_item("lj", e.dhdl_lj)?;
-        d.set_item("crf", e.dhdl_crf)?;
-        d.set_item("bonded", e.dhdl_bonded)?;
+        d.set_item("lj", e.lj_total)?;
+        d.set_item("crf", e.crf_total)?;
+        d.set_item(
+            "bonded",
+            e.bond_total + e.angle_total + e.improper_total + e.dihedral_total,
+        )?;
+        d.set_item("kinetic", e.kinetic_total)?;
+        d.set_item("constraints", e.constraint_total)?;
+        d.set_item("distanceres", e.distanceres_total)?;
+        d.set_item("eds", e.eds_vr)?;
         Ok(d)
+    }
+
+    /// The extended-TI (`PRECALCLAM`) data of the last step, `None` when the recipe has none:
+    /// `lambdas` (the grid, N), `energies` and `derivatives` (N × 12, the `.tre`'s and the
+    /// `.trg`'s `# precalclam` rows: A/B LJ, A/B CRF, then the kinetic, bond, angle, improper,
+    /// distance-, angle-, dihedral-restraint and distance-field terms), `abdih` and
+    /// `free_abdih` (A, B: the `# ABdih` rows). Computed on the steps NTWG divides only.
+    #[getter]
+    fn precalclam<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Option<Bound<'py, pyo3::types::PyDict>>> {
+        let Some(grid) = self.topology.precalc_lambdas else {
+            return Ok(None);
+        };
+        let state = self.configuration.old();
+        let (e, d) = (
+            &state.energies.precalc,
+            &state.perturbed_energy_derivatives.precalc,
+        );
+        let n = e.nr_lambdas();
+        let rows = |p: &gromos_core::PrecalcEnergies| -> Vec<Vec<f64>> {
+            (0..n).map(|k| p.row(k).to_vec()).collect()
+        };
+        let out = pyo3::types::PyDict::new_bound(py);
+        out.set_item(
+            "lambdas",
+            PyArray1::from_vec_bound(py, (0..n).map(|k| grid.lambda(k)).collect()),
+        )?;
+        out.set_item("energies", PyArray2::from_vec2_bound(py, &rows(e))?)?;
+        out.set_item("derivatives", PyArray2::from_vec2_bound(py, &rows(d))?)?;
+        out.set_item(
+            "abdih",
+            PyArray1::from_vec_bound(py, vec![e.a_dihedral, e.b_dihedral]),
+        )?;
+        out.set_item(
+            "free_abdih",
+            PyArray1::from_vec_bound(py, vec![d.a_dihedral, d.b_dihedral]),
+        )?;
+        Ok(Some(out))
+    }
+
+    /// EDS reference-state energy V_R (kJ/mol) at the last step (`.tre` slot 35, part of
+    /// `total_energy` through the special energy, not of `potential_energy`); 0 without EDS.
+    #[getter]
+    fn eds_vr(&self) -> f64 {
+        self.configuration.old().energies.eds_vr
+    }
+
+    /// A-EDS mixed energy V_mix (kJ/mol) at the last step (`.tre` slot 34, in no total); 0
+    /// without A-EDS.
+    #[getter]
+    fn eds_vmix(&self) -> f64 {
+        self.configuration.old().energies.eds_vmix
+    }
+
+    /// A-EDS E_max (kJ/mol) after the last step's search update (`.tre` slot 36); 0 without
+    /// A-EDS.
+    #[getter]
+    fn eds_emax(&self) -> f64 {
+        self.configuration.old().energies.eds_emax
+    }
+
+    /// A-EDS E_min (kJ/mol) after the last step's search update (`.tre` slot 37); 0 without
+    /// A-EDS.
+    #[getter]
+    fn eds_emin(&self) -> f64 {
+        self.configuration.old().energies.eds_emin
+    }
+
+    /// A-EDS offsets E_i^R (kJ/mol) after the last step's search update, one per state (the
+    /// `.tre`'s `# eds` offset column); zeros in plain EDS, empty without EDS.
+    #[getter]
+    fn eds_eir(&self) -> Vec<f64> {
+        self.configuration.old().energies.eds_eir.clone()
+    }
+
+    /// EDS end-state energies V_i (kJ/mol) at the last step, one per state (the `.tre`'s
+    /// `# eds` rows); empty without EDS.
+    #[getter]
+    fn eds_vi(&self) -> Vec<f64> {
+        self.configuration.old().energies.eds_vi.clone()
+    }
+
+    /// ∂V_i/∂λ of the EDS end states (kJ/mol) at the last step, one per state (the `.trg`'s
+    /// `# eds` rows): the EDS–perturbed pairs of a run with perturbed atoms; empty without EDS.
+    #[getter]
+    fn eds_dvi(&self) -> Vec<f64> {
+        self.configuration
+            .old()
+            .perturbed_energy_derivatives
+            .eds_vi
+            .clone()
     }
 
     /// Kinetic energy (kJ/mol).
@@ -668,13 +830,11 @@ impl PySimulation {
         self.configuration.old().box_config.volume()
     }
 
-    /// Current instantaneous pressure (bar): `P = (2*KE - virial) / (3*V)`.
+    /// Current instantaneous pressure (kJ mol⁻¹ nm⁻³): trace / 3 of the pressure tensor
+    /// `2/V·(E_kin + ½·Σ r⊗f)`, the number the barostat couples to and gromosXX writes.
     ///
-    /// The virial term is only populated by `PressureCalculation` in the
-    /// algorithm sequence — automatic for NPT (`Recipe.npt(...)`), absent for NVE/NVT.
-    /// Without it this returns the *kinetic-only* term (`2*KE / (3*V)`, not zero) — a
-    /// physically incomplete, misleadingly large number, not "no pressure to report".
-    /// Only trust this getter under NPT.
+    /// The tensor is only computed by `PressureCalculation` in the algorithm sequence —
+    /// automatic for NPT (`Recipe.npt(...)`), absent for NVE/NVT, where this is 0.
     #[getter]
     fn pressure(&self) -> f64 {
         self.configuration.old().pressure()
@@ -769,7 +929,7 @@ impl PySimulation {
             frame.dihedral,
             frame.lj,
             frame.coul_real,
-            state.energies.dhdl_total,
+            state.perturbed_energy_derivatives.total(),
         ]
     }
 }
@@ -777,5 +937,6 @@ impl PySimulation {
 /// Register simulation bindings in the Python module.
 pub fn register_simulation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySimulation>()?;
+    m.add_function(wrap_pyfunction!(_precalclam_longrange_warning, m)?)?;
     Ok(())
 }

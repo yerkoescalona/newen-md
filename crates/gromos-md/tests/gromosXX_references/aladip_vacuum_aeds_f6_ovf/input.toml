@@ -1,0 +1,30 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_aeds_f6_ovf"
+description = "aladip vacuum, A-EDS FORM 6 over the three gentle end states of aladip_aeds3.mpt with EIR 0 6000 0, 100 steps from Maxwell-Boltzmann velocities: V_2 - E_2^R is about -4000 kJ/mol, e^{-beta(V_2 - E_2^R)} overflows, the prevalences are NaN and gromosXX moves no offset after the centring of step 0 (-2000, 4000, -2000)"
+level = 4
+isolates = "the FORM 6 offset update frozen by the plain-exponential prevalences (D25)"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_aeds_f6_ovf.in"
+pttopo = "../shared/aladip_aeds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): reproduce gromosXX 247c95c4, whose defects this native
+# reference pins: the columns after the update (D16), plain-exponential prevalences (D25).
+[recipe_overrides]
+"aeds.energy_columns" = "gromosxx-post-update"
+"aeds.prevalence" = "gromosxx-plain-exp"

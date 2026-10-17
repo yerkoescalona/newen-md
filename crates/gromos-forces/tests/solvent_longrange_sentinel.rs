@@ -12,7 +12,7 @@ use gromos_core::pairlist::{
     sentinel_long_range_is_exact, PairlistContainer, StandardPairlistAlgorithm,
 };
 use gromos_forces::nonbonded::{
-    lj_crf_innerloop, solvent_innerloop, CRFParameters, ForceStorage, LJParamMatrix,
+    lj_crf_innerloop, solvent_innerloop, CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix,
     LJParameters as KernelLJ,
 };
 use gromos_io::coordinate::read_coordinates;
@@ -90,6 +90,7 @@ fn sentinel_long_range_matches_expanded_per_atom_images() {
         apm,
         four_pi_eps_i,
         &mut sentinel,
+        EnergyGroups::single(),
     );
 
     // Reference path: every atom pair explicitly, per-atom minimum image.
@@ -111,6 +112,7 @@ fn sentinel_long_range_matches_expanded_per_atom_images() {
         &periodicity,
         four_pi_eps_i,
         &mut reference,
+        EnergyGroups::single(),
     );
 
     let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-300);

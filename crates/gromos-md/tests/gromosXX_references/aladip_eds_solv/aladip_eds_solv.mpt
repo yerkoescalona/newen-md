@@ -1,0 +1,14 @@
+TITLE
+aladip solvated: two EDS end states on four atoms (CB, N, O9, H11); H11's state charges differ from its topology charge
+END
+MPERTATOM
+# NJLA NPTB
+    4    2
+# state names
+  stateA  stateB
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2
+   1  CB      14    0.000    11    1.000
+   4  N        5   -0.280    19    0.200
+   9  O        1   -0.380     1   -0.180
+  11  H       18    0.300    14    0.000
+END

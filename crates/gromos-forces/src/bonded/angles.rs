@@ -15,6 +15,17 @@ pub fn calculate_angle_forces(
     conf: &Configuration,
     pbc: &Periodicity,
 ) -> ForceEnergy {
+    calculate_angle_forces_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_angle_forces`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `angle_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_angle_forces_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
+) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
     for angle in topo.all_angles_global() {
@@ -53,6 +64,9 @@ pub fn calculate_angle_forces(
         let f_j = -(f_i + f_k);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[angle.i]] += energy;
+        }
         result.forces[angle.i] += f_i;
         result.forces[angle.j] += f_j;
         result.forces[angle.k] += f_k;
@@ -86,6 +100,17 @@ pub fn calculate_harmonic_angle_forces(
     topo: &Topology,
     conf: &Configuration,
     pbc: &Periodicity,
+) -> ForceEnergy {
+    calculate_harmonic_angle_forces_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_harmonic_angle_forces`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `angle_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_harmonic_angle_forces_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
@@ -165,6 +190,9 @@ pub fn calculate_harmonic_angle_forces(
         let f_j = -(f_i + f_k); // Force conservation
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[angle.i]] += energy;
+        }
         result.forces[angle.i] += f_i;
         result.forces[angle.j] += f_j;
         result.forces[angle.k] += f_k;

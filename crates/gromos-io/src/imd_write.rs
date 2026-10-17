@@ -3,7 +3,7 @@
 //! Every block the parser models is regenerated from `ImdParameters` fields in the positional
 //! GROMOS layout (comment line with the field names, then the values), in the block order the
 //! reference inputs use. Blocks the parser does **not** model but found in the file
-//! (`raw_blocks` entries such as GAMD, EDS, QMMM, …) are re-emitted verbatim after the modelled
+//! (`raw_blocks` entries such as GAMD, QMMM, …) are re-emitted verbatim after the modelled
 //! ones, so a read → write round trip loses nothing.
 //!
 //! Two rules learnt from feeding the output to the real gromosXX (3.9 A7):
@@ -48,7 +48,11 @@ pub const MODELLED_BLOCKS: &[&str] = &[
     "ROTTRANS",
     "DISTANCERES",
     "PERTURBATION",
+    "LAMBDAS",
+    "PRECALCLAM",
     "ENERGYMIN",
+    "EDS",
+    "AEDS",
 ];
 
 /// One data line: indented, values separated by two spaces.
@@ -306,12 +310,82 @@ pub fn write_imd(params: &ImdParameters, n_atoms: Option<usize>) -> String {
         });
     }
 
+    if let Some(l) = &p.lambdas {
+        block(&mut out, "LAMBDAS", |o| {
+            o.push_str("#    NTIL\n");
+            row(o, vals![if l.enabled { "on" } else { "off" }]);
+            o.push_str("#    NTLI  NILG1  NILG2  ALI  BLI  CLI  DLI  ELI\n");
+            for r in &l.rows {
+                let [a, b, c, d, e] = r.coefficients;
+                row(o, vals![r.kind.gromos_name(), r.g1, r.g2, a, b, c, d, e]);
+            }
+        });
+    }
+
+    if let Some(b) = &p.precalclam {
+        block(&mut out, "PRECALCLAM", |o| {
+            o.push_str("#    NRLAM   MINLAM   MAXLAM\n");
+            row(o, vals![b.nr_lambdas, b.min_lambda, b.max_lambda]);
+        });
+    }
+
     if present("ENERGYMIN") || p.ntem != 0 {
         block(&mut out, "ENERGYMIN", |o| {
             o.push_str("#    NTEM    NCYC    DELE    DX0    DXM   NMIN   FLIM\n");
             row(
                 o,
                 vals![p.ntem, p.ncyc, p.dele, p.dx0, p.dxm, p.nmin, p.flim],
+            );
+        });
+    }
+
+    if let Some(b) = &p.eds {
+        block(&mut out, "EDS", |o| {
+            o.push_str("#    EDS\n");
+            row(o, vals![i32::from(b.enabled)]);
+            o.push_str("#    FORM  NUMSTATES\n");
+            row(o, vals![b.form, b.num_states]);
+            if !b.enabled {
+                return;
+            }
+            if b.form == 3 {
+                o.push_str("#    i  j  S\n");
+                for pr in &b.pairs {
+                    row(o, vals![pr.i, pr.j, pr.s]);
+                }
+            } else {
+                o.push_str("#    S\n");
+                row(o, &b.s.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+            }
+            o.push_str("#    EIR\n");
+            row(o, &b.eir.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+        });
+    }
+
+    if let Some(b) = &p.aeds {
+        block(&mut out, "AEDS", |o| {
+            o.push_str("#    AEDS\n");
+            row(o, vals![i32::from(b.enabled)]);
+            o.push_str("#    FORM  NUMSTATES\n");
+            row(o, vals![b.form, b.num_states]);
+            if !b.enabled {
+                return;
+            }
+            o.push_str("#    EMAX  EMIN\n");
+            row(o, vals![b.emax, b.emin]);
+            o.push_str("#    EIR\n");
+            row(o, &b.eir.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+            o.push_str("#    NTIAEDSS  RESTREMIN  BMAXTYPE  BMAX  ASTEPS  BSTEPS\n");
+            row(
+                o,
+                vals![
+                    i32::from(b.ntiaedss),
+                    i32::from(b.restremin),
+                    b.bmaxtype,
+                    b.bmax,
+                    b.asteps,
+                    b.bsteps
+                ],
             );
         });
     }

@@ -1,0 +1,24 @@
+D25 (gromosXX 247c95c4): A-EDS FORMS 5/6 prevalences by plain exponentials.
+md++/src/algorithm/integration/eds.cc:339-343 compute exp(-beta (V_i - E_i^R)) unshifted: below V_i - E_i^R ~ -709.78/beta
+(-1770.6 kJ/mol at 300 K) a term is inf, the prevalences inf/inf = NaN, "prevalence >= 1/N" is false and no offset moves
+(all above +745/beta: 0/0, the same). Fix: shift every exponent by the largest one (log-sum-exp); the prevalences are
+unchanged where nothing overflows.
+
+diff --git a/md++/src/algorithm/integration/eds.cc b/md++/src/algorithm/integration/eds.cc
+--- a/md++/src/algorithm/integration/eds.cc
++++ b/md++/src/algorithm/integration/eds.cc
+@@ -336,8 +336,13 @@
+           std::vector<double> exp_vi(numstates);
+           double prevalence = 0.0;
+           double total_endstates_ene = 0.0;
++          // shifted by the largest exponent, so that no term overflows
++          double max_exponent = -1.0 * beta * (eds_vi[0] - eir[0]);
++          for (unsigned int state = 1; state < numstates; state++) {
++            max_exponent = std::max(max_exponent, -1.0 * beta * (eds_vi[state] - eir[state]));
++          }
+           for (unsigned int state = 0; state < numstates; state++) {
+-            exp_vi[state] = exp(-1.0 * beta * (eds_vi[state] - eir[state]));
++            exp_vi[state] = exp(-1.0 * beta * (eds_vi[state] - eir[state]) - max_exponent);
+             total_endstates_ene += exp_vi[state];
+           }
+ 

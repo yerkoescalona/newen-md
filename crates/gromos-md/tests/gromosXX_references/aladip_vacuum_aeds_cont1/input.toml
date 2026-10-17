@@ -1,0 +1,30 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_aeds_cont1"
+description = "aladip vacuum, A-EDS FORM 4 search, job 1 of 2 (100 steps, NTIAEDSS 1, ASTEPS = BSTEPS = 20): its final AEDSSEARCH block starts aladip_vacuum_aeds_cont2"
+level = 4
+isolates = "the AEDSSEARCH block of the final configuration"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_aeds_cont1.in"
+pttopo = "../shared/aladip_aeds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): reproduce gromosXX 247c95c4, whose defects this native
+# reference pins: the columns after the update (D16), state 1 as the default target (D32).
+[recipe_overrides]
+"aeds.energy_columns" = "gromosxx-post-update"
+"aeds.target_state" = "gromosxx-state1-default"

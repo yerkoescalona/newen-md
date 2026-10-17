@@ -24,7 +24,8 @@ use crate::{
     bonded::calculate_bonded_forces_ntf,
     nonbonded::{
         lj_crf_innerloop_novirial, one_four_interaction_loop, rf_excluded_interactions,
-        solvent_innerloop_novirial, CRFParameters, ForceStorage, LJParamMatrix, LJParameters,
+        solvent_innerloop_novirial, CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix,
+        LJParameters,
     },
 };
 
@@ -163,6 +164,7 @@ pub fn single_point_energy(
         params.ntf[1],
         params.ntf[3],
         params.ntf[2],
+        &mut crate::bonded::BondedGroupEnergies::default(),
     );
 
     // ── Nonbonded ────────────────────────────────────────────────────────────
@@ -179,6 +181,7 @@ pub fn single_point_energy(
             &periodicity,
             gromos_core::units::four_pi_eps_i,
             &mut nb,
+            EnergyGroups::single(),
         );
     }
     if !solvent_u32.is_empty() {
@@ -193,6 +196,7 @@ pub fn single_point_energy(
             params.atoms_per_solvent,
             gromos_core::units::four_pi_eps_i,
             &mut nb,
+            EnergyGroups::single(),
         );
     }
 
@@ -205,6 +209,7 @@ pub fn single_point_energy(
         gromos_core::units::four_pi_eps_i,
         &mut nb,
         topo.num_solute_atoms(),
+        EnergyGroups::single(),
     );
 
     if !topo.one_four_pairs.is_empty() {
@@ -219,6 +224,7 @@ pub fn single_point_energy(
             gromos_core::units::four_pi_eps_i,
             &mut nb,
             1.0,
+            EnergyGroups::single(),
         );
     }
 

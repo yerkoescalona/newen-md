@@ -245,7 +245,8 @@ fn perturbation_topology_follows_ntg() {
     // A pre-perturbed topology with NTG = 0: inconsistent.
     let pt = read_pttopo(&ptp).expect("ptp");
     let mut topo = fx.topology.clone();
-    topo.apply_perturbation(pt.perturbed_solute, pt.is_perturbed);
+    topo.apply_perturbation(pt.perturbed_solute, pt.is_perturbed)
+        .unwrap();
     let err = prepare_system(
         &imd0,
         topo,

@@ -68,19 +68,36 @@ pub struct CRFParameters {
 }
 
 impl CRFParameters {
-    /// Calculate CRF parameters from physical constants.
+    /// Calculate CRF parameters from physical constants, as gromosXX's
+    /// `Nonbonded_Term::init` and `Eds_Nonbonded_Term::init` do (`nonbonded_term.cc:51-121`,
+    /// `perturbed_nonbonded_term.cc:51-111`).
     ///
     /// # Arguments
-    /// * `cutoff` - Nonbonded cutoff distance in nm
+    /// * `cutoff` - Reaction-field radius RCRF in nm (gromosXX `nonbonded.rf_cutoff`; not RCUTL)
     /// * `epsilon` - Dielectric permittivity inside the cutoff
-    /// * `rf_epsilon` - Dielectric permittivity outside the cutoff (reaction field)
+    /// * `rf_epsilon` - Dielectric permittivity outside the cutoff (reaction field); 0 means a
+    ///   conducting boundary, `C_RF = −1`
     /// * `rf_kappa` - Debye-Hückel screening parameter in nm⁻¹
+    ///
+    /// RCRF = 0 switches the reaction field off: every constant is zero (plain Coulomb).
     pub fn new(cutoff: f64, epsilon: f64, rf_epsilon: f64, rf_kappa: f64) -> Self {
+        if cutoff <= 0.0 {
+            return Self {
+                crf_cut: 0.0,
+                crf_2cut3i: 0.0,
+                crf_cut3i: 0.0,
+                cutoff_sq: 0.0,
+            };
+        }
         let kappa_cut = rf_kappa * cutoff;
         let kappa_cut2 = kappa_cut * kappa_cut;
 
-        let crf = (2.0 * (epsilon - rf_epsilon) * (1.0 + kappa_cut) - rf_epsilon * kappa_cut2)
-            / ((epsilon + 2.0 * rf_epsilon) * (1.0 + kappa_cut) + rf_epsilon * kappa_cut2);
+        let crf = if rf_epsilon == 0.0 {
+            -1.0
+        } else {
+            (2.0 * (epsilon - rf_epsilon) * (1.0 + kappa_cut) - rf_epsilon * kappa_cut2)
+                / ((epsilon + 2.0 * rf_epsilon) * (1.0 + kappa_cut) + rf_epsilon * kappa_cut2)
+        };
 
         let cut3i = 1.0 / (cutoff * cutoff * cutoff);
         let crf_cut3i = crf * cut3i;
@@ -92,6 +109,197 @@ impl CRFParameters {
             crf_2cut3i,
             crf_cut3i,
             cutoff_sq: cutoff * cutoff,
+        }
+    }
+}
+
+/// Which energy group each atom belongs to (gromosXX `topo.atom_energy_group()`) and how many
+/// groups there are. With one group nothing is booked per group, and the kernels run their
+/// ungrouped instantiation.
+#[derive(Debug, Clone, Copy)]
+pub struct EnergyGroups<'a> {
+    atom_group: &'a [usize],
+    n_groups: usize,
+}
+
+impl<'a> EnergyGroups<'a> {
+    /// One energy group: no per-group booking.
+    pub const fn single() -> EnergyGroups<'static> {
+        EnergyGroups {
+            atom_group: &[],
+            n_groups: 1,
+        }
+    }
+
+    /// `atom_group[i]` is the energy group of atom `i`; it must cover every atom a kernel sees
+    /// when `n_groups > 1`.
+    pub fn new(atom_group: &'a [usize], n_groups: usize) -> Self {
+        Self {
+            atom_group,
+            n_groups,
+        }
+    }
+
+    /// More than one group: energies are booked per group pair.
+    #[inline(always)]
+    pub fn is_grouped(&self) -> bool {
+        self.n_groups > 1
+    }
+
+    /// Number of energy groups.
+    pub fn n_groups(&self) -> usize {
+        self.n_groups
+    }
+
+    /// Row-major cell `[eg(i)][eg(j)]` of an `n_groups × n_groups` matrix.
+    #[inline(always)]
+    pub fn cell(&self, i: usize, j: usize) -> usize {
+        self.atom_group[i] * self.n_groups + self.atom_group[j]
+    }
+}
+
+/// Pair energies and their λ derivatives per energy-group pair, flat row-major
+/// `n_groups × n_groups` (gromosXX `lj_energy[eg(i)][eg(j)]`, `crf_energy`, and the same two of
+/// `perturbed_energy_derivatives`). Both triangles are booked; the writer folds them.
+/// Empty with one energy group.
+#[derive(Debug, Clone, Default)]
+pub struct GroupEnergies {
+    pub n_groups: usize,
+    pub lj: Vec<f64>,
+    pub crf: Vec<f64>,
+    pub dhdl_lj: Vec<f64>,
+    pub dhdl_crf: Vec<f64>,
+}
+
+impl GroupEnergies {
+    /// Zeroed matrices for `n_groups` groups; empty for one group.
+    pub fn new(n_groups: usize) -> Self {
+        let cells = if n_groups > 1 { n_groups * n_groups } else { 0 };
+        Self {
+            n_groups: if n_groups > 1 { n_groups } else { 1 },
+            lj: vec![0.0; cells],
+            crf: vec![0.0; cells],
+            dhdl_lj: vec![0.0; cells],
+            dhdl_crf: vec![0.0; cells],
+        }
+    }
+
+    /// Whether the matrices are sized for more than one group.
+    #[inline(always)]
+    pub fn is_grouped(&self) -> bool {
+        !self.lj.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.lj.fill(0.0);
+        self.crf.fill(0.0);
+        self.dhdl_lj.fill(0.0);
+        self.dhdl_crf.fill(0.0);
+    }
+
+    /// Element-wise sum of `other` into `self` (same group count, or `other` ungrouped).
+    pub fn merge(&mut self, other: &GroupEnergies) {
+        if !other.is_grouped() {
+            return;
+        }
+        assert_eq!(self.lj.len(), other.lj.len(), "energy-group count mismatch");
+        for (dst, src) in [
+            (&mut self.lj, &other.lj),
+            (&mut self.crf, &other.crf),
+            (&mut self.dhdl_lj, &other.dhdl_lj),
+            (&mut self.dhdl_crf, &other.dhdl_crf),
+        ] {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d += *s;
+            }
+        }
+    }
+
+    /// Add a pair's energies and λ derivatives to flat cell `k`.
+    #[inline(always)]
+    pub fn book(&mut self, k: usize, e_lj: f64, e_crf: f64, de_lj: f64, de_crf: f64) {
+        self.lj[k] += e_lj;
+        self.crf[k] += e_crf;
+        self.dhdl_lj[k] += de_lj;
+        self.dhdl_crf[k] += de_crf;
+    }
+}
+
+/// Extended-TI (PRECALCLAM, item 1.8) energies of the perturbed nonbonded terms at every λ_k
+/// of the grid: A- and B-state Lennard-Jones and reaction field, energies and derivatives, flat
+/// `[k][cell]` with `cell` the row-major energy-group pair (gromosXX `A_lj_energy[k][g1][g2]` and
+/// its three siblings, on `energies` and `perturbed_energy_derivatives`). Empty — and never
+/// touched by a kernel — when PRECALCLAM is off.
+#[derive(Debug, Clone, Default)]
+pub struct PrecalcNonbonded {
+    /// λ_k of the grid.
+    pub lambdas: Vec<f64>,
+    n_cells: usize,
+    /// `A_lj`, `B_lj`, `A_crf`, `B_crf` energies.
+    pub energy: [Vec<f64>; 4],
+    /// The same four on the derivative record (`A_de`, `B_de`).
+    pub deriv: [Vec<f64>; 4],
+}
+
+impl PrecalcNonbonded {
+    /// Zeroed arrays for the grid `grid` and `n_groups` energy groups.
+    pub fn new(grid: &gromos_core::lambdas::PrecalcLambdas, n_groups: usize) -> Self {
+        let n_cells = n_groups.max(1) * n_groups.max(1);
+        let len = grid.nr_lambdas * n_cells;
+        Self {
+            lambdas: (0..grid.nr_lambdas).map(|k| grid.lambda(k)).collect(),
+            n_cells,
+            energy: std::array::from_fn(|_| vec![0.0; len]),
+            deriv: std::array::from_fn(|_| vec![0.0; len]),
+        }
+    }
+
+    /// Whether the arrays are sized (PRECALCLAM on).
+    #[inline(always)]
+    pub fn is_active(&self) -> bool {
+        !self.lambdas.is_empty()
+    }
+
+    /// Number of energy-group pairs per λ_k.
+    pub fn n_cells(&self) -> usize {
+        self.n_cells
+    }
+
+    pub fn clear(&mut self) {
+        for v in self.energy.iter_mut().chain(self.deriv.iter_mut()) {
+            v.fill(0.0);
+        }
+    }
+
+    /// Element-wise sum of `other` into `self`; a no-op when `other` is empty.
+    pub fn merge(&mut self, other: &PrecalcNonbonded) {
+        if !other.is_active() {
+            return;
+        }
+        assert_eq!(
+            self.energy[0].len(),
+            other.energy[0].len(),
+            "PRECALCLAM grid mismatch"
+        );
+        for (dst, src) in self
+            .energy
+            .iter_mut()
+            .chain(self.deriv.iter_mut())
+            .zip(other.energy.iter().chain(other.deriv.iter()))
+        {
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d += *s;
+            }
+        }
+    }
+
+    /// Add one λ_k's `[A_lj, B_lj, A_crf, B_crf]` energies and derivatives to `cell`.
+    #[inline(always)]
+    pub fn book(&mut self, k: usize, cell: usize, e: [f64; 4], de: [f64; 4]) {
+        let idx = k * self.n_cells + cell;
+        for c in 0..4 {
+            self.energy[c][idx] += e[c];
+            self.deriv[c][idx] += de[c];
         }
     }
 }
@@ -108,10 +316,20 @@ pub struct ForceStorage {
     pub dhdl_lj: f64,
     /// dH/dλ of the reaction-field part of these pairs
     pub dhdl_crf: f64,
+    /// The same energies and derivatives per energy-group pair (empty with one group); the
+    /// scalars above stay the totals.
+    pub groups: GroupEnergies,
+    /// PRECALCLAM energies of these pairs (empty when off).
+    pub precalc: PrecalcNonbonded,
 }
 
 impl ForceStorage {
     pub fn new(n_atoms: usize) -> Self {
+        Self::with_groups(n_atoms, 1)
+    }
+
+    /// Storage that also books energies per energy-group pair when `n_groups > 1`.
+    pub fn with_groups(n_atoms: usize, n_groups: usize) -> Self {
         Self {
             forces: vec![Vec3::ZERO; n_atoms],
             e_lj: 0.0,
@@ -119,6 +337,8 @@ impl ForceStorage {
             virial: [[0.0; 3]; 3],
             dhdl_lj: 0.0,
             dhdl_crf: 0.0,
+            groups: GroupEnergies::new(n_groups),
+            precalc: PrecalcNonbonded::default(),
         }
     }
 
@@ -129,6 +349,8 @@ impl ForceStorage {
         self.virial = [[0.0; 3]; 3];
         self.dhdl_lj = 0.0;
         self.dhdl_crf = 0.0;
+        self.groups.clear();
+        self.precalc.clear();
     }
 
     /// Accumulate another ForceStorage into this one (thread-local reduction).
@@ -145,6 +367,22 @@ impl ForceStorage {
         }
         self.dhdl_lj += other.dhdl_lj;
         self.dhdl_crf += other.dhdl_crf;
+        self.groups.merge(&other.groups);
+        self.precalc.merge(&other.precalc);
+    }
+
+    /// Panic unless this storage books the group pairs `groups` describes (checked once per
+    /// kernel call, outside the pair loop).
+    #[inline]
+    pub(crate) fn check_groups(&self, groups: &EnergyGroups<'_>) {
+        if groups.is_grouped() {
+            assert_eq!(
+                self.groups.lj.len(),
+                groups.n_groups() * groups.n_groups(),
+                "ForceStorage is not sized for {} energy groups",
+                groups.n_groups()
+            );
+        }
     }
 }
 
@@ -176,6 +414,17 @@ mod tests {
         assert_eq!(crf.crf_cut3i, 0.0);
         assert!((crf.crf_cut - 1.0 / 1.4).abs() < 1e-15);
         assert!((crf.cutoff_sq - 1.96).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_conducting_boundary_has_crf_minus_one() {
+        // gromosXX nonbonded_term.cc:58-71: EPSRF = 0 → crf = −1, not the ε formula's 2
+        let crf = CRFParameters::new(1.2, 1.0, 0.0, 0.0);
+        let cut3i = 1.0 / (1.2 * 1.2 * 1.2);
+        assert_eq!(crf.crf_cut3i, -cut3i);
+        assert_eq!(crf.crf_2cut3i, -cut3i / 2.0);
+        assert_eq!(crf.crf_cut, 1.5 / 1.2);
+        assert_eq!(crf.cutoff_sq, 1.2 * 1.2);
     }
 
     #[test]

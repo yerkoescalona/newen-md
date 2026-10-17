@@ -5,13 +5,14 @@
 //! - SETTLE: Analytical constraint solver for rigid water
 //! - M-SHAKE: Mass-weighted SHAKE variant
 //! - LINCS: Linear constraint solver
-//! - Perturbed SHAKE: λ-dependent SHAKE for FEP calculations
+//! - Perturbed SHAKE: λ-dependent constraint lengths for FEP (in `shake_buffered`)
 //! - Flexible Constraints: Time-dependent constraints (FlexShake)
 //! - Angle Constraints: Fix bond angles
 //! - Dihedral Constraints: Fix dihedral angles
 //! - COM Motion Removal: Remove center-of-mass translation and rotation
 
 use gromos_core::configuration::Configuration;
+use gromos_core::lambdas::{InteractionLambda, PrecalcLambdas};
 use gromos_core::math::{Periodicity, Vec3};
 use gromos_core::topology::Topology;
 
@@ -21,6 +22,9 @@ use gromos_core::topology::Topology;
 /// and reusing skip arrays across iterations.
 #[derive(Debug, Clone)]
 pub struct ShakeBuffers {
+    /// Perturbed solute constraints (gromosXX `perturbed_solute().distance_constraints()`),
+    /// shaken before the unperturbed ones in every iteration (`perturbed_shake.cc:318-345`).
+    pub perturbed_constraints: Vec<PerturbedConstraint>,
     /// Precomputed solute constraints: (atom_i, atom_j, constraint_length)
     pub solute_constraints: Vec<(usize, usize, f64)>,
     /// Precomputed solvent constraints: (atom_i, atom_j, constraint_length)
@@ -33,6 +37,18 @@ pub struct ShakeBuffers {
     skip_next: Vec<bool>,
 }
 
+/// A perturbed distance constraint: its length is `(1 − L)·r0_A + L·r0_B` with `L` the bond λ
+/// of the energy group of atom `i`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerturbedConstraint {
+    pub i: usize,
+    pub j: usize,
+    pub r0_a: f64,
+    pub r0_b: f64,
+    /// Energy group of atom `i`: its bond λ, and the cell its dH/dλ is booked to.
+    pub group: usize,
+}
+
 impl ShakeBuffers {
     /// Precompute constraint lists from topology and NTC mode.
     /// Call once at initialization, reuse across all MD steps.
@@ -43,17 +59,13 @@ impl ShakeBuffers {
     pub fn new(topo: &Topology, ntc: NtcMode, include_solvent: bool) -> Self {
         let solute_constraints: Vec<(usize, usize, f64)> = match ntc {
             NtcMode::SolventOnly => Vec::new(),
+            // gromosXX `in_topology.cc:2143-2178`: NTC = 2 constrains exactly the BONDH bonds
             NtcMode::HydrogenBonds => topo.moltypes[0]
                 .bonds
                 .iter()
                 .filter_map(|bond| {
                     let constraint_length = topo.bond_parameters[bond.bond_type].r0;
-                    if constraint_length < 1e-10 {
-                        return None;
-                    }
-                    let mass_i = topo.mass[bond.i];
-                    let mass_j = topo.mass[bond.j];
-                    if mass_i > 2.0 && mass_j > 2.0 {
+                    if constraint_length < 1e-10 || !bond.hydrogen {
                         return None;
                     }
                     Some((bond.i, bond.j, constraint_length))
@@ -68,6 +80,23 @@ impl ShakeBuffers {
                         return None;
                     }
                     Some((bond.i, bond.j, constraint_length))
+                })
+                .collect(),
+        };
+
+        // NTC > 1: the perturbed bonds `prepare_system` handed to the constraints (NTC = 3)
+        let perturbed_constraints: Vec<PerturbedConstraint> = match ntc {
+            NtcMode::SolventOnly => Vec::new(),
+            NtcMode::HydrogenBonds | NtcMode::AllBonds => topo
+                .perturbed_solute
+                .distance_constraints
+                .iter()
+                .map(|b| PerturbedConstraint {
+                    i: b.i,
+                    j: b.j,
+                    r0_a: topo.bond_parameters[b.a_type].r0,
+                    r0_b: topo.bond_parameters[b.b_type].r0,
+                    group: topo.atom_to_energy_group.get(b.i).copied().unwrap_or(0),
                 })
                 .collect(),
         };
@@ -91,6 +120,10 @@ impl ShakeBuffers {
 
         // Collect constrained atoms (deduplicated + sorted, replaces HashSet)
         let mut constrained_atoms: Vec<usize> = Vec::new();
+        for c in &perturbed_constraints {
+            constrained_atoms.push(c.i);
+            constrained_atoms.push(c.j);
+        }
         for &(i, j, _) in solute_constraints.iter().chain(solvent_constraints.iter()) {
             constrained_atoms.push(i);
             constrained_atoms.push(j);
@@ -103,6 +136,7 @@ impl ShakeBuffers {
         let skip_next = vec![true; n_total_atoms];
 
         Self {
+            perturbed_constraints,
             solute_constraints,
             solvent_constraints,
             constrained_atoms,
@@ -113,7 +147,18 @@ impl ShakeBuffers {
 
     /// Returns true if there are no constraints at all.
     pub fn is_empty(&self) -> bool {
-        self.solute_constraints.is_empty() && self.solvent_constraints.is_empty()
+        self.perturbed_constraints.is_empty()
+            && self.solute_constraints.is_empty()
+            && self.solvent_constraints.is_empty()
+    }
+
+    /// The solute distance constraints as atom pairs, perturbed ones included: each removes a
+    /// degree of freedom (gromosXX `topology.cc:1076-1180`).
+    pub fn solute_constraint_pairs(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.solute_constraints
+            .iter()
+            .map(|&(i, j, _)| (i, j))
+            .chain(self.perturbed_constraints.iter().map(|c| (c.i, c.j)))
     }
 }
 
@@ -122,7 +167,7 @@ impl ShakeBuffers {
 pub enum NtcMode {
     /// NTC=1: no solute constraints (solvent only if NTCS>0)
     SolventOnly,
-    /// NTC=2: constrain bonds involving hydrogen atoms
+    /// NTC=2: constrain the bonds of the topology's BONDH block
     HydrogenBonds,
     /// NTC=3: constrain all bonds
     AllBonds,
@@ -215,14 +260,14 @@ impl ConstraintResult {
 }
 
 /// The constraint furthest from its length, as `(error, (i, j, distance, length))`.
-fn worst_unsatisfied<'a>(
+fn worst_unsatisfied(
     conf: &Configuration,
     pbc: &Periodicity,
-    constraints: impl Iterator<Item = &'a (usize, usize, f64)>,
+    constraints: impl Iterator<Item = (usize, usize, f64)>,
 ) -> (f64, Option<(usize, usize, f64, f64)>) {
     let mut max_error = 0.0;
     let mut worst = None;
-    for &(i, j, length) in constraints {
+    for (i, j, length) in constraints {
         let (error, distance) = constraint_error(conf, pbc, i, j, length);
         if error > max_error {
             max_error = error;
@@ -295,202 +340,48 @@ pub fn shake(
     dt: f64,
     params: &ShakeParameters,
 ) -> ConstraintResult {
-    let pbc = box_periodicity(conf);
-    let tolerance = params.tolerance;
-    let dt2 = dt * dt;
-
-    // Collect constrained atom indices for velocity correction
-    let mut constrained_atoms = std::collections::HashSet::new();
-
-    // Build the list of solute constraints based on NTC mode
-    let solute_constraints: Vec<(usize, usize, f64)> = match params.ntc {
-        NtcMode::SolventOnly => Vec::new(), // NTC=1: no solute constraints
-        NtcMode::HydrogenBonds => {
-            // NTC=2: only bonds involving hydrogen (mass < 2.0)
-            topo.moltypes[0]
-                .bonds
-                .iter()
-                .filter_map(|bond| {
-                    let constraint_length = topo.bond_parameters[bond.bond_type].r0;
-                    if constraint_length < 1e-10 {
-                        return None;
-                    }
-                    let mass_i = topo.mass[bond.i];
-                    let mass_j = topo.mass[bond.j];
-                    if mass_i > 2.0 && mass_j > 2.0 {
-                        return None;
-                    }
-                    Some((bond.i, bond.j, constraint_length))
-                })
-                .collect()
-        },
-        NtcMode::AllBonds => {
-            // NTC=3: all bonds
-            topo.moltypes[0]
-                .bonds
-                .iter()
-                .filter_map(|bond| {
-                    let constraint_length = topo.bond_parameters[bond.bond_type].r0;
-                    if constraint_length < 1e-10 {
-                        return None;
-                    }
-                    Some((bond.i, bond.j, constraint_length))
-                })
-                .collect()
-        },
-    };
-
-    // Build solvent constraints list
-    let mut solvent_constraints: Vec<(usize, usize, f64)> = Vec::new();
-    if !topo.solvent_constraint_template.is_empty() && topo.num_solvent_molecules() > 0 {
-        let n_solute = topo.num_solute_atoms();
-        let atoms_per_solvent = topo.solvent_atom_template.len();
-        let num_molecules = topo.num_solvent_molecules();
-
-        for mol in 0..num_molecules {
-            let base = n_solute + mol * atoms_per_solvent;
-            for constr in &topo.solvent_constraint_template {
-                solvent_constraints.push((base + constr.i, base + constr.j, constr.length));
-            }
-        }
-    }
-
-    let total_constraints = solute_constraints.len() + solvent_constraints.len();
-    if total_constraints == 0 {
-        return ConstraintResult {
-            converged: true,
-            iterations: 0,
-            max_error: 0.0,
-            worst: None,
-        };
-    }
-
-    // Collect all constraint atom indices for constraint force zeroing
-    for &(i, j, _) in solute_constraints.iter().chain(solvent_constraints.iter()) {
-        constrained_atoms.insert(i);
-        constrained_atoms.insert(j);
-    }
-
-    // Zero constraint forces for constrained atoms (GROMOS: done before SHAKE iterations)
-    for &atom in &constrained_atoms {
-        conf.old_mut().constraint_force[atom] = Vec3::ZERO;
-    }
-
-    // skip_now/skip_next optimization: avoid re-checking converged constraints
-    // For solute: indexed by local solute atom index
-    let _n_solute_atoms = topo.num_solute_atoms();
-    let n_total_atoms = topo.num_atoms();
-    let mut skip_now = vec![false; n_total_atoms];
-    let mut skip_next = vec![true; n_total_atoms];
-
-    let mut converged = false;
-    let mut iteration = 0;
-
-    while iteration < params.max_iterations && !converged {
-        converged = true;
-        iteration += 1;
-
-        // === Solute constraints ===
-        for &(i, j, constraint_length) in &solute_constraints {
-            // skip optimization: if both atoms can be skipped, skip
-            if skip_now[i] && skip_now[j] {
-                continue;
-            }
-            // skip if both masses are zero (fixed atoms)
-            if topo.inverse_mass[i] == 0.0 && topo.inverse_mass[j] == 0.0 {
-                continue;
-            }
-
-            if !shake_one_constraint_full(
-                conf,
-                topo,
-                &pbc,
-                i,
-                j,
-                constraint_length,
-                tolerance,
-                dt2,
-                &mut skip_next,
-            ) {
-                converged = false;
-            }
-        }
-
-        // === Solvent constraints ===
-        for &(i, j, constraint_length) in &solvent_constraints {
-            if skip_now[i] && skip_now[j] {
-                continue;
-            }
-
-            if !shake_one_constraint_full(
-                conf,
-                topo,
-                &pbc,
-                i,
-                j,
-                constraint_length,
-                tolerance,
-                dt2,
-                &mut skip_next,
-            ) {
-                converged = false;
-            }
-        }
-
-        // Swap skip arrays for next iteration
-        std::mem::swap(&mut skip_now, &mut skip_next);
-        skip_next.iter_mut().for_each(|s| *s = true);
-    }
-
-    // Finalize constraint forces: scale by 1/dt² (GROMOS convention)
-    // Solute constraint forces
-    for &(i, j, _) in &solute_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
-    }
-    // Solvent constraint forces
-    for &(i, j, _) in &solvent_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
-    }
-
-    // GROMOS velocity correction: vel = (pos_new - pos_old) / dt
-    // Done AFTER all SHAKE iterations converge
-    for &atom in &constrained_atoms {
-        conf.current_mut().vel[atom] =
-            (conf.current().pos[atom] - conf.old().pos[atom]) * (1.0 / dt);
-    }
-
-    let (max_error, worst) = if converged {
-        (0.0, None)
-    } else {
-        worst_unsatisfied(
-            conf,
-            &pbc,
-            solute_constraints.iter().chain(solvent_constraints.iter()),
-        )
-    };
-
-    ConstraintResult {
-        converged,
-        iterations: iteration,
-        max_error,
-        worst,
-    }
+    let mut buffers = ShakeBuffers::new(topo, params.ntc, true);
+    shake_buffered(topo, conf, dt, params, &mut buffers, None, false)
 }
 
 /// Apply SHAKE using precomputed buffers (zero per-step allocations).
 ///
 /// This is the performance-critical version called every MD step.
 /// All constraint lists are precomputed in `ShakeBuffers`, and skip arrays are reused.
+///
+/// `precalc`: the PRECALCLAM grid when this step is one it is evaluated on — every perturbed
+/// constraint correction then adds to the `AB_bond` derivatives at each λ_k
+/// (`perturbed_shake.cc:229-259`; energies get nothing, gromosXX's own caveat).
+///
+/// `atomic_virial`: the run computes the atomic virial (`VIRIAL 1`). gromosXX adds the constraint
+/// virial only then, and never in vacuum (`shake.h:380`, `perturbed_shake.cc:209`, dispatched by
+/// `SPLIT_VIRIAL_BOUNDARY`, `template_split.h:58-79`).
 pub fn shake_buffered(
     topo: &Topology,
     conf: &mut Configuration,
     dt: f64,
     params: &ShakeParameters,
     buffers: &mut ShakeBuffers,
+    precalc: Option<PrecalcLambdas>,
+    atomic_virial: bool,
 ) -> ConstraintResult {
     let pbc = box_periodicity(conf);
+    if atomic_virial && !matches!(pbc, Periodicity::Vacuum(_)) {
+        shake_buffered_impl::<true>(topo, conf, dt, params, buffers, precalc, pbc)
+    } else {
+        shake_buffered_impl::<false>(topo, conf, dt, params, buffers, precalc, pbc)
+    }
+}
+
+fn shake_buffered_impl<const VIRIAL: bool>(
+    topo: &Topology,
+    conf: &mut Configuration,
+    dt: f64,
+    params: &ShakeParameters,
+    buffers: &mut ShakeBuffers,
+    precalc: Option<PrecalcLambdas>,
+    pbc: Periodicity,
+) -> ConstraintResult {
     if buffers.is_empty() {
         return ConstraintResult {
             converged: true,
@@ -519,6 +410,55 @@ pub fn shake_buffered(
         converged = true;
         iteration += 1;
 
+        // === Perturbed solute constraints (gromosXX perturbed_shake_iteration) ===
+        for c in &buffers.perturbed_constraints {
+            let (i, j) = (c.i, c.j);
+            if buffers.skip_now[i] && buffers.skip_now[j] {
+                continue;
+            }
+            if topo.inverse_mass[i] == 0.0 && topo.inverse_mass[j] == 0.0 {
+                continue;
+            }
+            // perturbed_shake.cc:121-125: the bond λ of atom i's energy group
+            let (lam, lam_derivative) =
+                topo.individual_lambdas
+                    .get(InteractionLambda::Bond, c.group, c.group);
+            let r0 = (1.0 - lam) * c.r0_a + lam * c.r0_b;
+            if let Some((lambda, sp, dist2)) = shake_one_constraint_full::<VIRIAL>(
+                conf,
+                topo,
+                &pbc,
+                i,
+                j,
+                r0,
+                tolerance,
+                dt2,
+                &mut buffers.skip_next,
+            ) {
+                converged = false;
+                // perturbed_shake.cc:224-226, booked on the old state (this step's energies)
+                let constr_length2 = r0 * r0;
+                let de = lam_derivative * lambda / dt2 * constr_length2.sqrt() * (c.r0_b - c.r0_a);
+                let d = &mut conf.old_mut().perturbed_energy_derivatives;
+                if let Some(cell) = d.constraints_energy.get_mut(c.group) {
+                    *cell += de;
+                }
+                d.constraint_total += de;
+                d.special_total += de;
+                if let Some(grid) = &precalc {
+                    let r0_diff = c.r0_b - c.r0_a;
+                    let sp_2_m_dt2 = sp * 2.0 * (1.0 / topo.mass[i] + 1.0 / topo.mass[j]) * dt2;
+                    let ab_bond = &mut d.precalc.ab_bond;
+                    for (k, slot) in ab_bond.iter_mut().enumerate().take(grid.nr_lambdas) {
+                        let lam = grid.lambda(k);
+                        let r0lam = (1.0 - lam) * c.r0_a + lam * c.r0_b;
+                        let difflam = r0lam * r0lam - dist2;
+                        *slot += (difflam / sp_2_m_dt2) * r0lam * r0_diff;
+                    }
+                }
+            }
+        }
+
         // === Solute constraints ===
         for &(i, j, constraint_length) in &buffers.solute_constraints {
             if buffers.skip_now[i] && buffers.skip_now[j] {
@@ -528,7 +468,7 @@ pub fn shake_buffered(
                 continue;
             }
 
-            if !shake_one_constraint_full(
+            if shake_one_constraint_full::<VIRIAL>(
                 conf,
                 topo,
                 &pbc,
@@ -538,7 +478,9 @@ pub fn shake_buffered(
                 tolerance,
                 dt2,
                 &mut buffers.skip_next,
-            ) {
+            )
+            .is_some()
+            {
                 converged = false;
             }
         }
@@ -549,7 +491,7 @@ pub fn shake_buffered(
                 continue;
             }
 
-            if !shake_one_constraint_full(
+            if shake_one_constraint_full::<VIRIAL>(
                 conf,
                 topo,
                 &pbc,
@@ -559,7 +501,9 @@ pub fn shake_buffered(
                 tolerance,
                 dt2,
                 &mut buffers.skip_next,
-            ) {
+            )
+            .is_some()
+            {
                 converged = false;
             }
         }
@@ -569,14 +513,9 @@ pub fn shake_buffered(
         buffers.skip_next.iter_mut().for_each(|s| *s = true);
     }
 
-    // Finalize constraint forces: scale by 1/dt²
-    for &(i, j, _) in &buffers.solute_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
-    }
-    for &(i, j, _) in &buffers.solvent_constraints {
-        conf.old_mut().constraint_force[i] *= 1.0 / dt2;
-        conf.old_mut().constraint_force[j] *= 1.0 / dt2;
+    // Constraint forces: 1/dt² once per atom (`shake.h:529` solute, `:653` solvent)
+    for &atom in &buffers.constrained_atoms {
+        conf.old_mut().constraint_force[atom] *= 1.0 / dt2;
     }
 
     // Velocity correction
@@ -588,13 +527,23 @@ pub fn shake_buffered(
     let (max_error, worst) = if converged {
         (0.0, None)
     } else {
+        // perturbed constraints at their λ-mixed length, as shaken above
+        let perturbed = buffers.perturbed_constraints.iter().map(|c| {
+            let (lam, _) = topo
+                .individual_lambdas
+                .get(InteractionLambda::Bond, c.group, c.group);
+            (c.i, c.j, (1.0 - lam) * c.r0_a + lam * c.r0_b)
+        });
         worst_unsatisfied(
             conf,
             &pbc,
-            buffers
-                .solute_constraints
-                .iter()
-                .chain(buffers.solvent_constraints.iter()),
+            perturbed.chain(
+                buffers
+                    .solute_constraints
+                    .iter()
+                    .chain(buffers.solvent_constraints.iter())
+                    .copied(),
+            ),
         )
     };
 
@@ -607,11 +556,11 @@ pub fn shake_buffered(
 }
 
 /// Apply SHAKE to a single distance constraint with full GROMOS features.
-/// Returns true if already converged.
-/// Accumulates constraint force (pre-1/dt² scaling) and virial tensor.
+/// Returns `None` if already converged, else the Lagrange multiplier it applied.
+/// Accumulates constraint force (pre-1/dt² scaling) and, with `VIRIAL`, the virial tensor.
 #[inline]
 #[allow(clippy::too_many_arguments)] // one constraint's worth of state, as in gromosXX
-fn shake_one_constraint_full(
+fn shake_one_constraint_full<const VIRIAL: bool>(
     conf: &mut Configuration,
     topo: &Topology,
     pbc: &Periodicity,
@@ -621,7 +570,7 @@ fn shake_one_constraint_full(
     tolerance: f64,
     dt2: f64,
     skip_next: &mut [bool],
-) -> bool {
+) -> Option<(f64, f64, f64)> {
     let constr_length2 = constraint_length * constraint_length;
 
     // GROMOS convention: r = pos(i) - pos(j), under the minimum-image convention
@@ -633,7 +582,7 @@ fn shake_one_constraint_full(
 
     // GROMOS convergence: fabs(diff) >= constr_length2 * tolerance * 2.0
     if diff.abs() < constr_length2 * tolerance * 2.0 {
-        return true; // already converged
+        return None; // already converged
     }
 
     // Reference (old) distance vector, likewise the nearest image
@@ -646,7 +595,7 @@ fn shake_one_constraint_full(
     let inv_mass_sum = inv_mass_i + inv_mass_j;
 
     if inv_mass_sum < 1e-20 {
-        return true; // fixed atoms
+        return None; // fixed atoms
     }
 
     // GROMOS: lambda = diff / (sp * 2.0 * inv_mass_sum)
@@ -659,17 +608,19 @@ fn shake_one_constraint_full(
     conf.old_mut().constraint_force[j] -= cons_force;
 
     // Virial tensor contribution (GROMOS: virial_tensor(a,aa) += ref_r(a) * ref_r(aa) * lambda / dt2)
-    let lambda_over_dt2 = lambda / dt2;
-    let vt = &mut conf.old_mut().virial_tensor;
-    vt.x_axis.x += ref_r.x * ref_r.x * lambda_over_dt2;
-    vt.x_axis.y += ref_r.x * ref_r.y * lambda_over_dt2;
-    vt.x_axis.z += ref_r.x * ref_r.z * lambda_over_dt2;
-    vt.y_axis.x += ref_r.y * ref_r.x * lambda_over_dt2;
-    vt.y_axis.y += ref_r.y * ref_r.y * lambda_over_dt2;
-    vt.y_axis.z += ref_r.y * ref_r.z * lambda_over_dt2;
-    vt.z_axis.x += ref_r.z * ref_r.x * lambda_over_dt2;
-    vt.z_axis.y += ref_r.z * ref_r.y * lambda_over_dt2;
-    vt.z_axis.z += ref_r.z * ref_r.z * lambda_over_dt2;
+    if VIRIAL {
+        let lambda_over_dt2 = lambda / dt2;
+        let vt = &mut conf.old_mut().virial_tensor;
+        vt.x_axis.x += ref_r.x * ref_r.x * lambda_over_dt2;
+        vt.x_axis.y += ref_r.x * ref_r.y * lambda_over_dt2;
+        vt.x_axis.z += ref_r.x * ref_r.z * lambda_over_dt2;
+        vt.y_axis.x += ref_r.y * ref_r.x * lambda_over_dt2;
+        vt.y_axis.y += ref_r.y * ref_r.y * lambda_over_dt2;
+        vt.y_axis.z += ref_r.y * ref_r.z * lambda_over_dt2;
+        vt.z_axis.x += ref_r.z * ref_r.x * lambda_over_dt2;
+        vt.z_axis.y += ref_r.z * ref_r.y * lambda_over_dt2;
+        vt.z_axis.z += ref_r.z * ref_r.z * lambda_over_dt2;
+    }
 
     // Update positions
     let correction = ref_r * lambda;
@@ -680,7 +631,8 @@ fn shake_one_constraint_full(
     skip_next[i] = false;
     skip_next[j] = false;
 
-    false // not yet converged
+    // not yet converged: the multiplier, and `sp`, `dist2` for the PRECALCLAM derivative
+    Some((lambda, sp, dist2))
 }
 
 /// Shake initial positions to satisfy constraints (GROMOS: sim.param().start.shake_pos).
@@ -763,153 +715,6 @@ pub fn m_shake(
     shake(topo, conf, dt, params)
 }
 
-// ============================================================================
-// Perturbed SHAKE (for FEP)
-// ============================================================================
-
-/// Apply Perturbed SHAKE algorithm for Free Energy Perturbation
-///
-/// Perturbed SHAKE extends standard SHAKE to handle λ-dependent constraints
-/// where the constraint length smoothly transitions between states A and B:
-/// r₀(λ) = (1-λ)·r₀_A + λ·r₀_B
-///
-/// Additionally, it calculates the energy derivative ∂H/∂λ needed for
-/// thermodynamic integration (TI) free energy calculations.
-///
-/// # Algorithm
-/// 1. For each perturbed bond, interpolate constraint length: r₀(λ)
-/// 2. Apply standard SHAKE iteration with λ-dependent length
-/// 3. Accumulate constraint forces
-/// 4. Calculate ∂H/∂λ contribution from constraints
-///
-/// # Parameters
-/// - `topo`: Molecular topology with perturbed bond information
-/// - `conf`: Configuration with positions and FEP energy derivatives
-/// - `dt`: Time step size
-/// - `lambda`: Current λ value (0 = state A, 1 = state B)
-/// - `lambda_deriv`: dλ/dt for energy derivative calculation
-/// - `params`: SHAKE parameters (tolerance, max iterations)
-///
-/// # Returns
-/// - `ConstraintResult` with convergence status and statistics
-#[allow(non_snake_case)]
-pub fn perturbed_shake(
-    topo: &Topology,
-    conf: &mut Configuration,
-    dt: f64,
-    lambda: f64,
-    lambda_deriv: f64,
-    params: &ShakeParameters,
-) -> ConstraintResult {
-    let dt_sq = dt * dt;
-    let tolerance_sq = params.tolerance * params.tolerance;
-
-    let mut max_error = f64::MAX;
-    let mut iteration = 0;
-
-    // Iterate until convergence or max iterations
-    while iteration < params.max_iterations && max_error > tolerance_sq {
-        max_error = 0.0;
-        iteration += 1;
-
-        // Process each perturbed distance constraint
-        for pert_bond in &topo.perturbed_solute.bonds {
-            let i = pert_bond.i;
-            let j = pert_bond.j;
-
-            // Get state A and state B bond parameters
-            let bond_a = &topo.bond_parameters[pert_bond.a_type];
-            let bond_b = &topo.bond_parameters[pert_bond.b_type];
-
-            // Interpolate constraint length: r₀(λ) = (1-λ)·r₀_A + λ·r₀_B
-            let r0_a = bond_a.r0;
-            let r0_b = bond_b.r0;
-            let constraint_length = (1.0 - lambda) * r0_a + lambda * r0_b;
-
-            if constraint_length < 1e-10 {
-                continue; // Skip if constraint length is zero
-            }
-
-            // Target distance squared
-            let d_ij_sq = constraint_length * constraint_length;
-
-            // Current distance vector
-            let r_ij = conf.current().pos[j] - conf.current().pos[i];
-            let r_current_sq = r_ij.dot(r_ij);
-
-            if r_current_sq < 1e-20 {
-                continue; // Avoid division by zero
-            }
-
-            // Constraint error
-            let diff = r_current_sq - d_ij_sq;
-            let error = diff * diff / (d_ij_sq * d_ij_sq);
-
-            if error > max_error {
-                max_error = error;
-            }
-
-            if error < tolerance_sq {
-                continue; // Already satisfied
-            }
-
-            // Old distance vector (for velocity correction)
-            let r_ij_old = conf.old().pos[j] - conf.old().pos[i];
-            let r_ij_dot_r_ij_old = r_ij.dot(r_ij_old);
-
-            // Mass weighting
-            let inv_mass_i = topo.inverse_mass[i];
-            let inv_mass_j = topo.inverse_mass[j];
-            let inv_mass_sum = inv_mass_i + inv_mass_j;
-
-            if inv_mass_sum < 1e-20 {
-                continue; // Both masses infinite (fixed atoms)
-            }
-
-            // Lagrange multiplier: λ = (r² - r₀²) / (2 * (1/m_i + 1/m_j) * r·r_old)
-            let denominator = 2.0 * inv_mass_sum * r_ij_dot_r_ij_old;
-
-            if denominator.abs() < 1e-20 {
-                continue; // Avoid division by zero
-            }
-
-            let lambda_constr = diff / denominator;
-
-            // Position corrections
-            let delta_i = r_ij_old * (-lambda_constr * inv_mass_i);
-            let delta_j = r_ij_old * (lambda_constr * inv_mass_j);
-
-            conf.current_mut().pos[i] += delta_i;
-            conf.current_mut().pos[j] += delta_j;
-
-            // Store constraint force for virial calculation
-            // F_constraint = λ · r_old / dt²
-            let _constraint_force = r_ij_old * (lambda_constr / dt_sq);
-
-            // Accumulate to frame-level constraint forces if available
-            // (In production, these would be stored in Configuration)
-
-            // Calculate ∂H/∂λ contribution for FEP
-            // ∂H/∂λ = (dλ/dt) · (λ/dt²) · √(constraint_length²) · (r₀_B - r₀_A)
-            if lambda_deriv.abs() > 1e-20 {
-                let ref_dist = constraint_length; // Current constraint length
-                let _dH_dlambda_contrib =
-                    lambda_deriv * lambda_constr / dt_sq * ref_dist * (r0_b - r0_a);
-
-                // Store in energy derivatives (would be added to Configuration in production)
-                // conf.current_mut().perturbed_energy_derivatives.constraints_energy += dH_dlambda_contrib;
-            }
-        }
-    }
-
-    ConstraintResult {
-        converged: max_error <= tolerance_sq,
-        iterations: iteration,
-        max_error: max_error.sqrt(),
-        worst: None,
-    }
-}
-
 /// SETTLE: Analytical constraint solver for rigid 3-site water molecules
 ///
 /// SETTLE (Miyamoto & Kollman, 1992) is an analytical method specifically
@@ -927,7 +732,15 @@ pub fn perturbed_shake(
 /// Assumptions (checked by the caller / `SettleAlgorithm::init`):
 /// - Exactly one solvent, water-like with 3 atoms and equal H masses
 /// - 3 distance constraints with the two O-H lengths equal
-pub fn settle(topo: &Topology, conf: &mut Configuration, dt: f64) -> ConstraintResult {
+///
+/// `atomic_virial`: add the constraint virial, which gromosXX does only for `VIRIAL 1`
+/// (`settle.cc:397`).
+pub fn settle(
+    topo: &Topology,
+    conf: &mut Configuration,
+    dt: f64,
+    atomic_virial: bool,
+) -> ConstraintResult {
     let n_solute = topo.num_solute_atoms();
     let num_atoms = topo.num_atoms();
 
@@ -1108,7 +921,7 @@ pub fn settle(topo: &Topology, conf: &mut Configuration, dt: f64) -> ConstraintR
         // atomic virial contribution (settle.cc:397-411)
         // GROMOS: virial_tensor(row, col) += Σ_k pos_old[k](row) * cons_force[k](col);
         // Mat3 is column-major (mat.col(col)[row]), see forcefield.rs virial transfer.
-        {
+        if atomic_virial {
             let p = [
                 [pos_old[0].x, pos_old[0].y, pos_old[0].z],
                 [pos_old[1].x, pos_old[1].y, pos_old[1].z],
@@ -1202,10 +1015,7 @@ impl LincsBuffers {
                     .iter()
                     .filter_map(|bond| {
                         let r0 = topo.bond_parameters[bond.bond_type].r0;
-                        if r0 < 1e-10 {
-                            return None;
-                        }
-                        if topo.mass[bond.i] > 2.0 && topo.mass[bond.j] > 2.0 {
+                        if r0 < 1e-10 || !bond.hydrogen {
                             return None;
                         }
                         Some((bond.i, bond.j, r0))
@@ -1947,16 +1757,19 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 0,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 1,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
 
         topo.bond_parameters.push(BondParameters {
@@ -2008,6 +1821,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,
@@ -2076,11 +1890,13 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 0,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,
@@ -2244,7 +2060,7 @@ mod tests {
         conf.current_mut().pos[2] = conf.old().pos[2] + Vec3::new(0.0008, -0.0011, 0.0003);
 
         let dt = 0.002;
-        let result = settle(&topo, &mut conf, dt);
+        let result = settle(&topo, &mut conf, dt, true);
         assert!(
             result.converged,
             "SETTLE failed to find a valid analytical solution"

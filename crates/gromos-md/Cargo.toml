@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "GROMOS-RS simulation engines (md, remd, eds, gamd)"
+description = "GROMOS-RS simulation engines (md, remd, gamd)"
 # Binaries are declared explicitly: `src/bin/mdf.rs` is a mean-force utility, not gromos++'s
 # `mdf` (the minimum-distance program, ported in gromos-analysis), and two crates producing a
 # binary of the same name overwrite each other in `target/<profile>/`.
@@ -60,10 +60,6 @@ path = "src/bin/md.rs"
 [[bin]]
 name = "remd"
 path = "src/bin/remd.rs"
-
-[[bin]]
-name = "eds"
-path = "src/bin/eds.rs"
 
 [[bin]]
 name = "gamd"

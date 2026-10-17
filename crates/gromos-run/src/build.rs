@@ -28,11 +28,11 @@ use gromos_forces::{
 };
 use gromos_integrators::{
     algorithms::{
-        BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat, BerendsenThermostatParams,
-        EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition, LeapFrogVelocity,
-        LincsAlgorithm, NoseHooverThermostat, PressureCalculation, RemoveCOMMotion,
-        RottransConstraints, SettleAlgorithm, ShakeAlgorithm, SteepestDescentAlgorithm,
-        TemperatureCalculation, VirialType,
+        BathRange, BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat,
+        BerendsenThermostatParams, EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition,
+        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, PressureCalculation,
+        RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
+        SteepestDescentAlgorithm, TemperatureCalculation, VirialType,
     },
     constraints::ShakeParameters,
 };
@@ -42,6 +42,7 @@ use gromos_io::{
     posres::{build_posres_entries, read_posresspec, read_refpos},
 };
 
+use crate::dof::{bath_dofs, rottrans_dof, BathDof};
 use crate::plan::{
     build_plan, validate_plan, AlgorithmSpec, DistanceRestraintsPlan, ForcefieldPlan,
     PositionRestraintsPlan,
@@ -89,6 +90,10 @@ pub struct BuildSummary {
     /// Kinetic degrees of freedom (see [`crate::total_dof`]); what the thermostat couples to
     /// and what the temperature must be reported with.
     pub total_dof: f64,
+    /// The temperature baths the run reports (`VOLUMEPRESSURE03`): their total, COM and
+    /// internal-rotational degrees of freedom. One bath over the whole system without a
+    /// multi-bath thermostat, as gromosXX's default `Multibath`.
+    pub baths: Vec<BathDof>,
 }
 
 /// The result of `instantiate`: the sequence plus the counts the caller may report.
@@ -179,9 +184,11 @@ fn load_distance_restraints(
         }
         dr.add(r);
     }
+    // gromosXX creates the perturbed restraints only for a perturbed run
+    // (`create_special.cc:125-133`; `in_distanceres.cc:520-524` ignores PERTDISRESSPEC otherwise)
     let mut pdr = PerturbedDistanceRestraints::new();
-    for spec in &perturbed {
-        pdr.add(PerturbedDistanceRestraint::new(
+    for spec in perturbed.iter().filter(|_| plan.perturbed) {
+        let mut r = PerturbedDistanceRestraint::new(
             spec.atom1,
             spec.atom2,
             spec.n,
@@ -194,22 +201,13 @@ fn load_distance_restraints(
             plan.k,
             plan.r_linear,
             plan.mode,
-        ));
+        );
+        if let Some(tau) = plan.time_averaging {
+            r = r.with_time_averaging(tau, plan.dt);
+        }
+        pdr.add(r);
     }
     Ok((dr, pdr))
-}
-
-/// GROMOS: individual λ = RLAM^NLAM, dλ/dRLAM = NLAM · RLAM^(NLAM−1)
-/// (same arithmetic as `ImdParameters::lambda_and_derivative`, bit for bit).
-fn lambda_and_derivative(lambda: f64, nlam: i32) -> (f64, f64) {
-    let n = nlam as f64;
-    let l = lambda.powf(n);
-    let dl = if nlam <= 0 {
-        0.0
-    } else {
-        n * lambda.powf(n - 1.0)
-    };
-    (l, dl)
 }
 
 struct ForcefieldBuilt {
@@ -226,8 +224,9 @@ fn instantiate_forcefield(
     periodicity: &Periodicity,
 ) -> Result<ForcefieldBuilt, RunError> {
     let n_atoms = topo.num_atoms();
-    // CRF interior dielectric is always 1 in GROMOS.
-    let crf_params = CRFParameters::new(ff.cutoff_long, 1.0, ff.epsilon_rf, ff.kappa);
+    // CRF interior dielectric is always 1 in GROMOS; the constants come from RCRF, not RCUTL
+    // (gromosXX `nonbonded_term.cc:51-63` reads `nonbonded.rf_cutoff`).
+    let crf_params = CRFParameters::new(ff.rf_cutoff, 1.0, ff.epsilon_rf, ff.kappa);
     let lj_params = Forcefield::convert_lj_parameters(topo);
 
     let mut pairlist = PairlistContainer::new(ff.cutoff_short, ff.cutoff_long, 0.0);
@@ -282,13 +281,12 @@ fn instantiate_forcefield(
         distance_restraints = (dr.restraints.len(), pdr.restraints.len());
         forcefield.distance_restraints = dr;
         forcefield.perturbed_distance_restraints = pdr;
-        forcefield.lambda = plan.lambda;
     }
     if let Some(p) = &ff.perturbation {
-        forcefield.lambda_and_derivative = lambda_and_derivative(p.lambda, p.nlam);
-        forcefield.lambda_exp = p.nlam;
+        // λ, NLAM and the individual λ come with the topology (`prepare_system`)
         forcefield.global_alphlj = p.alpha_lj;
         forcefield.global_alphc = p.alpha_c;
+        forcefield.atom_pair_kernel = p.atom_pair_kernel;
     }
 
     Ok(ForcefieldBuilt {
@@ -414,6 +412,33 @@ pub fn instantiate(
     let mut initial_pairs = 0;
     let mut position_restraints = 0;
     let mut distance_restraints = (0, 0);
+    // the constraint algorithms add their virial only for the atomic virial
+    let mut atomic_virial = false;
+    // the force field computes end states exactly when the topology has EDS atoms; only the
+    // EDS algorithm uses them
+    let eds_states = plan.iter().find_map(|a| match a {
+        AlgorithmSpec::Eds(e) => Some(e.num_states),
+        _ => None,
+    });
+    match (eds_states, topo.eds_solute.is_empty()) {
+        (Some(n), false) if n != topo.eds_solute.num_states => {
+            return Err(RunError::InvalidPlan(format!(
+                "the EDS step mixes {n} states, the topology's MPERTATOM block has {}",
+                topo.eds_solute.num_states
+            )))
+        },
+        (Some(_), true) => {
+            return Err(RunError::InvalidPlan(
+                "an EDS step without EDS atoms (no MPERTATOM in the topology)".to_string(),
+            ))
+        },
+        (None, false) => {
+            return Err(RunError::InvalidPlan(
+                "the topology has EDS atoms (MPERTATOM) but the plan has no EDS step".to_string(),
+            ))
+        },
+        _ => {},
+    }
 
     for spec in plan {
         match spec {
@@ -421,6 +446,7 @@ pub fn instantiate(
                 seq.push(Box::new(RemoveCOMMotion::new(*initial, *every)));
             },
             AlgorithmSpec::Forcefield(ff) => {
+                atomic_virial = ff.virial == VirialKind::Atomic;
                 let built = instantiate_forcefield(ff, topo, conf, periodicity)?;
                 initial_pairs = built.initial_pairs;
                 position_restraints = built.position_restraints;
@@ -430,52 +456,97 @@ pub fn instantiate(
             AlgorithmSpec::Orchestrator { terms } => {
                 seq.push(instantiate_orchestrator(terms, topo, periodicity)?);
             },
+            AlgorithmSpec::Eds(e) => {
+                use gromos_integrators::eds::{AedsForm, AedsParams, Eds, EdsForm};
+                if let Some(a) = &e.aeds {
+                    let form = AedsForm::from_gromos(a.form).ok_or_else(|| {
+                        RunError::InvalidPlan(format!("AEDS FORM {}: must be 1-6", a.form))
+                    })?;
+                    let params = AedsParams {
+                        form,
+                        bmax_type: a.bmax_type,
+                        bmax: a.bmax,
+                        asteps: a.asteps,
+                        bsteps: a.bsteps,
+                        columns: a.energy_columns,
+                        prevalence: a.prevalence,
+                        target: a.target_state,
+                    };
+                    seq.push(Box::new(Eds::accelerated(
+                        params,
+                        a.emax,
+                        a.emin,
+                        e.eir.clone(),
+                        a.fullemin,
+                        a.restart,
+                        e.beta,
+                    )));
+                    continue;
+                }
+                let form = match e.form {
+                    1 => EdsForm::SingleS {
+                        s: e.s.first().copied().unwrap_or(1.0),
+                    },
+                    2 => EdsForm::MultiS { s: e.s.clone() },
+                    _ => EdsForm::PairS {
+                        pairs: e.pairs.clone(),
+                    },
+                };
+                seq.push(Box::new(Eds::new(form, e.eir.clone(), e.beta)));
+            },
             AlgorithmSpec::LatticeShift => seq.push(Box::new(LatticeShift::new())),
             AlgorithmSpec::LeapFrogVelocity => seq.push(Box::new(LeapFrogVelocity::new())),
-            AlgorithmSpec::Thermostat { algorithm, baths } => {
+            AlgorithmSpec::Thermostat {
+                algorithm,
+                baths,
+                ranges,
+            } => {
                 let first = baths
                     .first()
                     .ok_or_else(|| RunError::Recipe("thermostat without a bath".to_string()))?;
+                if ranges.last().map(|r| r.last_atom + 1) != Some(n_atoms)
+                    || ranges
+                        .iter()
+                        .any(|r| r.com_bath.max(r.ir_bath) >= baths.len())
+                {
+                    return Err(RunError::Recipe(format!(
+                        "thermostat ranges {ranges:?} do not map the {n_atoms} atoms onto {} \
+                         bath(s)",
+                        baths.len()
+                    )));
+                }
                 match algorithm {
                     ThermostatAlgorithm::Berendsen => {
-                        let mut alg = BerendsenThermostat::new_single_bath(
+                        let params = baths
+                            .iter()
+                            .map(|b| BerendsenThermostatParams {
+                                temperature: b.temperature,
+                                tau: b.tau,
+                                dof: b.dof,
+                            })
+                            .collect();
+                        seq.push(Box::new(BerendsenThermostat::new(params, ranges.clone())))
+                    },
+                    ThermostatAlgorithm::NoseHoover => {
+                        let mut alg = NoseHooverThermostat::new_single_bath(
                             first.temperature,
                             first.tau,
                             first.dof,
                             n_atoms,
                         );
-                        if baths.len() > 1 {
-                            alg.params.clear();
-                            alg.bath_ranges.clear();
-                            let mut start = 0;
-                            for b in baths {
-                                alg.params.push(BerendsenThermostatParams {
-                                    temperature: b.temperature,
-                                    tau: b.tau,
-                                    dof: b.dof,
-                                });
-                                alg.bath_ranges.push((start, b.last_atom));
-                                start = b.last_atom + 1;
-                            }
-                        }
+                        alg.ranges.clone_from(ranges);
                         seq.push(Box::new(alg))
                     },
-                    ThermostatAlgorithm::NoseHoover => {
-                        seq.push(Box::new(NoseHooverThermostat::new_single_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                        )))
-                    },
                     ThermostatAlgorithm::NoseHooverChain(n) => {
-                        seq.push(Box::new(NoseHooverThermostat::new_chain_bath(
+                        let mut alg = NoseHooverThermostat::new_chain_bath(
                             first.temperature,
                             first.tau,
                             first.dof,
                             n_atoms,
                             (*n).max(2),
-                        )))
+                        );
+                        alg.ranges.clone_from(ranges);
+                        seq.push(Box::new(alg))
                     },
                 }
             },
@@ -496,9 +567,14 @@ pub fn instantiate(
                 alg.include_solvent = *include_solvent;
                 alg.shake_initial_positions = *initial_positions;
                 alg.shake_initial_velocities = *initial_velocities;
+                alg.atomic_virial = atomic_virial;
                 seq.push(Box::new(alg));
             },
-            AlgorithmSpec::Settle => seq.push(Box::new(SettleAlgorithm::new())),
+            AlgorithmSpec::Settle => {
+                let mut alg = SettleAlgorithm::new();
+                alg.atomic_virial = atomic_virial;
+                seq.push(Box::new(alg))
+            },
             AlgorithmSpec::Lincs {
                 solute,
                 order_solute,
@@ -526,9 +602,9 @@ pub fn instantiate(
                     .with_min_steps(*min_steps)
                     .with_force_limit(*force_limit),
             )),
-            AlgorithmSpec::TemperatureCalculation { bath_last_atom } => {
-                seq.push(Box::new(TemperatureCalculation::with_baths(bath_last_atom)))
-            },
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } => seq.push(Box::new(
+                TemperatureCalculation::with_baths(*n_baths, ranges),
+            )),
             AlgorithmSpec::PressureCalculation { virial } => {
                 seq.push(Box::new(PressureCalculation::new(virial_type(*virial))))
             },
@@ -567,6 +643,24 @@ fn summarize(
         ConstraintAlgorithm::code(c.solvent_algorithm),
         has_solvent,
     );
+    let ntc_mode = ConstraintSelection::ntc_mode_of(c.solute.ntc());
+    let rottrans = c.rottrans_last.is_some();
+    let (n_baths, ranges) = plan
+        .iter()
+        .find_map(|spec| match spec {
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } if !ranges.is_empty() => {
+                Some((*n_baths, ranges.clone()))
+            },
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            let whole = BathRange {
+                last_atom: topo.num_atoms().saturating_sub(1),
+                com_bath: 0,
+                ir_bath: 0,
+            };
+            (1, vec![whole])
+        });
     let mut summary = BuildSummary {
         is_minimization: recipe.is_minimization(),
         constraints: sel,
@@ -578,11 +672,16 @@ fn summarize(
         distance_restraints: inst.distance_restraints,
         initial_pairs: inst.initial_pairs,
         parallel_nonbonded: false,
-        total_dof: total_dof(
+        total_dof: total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin)
+            - rottrans_dof(topo, rottrans),
+        baths: bath_dofs(
             topo,
             &sel,
-            ConstraintSelection::ntc_mode_of(c.solute.ntc()),
+            ntc_mode,
             recipe.boundary.ndfmin,
+            n_baths,
+            &ranges,
+            rottrans,
         ),
     };
     for spec in plan {
@@ -600,7 +699,9 @@ fn summarize(
                     ntc: ConstraintSelection::ntc_mode_of(solute.ntc()),
                 })
             },
-            AlgorithmSpec::Thermostat { algorithm, baths } => {
+            AlgorithmSpec::Thermostat {
+                algorithm, baths, ..
+            } => {
                 let label = match algorithm {
                     ThermostatAlgorithm::Berendsen => "Berendsen".to_string(),
                     ThermostatAlgorithm::NoseHoover => "Nose-Hoover".to_string(),
@@ -640,7 +741,7 @@ pub fn build_sequence_from_recipe(
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
     let topo = &prepared.topology;
-    let plan = build_plan(recipe, topo, prepared.physical_constants.four_pi_eps_i)?;
+    let plan = build_plan(recipe, topo, &prepared.physical_constants)?;
     validate_plan(&plan)?;
     let periodicity = periodicity_of(prepared);
     let inst = instantiate(&plan, topo, &prepared.configuration, &periodicity)?;
@@ -661,6 +762,11 @@ pub fn build_sequence_from_plan(
     plan: Vec<AlgorithmSpec>,
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
+    // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
+    crate::plan::check_electrostatics(recipe)?;
+    crate::plan::check_perturbation(recipe)?;
+    crate::plan::check_eds(recipe)?;
+    crate::plan::check_plan_against_recipe(recipe, &plan)?;
     validate_plan(&plan)?;
     let periodicity = periodicity_of(prepared);
     let inst = instantiate(
@@ -689,6 +795,9 @@ pub fn build_sequence_from_imd(
     let (mut recipe, diagnostics) = RunRecipe::from_imd_with(imd, &options.passthrough)?;
     recipe.execution.parallel = options.parallel;
     recipe.inputs = inputs.clone();
+    for (key, value) in &options.recipe_overrides {
+        recipe.set(key, value)?;
+    }
     let mut built = build_sequence_from_recipe(&recipe, prepared)?;
     built.diagnostics = diagnostics;
     if let Some(partition) = options.pair_partition {
@@ -724,6 +833,51 @@ pub fn start(
         })
 }
 
+/// Slow growth: after every step ([`start`]'s included), λ += DLAMT·Δt and the individual λ
+/// and perturbed masses follow ([`Topology::update_for_lambda`]). A no-op unless the run is
+/// perturbed (NTG = 1) with DLAMT ≠ 0.
+///
+/// gromosXX `Slow_Growth::apply` (`slow_growth.cc:43-53`), pushed after the barostat and before
+/// the energy totals (`create_md_sequence.cc:279-286`): the step's forces, integration,
+/// constraints and kinetic energy used the old λ, the next step uses the new one. λ is not
+/// bounded: it passes 1 when RLAM + DLAMT·NSTLIM·Δt > 1, as in gromosXX. The step's outputs
+/// carry the old λ (`.trg`, gromosXX `topo.old_lambda()`), except the `.tre` mass, summed over
+/// the masses already at the new λ (`out_configuration.cc:1786`); the final configuration's
+/// `PERTDATA` holds the new λ.
+///
+/// Returns the new λ on the step that takes it out of [0, 1] (from inside), for the caller to
+/// warn ([`lambda_warning`]); gromosXX neither clamps nor warns.
+pub fn advance_lambda(recipe: &RunRecipe, topo: &mut Topology) -> Option<f64> {
+    let p = &recipe.perturbation;
+    if p.enabled == 0 || p.dlamt == 0.0 {
+        return None;
+    }
+    let before = topo.lambda;
+    topo.lambda += p.dlamt * recipe.control.dt;
+    topo.update_for_lambda();
+    (lambda_in_range(before) && !lambda_in_range(topo.lambda)).then_some(topo.lambda)
+}
+
+/// λ in [0, 1], up to 10⁻⁹: a sum of DLAMT·Δt steps meant to end on 1 may overshoot it by
+/// rounding.
+pub fn lambda_in_range(lambda: f64) -> bool {
+    (-1e-9..=1.0 + 1e-9).contains(&lambda)
+}
+
+/// The warning for a λ outside [0, 1]: reached by slow growth after step `after_step`
+/// ([`advance_lambda`]), or, with `None`, the λ a run starts at
+/// ([`crate::PrepareNote::LambdaOutOfRange`]).
+pub fn lambda_warning(after_step: Option<usize>, lambda: f64) -> String {
+    let what = match after_step {
+        Some(step) => format!("slow growth takes lambda out of [0, 1] after step {step}"),
+        None => "the run starts outside [0, 1]".to_string(),
+    };
+    format!(
+        "{what}: lambda = {lambda:.6}; every perturbed term and mass is extrapolated past the \
+         end state"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! The recipe path must be **bit-identical** to the step-1 builder it replaced, on every
@@ -740,6 +894,7 @@ mod tests {
 
     use super::*;
     use crate::{legacy_builder::legacy_build_sequence, prepare_system, Coordinates};
+    use gromos_integrators::algorithms::BathRange;
 
     fn refs() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../gromos-md/tests/gromosXX_references")
@@ -809,6 +964,9 @@ mod tests {
         out
     }
 
+    /// `.imd` blocks the test-only legacy builder never modelled.
+    const LEGACY_UNMODELLED_BLOCKS: [&str; 4] = ["LAMBDAS", "PRECALCLAM", "EDS", "AEDS"];
+
     #[test]
     fn plan_matches_legacy_builder_bit_for_bit() {
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(refs())
@@ -820,9 +978,9 @@ mod tests {
         dirs.sort();
         assert!(dirs.len() >= 40);
         // The same passthrough policy the binary uses: blocks that carry no physics for the
-        // recipe (GAMD and EDS are applied by the binary itself, INNERLOOP selects a kernel).
+        // recipe (GAMD is applied by the binary itself, INNERLOOP selects a kernel).
         let options = RunOptions {
-            passthrough: crate::recipe::PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]),
+            passthrough: crate::recipe::PassthroughPolicy::allow(["GAMD", "INNERLOOP"]),
             ..RunOptions::default()
         };
         let mut compared = 0;
@@ -844,6 +1002,25 @@ mod tests {
             // Likewise COVALENTFORM: the legacy builder always used the quartic/cosine-harmonic
             // forms, so an input asking for the harmonic ones has no counterpart to compare with.
             if loaded.imd.ntbbh != 0 || loaded.imd.ntbah != 0 || loaded.imd.ntbdn != 0 {
+                continue;
+            }
+            // And it built the reaction field from RCUTL, so an RCRF that differs from it has no
+            // legacy counterpart (item 1.8).
+            if loaded.imd.rcrf != loaded.imd.rcutl {
+                continue;
+            }
+            // Nor did it model individual λ (LAMBDAS), extended TI (PRECALCLAM) or (A)EDS: an input
+            // carrying any of them has no legacy counterpart either.
+            let unmodelled: Vec<&str> = LEGACY_UNMODELLED_BLOCKS
+                .iter()
+                .copied()
+                .filter(|b| loaded.imd.raw_blocks.contains_key(*b))
+                .collect();
+            if !unmodelled.is_empty() {
+                println!(
+                    "{name}: skipped, the legacy builder does not model {}",
+                    unmodelled.join(", ")
+                );
                 continue;
             }
             let steps = loaded.imd.nstlim.min(10);
@@ -882,5 +1059,218 @@ mod tests {
             compared += 1;
         }
         assert!(compared >= 40, "only {compared} systems compared");
+    }
+
+    /// The DOFSET ranges are the one atom → bath mapping (gromosXX `Multibath::in_bath`), also
+    /// when the bath numbers do not ascend with the atoms.
+    #[test]
+    fn dofset_ranges_map_atoms_to_baths_in_file_order() {
+        let loaded = load(&refs().join("aladip_multibath_swapped")).expect("reference");
+        let built = build_sequence_from_imd(
+            &loaded.imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .unwrap();
+        let swapped = vec![
+            BathRange {
+                last_atom: 11,
+                com_bath: 1,
+                ir_bath: 1,
+            },
+            BathRange {
+                last_atom: 71,
+                com_bath: 0,
+                ir_bath: 0,
+            },
+        ];
+        let thermostat = built.plan.iter().find_map(|a| match a {
+            AlgorithmSpec::Thermostat { ranges, .. } => Some(ranges.clone()),
+            _ => None,
+        });
+        assert_eq!(thermostat, Some(swapped.clone()));
+        let kinetic = built.plan.iter().find_map(|a| match a {
+            AlgorithmSpec::TemperatureCalculation { n_baths, ranges } => {
+                Some((*n_baths, ranges.clone()))
+            },
+            _ => None,
+        });
+        assert_eq!(kinetic, Some((2, swapped)));
+    }
+
+    #[test]
+    fn a_temperature_group_split_over_two_baths_is_refused() {
+        // gromosXX multibath.cc:161-181: the solute (atoms 1-12) is one temperature group
+        let loaded = load(&refs().join("aladip_multibath_swapped")).expect("reference");
+        let mut imd = loaded.imd.clone();
+        imd.temp_bath[0].dof_sets = vec![[6, 1, 1], [72, 2, 2]];
+        let err = build_sequence_from_imd(
+            &imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            err.to_string()
+                .contains("Temperature group distributed over multiple baths"),
+            "{err}"
+        );
+
+        imd.temp_bath[0].dof_sets = vec![[42, 1, 1], [12, 2, 2], [72, 1, 1]];
+        let err = build_sequence_from_imd(
+            &imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .err()
+        .expect("refused");
+        assert!(err.to_string().contains("Multibath not sorted"), "{err}");
+    }
+
+    #[test]
+    fn perturbed_distance_restraints_only_in_a_perturbed_run() {
+        // gromosXX ignores PERTDISRESSPEC with NTG = 0 (in_distanceres.cc:520-524)
+        let dir = refs().join("aladip_vacuum_fep_distres");
+        let mut loaded = load(&dir).expect("reference");
+        let built = build_sequence_from_imd(
+            &loaded.imd,
+            &(loaded.prepare)(),
+            &loaded.inputs,
+            &RunOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(built.summary.distance_restraints, (6, 6));
+        loaded.imd.ntg = 0;
+        let imd = loaded.imd.clone();
+        let inputs = loaded.inputs.clone();
+        let parsed = read_topology_file(dir.join("../shared/aladip.topo")).unwrap();
+        let pc = parsed.physical_constants;
+        let coords: Coordinates = read_coordinates(dir.join("../aladip_vacuum/aladip_vacuum.conf"))
+            .unwrap()
+            .into();
+        let prepared = prepare_system(&imd, build_topology(parsed), pc, coords, &inputs).unwrap();
+        let built =
+            build_sequence_from_imd(&imd, &prepared, &inputs, &RunOptions::default()).unwrap();
+        assert_eq!(built.summary.distance_restraints, (6, 0));
+    }
+
+    #[test]
+    fn slow_growth_moves_lambda_and_the_masses_without_a_bound() {
+        // gromosXX slow_growth.cc:49-52; atom 1 (CB) is 15.035 in A, 12.035 in B
+        let dir = refs().join("aladip_vacuum_fep");
+        let loaded = load(&dir).expect("reference");
+        let mut topo = (loaded.prepare)().topology;
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        assert_eq!(
+            (recipe.perturbation.lambda, recipe.control.dt),
+            (0.125, 0.002)
+        );
+        advance_lambda(&recipe, &mut topo);
+        assert_eq!(topo.lambda, 0.125, "DLAMT = 0: nothing moves");
+        recipe.perturbation.dlamt = 2.0;
+        let mut expected = 0.125;
+        for _ in 0..3 {
+            advance_lambda(&recipe, &mut topo);
+            expected += 2.0 * 0.002;
+        }
+        assert_eq!(topo.lambda, expected);
+        assert_eq!(topo.mass[0], (1.0 - expected) * 15.035 + expected * 12.035);
+        topo.lambda = 0.995;
+        assert_eq!(
+            advance_lambda(&recipe, &mut topo),
+            None,
+            "λ = 0.999: inside"
+        );
+        assert_eq!(
+            advance_lambda(&recipe, &mut topo),
+            Some(0.995 + 2.0 * 0.002 + 2.0 * 0.002),
+            "the step that leaves [0, 1] is reported"
+        );
+        assert_eq!(
+            topo.lambda,
+            0.995 + 2.0 * 0.002 + 2.0 * 0.002,
+            "no clamp at 1"
+        );
+        assert_eq!(advance_lambda(&recipe, &mut topo), None, "reported once");
+        assert!(lambda_warning(Some(2), 1.007).contains("after step 2: lambda = 1.007000"));
+        recipe.perturbation.enabled = 0;
+        let before = topo.lambda;
+        advance_lambda(&recipe, &mut topo);
+        assert_eq!(topo.lambda, before, "NTG = 0: inert");
+    }
+
+    #[test]
+    fn a_plan_from_another_recipe_still_meets_the_recipes_refusals() {
+        // `Simulation(system, recipe, plan=…)`: the plan was made from a recipe without NSCALE
+        let dir = refs().join("aladip_vacuum_fep");
+        let loaded = load(&dir).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        assert!(build_sequence_from_plan(&recipe, plan.clone(), &prepared).is_ok());
+        let mut scaled = recipe.clone();
+        scaled.perturbation.nscale = 1;
+        let err = build_sequence_from_plan(&scaled, plan, &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("NSCALE"), "{err}");
+    }
+
+    #[test]
+    fn lattice_sum_electrostatics_are_refused_for_an_unperturbed_run() {
+        let dir = refs().join("nacl_water_box");
+        let loaded = load(&dir).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_eq!(recipe.perturbation.enabled, 0);
+        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        for nlrele in [2, 3] {
+            let mut ls = recipe.clone();
+            ls.forcefield.electrostatics.electrostatics = nlrele;
+            let err = build_plan(&ls, &prepared.topology, &prepared.physical_constants)
+                .expect_err("refused");
+            assert!(
+                err.to_string()
+                    .contains(&format!("NLRELE = {nlrele}: lattice-sum")),
+                "{err}"
+            );
+            // a plan made from the reaction-field recipe does not get past it either
+            let err = build_sequence_from_plan(&ls, plan.clone(), &prepared)
+                .err()
+                .expect("refused");
+            assert!(err.to_string().contains("lattice-sum"), "{err}");
+        }
+        for nlrele in [-1, 0, 1] {
+            let mut rf = recipe.clone();
+            rf.forcefield.electrostatics.electrostatics = nlrele;
+            assert!(
+                crate::plan::check_electrostatics(&rf).is_ok(),
+                "NLRELE = {nlrele}"
+            );
+        }
+    }
+
+    #[test]
+    fn solute_temperature_groups_must_reach_the_last_solute_atom() {
+        // gromosXX in_topology.cc:278-290
+        let dir = refs().join("aladip_multibath_swapped");
+        let loaded = load(&dir).expect("reference");
+        let parsed = read_topology_file(dir.join("../shared/aladip.topo")).unwrap();
+        let pc = parsed.physical_constants;
+        let mut topo = build_topology(parsed);
+        topo.temperature_groups = vec![(0..6).collect()];
+        let coords: Coordinates = read_coordinates(dir.join("../shared/aladip.conf"))
+            .unwrap()
+            .into();
+        let err = prepare_system(&loaded.imd, topo, pc, coords, &loaded.inputs)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("TEMPERATUREGROUPS"), "{err}");
     }
 }

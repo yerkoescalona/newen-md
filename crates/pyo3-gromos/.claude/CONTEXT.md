@@ -10,6 +10,25 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Charge-change corrections (1.8, 0.0.65–0.0.66):** `_charge_correction` and `_rf_self_energy`
+  (`programs.rs`) bind `gromos_analysis::free_energy::{charge_correction, rf_self_energy}` for
+  `gromos.analysis.charge_correction` / `rf_self_energy`.
+- **Perturbations and parallel windows (1.8, 0.0.64):** `_make_pt_top_mutate`, `_ptp_net_charge`,
+  `_pt_top` (`programs.rs`) bind gromos-tools' `make_pt_top::{mutate, make_pt_top}` and
+  `pt_top::pt_top` for `gromos.free_energy.Perturbation`. `System` pickles when made by
+  `System.from_files` (as `from_files` on the absolute paths; `module = "gromos"`), which
+  `run_windows(parallel=N)` needs to hand it to worker processes; one built in memory raises
+  `TypeError`. `Simulation` raises a `UserWarning` when slow growth takes λ out of [0, 1]
+  (`advance_lambda`'s return, in the constructor, `step` and `run`) or the run starts outside it
+  (`PrepareNote::LambdaOutOfRange`).
+- **Extended TI in process (1.8, 0.0.62):** `Simulation.precalclam` (the grid, the `# precalclam`
+  energy and derivative rows, `# ABdih`) of the last step; `_precalc_bar_data`, `_precalc_bar`,
+  `_precalc_mbar` (`programs.rs`) take per-window frame stacks and call
+  `ext_ti_ana::bar_file` → `bar::bar` / `mbar::{reduced_potentials, mbar}`
+  (`gromos.free_energy.FreeEnergyWindows.bar/.mbar`).
+- **Slow growth (1.8, 0.0.61):** `Simulation` calls `gromos_run::advance_lambda` after the
+  constructor's step 0 and after every `step`/`run` step, as `md` does (no "converged" stop, so
+  under steepest descent λ also moves on the step `md` stops at).
 - `System`, `Recipe`/`Term`/`Algorithm`/`Plan`, `Simulation(system, recipe[, plan=])` ✓ (3.9,
   2026-08-29); `InputParameters` and the `AlgorithmSequence.*` presets are deprecation shims
 - `sim.run(steps, ene_freq)` → numpy array; energy decomposition (bond/angle/dihedral/improper/lj/coulomb) ✓ (P3.3)
@@ -67,7 +86,8 @@ Python-callable API for running simulations and analysing trajectories.
   binary's code), inserts the optional ML term after `Forcefield` via `AlgorithmSequence::insert`,
   and maps `RunError` onto the builtin exceptions the binding always raised (`run_err`). Python now
   honours the topology's `four_pi_eps_i`, takes NSM from the coordinate file, and uses the binary's
-  parallel-kernel policy. FEP: `Topology.apply_perturbation(path)` (no `Simulation` kwarg).
+  parallel-kernel policy. FEP: `Topology.apply_perturbation(path)` (no `Simulation` kwarg),
+  which returns the solute's net charge in state A and B (0.0.59).
   `resolve_algorithm_sequence` (the descriptor path) survives until steps 3–4 with the same
   parallel policy/`four_pi_eps_i` so `test_front_end_parity.py` stays exact.
 - **3.9 step 2 ✓ (2026-08-29).** `build_simulation` goes through the recipe path

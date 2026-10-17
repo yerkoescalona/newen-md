@@ -20,7 +20,7 @@ make_pt_top, prep_posres, build_box.
 | `make_top` | topology reads back identical: atoms, exclusions, 1-4, every bonded term and parameter, solvent — peptide `NH3+ ALA GLY COO-` and a two-MTB methanol; gromos++'s own reader accepts ours | `topology_references.rs` |
 | `com_top` | same, aladip + CH4 | `topology_references.rs` |
 | `red_top` | same, atoms 1–6 of aladip | `topology_references.rs` |
-| `make_pt_top` | `PERTATOMPARAM` reads back identical | `topology_references.rs` |
+| `make_pt_top` | `PERTATOMPARAM` reads back identical; prints each perturbed molecule's net charge A/B (1.8, 0.0.59; `pt_top` puts it in its title). Typed verbs (0.0.64): `make_pt_top::make_pt_top` (two topologies → `.ptp` text + net charges), `make_pt_top::mutate` (state B = state A with new charges/IAC/masses on chosen atoms), `pt_top::pt_top` (state B of a topology); `gromos.free_energy.Perturbation` calls them | `topology_references.rs` |
 | `sim_box` | box, solvent count, every position (352 SPC around methanol) | `sim_box_reference.rs` |
 | `copy_box` | every position and label, `@dir x` | `box_tool_references.rs` |
 | `inbox` | every position | `box_tool_references.rs` |

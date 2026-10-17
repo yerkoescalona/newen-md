@@ -213,9 +213,11 @@ class Topology:
         Raises ``IndexError`` for a code outside the topology's types."""
         ...
     def solvate(self, nsm: int) -> None: ...
-    def apply_perturbation(self, pttopo_file: str) -> None:
-        """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs (what `md @pttopo`
-        does when NTG != 0). Call before solvate() and before building a Simulation."""
+    def apply_perturbation(self, pttopo_file: str) -> tuple[float, float]:
+        """Merge a GROMOS perturbation topology (.ptp) for FEP/TI runs and its MPERTATOM EDS
+        end states (what `md @pttopo` does with NTG != 0 / EDS = 1). Call before solvate() and
+        before building a Simulation. Returns the solute's net charge (e) in state A and B.
+        Raises ValueError when a perturbed bond is not a bond of the topology."""
         ...
     def __repr__(self) -> str: ...
     def __len__(self) -> int: ...
@@ -309,6 +311,7 @@ _AlgorithmKind = Literal[
     "remove_com",
     "forcefield",
     "orchestrator",
+    "eds",
     "leap_frog_velocity",
     "thermostat",
     "leap_frog_position",
@@ -464,6 +467,20 @@ class Recipe:
     def minimisation(self) -> dict[str, Any]: ...
     @property
     def perturbation(self) -> dict[str, Any]: ...
+    @property
+    def eds(self) -> dict[str, Any] | None:
+        """The ``EDS`` block (``enabled``, ``form``, ``num_states``, ``s``, ``pairs``, ``eir``),
+        or ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``."""
+        ...
+    @property
+    def aeds(self) -> dict[str, Any] | None:
+        """The ``AEDS`` block (``enabled``, ``form``, ``num_states``, ``emax``, ``emin``,
+        ``eir``, ``ntiaedss``, ``restremin``, ``bmaxtype``, ``bmax``, ``asteps``, ``bsteps``), or
+        ``None`` without one; the end states come from ``inputs["pttopo"]``'s ``MPERTATOM``.
+        ``energy_columns``, ``prevalence`` and ``target_state`` (no ``.imd`` block; present only
+        when not ``"intended"``) reproduce gromosXX's A-EDS defects (``"gromosxx-post-update"``,
+        ``"gromosxx-plain-exp"``, ``"gromosxx-state1-default"``)."""
+        ...
     @property
     def outputs(self) -> dict[str, Any]: ...
     @property
@@ -629,13 +646,57 @@ class Simulation:
     @property
     def kinetic_energy(self) -> float: ...
     @property
+    def precalclam(self) -> dict[str, npt.NDArray[np.float64]] | None:
+        """The extended-TI (``PRECALCLAM``) data of the last step, ``None`` without it:
+        ``lambdas`` (the grid, N), ``energies`` and ``derivatives`` (N × 12, the ``.tre``'s and
+        the ``.trg``'s ``# precalclam`` rows), ``abdih`` and ``free_abdih`` (A, B). Computed
+        on the steps NTWG divides only."""
+        ...
+    @property
+    def eds_vr(self) -> float:
+        """EDS reference-state energy V_R (kJ/mol) at the last step (``.tre`` slot 35, part of
+        ``total_energy`` through the special energy); 0 without EDS."""
+        ...
+    @property
+    def eds_vmix(self) -> float:
+        """A-EDS mixed energy V_mix (kJ/mol) at the last step (``.tre`` slot 34, in no total);
+        0 without A-EDS."""
+        ...
+    @property
+    def eds_emax(self) -> float:
+        """A-EDS E_max (kJ/mol) after the last step's search update (``.tre`` slot 36)."""
+        ...
+    @property
+    def eds_emin(self) -> float:
+        """A-EDS E_min (kJ/mol) after the last step's search update (``.tre`` slot 37)."""
+        ...
+    @property
+    def eds_eir(self) -> list[float]:
+        """A-EDS offsets E_i^R (kJ/mol) after the last step's search update, one per state
+        (the ``.tre``'s ``# eds`` offset column); zeros in plain EDS, empty without EDS."""
+        ...
+    @property
+    def eds_vi(self) -> list[float]:
+        """EDS end-state energies V_i (kJ/mol) at the last step, one per state; empty
+        without EDS."""
+        ...
+    @property
+    def eds_dvi(self) -> list[float]:
+        """∂V_i/∂λ of the EDS end states (kJ/mol) at the last step, one per state: the
+        EDS–perturbed pairs of a run with perturbed atoms; empty without EDS."""
+        ...
+    @property
     def dhdl(self) -> float:
-        """dH/dλ (kJ/mol) at the last step — the TI integrand; 0 unless the recipe's
-        ``perturbation`` is enabled (a ``pttopo`` in ``inputs`` and ``NTG=1``)."""
+        """dH/dλ (kJ/mol) at the last step — the TI integrand: the whole derivative (kinetic,
+        potential, constraints and restraints), the first value of a ``.trg`` frame; 0 unless
+        the recipe's ``perturbation`` is enabled (a ``pttopo`` in ``inputs`` and ``NTG=1``)."""
         ...
     @property
     def dhdl_terms(self) -> dict[str, float]:
-        """dH/dλ split by term at the last step: ``{"lj", "crf", "bonded"}`` (kJ/mol)."""
+        """dH/dλ split by term at the last step (kJ/mol): ``lj``, ``crf``, ``bonded``,
+        ``kinetic`` (λ-dependent masses), ``constraints`` (perturbed SHAKE),
+        ``distanceres`` (perturbed distance restraints) and ``eds`` (∂V_R/∂λ of an EDS run
+        with perturbed atoms, ``.trg`` slot 35)."""
         ...
     @property
     def term_energies(self) -> dict[str, float]:
@@ -738,6 +799,10 @@ class System:
     @property
     def configuration(self) -> Configuration: ...
     def write(self, path: str) -> None: ...
+    def __reduce__(self) -> tuple[Any, tuple[str, str]]:
+        """A `System.from_files` system pickles as `from_files` on its two (absolute) paths; one
+        built in memory raises `TypeError`."""
+        ...
     def __repr__(self) -> str: ...
 
 # Free functions
@@ -785,6 +850,161 @@ def _make_top(
     *, build: list[str], param: str, seq: list[str], solv: str | None = None
 ) -> Topology: ...
 def _check_top(topology: Topology) -> tuple[list[str], list[str], str]: ...
+def _make_pt_top_mutate(
+    topology: Topology,
+    atoms: str | list[int],
+    *,
+    charge_b: list[float] | None = None,
+    iac_b: list[int] | None = None,
+    mass_b: list[float] | None = None,
+    alpha_lj: float = 1.51,
+    alpha_crf: float = 0.5,
+    title: str | None = None,
+) -> tuple[str, list[tuple[int, float, float]]]:
+    """`make_pt_top` from `topology` to a copy with new state-B parameters on `atoms` (a gromos++
+    specifier or 0-based indices; `iac_b` 1-based): the `.ptp` text and each perturbed
+    molecule's (0-based index, Q_A, Q_B)."""
+    ...
+
+def _ptp_net_charge(topology: Topology, text: str) -> tuple[float, float]:
+    """The solute's net charge in A and B with the `.ptp` text merged into a copy of
+    `topology` (what `Topology.apply_perturbation` returns)."""
+    ...
+
+def _precalclam_longrange_warning(recipe: Recipe) -> str | None:
+    """The `PrecalclamLongRangeGaps` warning a run of `recipe` raises, or `None`
+    (`gromos.free_energy` warns once for a set of windows with it)."""
+    ...
+
+def _pt_top(
+    topology: Topology, text: str, *, first_atom: int = 0
+) -> tuple[Topology, list[tuple[int, float, float]]]:
+    """`pt_top`: `topology` in state B of the `.ptp` text, and each perturbed molecule's
+    (0-based index, Q_A, Q_B)."""
+    ...
+
+def _ext_ti_ana(argv: list[str], *, seed: int | None = None, write: bool = True) -> dict[str, Any]:
+    """`ext_ti_ana` in process: the predictions as arrays and the files written;
+    `gromos.analysis.ext_ti_ana` builds `argv` from keywords."""
+    ...
+
+def _bar(
+    files: list[str],
+    temperature: float,
+    *,
+    max_iterations: int = 500,
+    convergence: float = 1e-5,
+    bootstrap: int = 0,
+    seed: int | None = None,
+    printdist: str | None = None,
+    parity: str | None = None,
+) -> dict[str, Any]:
+    """`bar` in process on `ext_ti_ana @bar_data` files: per-interval and total ΔG, kJ/mol."""
+    ...
+
+def _ext_ti_merge(argv: list[str]) -> dict[str, Any]:
+    """`ext_ti_merge` in process: the merged ⟨∂H/∂λ⟩ curve and its integral."""
+    ...
+
+def _mbar(
+    u_kn: npt.NDArray[np.float64],
+    n_k: list[int],
+    temperature: float,
+    *,
+    max_iterations: int = 10000,
+    tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    """MBAR on potentials in kJ/mol: free energies and their errors, kJ/mol."""
+    ...
+
+def _ti_trapezoid(
+    files: list[str], lambdas: list[float] | None = None, skip: int = 0
+) -> dict[str, Any]:
+    """Plain multi-window TI over `.trg` files (trapezoid rule)."""
+    ...
+
+def _ti_trapezoid_series(
+    lambdas: list[float], series: list[list[float]], skip: int = 0
+) -> dict[str, Any]:
+    """The same TI over in-memory dH/dλ series, one per λ (`gromos.free_energy`)."""
+    ...
+
+def _precalc_bar_data(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+) -> list[dict[str, Any]]:
+    """The per-frame energies BAR/MBAR use, from in-memory PRECALCLAM frames
+    (`gromos.free_energy`): per window `slam`, `plam`, `e_s`, `e_p`, kJ/mol."""
+    ...
+
+def _precalc_bar(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+    *,
+    max_iterations: int = 500,
+    convergence: float = 1e-5,
+) -> dict[str, Any]:
+    """`bar` over in-memory PRECALCLAM frames: what `_bar` returns."""
+    ...
+
+def _precalc_mbar(
+    windows: list[dict[str, Any]],
+    grid: tuple[int, float, float],
+    nlam: float,
+    temperature: float,
+    skip: int = 0,
+    *,
+    max_iterations: int = 10000,
+    tolerance: float = 1e-10,
+) -> dict[str, Any]:
+    """MBAR over in-memory PRECALCLAM frames: what `_mbar` returns, plus `lambdas`."""
+    ...
+
+def _dgslv_pbsolv(argv: list[str]) -> dict[str, Any]:
+    """`dGslv_pbsolv` in process: potentials and free energies of every solve, the table and
+    the log; `gromos.analysis.dgslv_pbsolv` builds `argv` from keywords."""
+    ...
+
+def _charge_correction(
+    scheme: str,
+    charge_a: float,
+    charge_b: float,
+    box_edge: float,
+    cutoff: float,
+    eps_rf: float,
+    solvent: str,
+    *,
+    eps_solvent: float,
+    eps_model: float | None,
+    ion_radius: float,
+    density: float,
+    quadrupole_trace: float | None,
+    four_pi_eps_i: float,
+) -> dict[str, float]:
+    """The analytic charging-free-energy correction terms (kJ/mol);
+    `gromos.analysis.charge_correction` fills in the defaults."""
+    ...
+
+def _rf_self_energy(
+    charges_a: list[float],
+    charges_b: list[float],
+    cutoff: float,
+    eps_rf: float,
+    *,
+    kappa: float,
+    eps_cs: float,
+    four_pi_eps_i: float,
+) -> float:
+    """The GROMOS reaction-field self-energy change of a charge change (kJ/mol);
+    `gromos.analysis.rf_self_energy` fills in the defaults."""
+    ...
+
 def rmsd(
     positions: npt.NDArray[np.float64],
     reference: npt.NDArray[np.float64],

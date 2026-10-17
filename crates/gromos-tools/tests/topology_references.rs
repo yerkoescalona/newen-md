@@ -388,6 +388,130 @@ fn pt_top_matches_gromospp() {
     assert_same(&ours, &theirs);
 }
 
+/// A +1 → 0 perturbation: `pt_top` puts each perturbed molecule's net charge in A and B into
+/// its title, `make_pt_top` prints it (1.8).
+#[test]
+fn pt_top_and_make_pt_top_print_the_net_charges() {
+    use gromos_tools::programs::topology::{make_pt_top, pt_top};
+    let dir = std::env::temp_dir().join(format!("gromos_net_charge_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let top = references().join("shared/ch4_spc.top");
+    let ptp = |name: &str, qa: f64, qb: f64| {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!(
+                "TITLE\ncharge\nEND\nPERTATOMPARAM\n1\n    1 1 CM 17 16.043 {qa} 17 16.043 {qb} \
+                 0.0 0.0\nEND\n"
+            ),
+        )
+        .unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let call = |run: fn(&[String], &mut dyn std::io::Write) -> Result<(), String>,
+                args: &[&str]| {
+        let mut argv = vec!["prog".to_string()];
+        argv.extend(args.iter().map(|s| s.to_string()));
+        let argv = gromos_io::normalize(argv).expect("normalize");
+        let mut out = Vec::new();
+        run(&argv, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    };
+    let top_s = top.to_string_lossy();
+
+    let minus = ptp("minus.ptp", 1.0, 0.0);
+    let text = call(
+        pt_top::run,
+        &["@topo", &top_s, "@pttopo", &minus, "@type", "TOPO"],
+    );
+    assert!(
+        text.contains("net charge of molecule 1: A 1.000 B 0.000 (ΔQ = -1.000)"),
+        "{text}"
+    );
+
+    // the state-B topology of a 0 → +1 perturbation is the +1 topology
+    let plus = ptp("plus.ptp", 0.0, 1.0);
+    let plus_top = dir.join("plus.top");
+    let text = call(
+        pt_top::run,
+        &["@topo", &top_s, "@pttopo", &plus, "@type", "TOPO"],
+    );
+    assert!(text.contains("A 0.000 B 1.000 (ΔQ = 1.000)"), "{text}");
+    std::fs::write(&plus_top, text).unwrap();
+    let out_ptp = dir.join("made.ptp");
+    let text = call(
+        make_pt_top::run,
+        &[
+            "@topo",
+            &plus_top.to_string_lossy(),
+            &top_s,
+            "@out",
+            &out_ptp.to_string_lossy(),
+        ],
+    );
+    assert!(
+        text.contains("net charge of molecule 1: A 1.000 B 0.000 (ΔQ = -1.000)"),
+        "{text}"
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// The typed verbs `gromos.free_energy.Perturbation` calls: `mutate` + `make_pt_top` write the
+/// `.ptp` `make_pt_top @topo A B` writes from the same two states, and `pt_top` applies it back.
+#[test]
+fn mutate_make_pt_top_and_pt_top_verbs_round_trip() {
+    use gromos_io::ptp::parse_pttopo;
+    use gromos_io::topology::build_topology;
+    use gromos_tools::programs::topology::make_pt_top::{self, Mutation};
+    use gromos_tools::programs::topology::pt_top;
+
+    let parsed = read_topology_file(references().join("shared/ch4_spc.top")).unwrap();
+    let a = build_topology(parsed.clone());
+    let plus = Mutation {
+        charge: Some(&[1.0]),
+        ..Default::default()
+    };
+    let b = make_pt_top::mutate(&a, &[0], &plus).unwrap();
+    assert_eq!((a.charge[0], b.charge[0]), (0.0, 1.0));
+    assert_eq!((a.iac[0], a.mass[0]), (b.iac[0], b.mass[0]));
+    let (text, charges) = make_pt_top::make_pt_top(&a, &b, 0.0, 0.0, "plus").unwrap();
+    assert_eq!(charges.len(), 1);
+    assert_eq!(
+        (charges[0].0, charges[0].1.a, charges[0].1.b),
+        (0, 0.0, 1.0)
+    );
+    // the file writer the `make_pt_top` binary used to call writes the same text
+    let file = std::env::temp_dir().join(format!("gromos_verbs_{}.ptp", std::process::id()));
+    gromos_io::PtpWriter::new(&file)
+        .unwrap()
+        .write(&a, &b, 0.0, 0.0, "plus")
+        .unwrap();
+    assert_eq!(text, std::fs::read_to_string(&file).unwrap());
+    std::fs::remove_file(&file).ok();
+
+    let pt = parse_pttopo(&text).unwrap();
+    assert_eq!(pt.perturbed_solute.atoms.len(), 1);
+    let (state_b, charges) = pt_top::pt_top(parsed, &pt, 0).unwrap();
+    assert_eq!(state_b.charges[0], 1.0);
+    assert_eq!((charges[0].1.a, charges[0].1.b), (0.0, 1.0));
+
+    let err = |atoms: &[usize], m: Mutation| make_pt_top::mutate(&a, atoms, &m).unwrap_err();
+    assert!(err(&[], plus).contains("no atoms"));
+    assert!(err(&[1], plus).contains("not a solute atom"));
+    assert!(err(&[0, 0], plus).contains("twice"));
+    assert!(err(&[0], Mutation::default()).contains("nothing to change"));
+    let too_many = Mutation {
+        charge: Some(&[1.0, 2.0]),
+        ..Default::default()
+    };
+    assert!(err(&[0], too_many).contains("one per atom"));
+    let bad_type = Mutation {
+        iac: Some(&[999]),
+        ..Default::default()
+    };
+    assert!(err(&[0], bad_type).contains("atom types"));
+}
+
 /// gromos++'s output text, token by token (numbers within `rel`); the TITLE block is skipped
 /// because ours keeps the input title's trailing blanks.
 fn assert_same_text(ours: &str, theirs: &str, rel: f64) {

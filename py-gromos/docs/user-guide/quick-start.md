@@ -266,8 +266,10 @@ and two terms of one kind report as `xtb:0` / `xtb:1` (each with its own work di
 ## Free-energy perturbation from Python
 
 A recipe with a perturbation topology in its `inputs` and `perturbation.enabled = 1` runs FEP;
-`sim.dhdl` is the thermodynamic-integration integrand ∂H/∂λ at the current step, `sim.dhdl_terms`
-its LJ / CRF / bonded split, and `run()`'s last column is `dhdl`:
+`sim.dhdl` is the thermodynamic-integration integrand ∂H/∂λ at the current step — the whole
+derivative: kinetic (λ-dependent masses), potential, perturbed constraints and restraints —
+`sim.dhdl_terms` its `lj` / `crf` / `bonded` / `kinetic` / `constraints` / `distanceres` split,
+and `run()`'s last column is `dhdl`:
 
 ```python
 recipe = Recipe.from_imd("run.imd").with_inputs(pttopo="solute_dummy.ptp")
@@ -276,12 +278,15 @@ for lam in (0.0, 0.25, 0.5, 0.75, 1.0):
     sim = Simulation(system, recipe.update(perturbation={"lambda": lam}))
     frames = sim.run(5000, ene_freq=10)                  # (501, 13)
     means[lam] = EnergyTimeseries(frames).dhdl[100:].mean()   # drop the first 1 ps
-# ΔG = ∫ <∂H/∂λ> dλ — numpy.trapz(list(means.values()), list(means)) or the `ext_ti_ana` binary
+# ΔG = ∫ <∂H/∂λ> dλ — numpy.trapezoid(list(means.values()), list(means))
 ```
 
-The `md` binary writes the same quantity to a `.trg` file (`@trg`, every `NTWG` steps) that
-gromos++ `ene_ana` / `ext_ti_ana` and the project's `ext_ti_ana` read; `scripts/ti_ch4.py` is a
-complete two-engine TI study.
+The `md` binary writes the same quantity, as the first value of each frame, to a `.trg` file
+(`@trg`, every `NTWG` steps); `gromos.analysis.ti_trapezoid(trg_files, lambdas)` integrates a set
+of windows. With a `PRECALCLAM` block the `.tre`/`.trg` also carry the energies on a λ grid, which
+`gromos.analysis.ext_ti_ana` (gromos++'s program) reweights and writes for `gromos.analysis.bar`
+and `gromos.analysis.mbar`. `scripts/ti_ch4.py` is a complete two-engine study with all three
+estimators (`--estimator ti|bar|mbar`).
 
 ## Migrating from `InputParameters`
 

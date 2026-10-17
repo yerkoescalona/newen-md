@@ -1,0 +1,22 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_multibath_rottrans"
+description = "Aladip + 20 SPC, DOFSET 2 baths, ROTTRANS on the 12 solute atoms"
+level = 5
+isolates = "ROTTRANS degrees of freedom per bath (topology.cc:1370-1402); per-bath temperatures"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_multibath_rottrans.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

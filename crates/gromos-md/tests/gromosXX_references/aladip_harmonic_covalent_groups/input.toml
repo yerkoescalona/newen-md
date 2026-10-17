@@ -1,0 +1,22 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_harmonic_covalent_groups"
+description = "aladip solvated with harmonic bonds/angles split over two solute energy groups"
+level = 4
+isolates = "harmonic bond/angle and dihedral energies booked by first atom across solute groups"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_harmonic_covalent_groups.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

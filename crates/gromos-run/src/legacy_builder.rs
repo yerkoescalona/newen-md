@@ -162,11 +162,15 @@ fn load_restraints(
             dr.add(r);
         }
         let mut pdr = PerturbedDistanceRestraints::new();
-        for spec in &perturbed {
-            pdr.add(PerturbedDistanceRestraint::new(
+        for spec in perturbed.iter().filter(|_| imd.ntg != 0) {
+            let mut r = PerturbedDistanceRestraint::new(
                 spec.atom1, spec.atom2, spec.n, spec.m, spec.a_r0, spec.b_r0, spec.a_w0, spec.b_w0,
                 spec.rah, k, r_linear, mode,
-            ));
+            );
+            if imd.ntdir < 0 {
+                r = r.with_time_averaging(imd.taudir, imd.dt);
+            }
+            pdr.add(r);
         }
         Some((dr, pdr))
     } else {
@@ -336,11 +340,8 @@ pub(crate) fn legacy_build_sequence(
     if let Some((dr, pdr)) = restraints.distance {
         forcefield.distance_restraints = dr;
         forcefield.perturbed_distance_restraints = pdr;
-        forcefield.lambda = imd.rlam;
     }
     if imd.ntg != 0 {
-        forcefield.lambda_and_derivative = imd.lambda_and_derivative();
-        forcefield.lambda_exp = imd.nlam;
         forcefield.global_alphlj = imd.alphlj;
         forcefield.global_alphc = imd.alphc;
     }

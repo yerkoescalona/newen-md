@@ -38,7 +38,7 @@ lint:
     gate "AlgorithmSequence::new() outside gromos-run" 'AlgorithmSequence::new()' crates --exclude-dir=gromos-run --exclude-dir=tests --exclude=algorithm.rs
     # (2) the binding pushes no algorithm of its own
     gate ".push(Box::new( in pyo3-gromos" '\.push(Box::new(' crates/pyo3-gromos
-    # (3) one IMD reader: gromos_run::read_imd / Recipe (GAMD/EDS passthrough blocks parse their own text)
+    # (3) one IMD reader: gromos_run::read_imd / Recipe (the GAMD passthrough block parses its own text)
     gate "IMD read outside gromos-run/gromos-io" -e 'read_imd_file(' -e 'parse_imd_str(' crates --exclude-dir=gromos-run --exclude-dir=gromos-io --exclude-dir=tests
     # (4) gromos-run never exits the process (doc comments excluded)
     if grep -rn --include='*.rs' 'process::exit' crates/gromos-run/src | grep -v ':[[:space:]]*//' ; then

@@ -1,14 +1,11 @@
 //! Free energy trajectory (.trg) — gromosXX's `TIMESTEP` + `FREEENERDERIVS03` layout.
 //!
 //! The writer emits what the native binary emits (`out_configuration.cc::_print_free_energyred`
-//! via `_print_energyred_helper`): a `TIMESTEP` block, then `FREEENERDERIVS03` with `# lambda`,
-//! the `# totals` of the derivative in ENERGY03 order (total, kinetic, potential, covalent,
-//! bond, angle, improper, dihedral, cross-dihedral, nonbonded, LJ, CRF, then the lattice-sum,
-//! special and restraint slots), and the per-bath / per-energy-group sections with the counts
-//! of the run — so gromos++ `ene_ana`/`ext_ti_ana` read the file, and the reference suite
-//! compares dH/dλ per term. Per-group derivatives are written as zeros (the engine tracks
-//! totals per term, not per energy group); numbers are printed with Rust's `e` exponent
-//! (`1.5e-2`, not `1.500000000e-02`), which every GROMOS reader parses.
+//! via `_print_energyred_helper`): a `TIMESTEP` block, then `FREEENERDERIVS03` with `# lambda`
+//! and the body the `.tre` writer prints too ([`write_energyred_body`]), from the record of λ
+//! derivatives — so gromos++ `ene_ana`/`ext_ti_ana` read the file, and the reference suite
+//! compares dH/dλ value by value. Numbers are printed with Rust's `e` exponent (`1.5e-2`, not
+//! `1.500000000e-02`), which every GROMOS reader parses.
 //!
 //! After `ENEVERSION` the writer adds the profile's self-description (`# energy-schema`,
 //! `# energy-layout`, optionally `# energy-provenance`): comment lines to every other reader
@@ -21,12 +18,13 @@
 //! dH/dλ (kJ/mol) is the thermodynamic-integration integrand at the current λ. Integrate
 //! ⟨dH/dλ⟩_λ over λ with `ext_ti_ana` to get ΔG.
 
-use crate::energy::ENE_VERSION;
+use crate::energy::{write_energyred_body, ENE_VERSION};
 use crate::energy_traj::{
     builtin_schema, read_preamble, self_description_lines, EnergyTraj, Provenance, OFFICIAL_LIBRARY,
 };
 use crate::gz::TextReader;
 use crate::IoError;
+use gromos_core::configuration::Energy;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -58,6 +56,21 @@ impl FreeEnergyFrame {
             dhdl_total,
             ..Default::default()
         }
+    }
+
+    /// The record of λ derivatives derived from the scalar fields, for `n_baths` baths and
+    /// `n_groups` energy groups (potential = total − special, no kinetic derivative).
+    pub fn to_energy(&self, n_baths: usize, n_groups: usize) -> Energy {
+        let mut d = Energy::new(n_baths.max(1), n_groups.max(1));
+        d.bond_total = self.dhdl_bond;
+        d.angle_total = self.dhdl_angle;
+        d.improper_total = self.dhdl_improper;
+        d.dihedral_total = self.dhdl_dihedral;
+        d.lj_total = self.dhdl_lj;
+        d.crf_total = self.dhdl_crf;
+        d.special_total = self.dhdl_special;
+        d.potential_total = self.dhdl_total - self.dhdl_special;
+        d
     }
 }
 
@@ -191,9 +204,6 @@ pub struct FreeEnergyWriter {
     n_groups: usize,
 }
 
-/// Number of entries in a `# totals` section (gromosXX `Energy` totals, 2023-04-15 layout).
-const N_TOTALS: usize = 52;
-
 impl FreeEnergyWriter {
     /// Create the file with its `TITLE` and `ENEVERSION` blocks. The per-bath / per-group
     /// sections default to one bath and one energy group; set the run's counts with
@@ -238,71 +248,28 @@ impl FreeEnergyWriter {
 
     /// Append one frame: a `TIMESTEP` block and a `FREEENERDERIVS03` block.
     pub fn write_frame(&mut self, frame: &FreeEnergyFrame) -> Result<(), IoError> {
+        let derivatives = frame.to_energy(self.n_baths, self.n_groups);
+        self.write_derivatives(frame.step, frame.time, frame.lambda, &derivatives)
+    }
+
+    /// Append one frame of the engine: a `TIMESTEP` block and a `FREEENERDERIVS03` block printed
+    /// from `derivatives` (the engine's `perturbed_energy_derivatives`, the single source of its
+    /// body).
+    pub fn write_derivatives(
+        &mut self,
+        step: usize,
+        time: f64,
+        lambda: f64,
+        derivatives: &Energy,
+    ) -> Result<(), IoError> {
         let w = &mut self.writer;
         writeln!(w, "TIMESTEP")?;
-        writeln!(w, "{:>15}{:>15.9}", frame.step, frame.time)?;
+        writeln!(w, "{:>15}{:>15.9}", step, time)?;
         writeln!(w, "END")?;
         writeln!(w, "FREEENERDERIVS03")?;
         writeln!(w, "# lambda")?;
-        writeln!(w, "{:>18.9e}", frame.lambda)?;
-        writeln!(w, "# totals")?;
-        let bonded = frame.dhdl_bond + frame.dhdl_angle + frame.dhdl_improper + frame.dhdl_dihedral;
-        let nonbonded = frame.dhdl_lj + frame.dhdl_crf;
-        let mut totals = [0.0f64; N_TOTALS];
-        totals[0] = frame.dhdl_total;
-        totals[2] = frame.dhdl_total; // potential: no kinetic derivative is tracked
-        totals[3] = bonded;
-        totals[4] = frame.dhdl_bond;
-        totals[5] = frame.dhdl_angle;
-        totals[6] = frame.dhdl_improper;
-        totals[7] = frame.dhdl_dihedral;
-        totals[9] = nonbonded;
-        totals[10] = frame.dhdl_lj;
-        totals[11] = frame.dhdl_crf;
-        totals[20] = frame.dhdl_special;
-        for v in totals {
-            writeln!(w, "{:>18.9e}", v)?;
-        }
-        let zeros = |n: usize| {
-            std::iter::repeat_n("   0.000000000e0", n)
-                .collect::<Vec<_>>()
-                .join("")
-        };
-        writeln!(w, "# baths")?;
-        writeln!(w, "{}", self.n_baths)?;
-        for _ in 0..self.n_baths {
-            writeln!(w, "{}", zeros(3))?;
-        }
-        writeln!(w, "# bonded")?;
-        writeln!(w, "{}", self.n_groups)?;
-        for _ in 0..self.n_groups {
-            writeln!(w, "{}", zeros(5))?;
-        }
-        writeln!(w, "# nonbonded")?;
-        for _ in 0..(self.n_groups * (self.n_groups + 1) / 2) {
-            writeln!(w, "{}", zeros(6))?;
-        }
-        writeln!(w, "# special")?;
-        for _ in 0..self.n_groups {
-            writeln!(w, "{}", zeros(13))?;
-        }
-        writeln!(w, "# eds\n# numstates\n0")?;
-        writeln!(
-            w,
-            "           # total         nonbonded           special            offset        total_orig       total_phys"
-        )?;
-        writeln!(w, "# gamd\n# numaccelgroups\n0")?;
-        writeln!(
-            w,
-            "      # E_dihedral       E_potential        K_dihedral       K_potential         dV_group"
-        )?;
-        writeln!(w, "# precalclam\n# nr_lambdas\n0")?;
-        writeln!(
-            w,
-            "          # A_e_lj            B_e_lj           A_e_crf           B_e_crf        AB_kinetic           AB_bond          AB_angle       AB_improper         AB_disres         AB_angres         AB_dihres        AB_disfld"
-        )?;
-        writeln!(w, "# ABdih\n      # A_dihedral       B_dihedral")?;
-        writeln!(w, "{}", zeros(2))?;
+        writeln!(w, "{:>18.9e}", lambda)?;
+        write_energyred_body(w, derivatives, 0)?;
         writeln!(w, "END")?;
         Ok(())
     }

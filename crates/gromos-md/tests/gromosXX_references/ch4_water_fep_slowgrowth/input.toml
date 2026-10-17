@@ -1,0 +1,33 @@
+# gromosXX md++ 2023-04-15 (native binary)
+
+[system]
+name = "ch4_water_fep_slowgrowth"
+description = "CH4 in water slow growth, CH4 -> dummy, lambda 0.25 -> 0.75 over 50 steps"
+level = 4
+natoms = 2998
+isolates = "perturbed soft-core pairs in a periodic box with solvent SHAKE at a lambda moving every step"
+
+[input]
+topology = "../shared/ch4_spc.top"
+configuration = "../shared/ch4_spc.cnf"
+parameters = "ch4_water_fep_slowgrowth.in"
+pttopo = "../shared/ch4_spc_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[precision]
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+force_abs = 1e-4
+energy_rel = 1e-6
+position_abs = 1e-6
+

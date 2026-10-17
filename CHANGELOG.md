@@ -5,6 +5,1571 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.66] (2026-10-16)
+
+**The charge-correction chain, complete** (1.8 FE-10, FE-11, FE-12): the Kastenholz–Hünenberger
+correction terms, the reaction-field self term that a raw GROMOS ΔG holds and the scheme
+excludes, and Na⁺ → dummy run through the whole chain to the methodology-independent hydration
+free energy. Perturbation topologies are now checked as gromosXX checks them. No engine output
+changes.
+
+### Added (FE-10 — the analytic companions of `dGslv_pbsolv`)
+
+- **`gromos_analysis::free_energy::charge_correction`**: the correction terms of Kastenholz &
+  Hünenberger, J. Chem. Phys. 124, 224501 (2006) (doi:10.1063/1.2201698) for a charge change
+  q_A → q_B on a spherical ion in a cubic box, each added to the raw ΔG: A1 (Born beyond the
+  cut-off, Eq. 25), A2 (polarisation inside the cut-off: the paper's radial Fredholm equation,
+  Eqs. 26–29 with kernels A3/A6, solved by product integration and Richardson-extrapolated),
+  B (Eq. 32 for lattice sums, the fit of Eq. 33 for cut-offs), C1 (summation scheme, from the
+  solvent's quadrupole-moment trace γ, Eqs. 34–42), C2 (Eq. 46, and the SPC fit of Eq. 47 for
+  lattice sums). Schemes LS (tinfoil), CM, BM (= GROMOS RF with charge groups; `RF`), BA;
+  EPSRF 0 is conducting, as in the engine. Quadratic terms scale with q_B² − q_A², linear ones
+  with q_B − q_A. γ is Eq. 35 over the model's charges: SPC 0.0082, SPC/E 0.008476, TIP3P
+  0.0076414, TIP4P 0.0092948 e nm². `ChargeCorrection::beyond_pb` = C1 + C2 is what to add on
+  top of `dGslv_pbsolv`, whose correction already holds the polarisation terms (B for LS,
+  A1 + A2 + B for RF); `total` is all five, for a sphere without the PB solves.
+- Python: `gromos.analysis.charge_correction(delta_q, box_edge, cutoff, eps_rf, solvent="SPC",
+  *, scheme="RF", charge_a=0.0, ion_radius=0.2, eps_solvent=78.0, eps_model=None,
+  density=33.427, quadrupole_trace=None, four_pi_eps_i=138.9354)` → dict `a1, a2, b, c1, c2,
+  total, beyond_pb, delta_phi_odl, quadrupole_trace` (kJ/mol), over the private binding
+  `_charge_correction` (stub in `gromos.pyi`). Refused with `ValueError`: an unknown solvent or
+  scheme (GM/GA are not covered), C2 for a lattice sum in anything but SPC, A2 without a model
+  permittivity (tabulated for SPC only, 66.6), a cut-off not beyond the ion radius.
+- User guide: "Correcting a charge change" in `docs/user-guide/free-energy.md` — the five
+  terms, which of them `dGslv_pbsolv` provides, and the chain raw ΔG (TI/BAR/MBAR) +
+  `dGslv_pbsolv` + `charge_correction(...)["beyond_pb"]`.
+
+### Added (FE-11 — the reaction-field self term and the Na⁺ chain)
+
+- **`gromos_analysis::free_energy::rf_self_energy`**: ΔG_self = −½·FPEPSI·(1 − C_rf/2)/R_C ·
+  Σ_i (q_B,i² − q_A,i²), the GROMOS reaction-field self term that a raw TI/BAR/MBAR ΔG of a
+  charge change contains exactly (gromosXX `nonbonded_term.cc:79-99`; the perturbed loop books
+  its λ-derivative). C_rf comes from gromos-forces' `CRFParameters::new` (RCRF, EPSRF, κ, EPSCS),
+  not a copy. `ChargeCorrection::corrected(raw, rf_self)` = [raw − ΔG_self] + A1 + A2 + B + C1
+  + C2 and `corrected_with_pb(raw, rf_self, pb_a, pb_b)` = [raw − ΔG_self] + PB(B) − PB(A) + C1
+  + C2: the Kastenholz–Hünenberger scheme is built for a raw ΔG without the self term (Reif,
+  Hünenberger & Oostenbrink, JCTC 8, 3705 (2012); Reif & Oostenbrink, JCC 35, 227 (2014)).
+- Python: `gromos.analysis.rf_self_energy(charges_a, charges_b, cutoff, eps_rf, *, kappa=0.0,
+  eps_cs=1.0, four_pi_eps_i=138.9354)` (charges as floats or per-atom sequences; binding
+  `_rf_self_energy`, stub in `gromos.pyi`) and `gromos.analysis.corrected_charging_dg(raw_dg,
+  rf_self, correction, *, pb_a=None, pb_b=None)`.
+- **FE-11, the chain end to end**: `scripts/na_hydration.py` (build, prepare, windows, analyse,
+  pb, correct) and `docs/free_energy_validation/na_{em,eq,window}.imd`: Na⁺ → dummy in 878 SPC
+  (3.0 nm, NPT 298 K, RF RCRF 1.4 / EPSRF 61), 11 windows × 20 ps, n = 3, `PRECALCLAM 11 0 1`;
+  results in `docs/free_energy_validation.md` (raw outputs `~/.cache/gromos-rs-item-1.8/fe11/`).
+
+### Changed (FE-12 — housekeeping; FE-11 documentation)
+
+- **Perturbation topologies are checked as gromosXX checks them.** The pre-2005 block names
+  `PERTBOND03`, `PERTBANGLE03`, `PERTIMPDIHEDRAL03`, `PERTATOMPAIR03` and `PERTATOM03` were read as
+  their successors; `parse_pttopo` now refuses them with gromosXX's message ("The PERTBOND03 block
+  was renamed to PERTBONDSTRETCH.", `in_perturbation.cc:164-170` and the four like it).
+  `PERTDIHEDRAL03`, which gromosXX never reads and so refuses as "block PERTDIHEDRAL03 not
+  supported!" (`:1809-1813`), is refused with that message. No checked-in `.ptp` uses any of them.
+- **A perturbed bond must exist.** `Topology::apply_perturbation` returns
+  `Result<NetCharge, String>` and refuses, before changing the topology, a `PERTBONDSTRETCH(H)` or
+  `PERTBONDSOFT` bond that is not a bond of the topology: "Perturbation of a non-existing bond in
+  PERTBONDSTRETCH block." (`in_perturbation.cc:232-247, 271-286, 420-425`), with the atom numbers
+  appended. As gromosXX's `bondMatcher` does, the pair is matched in file order (`2 1` does not
+  find bond `1 2`). `md`/`RunRecipe` report it as an inconsistent input, Python's
+  `Topology.apply_perturbation` and `Perturbation` raise. Every reference `.ptp` passes the check
+  (its perturbed bonds are all topology bonds, in topology order).
+- **The Python package takes the workspace version.** `py-gromos/pyproject.toml` declared
+  `version = "0.1.0"` against the workspace's 0.0.64; it now declares `dynamic = ["version"]` and
+  maturin reads it from `py-gromos/Cargo.toml` (`version.workspace = true`), so
+  `importlib.metadata.version("gromos")` and `gromos.__version__` give the workspace version (0.0.66 here). `uv.lock` drops
+  the static version.
+- **CI runs on pushes to `develop`** as well as `main` and `ci` (`ci.yml`, `test-rust.yml`,
+  `test-python.yml`; pull requests already ran for every target branch). `release.yml` unchanged.
+- The free-energy user guide says that slow growth (DLAMT ≠ 0) runs and warns when λ leaves
+  [0, 1], that NSCALE ≠ 0 is refused, and that the two checks above refuse a `.ptp`.
+- **Every `.ptp` block the reader does not apply is refused** ("block X not supported!",
+  gromosXX `in_perturbation.cc:1803-1820`). Before, such a block was dropped silently. This
+  covers `PERTCONSTRAINT03` and `PERTPOLPARAM`, which gromosXX reads and gromos-rs does not
+  model, and replaces the special case for `PERTDIHEDRAL03`. `LAMBDADEP` gets gromosXX's own
+  message ("… is deprecated. Use LAMBDAS block in the input file"). `SCALEDINTERACTIONS` still
+  passes: NSCALE ≠ 0 is refused by the run, and `check/lambdas.pttopo` (the check-suite input,
+  run with NSCALE forced to 0) carries the block. No other checked-in `.ptp`/`.pttopo`/`.mpt`
+  has a block outside the read set.
+- User guide "Correcting a charge change": the "Open question" admonition is replaced by the
+  settled convention. The raw ΔG holds ΔG_self, which comes off before the correction terms; the
+  chain is written out with `rf_self_energy` and `corrected_charging_dg`. The sentence that the
+  self term "already contains part of the continuum response that A1 describes" is gone: it does
+  not. For q 0 → 1 at R_C 1.4 nm ΔG_self is −73.83 / −73.88 / −73.96 kJ/mol (EPSRF 61 / 66.6 /
+  78.5), next to A1 = −48.81 / −48.88 / −48.99, so leaving it in shifts a monovalent ion by
+  about 74 kJ/mol.
+- `.claude/porting.md`: gromosXX's "Chris: CHECK!" at `perturbed_nonbonded_term.cc:749-751`
+  (and `:596-598`) is a false alarm. The `+q_A²` self-term correction is λ-independent and the
+  B state enters through the λ-weighted terms whose derivative is in `de_rf`.
+
+### Corrected
+
+- **Soft-core terms made from nothing.** A `PERTBONDSOFT`, `PERTANGLESOFT` or
+  `PERTIMPROPERDIHSOFT` line with state-A type 0 (a bond, angle or improper that exists only in
+  state B) underflowed `type − 1` (a panic in debug, a wrapped index in release). Type 0 now
+  means "absent in that state" in either column, as in gromosXX (`in_perturbation.cc:435-449,
+  765-777, 1003-1015`): `SoftBond`/`SoftAngle`/`SoftImproper::a_type` is `Option<usize>` like
+  `b_type`, and the soft kernels give the absent state K = 0 and the other state's equilibrium
+  value, the dummy type gromosXX appends (`perturbed_soft_bond_interaction.cc:249-263` and the
+  angle and improper equivalents). Type 0 in both columns is refused ("Conversion from bond type
+  0 to bond type 0 in PERTBONDSOFT block."). A soft bond being made is exempt from the
+  non-existing-bond check, as gromosXX's `t_A > 0` condition makes it, and the reader logs
+  gromosXX's "You are making / breaking a bond" warnings. No reference uses type 0, so no
+  output changes.
+
+### Verified
+
+- Checked against the paper's Tables III and IV (Na⁺ in SPC, R_I = 0.2 nm, L = [(N_w + 1)/ρ]^⅓):
+  A1, C1, and B, C1, C2 of all ten lattice-sum boxes to 0.01 kJ/mol; B of all 34 CM/BM/BA rows
+  to 0.02; A2 for BM within 0.06. **Not reproduced to 0.1:** A2 for CM, where our converged
+  solve lies 0.07–0.25 kJ/mol below Table III (24.23 vs 24.48 at R_C = 0.8 nm, 13.47 vs 13.54
+  at 1.6), the gap shrinking with R_C; the same solver unconverged (spacing R_C/80) lands within
+  0.12, so it is most likely the table's discretisation. That test runs at 0.26 kJ/mol and says
+  so. The corrected ΔG°_slv (ΔG_chg + the five terms + 13.62) of all 44 LS/CM/BM/BA rows comes
+  out within 0.06 kJ/mol of the tables, CM within 0.26 (its A2); six rows are pinned in the test.
+  `py-gromos/tests/test_charge_correction.py`: a row of each scheme, the charge-change scaling,
+  other water models, the refusals.
+- `rf_self_energy` gives −73.825 / −73.875 / −73.959 kJ/mol for q 0 → 1 (R_C 1.4, κ 0, EPSCS 1;
+  EPSRF 61 / 66.6 / 78.5) to 0.01 in Rust and Python. It equals the trapezoid TI integral of
+  gromos-forces' `perturbed_self_energy_correction` dH/dλ on a one-atom change (q 1 → −0.3,
+  κ 0.7): 1e-12 for NLAM 1 on 11 points, 1e-5 for NLAM 2 on 1001. It also equals the end-state
+  energy difference to 1e-12.
+- **FE-11** (n = 3, 160 of 200 frames per window kept): raw ΔG(Na⁺ → dummy) BAR 388.31 ± 2.39,
+  MBAR 388.13 ± 2.27, TI 384.24 ± 1.92 kJ/mol (TI's trapezoid misses 4 kJ/mol at the charged
+  end, where ⟨∂H/∂λ⟩ peaks at 1059 kJ/mol at λ 0.1). ΔG_self +73.83, `dGslv_pbsolv` PB(B) − PB(A)
+  +77.08, C1 +77.59, ΔG_cmp 7.95. ΔG°_slv(Na⁺) = −461.20 ± 2.39 (BAR), −461.02 ± 2.27 (MBAR)
+  kJ/mol, against Kastenholz & Hünenberger's methodology-independent −466.5 ± 1.4 (their method
+  spread 11.6). That is 5 kJ/mol, about 2.7 standard errors, with a different Na⁺ LJ model and
+  20-ps windows. Without the self-term subtraction the value would be −535.0. Wall time 810 s,
+  probe included (15-minute budget). The CH₄ → dummy control (§7) needs no correction.
+- Paper oddities found on the way (not ported): Table III prints L = 3.13 nm for the LS row with
+  N_w = 2048 (the box is 3.94 nm; its B and C1 are 3.94's), Table IV prints A1 = −557.15 for
+  −57.15 (BA, N_w = 1024, R_C = 1.2), and Table V lists C1 = −79.76 (= −ΔΦ_ODL) for every GM and
+  GA row although Eqs. 43–44 depend on R_C and R_I (about −72.7 kJ/mol at R_C = 0.8 nm as we
+  read Eq. 43).
+
+### Not done (left for later)
+
+- gromosXX's other existence checks: perturbing a non-existing angle, improper or proper dihedral
+  (`in_perturbation.cc:643, 882, 1103`) is still not refused.
+- `SCALEDINTERACTIONS` is accepted with NSCALE = 0, where gromosXX errors (its message
+  "Scaling turned on but no SCALEDINTERACTIONS block." sits in the scaling-off branch,
+  `in_perturbation.cc:1421-1427`).
+- FE-11 is a few-kJ/mol chain check, not a converged ΔG: 20-ps windows, 11 λ points (TI biased
+  by 4 kJ/mol), one box and cut-off, and not the paper's Na⁺ parameters.
+
+## [0.0.65] (2026-10-16)
+
+**A charge-changing gromosXX reference set, lattice sums refused** (1.8 FE-9, FE-8 plain-MD
+half): Na⁺ → neutral dummy under reaction field is pinned by four native references, and NLRELE
+2/3 is refused for every run instead of running the reaction field silently. No engine output
+changes; 120 references (119 pass, `aladip_gamd` ignored).
+
+### Added (FE-9 — charge-changing references)
+
+- `shared/nacl_na_dummy.ptp`: Na⁺ (IAC 34, +1) → dummy (IAC 19 `DUM`, 0), mass unchanged,
+  α_LJ = α_CRF = 0.5; ΔQ = −1 (solute A 0, B −1). Run in `nacl_water_box` (62 atoms, 20 SPC,
+  NLRELE 1 with the box's RCRF 0.9 and EPSRF 61, RCUTL 0.9 in a 2 nm box), RLAM 0.5, 20 steps,
+  NTWE = NTWG = 1, native md++ (`scripts/regen_gromosXX_references.py`):
+  - `nacl_water_fep`: plain TI;
+  - `nacl_water_fep_precalc`: `PRECALCLAM 11 0 1`;
+  - `nacl_water_fep_lambdas`: `LAMBDAS` on, vdw and crf rows with different polynomials on
+    (1,1) and (1,2) (λ′ = 0.25 / 0.225 for vdw, 0.175 / 0.3125 for crf at λ = 0.5);
+  - `nacl_water_fep_14`: `nacl_water_fep_precalc` on `shared/nacl_water_box_14.topo`, where the
+    Na–Cl pair is a 1-4 pair instead of an exclusion (`nacl_water_box` has no 1-4 pair).
+  They pin the perturbed RF self term, the RF excluded Na–Cl pair and the perturbed 1-4 pair,
+  terms that only a charge change moves. gromosXX writes no column of their own for them: they
+  are booked in the (1,1) cells of the `# nonbonded` rows (frame-0 dH/dλ CRF −89.58 kJ/mol with
+  the exclusion, +208.66 as a 1-4 pair) and in `A_e_crf`/`B_e_crf` of the `# precalclam` rows,
+  which the harness compares whole-block with every other value.
+- Registered in `test_gromosXX_references.rs` and `py-gromos/tests/test_gromosXX_references.py`.
+
+### Added (FE-8, plain MD — lattice sums)
+
+- `gromos_run::plan::check_electrostatics`, called by `build_plan` and
+  `build_sequence_from_plan` before the perturbation checks: `NONBONDED NLRELE = 2: lattice-sum
+  electrostatics (NLRELE 2/3) are not implemented (the reaction field would run in their place);
+  use NLRELE 1`. It holds for unperturbed runs too; until now only the FEP, EDS, A-EDS, slow
+  growth and PRECALCLAM arms refused it, and a plain run with NLRELE 2/3 ran the reaction field.
+  No reference input (124 `.in`/`.imd` files) uses NLRELE 2/3. Test
+  `lattice_sum_electrostatics_are_refused_for_an_unperturbed_run` (gromos-run, on
+  `nacl_water_box`: both paths refuse 2 and 3, −1/0/1 pass).
+
+### Verified
+
+- The four new references pass at the global tolerances on the first run (energies, `.trg`,
+  forces, trajectory, final configuration); changing α_CRF in the `.ptp` to 0.4 fails all three
+  original ones in `# nonbonded`, `# totals` and `# precalclam`. `md` prints `Perturbation net
+  charge: A 0.000 B -1.000 (ΔQ = -1.000)` and the reaction-field warning for each.
+- References: 119 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed;
+  gromos-run all green (`recipe_roundtrip` included); clippy on gromos-run/gromos-md only the
+  two known doc-list warnings; `cargo fmt --check` clean; `pytest
+  tests/test_gromosXX_references.py` 419 passed / 75 skipped (the four new systems in all four
+  comparisons).
+
+## [0.0.64] (2026-10-16)
+
+**A charge change from Python, end to end** (1.8 step 5 and the step-4b gate): a perturbation is
+made in Python by gromos-tools' `make_pt_top` (`Perturbation.mutate`), its λ windows run in
+worker processes, TI, BAR and MBAR agree, and `dGslv_pbsolv` on the end states gives the
+finite-size correction, matching gromos++ on the same state. Slow growth that takes λ out of
+[0, 1] now warns. No engine output changes; 116 references (115 pass, `aladip_gamd` ignored).
+
+### Added (1.8 step 5 — perturbations, parallel windows)
+
+- **`gromos.free_energy.Perturbation`**: `mutate(system, atoms, charge_b=, iac_b=, mass_b=,
+  alpha_lj=1.51, alpha_crf=0.5)` (state B = the topology with new charges, 1-based IACs or masses
+  on a gromos++ atom specifier or 0-based indices, one value or one per atom; the `.ptp` written
+  by `make_pt_top`), `from_ptp(path, topology=None)`; `.text`, `.net_charge_a`/`.net_charge_b`
+  (`Topology::apply_perturbation` on a copy: what `Topology.apply_perturbation` returns),
+  `.delta_charge`,
+  `.write(path)`, `.end_state(system, "A"|"B")` (`pt_top`). No perturbation logic in Python:
+  the private bindings `_make_pt_top_mutate`, `_ptp_net_charge`, `_pt_top`.
+- **Typed verbs** in gromos-tools: `make_pt_top::make_pt_top` (two topologies → `.ptp` text and
+  each perturbed molecule's net charge; `run` calls it), `make_pt_top::mutate` (+ `Mutation`:
+  refuses no atoms, solvent atoms, an atom twice, an IAC beyond the topology's types, a mass ≤ 0,
+  a value count that is neither one nor one per atom), `pt_top::pt_top` (state B of a topology;
+  `run` calls it). gromos-io: `ptp::parse_pttopo(&str)` (`read_pttopo` reads the file and calls
+  it) and `ptp::write_ptp(&mut dyn Write, …)` (`PtpWriter` delegates to it).
+- **`run_windows(..., perturbation=, parallel=N)`**: the perturbation is written to
+  `<workdir>/perturbation.ptp` (a temporary file without `workdir`) and given to every window as
+  `inputs["pttopo"]`; a recipe that names one already is refused. `parallel=N` runs N windows at
+  a time in *spawn* worker processes (`concurrent.futures.ProcessPoolExecutor`): `Simulation` is
+  `unsendable` and keeps the GIL while it runs, and `Algorithm` is not `Send`, so threads would
+  take turns. The worker rebuilds the system with `System.from_files` and runs the window as the
+  sequential loop does: the numbers are bit-identical (the parallel kernels' sums depend on the
+  thread count, which is the same in every process; `RAYON_NUM_THREADS` 1, 4 and 16 differ by up
+  to 2·10⁻⁹ kJ/mol on 60 steps of `ch4_water_fep`, 16 twice by 0).
+- **`System` pickles** when made by `System.from_files` (as `from_files` on its absolute paths;
+  the class is now `gromos.System` to pickle); one built in memory raises `TypeError`, and
+  `run_windows(parallel>1)` says so before starting workers.
+- `FreeEnergyWindows.window_statistics(skip)`: per window λ, ⟨∂H/∂λ⟩, its block-averaging error
+  and the sample count (what `report()` prints).
+- **`scripts/ti_ch4.py`** is a wrapper over the module: one `LambdaSchedule` over the reference
+  recipe, gromos-rs through `run_windows` (`--parallel` new; the other flags kept), gromosXX on
+  the same recipes written by `Recipe.to_imd`, its files through `gromos.analysis` as before.
+  Windows are kept per engine and kind (`<workdir>/<engine>/plain|precalclam<N>`). The table's
+  ⟨∂H/∂λ⟩ column is the `.trg` mean for every estimator (it was `ext_ti_ana`'s prediction at
+  the window's λ for BAR/MBAR). Same numbers on the 11-window, 1000-step demo (`--engine
+  gromos-rs`): TI −9.26 ± 0.49, BAR −10.30 ± 1.84, MBAR −9.96 ± 0.62 kJ/mol before and after
+  (MBAR −9.963150325264 → −9.963150325343, the energies now from memory instead of the
+  `.tre`'s printed digits); every window's mean identical. On 100 steps
+  both engines give the same ΔG to the printed digit (TI −5.49, BAR −23.05, MBAR −24.08).
+
+### Added (1.8 step 4b gate — `dGslv_pbsolv` on unit charges)
+
+- gromos++ oracle (`~/.cache/gromos-rs-item-1.8/pb_oracle/`, the patched build) on one Na⁺
+  (`na.top`, the LiveCoMS t_02 54A8 topology) and `ch4_water_fep`'s CH4 with a unit charge
+  (`ch4q.top`: `pt_top` with `ch4_plus.ptp`, written by `Perturbation.mutate`), both at the CH4's
+  place in its box of 999 SPC, `@schemeELEC LS` and `RF` (EPSRF 78.5, RCRF 1.4), grids 32³ and
+  50³: `tests/data/dgslv_pbsolv/{na,ch4q}_{ls,rf}.{stdout,log}` + README.
+  `dgslv_pbsolv_unit_charges_in_spc_match_gromospp`: stdout and every `DGRESULT` byte-identical;
+  the RF logs differ only in the sign of printed zeros (`-0.000`), which the test allows.
+  Corrections (CB/NPBC − LS/PBC [+ LS/PBC FFT − RF/PBC FFT]): Na⁺ −60.873 (LS), −77.739 (RF);
+  CH4⁺ −60.926 (LS), −77.986 (RF) kJ/mol.
+- `py-gromos/tests/test_free_energy_charge.py`: CH4 → CH4⁺ in 999 SPC by `Perturbation.mutate`
+  (α 0), seven windows λ = k/6 on a seven-point `PRECALCLAM` grid, 600 steps each from 300 K,
+  four worker processes; ⟨∂H/∂λ⟩ falls with λ; TI, BAR and MBAR (20 frames dropped) within twice
+  their combined errors, about −242 kJ/mol; `dGslv_pbsolv` on both end states through
+  `gromos.analysis.dgslv_pbsolv` (`Perturbation.end_state` written out): state A 0, state B each
+  free energy within 0.01 kJ/mol of gromos++'s, correction −77.985 kJ/mol. Also: parallel windows
+  equal the sequential ones (every energy and `PRECALCLAM` array, `bar()`, `ti()`); `mutate` is
+  the oracle's `.ptp` byte for byte and `from_ptp` reads it back with the charges; the refusals.
+- porting.md: the check of `dGslv_pbsolv`'s hard-coded constants against gromos-core (1/(4πε₀)
+  from the topology, gromos++'s 138.935484611 only for PQR input; k_B and N_A unused; the water
+  defaults ε 78.4, probe 0.14 nm, hydrogen 0.05 nm are gromos++'s, gromos-core has none).
+
+### Added (1.8 — slow growth out of range)
+
+- `gromos_run::advance_lambda` returns the new λ on the step that takes it out of [0, 1] (from
+  inside; 10⁻⁹ tolerance, `lambda_in_range`), and `prepare_system` notes
+  `PrepareNote::LambdaOutOfRange { lambda }` when a run starts outside [0, 1] (a `PERTDATA` λ;
+  RLAM is checked). `md` prints both as warnings, `Simulation` raises a Python `UserWarning`
+  (constructor, `step`, `run`), with one text (`lambda_warning`): `slow growth takes lambda out
+  of [0, 1] after step 39: lambda = 1.005000; every perturbed term and mass is extrapolated past
+  the end state` for `aladip_vacuum_fep_slowgrowth_cont`. Never a refusal: λ stays unbounded as
+  in gromosXX and the outputs are unchanged. A warning at the crossing rather than a prediction
+  from NSTLIM, because a minimisation stops early (`aladip_vacuum_em_slowgrowth`: NSTLIM 500, `md`
+  stops at 13 steps, inside [0, 1]; Python runs all 500 and warns after step 218). The Python
+  reference and parity tests ignore this one warning (pytest turns warnings into errors).
+- Tests: `a_pertdata_lambda_outside_zero_one_is_a_warning` (gromos-run), the crossing and its
+  one report in `slow_growth_moves_lambda_and_the_masses_without_a_bound`,
+  `test_slow_growth_past_the_end_state_warns_and_runs` (Python: once, after step 5; none when λ
+  ends on 1).
+
+### Changed
+
+- `gromos-integrators/src/fep.rs`'s header no longer says slow growth lives there: it names
+  `gromos_run::advance_lambda` (unbounded λ, the new warning) and says `LambdaController`
+  (replica code) clamps and is not what `md` runs.
+- `make_pt_top` writes the `.ptp` with `std::fs::write` of the verb's text (an error now says
+  "Error writing perturbation topology" where it said "Error creating output file").
+
+### Verified
+
+- References: 115 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed;
+  `aeds_runs` 4 passed (`cargo test --release -p gromos-md`, the `md` binary rebuilt).
+- tools, analysis, run, pyo3-gromos: 211 tests green (`gromospp_references` 29, two `dGslv_pbsolv`
+  tests among them; `topology_references` 9); clippy on the touched crates only the two known
+  doc-list warnings (forces, run); `cargo fmt --check` clean; G6/G11 lint greps clean.
+- `pytest` 923 passed / 86 skipped (`test_free_energy_charge.py` 6, `test_free_energy.py` 25);
+  stubtest clean; ruff and mypy clean on the touched Python (`ruff format` differences in
+  `test_gromosXX_references.py`, `test_free_energy.py` and `analysis.py` predate this version).
+
+### Found (gromosXX defect D34, reproduced)
+
+- The gap between `ext_ti_ana`'s predicted ⟨∂H/∂λ⟩ and the `.trg` mean on gromosXX's own
+  100-step files (`scripts/ti_ch4.py --engine both --steps 100 --lambdas 0,0.5,1 --ntwg 2
+  --estimator bar`: 2.058 vs 2.550 kJ/mol at λ = 0, NSNB 5, NTWG 2) is the reproduced
+  PRECALCLAM long-range quirk (porting.md), now dossier D34: on an output step after a pairlist
+  step that was not one, the λ_k rows lack the long-range terms (two of every five frames short
+  by about 1.25 kJ/mol in `A_e_lj`), so BAR/MBAR from them is biased in both engines alike; the
+  bias is zero when NTWG is a multiple of NSNB. Now a warning, never a refusal:
+  `PrepareNote::PrecalclamLongRangeGaps { nsnb, ntwg }` (`gromos_run::precalclam_longrange_gaps`:
+  a twin-range pairlist with neither of NSNB and NTWG dividing the other), printed by `md`; a
+  `UserWarning` from `Simulation`, once from `run_windows` and from `FreeEnergyWindows.bar()` /
+  `.mbar()` on such windows (one text, `precalclam_longrange_warning`). Tests:
+  `precalclam_with_interleaved_pairlist_and_output_steps_is_a_warning` (gromos-run),
+  `test_twin_range_precalclam_with_interleaved_output_warns_once` (Python); the reference and
+  parity tests expect or ignore it for `ch4_water_fep_precalc_twinrange`.
+
+### Not done (left for later)
+
+- `Perturbation` covers atom parameters (IAC, mass, charge); bonded and atom-pair perturbations
+  still come from a `.ptp` (`from_ptp`): the writer leaves those blocks empty, as before.
+- `PrepareNote::NetChargeChanged` still reaches Python only as `Perturbation.delta_charge`;
+  `Simulation` raises no warning for it.
+- The step-4b gate's (ii) is the charged CH4 of `ch4_water_fep`, as the gate says; the t_02
+  `md_TI_ASA_Na` set is not run.
+- The definition of done's other parts outside step 5: EDS through the recipe is in (0.0.60), the
+  plain-FEP benchmark ratios were not re-measured here (no engine change).
+
+### Item 1.8 close-out
+
+- **Step-6 gate, `eds_update_1`** (2026-10-16, the 0.0.63 tree): gromos++ `ene_ana @prop eds_vr
+  e1..eN` → `eds_update_1` (the unpatched gromos++ build, `md++/data/ene_ana.md++.lib`) on
+  gromos-rs's and gromosXX's `.tre` of `aladip_vacuum_eds`, `aladip_vacuum_eds3`,
+  `aladip_vacuum_eds_multis_fixed`, `aladip_vacuum_eds_pairs_fixed` and `two_waters_eds` (FORMS
+  1/2/3, two to four states): stdout, stderr and `tree_new.dat` byte-identical, and the
+  `ene_ana` series already byte-identical. The series are 10 frames long, so this shows the
+  pipeline is the same, not converged parameters; no A-EDS reference is covered.
+- **Step-3 gate (4)**: BENCHMARKING.md §7 now gives TI, BAR and MBAR for CH4 → dummy on both
+  engines, 11 windows × 20 ps, n = 3 replicas (mean ± sample std, gromos-rs / gromosXX): TI
+  −8.35 ± 2.09 / −10.76 ± 2.63, BAR −8.37 ± 2.11 / −10.56 ± 2.03, MBAR −8.43 ± 2.14 /
+  −10.69 ± 2.02 kJ/mol. The three estimators agree within every replica (largest difference 0.65
+  of the combined error), the engines within the replica spread (1.2–1.3 standard errors of the
+  difference). NTWG 10 is a multiple of NSNB 5, so the D34 gap does not arise. The single-run
+  errors are about half the replica std (MBAR's a tenth). Raw outputs and commands:
+  `~/.cache/gromos-rs-item-1.8/bench_fe/`.
+- **A4**: pymbar was never added as a py-gromos dependency. The MBAR gate (step 3 (3)) compares
+  against a fixture pymbar 4.0.3 dumped once (`crates/gromos-analysis/tests/data/mbar/`, made by
+  `make_reference.py` with pymbar installed by hand).
+
+## [0.0.63] (2026-10-16)
+
+**Three A-EDS defects of gromosXX corrected by default** (1.8): the energy columns are the
+parameters a frame's V_R* used (D16), the FORM 5/6 prevalences are a log-sum-exp (D25), and the
+E_min target is a sampled state (D32). Each has a recipe switch that reproduces gromosXX, and the
+native search references now set it. A patched gromosXX (D16, D25, D32) is the oracle for nine
+new references. Three other behaviours stay reproduced: the GROMOS manuals document them, so
+they are not defects. 116 references (115 pass, `aladip_gamd` ignored); the 107 earlier ones produce
+byte-identical output to the 0.0.62 binary.
+
+### Added (1.8 — A-EDS corrections)
+
+- **Recipe switches** (`RunRecipe::aeds`, no `.imd` token; `md @recipe_set`, Python
+  `Recipe.update(aeds={...})`, `[recipe_overrides]` in a reference's input.toml):
+  `aeds.energy_columns = "intended" | "gromosxx-post-update"`, `aeds.prevalence = "intended" |
+  "gromosxx-plain-exp"`, `aeds.target_state = "intended" | "gromosxx-state1-default"`. They go
+  through `AedsPlan` to `gromos_integrators::eds::AedsParams` (`AedsColumns`, `AedsPrevalence`,
+  `AedsTarget`). The recipe echo lists them only when they are not `"intended"`.
+- **Patched oracle**: `tests/gromosXX_references/patches/D16_aeds_energy_columns.patch`,
+  `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`, each a few lines of `eds.cc`.
+  Each applies alone to 247c95c4. All three are built into `.local/gromosXX-patched` next to
+  D1 and D2 (`patches/BUILD.md`). With that binary, the four D1/D2 `_fixed` references
+  regenerate byte for byte (`git status` clean).
+- References: `aladip_vacuum_aeds_f6_ovf` (native; FORM 6 with EIR 0 6000 0, where
+  e^{−β(V_2 − E_2^R)} overflows every step and gromosXX's offsets stay at (−2000, 4000, −2000)).
+  Patched oracle: `aladip_vacuum_aeds_f2_fixed`, `_f4_fixed`, `_f5_fixed`, `_f6_fixed`,
+  `_f6_ovf_fixed` (the offsets move, −0.0267 kJ/mol per step for state 2), `_sigma0_fixed`
+  (G and σ_G come from state 2, not from the never-visited state 1's 0) and
+  `_cont1_fixed`/`_cont2_fixed` (the corrected search continued through `AEDSSEARCH`). They
+  are registered in both suites.
+- Tests independent of the patched oracle:
+  - `eds.rs::log_sum_exp_prevalences_match_where_finite_and_survive_overflow`: equal to the
+    plain formula to 1e-15 where it is finite; the hand-computed step where it overflows or
+    underflows.
+  - `eds.rs::target_is_a_sampled_state_not_an_unvisited_state_1`: V_2 = 6, 8, 4 gives
+    G = 6, σ_G = 2, where gromosXX gives 0, 0.
+  - `aeds_runs.rs::a_frame_carries_the_parameters_its_reference_energy_used`: V_mix and V_R*
+    rebuilt from a frame's own columns fit within 1e-7 by default; with gromosXX's columns
+    only the previous frame's fit, and the other choice misses by > 1e-3.
+  - `aeds_runs.rs::the_e_min_target_is_a_sampled_state`: the RESTREMIN 0 input that gromosXX
+    turns into −∞ and then NaN runs, and G is the running mean of V_2.
+  - `recipe_roundtrip.rs::aeds_switches_are_set_by_path_and_echoed_only_when_not_the_default`.
+  - `aeds_replay.rs` replays the `_fixed` references under the intended rules (≤ 8.0e-10
+    relative) and `_f6_ovf` under the released ones.
+
+### Changed (default behaviour)
+
+- **Default A-EDS search output differs from 0.0.60-0.0.62** for FORMS 2-6. FORM 1 is
+  unchanged.
+  - `eds_emax`, `eds_emin` and the `# eds` offsets of a frame are now the values before that
+    step's update, i.e. the ones its `eds_vmix`/`eds_vr` used. Frame 0 shows the input (or
+    initialised) values.
+  - FORMS 3/4/5: G and σ_G (and so E_min) come from a state visited more than once wherever
+    gromosXX would pick a state 1 that was never visited.
+  - FORMS 5/6: prevalences differ at rounding level, and are finite where gromosXX's are NaN.
+  - The final `AEDSSEARCH` block is still the state after the last update, so a run continues
+    as before.
+- To reproduce 0.0.62 exactly, set the switches. The seven native search references now carry
+  them in their input.toml:
+
+  | reference | switches set |
+  |---|---|
+  | `aladip_vacuum_aeds_f2` | `energy_columns` |
+  | `aladip_vacuum_aeds_f4` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_f5` | `energy_columns`, `prevalence`, `target_state` |
+  | `aladip_vacuum_aeds_f6` | `energy_columns`, `prevalence` |
+  | `aladip_vacuum_aeds_sigma0` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_cont1` | `energy_columns`, `target_state` |
+  | `aladip_vacuum_aeds_cont2` | `energy_columns`, `target_state` |
+
+  `_below`, `_inside` and `_above` (FORM 1) need none. Measured: without its switches, each of
+  the seven fails, through `energy_columns` (all seven) and `target_state` (f4, f5, sigma0,
+  cont1). `prevalence` alone stays within tolerance on f5/f6 and is set for bit-identity.
+- `track_state` takes the target rule, and `advanced_offset_update` the prevalence rule.
+  `AedsParams` has three new fields.
+- `aeds_runs.rs`: the D15 refusal (BMAXTYPE 2, σ = 0) is now reached with
+  `aeds.target_state = gromosxx-state1-default`. Under the intended target the same input runs.
+  D15 stays refused for whichever target has no variance.
+
+### Corrected gromosXX defects
+
+- **D16** (`eds.cc:368-372`, dossier D16 bullet 1): A-EDS energy columns were written after
+  the search update. The LiveCoMS t_05 `scripts/search.py` rebuilds V_i* and V_R* from the
+  same frame's `e{i}`, `e{i}r`, `eds_emin`, `eds_emax` and `eds_vr`, which only works with the
+  pre-update columns. `eds_globmin`/`eds_globminfluc` stay this step's statistics.
+- **D25** (`eds.cc:339-343`, dossier D25): FORM 5/6 prevalences were plain exponentials. They
+  give NaN once −β(V_i − E_i^R) > 709.78 (V_i − E_i^R < −1770.6 kJ/mol at 300 K), or when all
+  are below −745; the offsets then freeze silently. The log-sum-exp is the same real number.
+- **D32** (`eds.cc:252-261`, new row): state 1 was the starting candidate for the E_min target
+  whatever its visit count. A never-visited state 1 (mean 0, σ 0) then stays the target while
+  every sampled state has a mean > 0. That gives a fake G and, with BMAXTYPE 2, the b_max = 0
+  of D15. Vol. 2 takes the minimum over the averages of sampled states. The "more than one
+  visit" rule gromosXX applies to states 2..N now applies to state 1 too. When no state
+  qualifies, state 1 is still used, as in gromosXX: no source says what should happen there.
+
+### Reproduced behaviour (documented in GROMOS Vol. 2, not defects)
+
+- **FORM 5/6 offset step ASTEPS·Δt** (`:355`, D33; 0.0.60 first called it "D17", which is the
+  dossier's extended-TI 1-4 scaling).
+  It is an energy if ASTEPS is a rate in kJ mol⁻¹ ps⁻¹: Vol. 4 says "determines the changing
+  rate of the offset" and LiveCoMS t_05 says "a higher number means a faster change". It is
+  a units error if ASTEPS is the step count it is in FORMS 2/4. No paper describes FORMS 5/6.
+- **τ ramp per job** (`:186`). Vol. 2 says "t_tot is the total simulation time of the run",
+  which is what gromosXX does. Perthold, Petrov & Oostenbrink (JCIM 2020) ramp "over the
+  nonequilibrium parameter search". A whole-search ramp needs a total length and an elapsed
+  step count, which neither the input nor `AEDSSEARCH` carries.
+- **The mean of V_i − E_i^R over moving offsets** (`:246`). Vol. 2 writes the average of
+  V_i − E_i^R without saying which E_i^R. ⟨V_i⟩ − E_i^R(now) is the other reading, and it
+  matches FORMS 2/4/5 (σ is that of V_i).
+
+### Verified
+
+- References: 115 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed; `aeds_runs` 4 passed; `aeds_replay` 7 passed.
+- All 107 earlier references, with the reproducing switches in their input.toml, give
+  byte-identical output to the 0.0.62 binary (built from `git archive HEAD`). That covers 468
+  files, every one except `<tre>.recipe.toml`, with the version and the reference path in the
+  provenance lines normalised. `aladip_gamd`'s `gamd_*.dat` were compared in separate working
+  directories.
+- Each `_fixed` reference fails when the switch for a correction it exercises is set to
+  gromosXX's value: `energy_columns` for all but `_sigma0_fixed` (its E_max/E_min never move),
+  `target_state` for `_f4`, `_f5`, `_sigma0`, `_cont1`, and `prevalence` for `_f6_ovf`.
+  `aladip_vacuum_aeds_f6_ovf` fails with the intended prevalences.
+- core, io, run, forces, integrators: 690 passed, 5 ignored. Clippy on integrators, run, md
+  and pyo3-gromos shows the same warnings as 0.0.62 (the two known doc-list ones). `cargo fmt
+  --check` is clean, and so are `cargo check --tests --workspace`, the G6/G11 greps,
+  `pytest` (915 passed / 86 skipped) and stubtest.
+
+### Not done (left for later)
+
+- The three reproduced behaviours above are kept as documented; a correction switch (and a Lean
+  statement) only if a source shows one of them to be a defect.
+- The Lean statements of D16, D25 and D32 are drafted in
+  `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md`, not in the `math` repository.
+- No FORM 1 `_fixed` reference: none of the three corrections touches FORM 1.
+- No `_fixed` reference isolates a single patch: each is generated with all five patches, so
+  the unit tests above isolate the corrections.
+
+## [0.0.62] (2026-10-16)
+
+**BAR and MBAR of λ windows run from Python** (1.8 step 5): a window run with `PRECALCLAM` keeps
+the energies of every sampled frame at the grid's λ, and `FreeEnergyWindows.bar()` / `.mbar()`
+give ΔG through the Rust `ext_ti_ana` → `bar` / `mbar` chain, equal to `gromos.analysis.bar` /
+`mbar` on the same frames. No engine output changes; 106 references pass.
+
+### Added (1.8 step 5 — BAR/MBAR)
+
+- **`Simulation.precalclam`** (Python): the extended-TI data of the last step, `None` without
+  `PRECALCLAM`: `lambdas` (the grid), `energies` and `derivatives` (N × 12, the `.tre`'s and
+  `.trg`'s `# precalclam` rows), `abdih`, `free_abdih` (the `# ABdih` rows). Computed on NTWG
+  steps only, as the engine fills it.
+- **`ext_ti_ana` over frames held in memory** (`gromos_analysis::programs::ext_ti_ana`):
+  `PrecalcFrame` (one frame's rows), `analyse_frames(&Options, &[PrecalcFrame])` (the program's
+  `analyse` with the frames from memory instead of `@en_files`/`@fr_files`, one loop for both),
+  `Options::for_frames` (a simulation at `slam` with NLAM and the identity λ-dependence,
+  gromos++'s defaults otherwise) and `bar_file` (the `@bar_data` energies at given λ as the
+  `bar::BarFile` `bar` and `mbar` read, the simulated λ unrounded; a λ off the grid is an error
+  naming it).
+- **`gromos.free_energy`**: `run_windows` keeps `Simulation.precalclam` of every sampled frame in
+  `Window.precalclam` (`Precalclam`: the stacked rows with the run's grid, NLAM, first-bath
+  temperature and whether it had `LAMBDAS` rows), also in the window's `.npz`, so `collect()`
+  windows keep it. `FreeEnergyWindows.bar(skip, temperature=None)` and `.mbar(skip,
+  temperature=None)` → `Estimate` (`.dg`, `.error` from the first window to the last, `.steps` per
+  neighbouring pair; unpacks as `dg, error`), `.bar_data(skip)` → the per-frame energies both use.
+  `skip` drops the first frames of each window, as `.ti(skip)` does. The arithmetic is Rust's:
+  the private bindings `_precalc_bar_data`, `_precalc_bar` (`bar::bar`, corrected error) and
+  `_precalc_mbar` (`mbar::reduced_potentials` + `mbar::mbar`).
+- User guide (*Free-energy windows*, section *BAR and MBAR*), API reference, stubs.
+- Tests: `test_window_precalclam_frames_equal_gromosxx` — each of the nine `*precalc*`
+  references (CH4 and methanol in water, the twin-range CH4 run, aladip with bonded, SHAKE,
+  distance-restraint, `LAMBDAS` and both atom-pair kernels) run as a window gives gromosXX's `.tre`
+  `# precalclam`/`# ABdih` rows and the `.trg`'s derivative rows on every frame (largest relative
+  deviation 5.0e-10, the printed precision); nine CH4 → dummy windows (λ = k/8, a nine-point grid,
+  300 steps at 300 K, a frame every 5 steps): `bar_data()` is the linear-λ energy of the raw rows
+  (1e-12), `bar()` and `mbar()` equal `analysis.bar` / `analysis.mbar` on the same frames written
+  out at full precision (1e-10, total and every pair), and the estimates survive `collect()`; TI,
+  BAR and MBAR agree (skip 10: −5.305 ± 0.741, −5.813 ± 1.544, −5.558 ± 0.683 kJ/mol; the test
+  asserts twice the combined error). `ext_ti_ana` unit tests: frames in memory give the files'
+  `Analysis` exactly; `bar_file` refuses a λ off the grid.
+
+### Changed
+
+- `run_windows` samples a window in chunks of NTWG steps (`run(0)`, then `run(NTWG)` per frame)
+  instead of one `run()`, to read `precalclam` after each sampled step; the energies are the same
+  frames.
+- `ext_ti_ana::analyse` reads its frames through the same loop as `analyse_frames`; an `ABDIH`
+  subblock missing from a frame is now reported before a wrong `PRECALCLAM` row count (only the
+  order of two errors changes).
+
+### Verified
+
+- References: 106 passed, 1 ignored (`aladip_gamd`); `fep_null_perturbation` 4 passed.
+- analysis (81 tests, `gromospp_references` 28 and `mbar_reference` 3 among them) and
+  pyo3-gromos green; clippy no new warnings (the two known doc-list ones in forces and run);
+  `cargo fmt --check` clean; `pytest` 843 passed / 77 skipped; stubtest clean; ruff and mypy
+  clean on the touched Python; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- BAR/MBAR of windows with `LAMBDAS` rows (refused: `Options::for_frames` takes the identity
+  λ-dependence; `ext_ti_ana`'s `@lam<X>_sim` coefficients would need the recipe's rows), and a
+  grid that does not hold every window's λ (refused).
+- The MBAR error is the asymptotic one and assumes uncorrelated frames: on frames 5 steps apart it
+  is about half the BAR error, which carries each side's statistical inefficiency. No
+  decorrelation or block analysis is applied.
+- `Perturbation.from_ptp`/`mutate`, window parallelism, `scripts/ti_ch4.py` as a wrapper over the
+  module (unchanged since 0.0.59).
+
+## [0.0.61] (2026-10-16)
+
+**Slow growth** (1.8): PERTURBATION DLAMT ≠ 0 runs instead of being refused — λ moves by
+DLAMT·Δt after every step and the masses and every perturbed term follow it, as gromosXX's
+`Slow_Growth` does, including its output bookkeeping and its unbounded λ. Five new references;
+106 pass, the 101 earlier ones (and `aladip_gamd`) byte-identical to 0.0.60.
+
+### Added (1.8 — slow growth)
+
+- **`gromos_run::advance_lambda(&recipe, &mut topology)`**: gromosXX `Slow_Growth::apply`
+  (`slow_growth.cc:43-53`), λ += DLAMT·Δt then `Topology::update_for_lambda` (individual λ and
+  perturbed masses); a no-op unless NTG = 1 and DLAMT ≠ 0 (`create_md_sequence.cc:279-286`). It
+  changes the topology, so it is not an algorithm of the sequence: `md` and `Simulation` call it
+  after every step (`start`'s included), at gromosXX's place — after the forces, integration,
+  constraints, kinetic energy and barostat of the step, before the next one. `md` skips it on the
+  step the minimiser stops at, whose gromosXX sequence ends early.
+- **Output** as gromosXX: the `.trg` prints the λ the step ran at (`topo.old_lambda()`,
+  `out_configuration.cc:1726`), the final configuration's `PERTDATA` the λ after the last step,
+  which a run with NRDGL = 1 continues from.
+- Refusals (`check_slow_growth`, `gromos-run/src/plan.rs`), the features gromosXX never unlocks
+  against `slow_growth` (`check_parameter.cc:387-388`; the unlocks at `:1603, 2530, 2594, 2748,
+  2819, 4217, 4489` are commented out): LAMBDAS with NTIL on, PRECALCLAM, EDS, A-EDS, lattice sums
+  (NLRELE 2/3), the shifted reaction field (NLRELE 4), conjugate gradients (NTEM ≥ 2), GAMD,
+  position constraints (NTPOR 3). DLAMT < 0 is refused whatever NTG says (gromosXX's `>=0` range,
+  `in_parameter.cc:879`); DLAMT ≠ 0 with NTG = 0 stays inert, as in gromosXX.
+- References (native gromosXX, whole-block energies, `.trg`, forces, trajectory, final
+  configuration with its `PERTDATA`): `aladip_vacuum_fep_slowgrowth` (RLAM 0.125, DLAMT 2/ps,
+  100 steps: masses, perturbed bonded and nonbonded terms at a moving λ), `_shake` (perturbed
+  SHAKE lengths, two energy groups), `_cont` (NRDGL = 1 from the first one's native final
+  configuration, DLAMT 6/ps, 50 steps, λ 0.525 → 1.125), `ch4_water_fep_slowgrowth` (in 999 SPC,
+  λ 0.25 → 0.75 over 50 steps), `aladip_vacuum_em_slowgrowth` (steepest descent: λ moves on 12 of
+  the 13 steps).
+
+### Fixed
+
+- A minimisation that converges writes its last `.tre` frame twice, as gromosXX; with NTG = 1 it
+  now writes the last `.trg` frame twice too (on the NTWG schedule of the previous step,
+  `out_configuration.cc:638-641`), which `md` left out. No earlier reference minimises a perturbed
+  system.
+
+### Reproduced gromosXX defects
+
+- **λ has no upper bound** (A): RLAM is checked to [0, 1] (`in_parameter.cc:878`), the running λ
+  (`slow_growth.cc:49-50`) and a PERTDATA λ (`in_configuration.cc:2358-2370`) are not, so a run
+  with RLAM + DLAMT·NSTLIM·Δt > 1 extrapolates every term and mass past state B without a
+  warning. Reproduced and pinned by `aladip_vacuum_fep_slowgrowth_cont`.
+- **The `.tre` mass belongs to the next λ** (B): gromosXX writes a step's energies at the start
+  of the next step, after `Slow_Growth`, and sums the masses then (`out_configuration.cc:1786`),
+  so `VOLUMEPRESSURE03`'s mass of frame n is Σ m(λ_{n+1}) while every other number is frame n's.
+  Reproduced (`md` writes after `advance_lambda`).
+- **The repeated converged `.trg` frame of a minimisation** (B) prints the previous step's λ
+  (`old_lambda`, no `Slow_Growth` on the stopping step) next to derivatives evaluated at the
+  current λ. Reproduced, pinned by `aladip_vacuum_em_slowgrowth`.
+
+### Not reproduced gromosXX defects
+
+- **"CUMULATIVE DG" without Δt** (A): the `.omd` slow-growth free energy accumulates
+  DLAMT·∂H/∂λ per step (`average.cc:425`) and prints the sum undivided (`:663`), not
+  DLAMT·Δt·∂H/∂λ: a ΔG 1/Δt too large (500× at Δt = 0.002; −615.5 instead of −1.231 kJ/mol
+  over the first 20 steps of `aladip_vacuum_fep_slowgrowth`'s run, checked against its `.trg`).
+  gromos-rs writes no `.omd` averages; integrate the `.trg` instead.
+
+### Verified
+
+- References: 106 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed; `aeds_runs` 2 passed. The 101 earlier references and
+  `aladip_gamd` produce byte-identical output to the 0.0.60 binary (every output file, the
+  version in the provenance line normalised; stdout/stderr up to timings and paths).
+- core, io, run, forces, integrators: 570 tests green; clippy no new warnings; `cargo fmt
+  --check` clean; `pytest` 831 passed / 77 skipped; stubtest clean; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- The correction of the unbounded λ (a clamp or a refusal of RLAM + DLAMT·NSTLIM·Δt > 1).
+- The `.omd` energy and dH/dλ averages, slow growth's cumulative ΔG among them.
+- `LambdaController` (`gromos-integrators/src/fep.rs`, used only by the replica code) clamps λ to
+  [0, 1] and is not what `md` runs; its header still names `slow_growth.cc`.
+
+## [0.0.60] (2026-10-16)
+
+**Accelerated EDS** (1.8): the `AEDS` block (FORMS 1-6) runs through the recipe instead of being
+refused — the boosted reference energy V_R*, the scaled EDS forces, the E_max/E_min and offset
+searches, and the `AEDSSEARCH` state a chained search continues from — reproducing gromosXX
+247c95c4 where it is well defined and refusing the inputs it crashes on. Ten new references;
+101 pass, the 91 earlier ones byte-identical to 0.0.59.
+
+### Added (1.8 step 8 — A-EDS)
+
+- **`AEDS` block, modelled** (`gromos_io::imd::AedsBlock`, `RunRecipe::aeds`, Python
+  `Recipe.aeds`): gromosXX's token stream (`in_parameter.cc:3968-4140`) — AEDS, FORM (1-6),
+  NUMSTATES (≥ 2, read even with AEDS = 0, which stops there), EMAX, EMIN, EIR, NTIAEDSS,
+  RESTREMIN, BMAXTYPE (1, 2), BMAX (> 0), ASTEPS and BSTEPS (> 0); left-over tokens are an
+  error. `imd_write` writes it, so it round-trips. `MPERTATOM` and the end-state nonbonded terms
+  are EDS's.
+- **The A-EDS step** (`gromos_integrators::eds`, the same plan kind `eds`, `EdsPlan::aeds`):
+  V_mix is the single-s fold with s = 1; V_R* and the force factor (`boosted_reference`,
+  `eds.cc:122-134`); F += Σ p_i·fkfac·F_i, likewise the virial and Σ p_i ∂V_i/∂λ (only the EDS
+  part is scaled, as in gromosXX); V_R* in `eds_vr` and the special energy, V_mix in no total.
+- **The searches**, pure functions unit-tested and replayed against gromosXX: `memory_time`
+  (`:186`), `initialise_search` (`:107-120`), `offset_update` (`:184-221`), `track_state`
+  (`:223-266`, `check_round_trip` `:731-750`), `emax_emin_update` (`:270-330`, all four E_min
+  branches), `advanced_offset_update` (`:332-363`), `search_step` composing them.
+- **Search state in the configuration** (`gromos_core::AedsSearch`, `Configuration::aeds`): the
+  six scalars and ten per-state vectors of gromosXX's `sim.param().eds`. `md` writes it as the
+  final configuration's `AEDSSEARCH` block for FORMS 2-6 (`G96Writer::write_aedssearch`, fixed
+  format, 9 decimals, width 15, as `out_configuration.cc:3985-4004`); `read_coordinates` keeps the
+  block's lines and `parse_aedssearch` reads them. With NTIAEDSS = 0 in FORMS 2-6 the block is
+  required ("no AEDSSEARCH block in configuration") and overrides the input's EMAX, EMIN and EIR;
+  with NTIAEDSS = 1 a block present is ignored with gromosXX's warning. The Python front-end
+  reads it from the `.cnf` the same way.
+- **Output**: `ENERGY03` slots 34 (V_mix), 35 (V_R*), 36 (E_max), 37 (E_min), 38 (G), 39 (σ_G)
+  and the `# eds` offset column (E_i^R). Python: `Simulation.eds_vmix`, `eds_emax`, `eds_emin`,
+  `eds_eir`; stubs.
+- Refusals, each with a unit test (`check_aeds`, `gromos-run/src/plan.rs`): AEDS together with
+  EDS = 1 (whatever the AEDS block says, as gromosXX), no coupled bath, baths at different or zero
+  temperature, energy minimisation (gromosXX keeps steepest descent locked with AEDS too),
+  triclinic and truncated-octahedral boxes (gromosXX allows them; no reference here), lattice
+  sums, NLRELE 4, QM/ML terms, GAMD, LAMBDAS, PRECALCLAM, and the three defects below.
+  REPLICA_EDS stays refused by name.
+- References (native gromosXX, whole-block: energies, forces, trajectory, final configuration
+  with its `AEDSSEARCH` block): `aladip_vacuum_aeds_below` / `_inside` / `_above` (FORM 1, two
+  end states, V_mix below, inside and above the window); `aladip_vacuum_aeds_f2`, `_f4`, `_f5`,
+  `_f6` (three gentle end states `shared/aladip_aeds3.mpt`, 300 steps, 250 for FORM 5 — FORM 4
+  runs all four E_min branches and 16 round trips); `aladip_vacuum_aeds_sigma0` (FORM 3,
+  BMAXTYPE 2, an unvisited default target held by RESTREMIN 1); `aladip_vacuum_aeds_cont1/2` (a
+  FORM 4 search over two jobs, the second from the first's native final configuration with
+  overridden input EMAX/EMIN/EIR). The test compares the `AEDSSEARCH` block value by value.
+- `gromos-run/tests/aeds_replay.rs`: gromosXX's printed V_i(t) of the f2/f4/f5/f6/sigma0
+  references fed into the pure functions reproduce its V_mix and V_R* (with the previous frame's
+  parameters), E_max, E_min, G, σ_G and offsets (after the update) every frame, and its final
+  `AEDSSEARCH` block — largest relative deviation 8.0e-10 (the 10 printed digits).
+- `gromos-md/tests/aeds_runs.rs`: a search over 100 + 100 steps through our own `AEDSSEARCH`
+  against 200 steps in one job, and the refused inputs through `md`.
+
+### Changed
+
+- `read_coordinates` reads a `VELOCITY` block whose lines carry only the three components (what
+  `G96Writer::write_velocities`, so `md`'s final configuration, writes); it read them as missing,
+  so a run continued from `md`'s own final configuration started from zero velocities.
+
+### Deliberate differences from gromosXX
+
+- The FORM 5 reference stops at 250 steps: at step 299 of the same run one off-diagonal virial
+  element (0.1192, a sum of terms of order 10³) differs in its 9th significant digit
+  (1.2·10⁻⁹ kJ/mol), the chaos of 300 MD steps, not the search (frames 0-249 agree everywhere).
+- gromosXX accumulates the A-EDS virial and Σ p_i ∂V_i/∂λ in `long double` (its weight `pi` is
+  one, `eds.cc:139`); gromos-rs in double (rounding level, within every reference tolerance).
+
+### Refused gromosXX defects (not reproduced)
+
+- **EMIN > EMAX** (dossier D14): gromosXX warns, returns before EIR is read and the vectors are
+  sized (`in_parameter.cc:4084-4088`), and segfaults in the first step (FORM 1) or while reading
+  the configuration (FORMS 2-6, NTIAEDSS then uninitialised). Refused by the recipe.
+- **BSTEPS < ASTEPS** in FORMS 2, 4, 5, 6 (D13): `bsteps − asteps` is unsigned
+  (`eds.cc:186`, `parameter.h:3305-3309`), τ wraps to ~4·10⁹ steps after step 0 and the offsets
+  freeze to 1e-7. Refused; FORMS 1 and 3 never use τ and accept it. `memory_time` itself
+  reproduces the wrap.
+- **BMAXTYPE 2 with a target state without variance** (D15): b_max = 0 and `eds.cc:314` divides by
+  it, E_min = −∞, V_R* −∞ then NaN. Refused at the step where it happens ("use BMAXTYPE 1 or
+  RESTREMIN 1"); where the RESTREMIN clamp catches it (E_min = G) the run goes on as in gromosXX
+  (`aladip_vacuum_aeds_sigma0`).
+
+### Reproduced gromosXX defects
+
+- **The energy columns are written after the search update** (D16, `eds.cc:368-372`): a frame's
+  `eds_vmix` and `eds_vr` were computed with the previous frame's E^R, E_max and E_min, which the
+  same frame prints already updated. A reweighting script that rebuilds V_R* from the columns
+  (e.g. the LiveCoMS t_05 `search.py`) must use the previous frame's `e{i}r`, `eds_emax`,
+  `eds_emin`. Reproduced (`gromos-integrators/src/eds.rs`, `apply_accelerated`).
+- **State 1 is the default target** even if never visited (its mean V_i − E_i^R then 0, a fake G,
+  `eds.cc:252-261`).
+- **Prevalences without log-sum-exp** (new, inferred from `eds.cc:339-343`, not probed): FORMS 5/6
+  compute e^{−β(V_i − E_i^R)} directly, so a state with V_i − E_i^R below about −1770 kJ/mol at
+  300 K overflows to ∞ and the offsets become NaN.
+
+### Reproduced behaviour (documented in GROMOS Vol. 2, not defects)
+
+The sources are quoted under 0.0.63.
+
+- **FORMS 5/6 offset step ASTEPS·Δt** (D33, `eds.cc:355`; not the dossier's D17, which is the
+  extended-TI 1-4 scaling): an energy if ASTEPS is the rate in kJ mol⁻¹ ps⁻¹
+  that Vol. 4 and LiveCoMS t_05 describe, a time if it is the step count it is in FORMS 2/4.
+  Reproduced (`search_step`).
+- **The memory-time ramp restarts in every job** (`sim.steps()` from 0, `eds.cc:186`), as Vol. 2's
+  "total simulation time of the run": a chained search has a saw-tooth τ; with ASTEPS = BSTEPS a
+  chained search equals a single one.
+- **The mean of V_i − E_i^R averages over the offsets of every step** (`:246`), Vol. 2's
+  \overline{V_i − E_i^R} with E_i^R moving, while σ is that of V_i.
+
+### Verified
+
+- References: 101 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed. The 91 earlier references (and `aladip_gamd`) produce
+  byte-identical output to the 0.0.59 binary (every file but `<tre>.recipe.toml`, the version in
+  the provenance line normalised).
+- Continuation: ours from gromosXX's job-1 configuration equals gromosXX's job 2 (the
+  `aladip_vacuum_aeds_cont2` reference); our job 1 → job 2 chain ends in the same `AEDSSEARCH`
+  block as gromosXX's chain, and both chains differ from the 200-step single job by at most
+  3.5·10⁻⁶ kJ/mol (5.3·10⁻⁸ relative), the 9-decimal restart round-off.
+- TI-AEDS (AEDS with `PERTATOMPARAM` atoms, which gromosXX allows), checked against the native
+  binary on `aladip_eds_solv_ti`'s system for 50 steps: FORM 1 inside the window, every `.tre`
+  number and the `.trg`'s dH/dλ and ∂V_R*/∂λ equal; FORM 4, ∂V_R*/∂λ within 5.5·10⁻¹⁰ relative.
+  No reference committed.
+- Timing against the 0.0.59 binary (`water_216_box`, 10 000 steps, one thread, n = 10,
+  interleaved): 7.295 ± 0.083 s vs 7.254 ± 0.258 s — unchanged.
+- core, io, run, forces, integrators: 568 tests green; clippy no new warnings; `cargo fmt
+  --check` clean; `pytest` 792 passed / 76 skipped; stubtest clean; G6/G11 lint gates clean.
+
+### Not done (left for later)
+
+- The corrections of D16 and D33 (a switch writing the pre-update parameters, an offset step in
+  energy units) and of the per-job τ ramp; a log-sum-exp for the FORM 5/6 prevalences.
+- `AEDSSEARCH` in trajectory frames (gromosXX writes it only into the final configuration, so a
+  crashed search loses its state); the Python front-end reads the block but writes no final
+  configuration.
+- Triclinic and truncated-octahedral boxes with A-EDS (gromosXX allows them), stochastic dynamics
+  (not implemented), `eds_2box`.
+- The LiveCoMS t_05 tutorial runs and an `ene_ana → dfmult` comparison on a production run.
+
+## [0.0.59] (2026-10-16)
+
+**Net charge of a perturbation, λ windows from Python** (1.8): every perturbed run reports the
+solute's net charge in state A and B, and a charge change under a reaction field is a warning
+(ΔG needs a finite-size correction); `gromos.free_energy` turns one perturbed recipe into λ
+windows, runs them in process and integrates ⟨∂H/∂λ⟩. No engine output changes; 91 references
+pass.
+
+### Added (1.8 step 4a — net-charge bookkeeping)
+
+- `gromos_core::NetCharge` (A, B, `delta()` exactly 0 within 1e-6 e, `Display`
+  `A 1.000 B 0.000 (ΔQ = -1.000)`); `Topology::apply_perturbation` returns the solute's,
+  `Topology::perturbed_molecule_charges` gives it per molecule holding a perturbed atom
+  (`end_state_charges`: the topology's charges with each `PERTATOMPARAM` atom's A or B charge).
+- `prepare_system` notes `PrepareNote::PerturbationNetCharge` on every perturbed run (`NTG ≠ 0`,
+  `.ptp` or Python object path) and `NetChargeChanged { delta, nlrele }` when ΔQ ≠ 0 under a
+  reaction field (NLRELE −1, 1, 4). The `md` binary prints `Perturbation net charge: A … B …
+  (ΔQ = …)` and warns `perturbation changes net charge by ΔQ under reaction field (NLRELE=…): ΔG
+  needs a finite-size correction`. No refusal.
+- `make_pt_top` prints `net charge of molecule m: A … B … (ΔQ = …)` per perturbed molecule;
+  `pt_top` adds the same lines to the title of the topology it writes (its output is the
+  topology).
+- Python: `Topology.apply_perturbation(path)` returns `(net_charge_a, net_charge_b)` (was `None`).
+- Tests: `gromos-run` `a_net_charge_change_under_reaction_field_is_a_warning` (CB of aladip
+  +1 → 0: charges and warning; NLRELE −1 warns, 0 and 2 do not; equal states ΔQ = 0, no
+  warning); `gromos-tools` `pt_top_and_make_pt_top_print_the_net_charges` (+1 → 0 through both
+  programs); `fep_null_perturbation::null_perturbation_reports_no_net_charge_change` (`md`
+  prints ΔQ = 0.000 and no warning); a core unit test.
+
+### Added (1.8 step 5, TI — py-gromos free-energy driver)
+
+- `gromos.free_energy`: `LambdaSchedule(points, interaction_lambdas)` → one `Recipe` per λ
+  (`perturbation.lambda`, optional `LAMBDAS` rows); `run_windows(system, recipes, workdir,
+  dry_run)` runs each window in process, sampling dH/dλ at the steps the run's `.trg` holds;
+  windows kept as `<workdir>/l0.250.npz` are read instead of rerun, `dry_run` returns the job
+  list; `collect(workdir)`; `FreeEnergyWindows.ti(skip)` → (ΔG, error), `.mean_dhdl()`,
+  `.report()`.
+- The estimator is `gromos_analysis::ti` (`TiWindow::from_samples`, shared with
+  `trapezoid_from_trg`), reached through the private binding `_ti_trapezoid_series`; no TI
+  arithmetic in Python.
+- One `EnergyTimeseries`: the design sketch in `system_builder.py` uses `timeseries.py`'s
+  instead of defining a second class.
+- User guide page *Free-energy windows* (`docs/user-guide/free-energy.md`), API reference,
+  stubs.
+- `tests/test_free_energy.py`: the five CH4 → dummy windows (λ = 0, 0.25, 0.5, 0.75, 1, 10
+  steps) built from `ch4_water_fep.in` by the schedule equal the `ch4_water_fep_l*` inputs; every
+  dH/dλ sample of the four referenced windows matches gromosXX's `.trg` (largest relative
+  deviation 4.5e-10, the printed precision), so the per-window means do; `ti()` equals
+  `analysis.ti_trapezoid` on those `.trg` files; kept windows read back identically.
+
+### Deliberate differences from gromosXX
+
+- gromosXX runs a charge-changing perturbation silently; gromos-rs warns under a reaction field.
+
+### Not done (left for later)
+
+- BAR/MBAR from `FreeEnergyWindows` (the in-process windows carry no PRECALCLAM energies; the
+  binary's `.tre`/`.trg` go through `gromos.analysis`), `Perturbation.from_ptp`/`mutate`, window
+  parallelism, `scripts/ti_ch4.py` as a wrapper over the module (unchanged).
+
+### Verified
+
+- References: 91 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 4 passed.
+- core, io, run, forces, integrators, tools, analysis: 666 tests green; clippy only the two
+  known doc-list warnings; `cargo fmt --check` clean; `pytest` 711 passed / 66 skipped; stubtest
+  clean; G6/G11 lint gates clean.
+
+## [0.0.58] (2026-10-16)
+
+**TI-EDS: perturbed atoms next to EDS end states** (1.8): an `EDS` run with `PERTURBATION NTG = 1`
+and `PERTATOMPARAM` atoms, which gromosXX accepts since 869b8a24 (undocumented in Vol. 2/4), no
+longer refused: per-state soft-core energies and forces of the EDS–perturbed pairs, ∂V_i/∂λ per
+end state, ∂V_R/∂λ = Σ p_i ∂V_i/∂λ in the `.trg`. Three new references; 91 pass.
+
+### Added (1.8 — TI-EDS)
+
+- **EDS–perturbed pairs** (`gromos-forces/src/nonbonded/eds.rs`: `eds_ti_pair_interactions`,
+  `eds_ti_one_four_interactions`, `eds_ti_rf_excluded_interactions`): cases 2 and 4 of
+  `perturbed_nonbonded_innerloop.cc` (`:167-239, 409-481`; 1-4 `:2057-2121, 2277-2341`;
+  excluded `:3696-3743`). Per state s the soft-core A/B kernel of the perturbed pairs
+  (`perturbed_lj_crf_interaction_scaled`, `rf_soft_interaction`) with `lj[M_IAC_e[s]][A_IAC_p]` /
+  `[B_IAC_p]`, charges `M_q_e[s]·A_q_p` / `·B_q_p`, the perturbed atom's α, the λ of the pair's
+  energy-group cell (`LAMBDAS`); the 1-4 pairs with cs6/cs12 and the 1-4 Coulomb scaling, the
+  excluded pairs (NSLFEXCL) with the soft reaction field and no self-term correction. Into the
+  state's force, virial and energy and a new per-state `EdsStorage::dvdl`, which the force field
+  books as the derivative record's `eds_vi` (long-range pairs on pairlist steps, as the energies).
+  `split_eds_pairs` sends a pair of an EDS atom and a perturbed atom to its own list (EDS atom
+  first); `EdsAtoms` splits the owned excluded and 1-4 partners the same way, so no branch runs in
+  the plain EDS loops, and none of this runs without perturbed atoms.
+- **The EDS step** already booked Σ p_i ∂V_i/∂λ (the derivative record's `eds_vr`, part of its
+  special energy, so of dH/dλ) for every form; it is now non-zero. `.trg`: slot 35 and the
+  `# eds` rows (∂V_i/∂λ per state).
+- Python: `Simulation.eds_dvi` (∂V_i/∂λ per state), `Simulation.dhdl_terms["eds"]` (∂V_R/∂λ, so
+  the terms sum to `dhdl`); stubs.
+- Refused, on the `.ptp` and the Python object path alike (`check_ti_eds`,
+  `gromos-run/src/prepare.rs`, unit-tested): an atom in both `PERTATOMPARAM` and `MPERTATOM`, a
+  `PERTATOMPAIR` pair with an EDS atom (below). PRECALCLAM, slow growth (DLAMT ≠ 0) and
+  NSCALE ≠ 0 stay refused with EDS as in any perturbed run.
+- References: `aladip_eds_solv_ti` (aladip in 20 SPC, EDS atoms N4 and H11, perturbed CB1, C8,
+  N10, CB12 with their own α, RLAM 0.3: EDS–perturbed pairlist pairs with the EDS atom first and
+  second, a 1-4 pair, five excluded pairs; `.trg` every step), `aladip_eds_solv_ti_groups` (two
+  energy groups across the EDS and perturbed atoms, `LAMBDAS` on) — native gromosXX;
+  `aladip_eds_solv_ti_multis_fixed` (FORM 2) — native + `patches/D2_eds_weights.patch`. Whole
+  block, `.tre`, `.trg` and forces.
+- `gromos-run/tests/ti_eds_lambda.rs`: three end states, FORMS 1/2/3, every state weighted
+  ≥ 5 %: the booked ∂V_i/∂λ and ∂V_R/∂λ at step 0 against central differences of V_i and V_R
+  between runs at λ = 0.3 ± δ (Richardson over δ = 1e-3, 1e-4): deviation 1.3e-11 / 5.1e-11 /
+  3.9e-11 kJ/mol for ∂V_R/∂λ (FORMS 1/2/3).
+
+### Deliberate differences from gromosXX
+
+- **Ownership of the excluded and 1-4 EDS–perturbed pairs.** gromosXX's perturbed atom owns them
+  (`PERTATOMPARAM` takes them before `MPERTATOM` looks, `in_perturbation.cc:1363-1391,
+  1748-1777`; case 4), gromos-rs's EDS atom owns every EDS–perturbed pair (as it owns every other
+  pair of its). The terms are the same, summed in another order: agreement to rounding, not bit
+  for bit. The three references state energy_rel 1e-10 / force_abs 1e-8; measured, every printed
+  `.tre` and `.trg` number is equal and the forces agree within 1e-9 kJ mol⁻¹ nm⁻¹ (the last
+  printed digit).
+- FORMS 2 and 3 book Σ p_i ∂V_i/∂λ; the released gromosXX books 0 (`eds.cc:603-604, 704-705`,
+  part of D2, corrected in 0.0.57).
+
+### Refused gromosXX defects (not reproduced)
+
+- **An atom in both `PERTATOMPARAM` and `MPERTATOM`** gets pair code 6, which no case of the
+  innerloop handles: its pairs are dropped silently (`perturbed_nonbonded_innerloop.cc:54-65`;
+  dossier D18).
+- **`PERTATOMPAIR` with an EDS atom**: `perturbed_nonbonded_pair.cc` has no EDS branch and uses the
+  topology type and charge in every end state (D19).
+
+### Verified
+
+- References: 91 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 3 passed. The 89 existing references' output is byte-identical to the
+  0.0.57 binary (all files but `<tre>.recipe.toml`, the version in the provenance line
+  normalised).
+- Timing against the 0.0.57 binary (n = 5, interleaved, one thread, `taskset -c 2`):
+  `ch4_water_fep_l025` 500 steps 11.547 ± 0.043 s vs 11.550 ± 0.049 s — unchanged.
+- core, io, run, forces, integrators: 550 tests green; clippy only the two known doc-list
+  warnings; `pytest` 708 passed / 66 skipped; stubtest clean; G6/G11 lint gates clean.
+
+## [0.0.57] (2026-10-13)
+
+**EDS through the recipe, the extended-TI analysis chain, `dGslv_pbsolv`** (1.8): an `EDS` block
+and an `MPERTATOM` perturbation topology run through the one builder and reproduce gromosXX's
+end-state energies, reference Hamiltonian, mixed forces and `.tre`; the binary-only EDS code is
+gone. Eight new references; 88 pass. `ext_ti_ana`, `bar` and `ext_ti_merge` are ported from
+gromos++ with an `mbar` beside them, `dGslv_pbsolv` is ported, and the three estimators print
+corrected values by default (`@parity gromospp` reproduces the release).
+
+### Added (1.8 step 6 — EDS)
+
+- **`EDS` block, modelled** (`gromos_io::imd::EdsBlock`, `RunRecipe::eds`, Python
+  `Recipe.eds`): gromosXX's token stream (`in_parameter.cc:3843-3961`) — EDS, FORM, NUMSTATES
+  (FORM 1-3 and NUMSTATES ≥ 2 even with EDS = 0), the S of the form (one; N(N−1)/2 in pair
+  order; N−1 rows `i j S`), EIR; left-over tokens are an error, EDS = 0 included. `imd_write`
+  writes it, so it round-trips.
+- **`MPERTATOM`** (`gromos_io::ptp::parse_mpertatom`, `gromos_core::EdsSolute`): `NJLA NPTB`,
+  the state names, per atom `seq name IAC CG` per state (trailing softness columns ignored, as
+  gromosXX does). `prepare_system` requires `@pttopo` with EDS on, checks NPTB = NUMSTATES, refuses
+  PERT* blocks in an EDS run without perturbation ("block X not supported for eds!") and an
+  `MPERTATOM` without EDS, and hands each EDS atom its excluded and 1-4 pairs
+  (`Topology::apply_eds_perturbation`, `in_perturbation.cc:1757-1777`) while they stay off the
+  pairlist. Python's `Topology.apply_perturbation` merges it too.
+- **End-state nonbonded terms** (`gromos-forces/src/nonbonded/eds.rs`): pairs with an EDS atom
+  leave the solute pairlists after every update (the EDS atom first, `insert_pair`) and are
+  computed once per state with the state's type and charge (cases 0 and 1 of
+  `perturbed_nonbonded_innerloop.cc:84-165`), into per-state forces, virials and energies
+  allocated once; the long-range ones on pairlist steps only; the 1-4 pairs with cs6/cs12; with
+  NSLFEXCL the RF self term (topology charge taken out of the standard total, `½·e_rf(q_s²)`
+  per state) and the excluded pairs per state; the molecular-virial correction per state. The
+  standard kernels are untouched; every MPI rank computes the EDS terms in full.
+- **The EDS step** (`gromos_integrators::eds::Eds`, plan kind `eds`, right after the force
+  field): β = 1/(k_B T) with T of the first bath and k_B from PHYSICALCONSTANTS, V_R, the weights
+  p_i, F += Σ p_i F_i, W += Σ p_i W_i, `eds_vr` = Σ p_i ∂V_i/∂λ on the derivatives; V_R is
+  booked in `Energy::eds_vr` and the special energy, not the potential.
+- **Output**: `ENERGY03` slot 35 and the `# eds` section with one row per state (V_i, its
+  nonbonded and special parts, offset 0, V_i twice), the same in `FREEENERDERIVS03`; an
+  `EDS reference` line on the step printout. Python: `Simulation.eds_vr`, `Simulation.eds_vi`.
+- Refusals, each with a unit test: no coupled bath (every TAU = −1), baths at different or zero
+  temperature, NTEM 2/3, unconstrained solvent (NTCS 0, vacuum included), flexible SHAKE,
+  triclinic or truncated-octahedral box, lattice sums, NLRELE 4 (shifted RF, not ported), QM/ML
+  terms, GAMD, PRECALCLAM, EDS with perturbed atoms (the EDS–perturbed kernels are not ported),
+  FORM 3 pair states outside 1..N, MPERTATOM IAC 0; AEDS and REPLICA_EDS by name whatever the
+  passthrough policy.
+- References: `aladip_vacuum_eds` (FORM 1, N = 2), `aladip_vacuum_eds3` (N = 3),
+  `aladip_eds_solv` (20 SPC, two baths, NTC 3, twin range NSNB 5, an EDS–EDS excluded and 1-4
+  pair, the self-term subtraction), `two_waters_eds` (LiveCoMS t_05, four states, dummy types,
+  three energy groups) — native gromosXX, whole-block; `aladip_vacuum_eds_multis_fixed`,
+  `aladip_vacuum_eds_pairs_fixed` — native + `patches/D2_eds_weights.patch`, whole-block;
+  `aladip_vacuum_eds_multis`, `aladip_vacuum_eds_pairs` — released gromosXX, frame 0's end-state
+  energies (and FORM 3's V_R) only (`compare` in `input.toml`), as its forces are defective.
+
+### Corrected (gromosXX defect not reproduced)
+
+- **EDS FORM 2 and 3 weights follow the documented formulas** (`parameter.h:624-658`), what
+  native + D2 computes: the released `eds.cc` seeds the log-prefactors with 0 (`:518, 620`),
+  drops the first update's `− max` (`:550-551, 647-648`), skips the multi-s pairs (0, j ≥ 2)
+  (`:557`, V_R wrong for N ≥ 3) and never books Σ p_i ∂V_i/∂λ (`:603-604, 704-705`). No
+  switch reproduces it (decided in 1.8; the patch documents it). F = −∇V_R for all three forms
+  (`gromos-run/tests/eds_forces.rs`: 5 atoms × 3 axes, Richardson over δ = 1e-4 and 1e-5 nm,
+  max deviation 3.5e-8 / 5.4e-7 / 1.3e-7 kJ mol⁻¹ nm⁻¹ for FORMS 1/2/3, every state weighted
+  ≥ 5 %).
+
+### Removed
+
+- The `eds` binary, the EDS path of `md` (`EdsBlock` parsing, the after-step application,
+  `eds_stats.dat`/`eds_vr.dat`), `gromos-io` `input/eds_block.rs` and `output/eds_stats.rs`,
+  `gromos-analysis`'s `eds_ana` (its input files no longer exist; the GROMOS chain is
+  `ene_ana → dfmult`), and the old `gromos-integrators` `eds` module (`EDSRunner`,
+  `EDSParameters`, the undriven AEDS search). `md` passes only `GAMD` (and `INNERLOOP`) through.
+
+### Reproduced gromosXX quirks
+
+- An EDS atom's excluded and 1-4 pairs leave the standard lists but not the pairlist
+  exclusions; the first-listed of two EDS atoms owns their pair; the RF self term is booked with
+  the topology charge and taken back out of `crf_energy[g][g]`; the 1-4 and RF-excluded end-state
+  virials count for every virial type, the pairs' only with a virial; the single-s log-sum-exp
+  is a running pairwise fold in state order (`eds.cc:409-424`). See `.claude/porting.md`.
+
+### Changed
+
+- `build_plan` takes the topology's `PhysicalConstants` (k_B for EDS), not `four_pi_eps_i`.
+- The `.ptp` reader takes a block header only outside a block (a one-word `TITLE` line was read
+  as a block).
+- The force field assigns `special_total` every step (0 without position restraints).
+
+### Added (1.8 step 3 — extended-TI analysis)
+
+- **`ext_ti_ana`, `bar`, `ext_ti_merge`**, the gromos++ programs, as library functions
+  (`gromos_analysis::programs::free_energy::{ext_ti_ana, bar, ext_ti_merge}`) and Python
+  `gromos.analysis.ext_ti_ana`, `bar`, `ext_ti_merge`. `ext_ti_ana` reads gromosXX's
+  `PRECALCLAM`/`FREEPRECALCLAM` and `ABDIH`/`FREEABDIH` blocks and predicts ⟨∂H/∂λ⟩ at other λ
+  and λ-dependences (`predicted_l*.dat`, `@bar_data`, `@dHdl_data`); `bar` is Bennett's
+  acceptance ratio over its `bar_data` files; `ext_ti_merge` merges the predictions and
+  integrates. With `@parity gromospp` all three are byte-identical to gromos++ 9cd9f6b3 on the
+  oracle cases (A1–A4 on the engine references, the five-window CH4 chain; the A5 inputs are
+  refused): `gromospp_references` 28 passed.
+- **`mbar`** (no gromos++ counterpart; binary, `programs::free_energy::mbar`,
+  `gromos.analysis.mbar`): MBAR over the `@bar_data` files of K windows. On the five CH4 windows
+  ΔG(0 → 1) = −46.74103 ± 1.88419 kJ/mol, all ten pairs within 0.01 kJ/mol of pymbar 4.0.3
+  (`tests/data/mbar/`); with two states it gives `bar`'s ΔG to 1e-6.
+- `scripts/ti_ch4.py --estimator ti|bar|mbar` runs the CH4 windows and analyses them through
+  `gromos.analysis`.
+
+### Deliberate differences from gromos++ (`ext_ti_ana`, `bar`)
+
+- `@imd` goes through gromos-rs's IMD reader: `LAMBDAS` rows by name as well as by number, and
+  NTLI 10/11 mapped as gromosXX does (distancefield/dihedralres; gromos++'s type table swaps
+  them, `ext_ti_ana.cc:404` used at `:1371-1385`, and its mk_script reader ignores named rows
+  and reads the rows with NTIL off). mk_script's diagnostics on stdout are not reproduced.
+- The `PRECALCLAM` columns follow the trajectory's layout: with 12 columns (md++ 2023-04-15,
+  `out_configuration.cc:3230-3260`) disres/dihres/disfld are columns 8/10/11 (gromos++ reads 9
+  and 10, `ext_ti_ana.cc:781-782`); with 11 they are 8/9/10.
+- With `@pmin` > 0 the `@bar_data`/`@dHdl_data` values are stored at the λ they name
+  (`ext_ti_ana.cc:513, 865`); `@dHdl_data` writes its rows without `@bar_data` too (`:1025`).
+- Values gromos++ leaves undefined (a parameter neither in `@imd` nor given, `@pmax` past the
+  grid, a grid of one λ, `@bar_data` outside `@pmin`/`@pmax`) are errors; `@cpus` other than 1
+  is refused (one thread; gromos++ without OpenMP refuses it too); the bootstrap seed can be
+  injected (library; gromos++ takes `time(NULL)`); an `@slj_scrf_file` whose last `END` has no
+  newline is read.
+
+### Added (1.8 step 4b — `dGslv_pbsolv`)
+
+- **`dGslv_pbsolv`**, the gromos++ program (`@topo @pbc @coord @pqr @atoms @atomsTOcharge
+  @schemeELEC @epsSOLV @epsRF @epsNPBC @rcut @gridspacing @nogridpoints @coordinates @NPBCsize
+  @increasegrid @cubesFFT @maxiter @probeIAC @probeRAD @HRAD @radscal @rminORsigma @verbose`), as a
+  library function (`gromos_analysis::programs::dgslv_pbsolv`) over a new `gromos_analysis::pb`
+  module: the finite-difference Poisson–Boltzmann solver (ICCG under PBC and NPBC, Debye–Hückel
+  boundary, dielectric maps from van der Waals radii) and the FFT Poisson solver (lattice-sum and
+  reaction-field boundary conditions, Hat charge shaping, the iterative cavity solver with its
+  vacuum fields) on `rustfft` with FFTW's sign and scaling conventions. On four LS cases and two
+  RF cases stdout and the whole `@verbose` log are byte-identical to gromos++ (FFT-derived
+  numbers within 1e-7, because `rustfft` picks its kernels at run time). About 5× faster than the
+  C++ on 16 cores (1.31 ± 0.01 s against 7.15 ± 0.04 s on the RF case, n = 5 and 3), and still
+  byte-identical on one thread.
+- `gromos.analysis.dgslv_pbsolv(...)` returns the per-atom potentials and the dG of every solve,
+  and the correction the program documents but does not compute (`CB/NPBC[FD] − LS/PBC[FD]`, plus
+  `LS/PBC[FFT] − RF/PBC[FFT]` under RF).
+- The gromos++ `dGslv_pbsolv` in the `BUILD` tree is a stub: the source tests `HAVE_LIBFFTW3`
+  before including `config.h` and line 109 is a deliberate syntax error. The oracle was a patched
+  copy linked against the built library; the recipe is in
+  `crates/gromos-analysis/tests/data/dgslv_pbsolv/README.md`.
+
+### Deliberate differences from gromos++ (`dGslv_pbsolv`)
+
+- Reproduced: the `×FPEPSI ÷FPEPSI` round trip of the PBC mean removal; `@radH` refused as unknown
+  and `@HRAD` accepted and ignored; the grid spacing not adapted to the box; `epsRF` in the
+  vacuum field but `εs` in the tensors; the `fixed`/3-decimal log format from the first FFT
+  gridcheck line on; the ICCG-PBC backward-wrap ε index; the unwrapped `+1` interpolation corners;
+  centring on all solute atoms while shifting only `@atoms`.
+- Not reproduced: `@epsRF 1` (gromos++ solves it and then aborts on an empty vector) is refused;
+  missing `@gridspacing` (division by zero), `@increasegrid` with fewer than three values (reads
+  neighbouring keys), solvent atoms in `@atoms` (undefined behaviour), grids of 100 points or
+  fewer (out-of-bounds read) and grid indices outside the allocation are refused; PQR mode returns
+  success instead of calling `exit(1)`.
+
+### Corrected: bar/ext_ti_merge/ext_ti_ana defaults
+
+- **`bar`, `ext_ti_merge` and `ext_ti_ana` now print the corrected values by default** (1.8). The
+  ports reproduced three gromos++ 9cd9f6b3 defects for parity; each is now corrected unless the
+  program is given `@parity gromospp` (library: `programs::free_energy::Parity`, default
+  `Corrected`, `GromosppReleased` reproduces the release; Python: `parity="gromospp"` on
+  `gromos.analysis.bar`, `ext_ti_merge`, `ext_ti_ana`):
+  - `bar` divided the Bennett error by (ln⟨f⟩)² a second time (`bar.cc:639`). On the five-window
+    CH4 chain the total error goes from 3.76986 to 3.56370 kJ/mol (windows 2.56637, 2.41098,
+    1.23029, 0.54694 → 2.11698, 2.40196, 1.49959, 0.44748); ΔG, the overlap integrals and
+    `@printdist` are unchanged.
+  - `ext_ti_merge` left the point N−2 out of the error of the integral (`ext_ti_merge.cc:282`,
+    `i < N-2`). On the chain: 2.248844 → 2.302129 (the integral, −51.651947, is unchanged).
+  - `ext_ti_ana` added the dihedral ∂H/∂λ without dΛ_dih/dλ (`ext_ti_ana.cc:830`), exact only for
+    a linear `@lamdih`. With Λ_dih = λ² (case A2) the prediction at λ = 0.1 goes from 86.364646
+    to 25.269276 kJ/mol; λ = 0.5 (factor 1) and every linear dependence are unchanged.
+  `Interval::error_corrected`, `BarResult::error_total_corrected` and
+  `Merged::integral_error_corrected` stay: the corrected values in both modes, equal to the
+  printed ones by default.
+- **Oracle**: gromos++ 9cd9f6b3 built with `D4_bar_error.patch`, `D5_ext_ti_ana_dlam.patch` and
+  `D8_ext_ti_merge_loop.patch` (`crates/gromos-md/tests/gromosXX_references/patches/`). Its
+  outputs are the new fixtures `tests/data/ext_ti_ana/chain_fixed/` and `A2_fixed/` (with their
+  provenance READMEs), compared byte for byte with gromos-rs's default output
+  (`ext_ti_ana_bar_ext_ti_merge_chain_matches_patched_gromospp`,
+  `ext_ti_ana_matches_patched_gromospp_a2_fixed`). The A1–A4 and `chain` cases now run with
+  `@parity gromospp` and still match the released gromos++ byte for byte. An unknown `@parity`
+  value is refused before any file is read.
+- `scripts/ti_ch4.py --estimator bar` reports the corrected BAR error without a change; the
+  Python tests compare the default output with `chain_fixed/` and `parity="gromospp"` with
+  `chain/`.
+- Gates: `cargo test --release -p gromos-analysis` (gromospp_references 28 passed, two new;
+  mbar_reference 3 passed), `cargo clippy -p gromos-analysis -p pyo3-gromos --tests` no warnings,
+  `pytest` 532 passed / 55 skipped, stubtest clean, G6/G11 lint gates clean.
+
+### Verified
+
+- References: 88 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored;
+  `fep_null_perturbation` 3 passed. The six whole-block EDS systems agree with gromosXX to the
+  last printed digit (energies within 4e-15 kJ/mol, forces within 2e-9 kJ mol⁻¹ nm⁻¹).
+- gromos++ `ene_ana @prop eds_vr e1 e2` → `dfmult @temp 300` on `aladip_eds_solv` gives the same
+  numbers from gromosXX's `.tre` and ours (DF_1_R 9.0898900, DF_2_1 11.696755, DF_2_R 20.786645
+  kJ/mol).
+- Every non-EDS reference's output is byte-identical to the 0.0.56 binary (81 systems).
+- Timing against the 0.0.56 binary (n = 5, interleaved, one thread, mean ± s.d.):
+  `ch4_water_fep_l025` 500 steps 11.436 ± 0.022 s vs 11.492 ± 0.069 s, `water_216_box` 10000
+  steps 6.446 ± 0.038 s vs 6.490 ± 0.194 s — unchanged.
+- The whole extended-TI chain on the engine's own files: gromos-rs `md` on the five CH4 window
+  inputs (`tests/data/ext_ti_ana/windows/ch4_l*.in`), then `ext_ti_ana` (default mode, the chain
+  test's arguments) → `bar` → `ext_ti_merge`, gives output byte-identical to the same chain on
+  gromosXX's `.tre`/`.trg` of those windows: all 21 files and both stdouts, so the largest
+  difference in the predicted curves is 0 at the printed 6 decimals, and the merged ΔG is
+  −51.651947 ± 2.302129 kJ/mol (TI) and −41.21067 ± 3.56370 kJ/mol (BAR) from both engines. The
+  inputs themselves: every `.trg` number equal as printed, `.tre` within 1e-9 kJ/mol (1.2e-10
+  relative, the last printed digit).
+- Merged tree (EDS with steps 3 and 4b and the estimator correction): `gromos-analysis`
+  gromospp_references 28, mbar_reference 3, library_parity 4, lib 36 passed; core, io, run,
+  forces, integrators and tools green; clippy only the two known doc-list warnings; `pytest`
+  681 passed / 66 skipped; stubtest clean; G6/G11 lint gates clean.
+
+## [0.0.56] (2026-10-13)
+
+**Corrected: `PERTATOMPAIR` pairs with a perturbed atom now use the intended kernel by default**
+(1.8). The gromosXX defect reproduced and flagged in 0.0.55 stays selectable and keeps its
+reference; a second reference from a patched native binary pins the correction. 80 reference
+systems pass.
+
+### Corrected
+
+- **The perturbed atom-pair kernel takes its arguments in their own slots.** gromosXX 247c95c4
+  calls `eds_pert_lj_crf_interaction` with its outputs shifted by one slot
+  (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200` against `perturbed_nonbonded_term.h:65-72`;
+  0.0.55, "Reproduced gromosXX defects"): for a normal or 1-4 state of a pair with a perturbed atom
+  the energies get the kernel's dH/dλ, the force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and
+  `coulomb_scaling = 0` removes the 1/r Coulomb term. The λ-grid (`PRECALCLAM`) calls a few
+  lines above pass the arguments correctly. gromos-rs now books, by default, the energies
+  `e_lj, e_crf`, the derivatives `de_lj, de_crf` and the force `f·r`, with Coulomb scaling 1 for
+  a normal state and the 1-4 scaling (`perturbed_nonbonded_innerloop.cc:2102`; 1, as for every
+  1-4 pair) for a 1-4 state. The λ-grid booking is unchanged.
+- Magnitude (`~/Development/gromos-divergences/REPORT.md` §2, on the three-pair aladip system of
+  `aladip_vacuum_fep_pairpert_precalc`): at frame 0 the defect books the pair energy wrong by
+  −151.99 kJ/mol and dH/dλ by +116.18 kJ/mol; the per-window ⟨dH/dλ⟩ error reaches
+  −28.8 kJ/mol; the dropped TI term integrates to −2.01 ± 0.08 kJ/mol (per pair −18.20, +16.38,
+  −0.19; n = 3 replicas, 41 windows); under NVE the booked force is not the gradient of the
+  booked energy (E_tot s.d. 6.21 vs 0.34 kJ/mol without the rows). An independent kernel
+  reproduces native to 6e-9 relative.
+
+### Added
+
+- `perturbation.atom_pair_kernel` in the recipe: `"intended"` (default) or `"gromosxx-shifted"`,
+  gromosXX's defect. No `.imd` block carries it: `read_imd` leaves the default, `imd_write`
+  writes nothing, the `.recipe.toml` echo shows it only when not the default. Python sees it in
+  `Recipe.perturbation` once set (`recipe.update(perturbation={"atom_pair_kernel": …})`).
+- `RunRecipe::set(key, value)` by dotted path, `RunOptions::recipe_overrides`, and
+  `md @recipe_set key=value` (repeatable) for recipe fields no `.imd` block carries. The
+  reference runners read an optional `[recipe_overrides]` table from `input.toml`.
+- Reference `aladip_vacuum_fep_pairpert_precalc_fixed`: the same run, expected output from native
+  gromosXX 247c95c4 + the D1 patch (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`: outputs in
+  their slots, `force = scalar·r`, `coulomb_scaling` the 1-4 scaling for the 1-4 calls and 1
+  otherwise), run with `"intended"`. `aladip_vacuum_fep_pairpert_precalc` runs with
+  `"gromosxx-shifted"` and pins the defect.
+
+### Verified
+
+- References: 80 passed, 1 ignored (`aladip_gamd`); check suite 10 passed, 1 ignored.
+- New gates, as no unpatched oracle exists for the corrected default: at λ = 0 (A state normal
+  or 1-4) and λ = 1 (B state) the pair term equals the plain LJ+CRF kernel; its force is
+  −∂V/∂r and its dH/dλ is ∂V/∂λ to 1e-6 relative (central differences, λ ∈ {0.25, 0.5, 0.75},
+  NLAM 1 and 2, a 1-4 state with Coulomb scaling 0.5 included); `fep_null_perturbation` with
+  `PERTATOMPAIR` rows 4-10 (1-4/1-4) and 4-11 (normal/normal) on perturbed atoms with equal
+  states stays null under the intended kernel and is not null under `"gromosxx-shifted"`.
+- Every other reference's output is byte-identical to the previous binary but for the version
+  header; the two `pairpert_precalc` systems, run without their override, take the new default.
+
+## [0.0.55] (2026-10-12)
+
+**Two defects found by step 2's gates, fixed as gromosXX does them, and one gromosXX defect
+reproduced and flagged** (1.8). The reference test now compares `VOLUMEPRESSURE03` and
+`CONSFORCERED` whole-block; two new native references, and the ignored
+`aladip_vacuum_fep_pairpert_precalc` now passes; 79 reference systems pass.
+
+### Fixed
+
+- **`PERTATOMPAIR` pairs with a perturbed atom.** The interaction types are read raw (0 excluded,
+  1 normal, 2 1-4) as `in_perturbation.cc` does; gromos-rs subtracted one and underflowed on 0.
+  Every pair now leaves the exclusion and 1-4 lists at prepare time and is computed once, per
+  state, in the atom-pair term with the A/B types, charges and soft core
+  (`perturbed_nonbonded_pair.cc:179-298`); its r⊗f goes to the virial and its λ-grid energies to
+  `PRECALCLAM`. `pt_top` mapped the B type off by one (type 1 added an exclusion, type 2 nothing);
+  it now matches gromos++ `PtTopology.cc:151-170`. Pinned by `aladip_vacuum_fep_pairpert_precalc`
+  (no longer ignored: pairs 4-10 1-4/excluded, 1-11 normal/1-4 with both atoms perturbed, 4-7
+  excluded/normal); 77 references whole-block at this point. The eleven aladip references that
+  carry the old 7-10 pair change only in the `.tre` virial (now r⊗f, as gromosXX) and one 1e-34
+  bath value.
+- **The constraint virial is added only for the atomic virial** (`shake.h:380`, `settle.cc:397`);
+  SHAKE and SETTLE added it under every virial type. Under the molecular virial the barostat saw
+  −1500 instead of +28 kJ mol⁻¹ nm⁻³ and shrank the LiveCoMS `t_02` box by 0.09 % per step.
+  Lean: `intragroup_pair_virial_zero`, `constraint_virial_pressure_shift`
+  (`math`, `OAI.Physics.Gromos.Divergences`). With it, as gromosXX:
+  - roto-translational constraints remove 3 COM and 3 internal degrees of freedom from atom 1's
+    baths (`topology.cc:1370-1400`), and the `ROTTRANS` reference is centred on the
+    chain-gathered COM;
+  - the `.tre` writes per-bath `T_total`/`T_com`/`T_ir`/`scale` and gromosXX's
+    `VOLUMEPRESSURE03` layout;
+  - one pressure, trace/3, for the barostat and the output;
+  - `CONSFORCERED` is scaled by 1/dt² once per atom;
+  - the perturbed bonded, 1-4, RF-excluded and atom-pair terms contribute their virial.
+
+  Nothing pinned this: `water_216_npt` runs no SHAKE and the test compared `ENERGY03` only. It now
+  compares the whole `VOLUMEPRESSURE03` block and `CONSFORCERED`, under which the previous binary
+  fails 22 systems; two new references, `aladip_solvated_npt_shake` and
+  `aladip_multibath_rottrans`.
+
+### Changed
+
+- `Simulation.pressure` (Python) returns trace(P)/3, the number the barostat couples to and
+  gromosXX writes, and is 0 under NVT/NVE (it returned the kinetic term alone).
+- `PERTATOMPAIR` interaction codes other than 0/1/2 are a parse error (gromosXX silently zeroes
+  the state).
+
+### Reproduced gromosXX defects (flagged, to be corrected in a later version)
+
+- **`eds_pert_lj_crf_interaction` called with its outputs shifted by one slot**
+  (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200` against `perturbed_nonbonded_term.h:65-72`).
+  For a `PERTATOMPAIR` pair with a perturbed atom and a normal or 1-4 state type, the state's
+  energies receive the kernel's dH/dλ, its force is `(f + e_lj + e_crf)·r`, its dH/dλ is 0, and
+  `eps = 0` and `coulomb_scaling = 0` are fed into the kernel, so its 1/r Coulomb term vanishes.
+  Reproduced in `atom_pair_state` (`gromos-forces/src/nonbonded/perturbed.rs`), pinned by
+  `aladip_vacuum_fep_pairpert_precalc`. Lean: `shiftedPairForce_eq_pairForce_iff`,
+  `shifted_ti_shortfall`, `crfSoftEnergy_shift` (`math`, `OAI.Physics.Gromos.Divergences`).
+- Reproduced quirks, now pinned by `VOLUMEPRESSURE03`:
+  - the bonded and perturbed bonded virial is added under every virial type, the gate commented
+    out (`quartic_bond_interaction.cc:93`, `perturbed_quartic_bond_interaction.cc:125`);
+  - the perturbed 1-4, RF-excluded and atom-pair virials are unconditional
+    (`perturbed_nonbonded_innerloop.cc:2247-2250, 3941-3946`, `perturbed_nonbonded_pair.cc:1559-1561`),
+    while plain pairs are gated (`nonbonded_set.cc:428-430`);
+  - SETTLE is gated on the atomic virial with no vacuum split (`settle.cc:397`); LINCS adds no
+    constraint virial;
+  - `NDFMIN` is not subtracted from the COM/IR dof (`multibath.cc:139-149`);
+  - a bath's `scale` is printed 0 without a thermostat (`multibath.h:48`,
+    `berendsen_thermostat.cc:134`);
+  - the kinetic-tensor rows are printed unrotated while the trace uses the rotated tensor
+    (`out_configuration.cc:3331-3344`).
+- Not ported (no reference): the position-restraint and distance/dihedral-restraint virials
+  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
+  dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).
+
+### Verified
+
+- References: 79 passed, 1 ignored (`aladip_gamd`), whole-block, `VOLUMEPRESSURE03` and
+  `CONSFORCERED` included; check suite, `fep_null_perturbation` and 563 unit tests green.
+- `ENERGY03`, forces, trajectories and final configurations are byte-identical to the previous
+  binary on every old reference.
+- LiveCoMS `t_02` over 500 steps matches native gromosXX to |ΔV|/V 3e-10 and 2e-5 K per bath.
+
+## [0.0.54] (2026-10-12)
+
+**Extended TI (`PRECALCLAM`): the energies of every perturbed interaction and their λ derivatives
+at `NRLAM` extra λ points, written as gromosXX writes them; and the reaction field built as
+gromosXX builds it at `EPSRF = 0` and from `RCRF`** (1.8 step 2). Nine new references generated
+by native gromosXX pin it: 76 reference systems pass, whole-block.
+
+### Added
+
+- **`PRECALCLAM NRLAM MINLAM MAXLAM`** (`in_parameter.cc:4478-4513`, `check_parameter.cc:261-266`):
+  gromosXX's range checks, perturbation on and `NTWE = NTWG > 0` required; refused with lattice
+  sum, the conjugate-gradient minimiser, QM/ML terms, GAMD and EDS, as gromosXX does. Allowed
+  with `LAMBDAS`, perturbed SHAKE and perturbed distance restraints. `Recipe.perturbation.precalclam`
+  (`{nr_lambdas, min_lambda, max_lambda}`, a dict in Python, `None` when absent); `imd_write`
+  emits the block.
+- On every NTWG step the grid fills, per λ_k, `A/B_lj` and `A/B_crf` per energy-group pair (pairs,
+  RF self and exclusions, perturbed 1-4, perturbed atom pairs), `AB_kinetic`, `AB_bond`,
+  `AB_angle`, `AB_improper`, `AB_disres`, and the `A_dihedral`/`B_dihedral` scalars; folded and
+  summed in `calculate_totals`' order (`energy.cc:397-423`), not part of the potential total.
+  `AB_angres`, `AB_dihres`, `AB_disfld` stay 0 (those restraints are not modelled).
+- The `.tre` and `.trg` carry `# precalclam` (`# nr_lambdas`, N, the 12 columns) and `# ABdih`
+  (`out_configuration.cc:3226-3266`); the `.trg` prints the derivative record. With
+  `NRLAM = 0` nothing changes.
+- **Nine references**: `ch4_water_fep_precalc`, `meoh_water_fep_precalc` (charge changes: CRF
+  pair, RF self and exclusion terms), `aladip_vacuum_fep_precalc` (bonded `AB_*`, `AB_kinetic`,
+  `ABdih`), `aladip_vacuum_fep_lambdas_precalc` (`LAMBDAS` with `NRLAM 6 0.2 0.7`),
+  `aladip_vacuum_fep_shake_precalc`, `aladip_vacuum_fep_distres_precalc`,
+  `ch4_water_fep_precalc_twinrange` (pairlist every 5 steps, output every 2), and
+  `aladip_solvated_epsrf0`, `aladip_solvated_rcrf`. `aladip_vacuum_fep_pairpert_precalc` is
+  generated and ignored (see Known, deferred).
+
+### Fixed
+
+- **`EPSRF = 0`** (conducting boundary): gromosXX sets `crf = −1` (`nonbonded_term.cc:58-71`,
+  `perturbed_nonbonded_term.cc:51-61`); gromos-rs used the ε formula. Step-0 CRF of
+  `aladip_solvated_epsrf0` was −56.26, gromosXX −60.87; now equal, in every kernel.
+- **The reaction-field constants come from `RCRF`**, not `RCUTL` (`nonbonded.rf_cutoff`,
+  `in_parameter.cc:4606`). Step-0 CRF of `aladip_solvated_rcrf` (RCRF 1.2, RCUTL 1.4) was −60.83,
+  gromosXX −61.72; now equal. gromosXX accepts `RCRF ≠ RCUTL` silently (`check_parameter.cc` has
+  no rule); so does gromos-rs. Every other reference has `RCRF = RCUTL` and `EPSRF ≠ 0` and is
+  byte-identical.
+
+### Verified
+
+- References: 76 passed, 2 ignored (`aladip_gamd`, `aladip_vacuum_fep_pairpert_precalc`),
+  whole-block; check suite 10 passed, 1 ignored; `fep_null_perturbation` 2 passed; unit crates
+  green; the MPI build succeeds.
+- `NRLAM = 0`: every `.tre`/`.trg`/`.trf`/`.trc`/final configuration is byte-identical to 0.0.53
+  on all 68 previous references.
+- gromos++ `ene_ana` prints identical averages on our `ch4_water_fep_precalc` files and
+  gromosXX's.
+- LiveCoMS tutorial `t_02/DDM/md_TI/md_TI_ASA_Na.imd` runs to completion (50 000 steps, 292 s).
+
+### Measured
+
+Wall time, one thread, 500 steps, interleaved, n = 5, mean ± std (BENCHMARKING.md §9):
+
+| system | 0.0.53 | this version | gromosXX | gromosXX / this |
+|---|---|---|---|---|
+| `ch4_water_fep_l025`, outputs off | 11.33 ± 0.11 s | 11.30 ± 0.08 s | — | — |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | — | 11.31 ± 0.06 s | 11.93 ± 0.02 s | 1.055 ± 0.006 |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | — | 12.15 ± 0.05 s | 13.14 ± 0.02 s | 1.081 ± 0.005 |
+
+Without `PRECALCLAM` nothing changes beyond noise. 81 λ points on every step cost 7 % here and
+10 % in gromosXX.
+
+### Deliberate differences from gromosXX
+
+- `NRLAM = 1` is refused: gromosXX divides by `NRLAM − 1` and every λ_k is NaN.
+- Conventions of the method (de Ruiter & Oostenbrink, JCTC 2016, 12, 4476; not divergences):
+  - the derivative record's signs, `A_de = +∂A/∂λ`, `B_de = −∂B/∂λ`: the B-state softness
+    derivative is taken in `1 − μ` (Eqs. 9, 12; `perturbed_nonbonded_term.cc:614-716`);
+  - the grid is in the individual μ, not λ, so `LAMBDAS` and `NLAM` are applied afterwards by
+    `ext_ti_ana` (p. 7, Eqs. 10–13); `AB_kinetic` keeps the simulated mass μ, `slam`, as momenta
+    are conserved (Eqs. 17, 19; `temperature_calculation.cc:200-224`).
+- Reproduced quirks (`.claude/porting.md`):
+  - the long-range ext energies are refreshed only on pairlist steps that are also output steps,
+    and are zero on the output steps after one that is not (`perturbed_nonbonded_set.cc:87-96,
+    280-300`);
+  - the improper angle is wrapped once, at the current λ, and not re-wrapped per λ_k;
+  - perturbed SHAKE books into the `AB_bond` derivative only (`perturbed_shake.cc:229-259`;
+    gromosXX's warning, `in_perturbation.cc:327-334`, is a prepare note);
+  - two bond-mixing forms are kept for bit-identity: `(1 − λ_k)·b0_A + λ_k·b0_B` on the grid,
+    `r0_A + L·Δr0` in the main term.
+- The two reaction-field fixes above (`EPSRF = 0` → `crf = −1`; constants from `RCRF`, not
+  `RCUTL`, accepted silently as gromosXX does).
+
+### Known, deferred
+
+- `PERTATOMPAIR` pairs with a perturbed atom are wrong in the main energy (`ptp.rs` type
+  underflow, list surgery, soft core); pinned by the ignored
+  `aladip_vacuum_fep_pairpert_precalc`, fixed next.
+
+## [0.0.53] (2026-10-11)
+
+**Individual λ per interaction and energy-group pair (`LAMBDAS`), the λ exponent done as gromosXX
+does it, and the dH/dλ of perturbed SHAKE and perturbed distance restraints** (1.8 step 1). Thirteen
+new references generated by native gromosXX pin it, all compared value by value in both energy
+blocks: 67 reference systems pass.
+
+### Added
+
+- **`LAMBDAS`** (`in_parameter.cc:4326-4472`): `NTIL on|off|1|0`, rows `NTLI NILG1 NILG2 ALI…ELI`
+  with `NTLI` a name or 1–12 (`angleres` is documented by gromosXX and rejected by its parser; so
+  here), groups 1-based and bounded by `NEGR`, `NILG2 ≥ NILG1`, a warning for an off-diagonal row
+  of a bonded kind, symmetric storage, the last duplicate wins, left-over tokens an error, and
+  without `NTG=1` the block is ignored with gromosXX's warning. One table in gromos-core
+  (`gromos_core::lambdas::IndividualLambdas`, 14 kinds in gromosXX's order) evaluated by the
+  topology's `update_for_lambda` with gromosXX's exact expression (`topology.cc:1442-1455`);
+  every perturbed term reads its own kind at `[eg(i)][eg(j)]` (nonbonded, RF self at `[g][g]`,
+  1-4, excluded, atom pairs) or `[eg(first atom)][same]` (bonded, restraints, SHAKE, masses,
+  kinetic), and multiplies its dH/dλ by dλ_i/dλ. `Recipe.perturbation.lambdas` carries the rows
+  (name or number for the kind); `imd_write` emits the block.
+- **`NRDGL=1`** reads λ from the configuration's `PERTDATA` block, as gromosXX does
+  (`in_configuration.cc:876-897, 2351-2371`), and errors without one; the final configuration
+  now carries `PERTDATA` whenever perturbation is on, and `DISRESEXPAVE` with time-averaged
+  restraints.
+- **Perturbed SHAKE** (`perturbed_shake.cc`): with `NTC=3` the perturbed bonds become constraints
+  of length `r0_A + L_bond·(r0_B − r0_A)`, shaken before the unperturbed ones, and their dH/dλ is
+  booked per group in the constraints column of the `.trg`. `NTC=2` constrains exactly the
+  `BONDH` bonds, which the topology now remembers (`Bond.hydrogen`); a perturbed BONDH bond under
+  `NTC=2` is refused as gromosXX does.
+- **Perturbed distance restraints** are a full port of
+  `perturbed_distance_restraint_interaction.cc` (`r0`/`w0` mixed in L, the `2^(n+m) L^n (1−L)^m`
+  prefactor, energy, force and dH/dλ per group), and time averaging (`NTDIR < 0`, the `r⁻³`
+  running average) now works for perturbed and unperturbed restraints; before this the average
+  was never computed.
+- **Thirteen references**: `ch4_water_fep_lambdas` (vdw/vdw_soft rows on the solute–solvent
+  pair), `ch4_water_fep_lambdas_off` (`NTIL off`, identical to `ch4_water_fep_l025` outside the
+  title), `ch4_water_fep_nlam2`, `ch4_water_fep_nrdgl`, `aladip_vacuum_fep_lambdas`
+  (bond/angle/dihedral/improper/mass on (1,1), (2,2), nonbonded on every pair),
+  `aladip_vacuum_fep_lambdas_nlam2`, `aladip_vacuum_fep_nlam2`, `aladip_vacuum_fep_shake`,
+  `aladip_vacuum_fep_shake_lambdas`, `aladip_vacuum_fep_shake_hblock` (H and non-H perturbed bond
+  blocks sharing an atom, a group-2 bond that changes length), `aladip_vacuum_fep_distres`,
+  `aladip_vacuum_fep_distres_lambdas`, `aladip_vacuum_fep_distres_tavg`.
+- gromosXX's `check/lambdas.t.cc` ported into the check suite: per-group energies of the `on`
+  run equal the `off` run at `λ = L`, and `dE_on = dE_off·L′`, for bond, angle, dihedral and
+  improper; its `NonBonded` values need `SCALEDINTERACTIONS` and are left out.
+- `fep_null_perturbation`: identity `LAMBDAS` rows on a null perturbation stay bit-identical.
+
+### Fixed
+
+- **`NLAM ≠ 1` was applied twice and to the wrong terms.** gromos-rs fed `RLAM^NLAM` to every
+  perturbed term and then raised it to `NLAM` again in the soft-core kernel. gromosXX evaluates
+  the polynomial on `RLAM`, uses `(1−L)^n` and `L^n` in the nonbonded term only, and keeps bonded
+  terms, restraints and masses linear in L (`perturbed_nonbonded_term.cc:322-347`); `powi` became
+  `powf` to match `pow`. `NLAM=1` outputs are byte-identical to before.
+- The constraint dH/dλ was computed and discarded; the perturbed distance-restraint dH/dλ was
+  never computed. Both reach the `.trg` now, and `Simulation.dhdl` returns the full derivative
+  (kinetic + potential + special), what the `.trg` writes and `ext_ti_ana` integrates;
+  `dhdl_terms` gains `kinetic`, `constraints`, `distanceres`.
+- `DLAMT ≠ 0` (slow growth) and `NSCALE ≠ 0` (`SCALEDINTERACTIONS`) were parsed and silently
+  ignored; both are refused with a message. The refusals run on every build path, including a
+  Python `Simulation(system, recipe, plan=…)`.
+- `PERTDISRESSPEC` restraints were applied with `NTG=0`; gromosXX ignores them then.
+- `PERTBONDSTRETCHH`, `PERTBONDANGLEH`, `PERTIMPROPERDIHH` and `PERTPROPERDIHH` were read after
+  the plain blocks; gromosXX reads them first (`in_perturbation.cc:172-175, 590, 827, 1058`),
+  which fixes the SHAKE order when both blocks share an atom.
+
+### Changed
+
+- The plan no longer carries `lambda`/`nlam`: λ lives on the prepared topology (`Topology.lambda`,
+  `lambda_exp`, `individual_lambdas`), one source for the force field, the constraints, the
+  restraints and the temperature calculation. The two dead `InteractionLambdas`/`LambdaController`
+  pairs are gone.
+
+### Deliberate differences from gromosXX
+
+- A perturbed atom pair whose group pair has `L_lj ≠ L_crf`: gromosXX only logs a critical
+  message, scales each state's combined LJ+RF force by the LJ factor and finishes the run
+  (`perturbed_nonbonded_pair.cc:309-312, 405`). Reproduced (a prepare note says so). With
+  `L_lj = L_crf` the previous per-kind sum is kept so NLAM=1 runs stay byte-identical; the last
+  bits differ from gromosXX for a charged perturbed 1-4 pair.
+- `LINCS` with `NTC=3` and perturbed bonds: gromosXX moves the bonds to constraints LINCS never
+  shakes and only warns, leaving them with neither constraint nor force
+  (`in_perturbation.cc:265-303`, `create_constraints.cc:139-143`). Refused instead.
+- `FORCESCALE 1/2` and `NTDIRA=1` with time-averaged restraints are refused (not implemented);
+  gromosXX runs them.
+- The `…03` perturbation blocks are still accepted (gromosXX errors on them); "Perturbation of a
+  non-existing bond" is still not checked. Both predate this version.
+
+### Still open
+
+- `SCALEDINTERACTIONS` / `NSCALE`, slow growth (`DLAMT`), replica-exchange λ, `FORCESCALE 1/2`.
+- `shake_buffered` scales the constraint forces by `1/dt²` once per constraint rather than once per
+  atom (gromosXX `perturbed_shake.cc:400-406`); nothing compares `CONSFORCERED` yet.
+
+## [0.0.52] (2026-10-11)
+
+**Energies are booked per energy group the way gromosXX books them, and the reference test now
+compares every number of the energy blocks** (1.8 step 0). Before this, the `# nonbonded` rows of
+every `.tre` were zero, `# bonded` filled group 1 only, `# special` and the centre-of-mass and
+internal kinetic energies were zero, and the `.trg` put all bonded dH/dλ in the bond slot. Nothing
+noticed, because the test compared three totals per frame. It now compares all 52 totals and every
+row of `# baths`, `# bonded`, `# nonbonded`, `# special`, `# eds`, `# gamd`, `# precalclam` and
+`# ABdih`, in the `.tre` and in the `.trg`, against native gromosXX: 54 references pass that way.
+
+### Added
+
+- **Energy groups as gromosXX assigns them** (`in_topology.cc:433-459`): `prepare_system` maps
+  every atom, solvent included, to its FORCE group. An NRE list that stops before the last atom
+  gets one more group, reported as `PrepareNote::EnergyGroupAdded`; an NRE beyond the last atom
+  or not strictly increasing is an error.
+- **Every energy and dH/dλ booked into its group cell**: nonbonded pairs, 1-4 pairs, RF excluded
+  pairs and the RF self term into `[eg(i)][eg(j)]`, the perturbed corrections into the same cells,
+  bonded terms by their first atom (cross-dihedrals by `a`), position and distance restraints by
+  the restrained atom. The kernels take an `EnergyGroups` argument and choose a const-generic
+  instantiation once per call, so a one-group run compiles to the previous code path.
+- **gromosXX's energy layout.** `Energy` carries the per-group arrays and matrices of
+  `configuration::Energy` and the centre-of-mass/internal split of the kinetic energy per bath
+  (`temperature_calculation.cc:60-113`); dH/dλ is a second `Energy` on
+  `State::perturbed_energy_derivatives`, as `conf.current().perturbed_energy_derivatives` is.
+- **The kinetic dH/dλ of perturbed masses** (`temperature_calculation.cc:116-237`), and dH/dλ
+  per bonded term (bond, angle, improper, dihedral) instead of one bonded sum.
+- **One writer for both blocks**: `gromos_io::energy::write_energyred_body` prints
+  `_print_energyred_helper` for the `.tre` (`EnergyWriter::write_energy`) and the `.trg`
+  (`FreeEnergyWriter::write_derivatives`), including slot 40 of the `.trg` (dH/dλ of the
+  potential times the potential, `energy_calculation.cc:87-89`), slots 47/48 (total plus the
+  shifted-RF extras) and the one empty GaMD group gromosXX always prints in the `.tre`.
+- **Five references** generated by native gromosXX: `aladip_vacuum_fep_groups` (two groups, per-term
+  dH/dλ per group, kinetic dH/dλ), `aladip_vacuum_fep_trg` (one group with a `.trg`),
+  `aladip_multibath_swapped` (DOFSET `12 2 2  72 1 1`), `aladip_solvated_em_posres_groups` and
+  `aladip_harmonic_covalent_groups` (position restraints and harmonic bonded terms split over two
+  solute groups).
+- `scripts/bench_engines.py --rust-md PATH` compares several Rust builds on the same patched
+  input, interleaved.
+
+### Fixed
+
+- **Atoms went to the wrong thermostat bath when DOFSET bath numbers do not rise with atom
+  order.** The plan kept one last atom per bath and read the baths as contiguous ranges in bath
+  order; with solute in bath 2 and water in bath 1, the solute was scaled by bath 1. Every
+  consumer (kinetic energy per bath, the Berendsen and Nosé–Hoover scaling, the kinetic dH/dλ) now
+  uses gromosXX's `in_bath` over the DOFSET ranges (`multibath.h:159-171`);
+  `aladip_multibath_swapped` pins it, trajectory included.
+- A temperature group spread over two baths is refused with gromosXX's message
+  (`multibath.cc:161-181`); it used to run, with the bath energies and the scaling disagreeing.
+- A TEMPERATUREGROUPS block whose last group ends before the last solute atom is refused when an
+  MD run is prepared (`in_topology.cc:278-290`); the shared topology parser still reads it, as
+  gromos++ does.
+- FORCE now refuses NRE values that are not positive or not strictly increasing
+  (`in_parameter.cc:986-993`).
+- `Topology::num_solute_atoms()` recursed forever on a topology without instances.
+- Under MPI, ranks other than 0 wrote `md.tre`, `md.trc`, `md.trg` and `md.recipe.toml` into
+  the working directory. Only rank 0 writes files now.
+- The `.trg` comparison now requires the same number of frames as gromosXX; extra frames used to
+  pass unseen.
+
+### Changed
+
+- `Energy` no longer has `dhdl_total`, `dhdl_bonded`, `dhdl_lj` and `dhdl_crf`; read
+  `State::perturbed_energy_derivatives` instead. `EnergyFrame` and `FreeEnergyFrame` are
+  scalar summaries; the engine writes both files from the energy records. The Python API is
+  unchanged (`Simulation.dhdl` is the potential part of dH/dλ, as before).
+
+### Deliberate differences from gromosXX
+
+- Per-cell summation order differs from gromosXX (long-range terms are added before the local
+  terms, 1-4 pairs are summed separately, perturbed terms are applied as a correction to state A),
+  so group cells agree within the reference tolerances, not bit for bit. The totals are summed as
+  before and are unchanged on every reference.
+- gromosXX's "Multibath not sorted" check never fires (`multibath.cc:189-196` never updates the
+  running last atom), so it accepts DOFSET lines whose last atom goes backwards and then counts a
+  negative number of degrees of freedom. gromos-rs refuses them.
+- `thermostat.cc:66-67` skips a range whose bath scale is exactly 1.0 with `continue`, which also
+  skips the update of the range's last atom, so the next range scales the skipped atoms too. This
+  is a defect and is not reproduced.
+
+### Measured
+
+Wall time of `md`, one thread, 500 steps, outputs off, interleaved, n = 5, mean ± std:
+
+| system (energy groups) | 0.0.50 | this version |
+|---|---|---|
+| `ch4_water_fep` (2) | 11.70 ± 0.41 s | 12.13 ± 0.41 s |
+| `water_216_box` (1) | 0.314 ± 0.009 s | 0.316 ± 0.009 s |
+
+One group costs nothing measurable. Two groups cost about 4 % ± 5 %, mostly in the long-range
+pairs. A per-pair read-modify-write of the group cell cost 14.5 %; a register accumulator that
+writes the cell only when it changes brought it down to these figures.
+
+### Still open
+
+- `VOLUMEPRESSURE03` still writes one temperature per bath without the centre-of-mass and internal
+  split and without the scaling column.
+- The dH/dλ of perturbed distance restraints and of perturbed SHAKE are not computed yet (1.8 step 1).
+
 ## [0.0.51] (2026-10-07)
 
 **`gromos.rdf()` returned a wrong g(r), and three implementations became one.** The binding
@@ -1769,6 +3334,7 @@ Code comments, tests and older entries above cite work by a stable id (`1.5`, `2
 | `1.5b` | Real-input compatibility | ✓ 0.0.42–0.0.46 |
 | `1.5c` | Tutorial 2 opened | ✓ 0.0.48 |
 | `1.7` | FEP / TI | ✓ complete for fixed λ |
+| `1.8` | Free-energy completeness | step 0 ✓ 0.0.52 (energy groups, whole-block energy tests); step 1 ✓ 0.0.53 (LAMBDAS, NLAM, perturbed SHAKE/restraint dH/dλ); step 2 ✓ 0.0.54 (PRECALCLAM, RF at EPSRF = 0 / from RCRF); 0.0.55 fixes (PERTATOMPAIR, constraint virial); 0.0.56 PERTATOMPAIR kernel corrected; step 3 ✓, 4b ✓, 6 ✓ 0.0.57 (extended-TI analysis and mbar, dGslv_pbsolv, EDS); steps 5, 7 open; 6b (λ-EDS) and 8 (AEDS) planned |
 | `2.0` | Instancing model, phases 1–2e | ✓ |
 | `2.1` | Atom selection | ✓ complete |
 | `2.2` | Shared analysis infra | ✓ complete |

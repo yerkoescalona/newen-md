@@ -1,0 +1,29 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_vacuum_fep_pairpert_precalc"
+description = "aladip vacuum FEP, PERTATOMPAIR pairs with perturbed atoms, energies at 11 precalculated lambdas; pins the gromosXX defect; see CHANGELOG 0.0.55"
+level = 4
+isolates = "PRECALCLAM ext energies for PERTATOMPAIR pairs with a perturbed atom"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_fep_pairpert_precalc.in"
+pttopo = "../shared/aladip_pairpert.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): the native binary's argument-shift defect, not the default kernel.
+[recipe_overrides]
+"perturbation.atom_pair_kernel" = "gromosxx-shifted"

@@ -1380,16 +1380,19 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 2,
             j: 3,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 1,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.iac = vec![0; 4];
         topo.mass = vec![1.0; 4];

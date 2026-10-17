@@ -1,0 +1,12 @@
+TITLE
+aladip probe: three gentle EDS end states
+END
+MPERTATOM
+# NJLA NPTB
+    2    3
+# state names
+  stateA  stateB  stateC
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2  IAC3  CHARGE3
+   4  N        5   -0.280     5   -0.480     5   -0.080
+   5  H       18    0.280    18    0.480    18    0.080
+END

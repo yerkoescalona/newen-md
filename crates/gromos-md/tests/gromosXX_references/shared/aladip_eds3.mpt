@@ -1,0 +1,13 @@
+TITLE
+aladip: three EDS end states
+END
+MPERTATOM
+# NJLA NPTB
+    3    3
+# state names
+  stateA  stateB  stateC
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2  IAC3  CHARGE3
+   1  CB      14    0.000    11    1.000    14    0.300
+   4  N        5   -0.280    19    0.200     6   -0.500
+  11  H       18    0.280    14    0.000    18    0.400
+END

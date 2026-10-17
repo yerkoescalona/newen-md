@@ -39,6 +39,14 @@ impl Algorithm for EnergyCalculation {
         // Finalize the potential total here.
         let state = conf.old_mut();
         state.energies.update_potential_total();
+        state.energies.book_totals_into_single_group();
+        // gromosXX `calculate_totals` (energy.cc:397-423) on both records, PRECALCLAM part
+        state.energies.precalc.calculate_totals();
+        let d = &mut state.perturbed_energy_derivatives;
+        d.book_totals_into_single_group();
+        d.precalc.calculate_totals();
+        // gromosXX energy_calculation.cc:87-89
+        d.entropy_term = d.potential_total * state.energies.potential_total;
         log::debug!(
             "  E_pot={:.10e}  E_kin={:.10e}  E_tot={:.10e}",
             state.energies.potential_total,

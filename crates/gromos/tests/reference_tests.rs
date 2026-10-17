@@ -14,7 +14,9 @@
 //!   Level 3: water_216_box, water_216_nvt, water_216_npt
 //!   Level 4: aladip_solvated
 
-use gromos::forces::nonbonded::{lj_crf_innerloop, CRFParameters, ForceStorage, LJParamMatrix};
+use gromos::forces::nonbonded::{
+    lj_crf_innerloop, CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix,
+};
 use gromos::io::coordinate::read_coordinate_file;
 use gromos::io::topology::{build_topology, read_topology_file};
 use gromos::math::Vec3;
@@ -301,6 +303,7 @@ fn test_pair_lj_forces_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     // Load expected forces
@@ -352,6 +355,7 @@ fn test_pair_lj_energy_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     let energies = parse_energies_tre(&base.join("expected/energies.tre"), 0);
@@ -402,6 +406,7 @@ fn test_nacl_pair_forces_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     // Load expected forces
@@ -454,6 +459,7 @@ fn test_nacl_pair_energy_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     let energies = parse_energies_tre(&base.join("expected/energies.tre"), 0);
@@ -501,6 +507,7 @@ fn test_pair_lj_mixed_forces_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     // Load expected forces
@@ -551,6 +558,7 @@ fn test_pair_lj_mixed_energy_step0() {
         &bc,
         gromos_core::units::four_pi_eps_i,
         &mut storage,
+        EnergyGroups::single(),
     );
 
     let energies = parse_energies_tre(&base.join("expected/energies.tre"), 0);

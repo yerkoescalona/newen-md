@@ -51,6 +51,8 @@ Desktop.ini
 
 # Logs and databases
 *.log
+# gromos++ @verbose logs are reference data of the dGslv_pbsolv test
+!crates/gromos-analysis/tests/data/dgslv_pbsolv/*.log
 *.sql
 *.sqlite
 *.db

@@ -33,9 +33,23 @@ fn every_reference_input_round_trips_through_the_recipe() {
     assert!(inputs.len() >= 40);
     for path in &inputs {
         let imd = read_imd_file(path).unwrap();
-        // GAMD and EDS are applied by the binary, not the recipe, and INNERLOOP selects a kernel:
-        // the same passthrough policy the binary uses.
-        let policy = PassthroughPolicy::allow(["GAMD", "EDS", "INNERLOOP"]);
+        // Extended TI (PRECALCLAM) is not modelled by the recipe yet (1.8); its reference inputs
+        // are refused, by design, until it is.
+        let unmodelled: Vec<&str> = ["PRECALCLAM"]
+            .into_iter()
+            .filter(|b| imd.raw_blocks.contains_key(*b))
+            .collect();
+        if !unmodelled.is_empty() {
+            println!(
+                "{}: skipped, the recipe does not model {} yet",
+                path.display(),
+                unmodelled.join(", ")
+            );
+            continue;
+        }
+        // GAMD is applied by the binary, not the recipe, and INNERLOOP selects a kernel: the
+        // same passthrough policy the binary uses.
+        let policy = PassthroughPolicy::allow(["GAMD", "INNERLOOP"]);
         let (recipe, diag) = RunRecipe::from_imd_with(&imd, &policy)
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(recipe.version, RECIPE_VERSION);
@@ -143,6 +157,102 @@ fn unmodelled_blocks_are_refused_unless_allowed() {
     assert!(recipe.to_imd_string(None).contains("GAMD\n1 2 3\nEND"));
 }
 
+/// REPLICA_EDS acts together with the modelled EDS block: refused by name whatever the
+/// passthrough policy.
+#[test]
+fn replica_eds_is_refused_even_when_allowed() {
+    let text = "SYSTEM\n  1 0\nEND\nREPLICA_EDS\n  1 1 2\nEND\n";
+    let imd = parse_imd_str(text).unwrap();
+    let err = RunRecipe::from_imd_with(&imd, &PassthroughPolicy::allow(["REPLICA_EDS"]))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("REPLICA_EDS") && err.contains("not implemented"),
+        "{err}"
+    );
+}
+
+/// The AEDS block is modelled: every field survives `.imd` → recipe → `.imd` → recipe and the
+/// recipe's dict form.
+#[test]
+fn the_aeds_block_round_trips() {
+    let text =
+        "SYSTEM\n  1 0\nEND\nAEDS\n 1\n 5 3\n 10.5 -50\n 0 -5 -140\n 0 1 2 3 500 50000\nEND\n";
+    let imd = parse_imd_str(text).unwrap();
+    let recipe = RunRecipe::from_imd(&imd).unwrap().0;
+    let a = recipe.aeds.clone().unwrap();
+    assert!(a.enabled && !a.ntiaedss && a.restremin);
+    assert_eq!((a.form, a.num_states, a.bmaxtype), (5, 3, 2));
+    assert_eq!((a.emax, a.emin, a.bmax), (10.5, -50.0, 3.0));
+    assert_eq!(a.eir, vec![0.0, -5.0, -140.0]);
+    assert_eq!((a.asteps, a.bsteps), (500, 50000));
+    let again = RunRecipe::from_imd(&parse_imd_str(&recipe.to_imd_string(None)).unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(again.aeds, recipe.aeds);
+    let json = recipe.to_json().unwrap();
+    assert_eq!(RunRecipe::from_json(&json).unwrap().aeds, recipe.aeds);
+    // AEDS = 0: FORM and NUMSTATES only, as gromosXX reads it
+    let off = parse_imd_str("AEDS\n 0\n 1 2\nEND\n").unwrap();
+    let r = RunRecipe::from_imd(&off).unwrap().0;
+    assert!(!r.aeds.as_ref().unwrap().enabled);
+    let again = RunRecipe::from_imd(&parse_imd_str(&r.to_imd_string(None)).unwrap())
+        .unwrap()
+        .0;
+    assert_eq!(again.aeds, r.aeds);
+}
+
+/// The A-EDS switches (D16, D25, D32) are not `.imd` tokens: absent from the echo while
+/// `"intended"`, set by dotted path, round-tripped through TOML and JSON, and the `.imd` the
+/// recipe writes does not change.
+#[test]
+fn aeds_switches_are_set_by_path_and_echoed_only_when_not_the_default() {
+    use gromos_run::recipe::{AedsColumns, AedsPrevalence, AedsTarget};
+    let text =
+        "SYSTEM\n  1 0\nEND\nAEDS\n 1\n 5 3\n 10.5 -50\n 0 -5 -140\n 0 1 2 3 500 50000\nEND\n";
+    let mut r = RunRecipe::from_imd(&parse_imd_str(text).unwrap())
+        .unwrap()
+        .0;
+    let a = r.aeds.clone().unwrap();
+    assert_eq!(
+        (a.energy_columns, a.prevalence, a.target_state),
+        (
+            AedsColumns::Intended,
+            AedsPrevalence::Intended,
+            AedsTarget::Intended
+        )
+    );
+    let toml = r.to_toml().unwrap();
+    for key in ["energy_columns", "prevalence", "target_state"] {
+        assert!(!toml.contains(key), "{toml}");
+    }
+    let imd = r.to_imd_string(None);
+    r.set("aeds.energy_columns", "gromosxx-post-update")
+        .unwrap();
+    r.set("aeds.prevalence", "gromosxx-plain-exp").unwrap();
+    r.set("aeds.target_state", "gromosxx-state1-default")
+        .unwrap();
+    let a = r.aeds.clone().unwrap();
+    assert_eq!(
+        (a.energy_columns, a.prevalence, a.target_state),
+        (
+            AedsColumns::GromosxxPostUpdate,
+            AedsPrevalence::GromosxxPlainExp,
+            AedsTarget::GromosxxState1Default
+        )
+    );
+    let toml = r.to_toml().unwrap();
+    assert!(
+        toml.contains("energy_columns = \"gromosxx-post-update\""),
+        "{toml}"
+    );
+    assert_eq!(RunRecipe::from_toml(&toml).unwrap(), r);
+    assert_eq!(RunRecipe::from_json(&r.to_json().unwrap()).unwrap(), r);
+    assert_eq!(r.to_imd_string(None), imd);
+    assert!(r.set("aeds.prevalence", "plain").is_err());
+    assert!(r.set("aeds.target", "intended").is_err());
+}
+
 #[test]
 fn factories_build_the_same_runs_as_the_parameter_factories() {
     let nvt = RunRecipe::nvt(0.002, 100, 298.0, "hbonds").unwrap();
@@ -176,4 +286,35 @@ fn a_typo_in_a_recipe_field_is_an_error() {
     json["control"]["stepz"] = serde_json::json!(5);
     let err = RunRecipe::from_json(&json.to_string()).unwrap_err();
     assert!(err.to_string().contains("stepz"), "{err}");
+}
+
+/// `atom_pair_kernel` is not an `.imd` block: absent from the echo at its default, set by dotted
+/// path (`md @recipe_set`), round-tripped when set, and nothing in the `.imd`.
+#[test]
+fn atom_pair_kernel_is_set_by_path_and_echoed_only_when_not_the_default() {
+    use gromos_run::recipe::AtomPairKernel;
+    let mut r = RunRecipe::default();
+    assert_eq!(r.perturbation.atom_pair_kernel, AtomPairKernel::Intended);
+    assert!(!r.to_toml().unwrap().contains("atom_pair_kernel"));
+    let imd = r.to_imd_string(None);
+
+    r.set("perturbation.atom_pair_kernel", "gromosxx-shifted")
+        .unwrap();
+    assert_eq!(
+        r.perturbation.atom_pair_kernel,
+        AtomPairKernel::GromosxxShifted
+    );
+    let toml = r.to_toml().unwrap();
+    assert!(
+        toml.contains("atom_pair_kernel = \"gromosxx-shifted\""),
+        "{toml}"
+    );
+    assert_eq!(RunRecipe::from_toml(&toml).unwrap(), r);
+    assert_eq!(r.to_imd_string(None), imd);
+
+    assert!(r.set("perturbation.atom_pair_kernel", "shifted").is_err());
+    assert!(r.set("perturbation.atom_pair_kernl", "intended").is_err());
+    assert!(r.set("perturbaton.atom_pair_kernel", "intended").is_err());
+    r.set("control.steps", "7").unwrap();
+    assert_eq!(r.control.steps, 7);
 }

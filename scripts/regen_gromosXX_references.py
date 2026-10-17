@@ -4,6 +4,7 @@
 Run from the repo root:
     python3 scripts/regen_gromosXX_references.py             # every system
     python3 scripts/regen_gromosXX_references.py meoh_water_fep ch4_water_fep_l000   # only these
+    python3 scripts/regen_gromosXX_references.py --binary PATH name   # another md binary
 
 The script runs the gromosXX md binary (patched to use CODATA 2018 constants)
 on every system in crates/gromos-md/tests/gromosXX_references/ and overwrites
@@ -11,8 +12,10 @@ the expected/ output files in place.
 
 Requires the patched binary at:
     .local/gromosXX/md++/BUILD/program/md
+unless --binary PATH names another one.
 """
 
+import argparse
 import subprocess
 import sys
 import tempfile
@@ -34,7 +37,7 @@ def parse_toml_str(text: str, key: str) -> str | None:
     return None
 
 
-def run_system(sys_dir: Path) -> bool:
+def run_system(sys_dir: Path, md_bin: Path = MD_BIN) -> bool:
     name = sys_dir.name
     toml_path = sys_dir / "input.toml"
     if not toml_path.exists():
@@ -57,7 +60,7 @@ def run_system(sys_dir: Path) -> bool:
         fin = tmp / "final.conf"
 
         cmd = [
-            str(MD_BIN),
+            str(md_bin),
             "@topo", str(topo),
             "@conf", str(conf),
             "@input", str(params),
@@ -128,19 +131,24 @@ def run_system(sys_dir: Path) -> bool:
 
 
 def main():
-    if not MD_BIN.exists():
-        print(f"ERROR: gromosXX binary not found at {MD_BIN}")
+    parser = argparse.ArgumentParser(description="Regenerate gromosXX reference outputs.")
+    parser.add_argument("--binary", type=Path, default=MD_BIN, help=f"md binary (default {MD_BIN})")
+    parser.add_argument("systems", nargs="*", help="systems to regenerate (default: all)")
+    args = parser.parse_args()
+    md_bin = args.binary.resolve()
+    if not md_bin.exists():
+        print(f"ERROR: gromosXX binary not found at {md_bin}")
         sys.exit(1)
 
-    print(f"Using binary: {MD_BIN}")
+    print(f"Using binary: {md_bin}")
     print(f"Reference dir: {REF_DIR}")
     print()
 
     systems = sorted(p for p in REF_DIR.iterdir() if p.is_dir() and p.name != "shared")
     # Optional: regenerate only the named systems (new references) — the committed expected/
     # files of the others are never rewritten by accident.
-    if len(sys.argv) > 1:
-        wanted = set(sys.argv[1:])
+    if args.systems:
+        wanted = set(args.systems)
         unknown = wanted - {p.name for p in systems}
         if unknown:
             print(f"ERROR: unknown system(s): {', '.join(sorted(unknown))}")
@@ -149,7 +157,7 @@ def main():
 
     failed = []
     for sys_dir in systems:
-        ok = run_system(sys_dir)
+        ok = run_system(sys_dir, md_bin)
         if not ok:
             failed.append(sys_dir.name)
 

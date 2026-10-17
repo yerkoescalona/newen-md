@@ -12,26 +12,28 @@
 //! is the nonbonded term; the bonded totals must equal the sum of the split), with `NSLFEXCL`
 //! toggled for the two reaction-field variants.
 //!
-//! Not portable here: `lambdas.t.cc` (per-group LAMBDAS block, not modelled), `scaling.t.cc`,
-//! `aladip_ls.t.cc` (lattice sum), the CG function, and the dihedral / angle / X-ray / local
-//! elevation / order-parameter restraints (1.6 — parked or next).
+//! `lambdas.t.cc` (individual λ, LAMBDAS on vs off) is ported for its bonded terms and its
+//! individual-λ loop; its NonBonded values need SCALEDINTERACTIONS (NSCALE = 1), which gromos-rs
+//! does not implement. Not portable here: `scaling.t.cc`, `aladip_ls.t.cc` (lattice sum), the CG
+//! function, and the dihedral / angle / X-ray / local elevation / order-parameter restraints
+//! (1.6 — parked or next).
 
 use std::path::{Path, PathBuf};
 
 use gromos_core::configuration::Configuration;
 use gromos_core::Topology;
-use gromos_forces::bonded::calculate_bonded_forces_ntf;
 use gromos_forces::bonded::perturbed::{
     calculate_perturbed_angle_forces, calculate_perturbed_bond_forces,
     calculate_perturbed_dihedral_forces, calculate_perturbed_improper_dihedral_forces,
     calculate_soft_angle_forces, calculate_soft_bond_forces, calculate_soft_improper_forces,
 };
+use gromos_forces::bonded::{calculate_bonded_forces_ntf, calculate_perturbed_bonded_forces};
 use gromos_io::coordinate::read_coordinates;
 use gromos_io::imd::ImdParameters;
 use gromos_io::topology::{build_topology, read_topology_file};
 use gromos_run::{
-    build_sequence_from_imd, prepare_system, read_imd, start, Coordinates, PassthroughPolicy,
-    Prepared, RunInputs, RunOptions,
+    build_sequence_from_imd, prepare_system, read_imd, start, Coordinates, Prepared, RunInputs,
+    RunOptions,
 };
 
 fn shared() -> PathBuf {
@@ -79,6 +81,11 @@ struct System {
 }
 
 fn load(input: &str, pttopo: bool, distrest: bool) -> System {
+    load_with(input, pttopo.then_some("aladip.pttopo"), distrest)
+}
+
+/// [`load`] with the perturbation topology `pttopo` (relative to `shared/`).
+fn load_with(input: &str, pttopo: Option<&str>, distrest: bool) -> System {
     let s = shared();
     let parsed = read_topology_file(s.join("aladip.topo")).expect("topology");
     let physical_constants = parsed.physical_constants;
@@ -88,7 +95,7 @@ fn load(input: &str, pttopo: bool, distrest: bool) -> System {
         .into();
     let imd = read_imd(s.join("check").join(input)).expect("imd");
     let inputs = RunInputs {
-        pttopo: pttopo.then(|| s.join("aladip.pttopo")),
+        pttopo: pttopo.map(|p| s.join(p)),
         distrest: distrest.then(|| s.join("check/aladip.distrest")),
         ..Default::default()
     };
@@ -104,6 +111,11 @@ fn load(input: &str, pttopo: bool, distrest: bool) -> System {
 /// Energies of the starting configuration: build the force field for `imd` (optionally with
 /// NSLFEXCL and RLAM overridden), run `init` + step 0, read the accumulated totals.
 fn step0_energies(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gromos_core::Energy {
+    step0_state(sys, nslfexcl, rlam).energies
+}
+
+/// The old state after step 0: its energies and their λ derivatives.
+fn step0_state(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gromos_core::State {
     let mut imd = sys.imd.clone();
     if let Some(v) = nslfexcl {
         imd.nslfexcl = v;
@@ -131,12 +143,8 @@ fn step0_energies(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gro
         .into();
     let mut prepared = prepare_system(&imd, topology, physical_constants, coords, &sys.inputs)
         .expect("prepare_system");
-    // aladip.in carries a LAMBDAS block switched `off` — inert, let it through.
-    let options = RunOptions {
-        passthrough: PassthroughPolicy::allow(["LAMBDAS"]),
-        ..Default::default()
-    };
-    let built = build_sequence_from_imd(&imd, &prepared, &sys.inputs, &options).expect("build");
+    let built = build_sequence_from_imd(&imd, &prepared, &sys.inputs, &RunOptions::default())
+        .expect("build");
     let mut seq = built.sequence;
     let state = gromos_core::algorithm::SimulationState::new(imd.dt, imd.nstlim);
     start(
@@ -146,7 +154,7 @@ fn step0_energies(sys: &System, nslfexcl: Option<i32>, rlam: Option<f64>) -> gro
         &state,
     )
     .expect("start");
-    prepared.configuration.old().energies.clone()
+    prepared.configuration.old().clone()
 }
 
 /// The check suite's reference values are single molecules in vacuum: no box, no minimum image.
@@ -165,6 +173,7 @@ fn bonded_split(topo: &Topology, conf: &Configuration, lambda: f64) -> [f64; 12]
         true,
         true,
         true,
+        &mut gromos_forces::bonded::BondedGroupEnergies::default(),
     );
     let dl = 1.0; // NLAM = 1 → dλ/dλ = 1
     let pb = calculate_perturbed_bond_forces(topo, conf, &vacuum(), lambda, dl);
@@ -217,7 +226,8 @@ fn aladip_bonded_terms_match_the_check_suite() {
     term(e[10], 13.3146020649, 13.314602, "PerturbedDihedral");
 
     // The force field books the same split into its totals.
-    let tot = step0_energies(&sys, None, None);
+    let st = step0_state(&sys, None, None);
+    let tot = &st.energies;
     close(
         tot.bond_total,
         e[0] + e[1] + e[2],
@@ -232,7 +242,29 @@ fn aladip_bonded_terms_match_the_check_suite() {
         "improper_total",
     );
     close(tot.dihedral_total, e[9] + e[10], 1e-9, "dihedral_total");
-    close(tot.dhdl_bonded, e[11], 1e-9, "dH/dλ of the bonded terms");
+    // dH/dλ per term, as gromosXX books it (soft terms with their kind)
+    let d = &st.perturbed_energy_derivatives;
+    let (topo, conf) = (&sys.prepared.topology, &sys.prepared.configuration);
+    let v = vacuum();
+    let dl = |f: fn(&Topology, &Configuration, &gromos_core::math::Periodicity, f64, f64) -> _| {
+        let r: gromos_forces::bonded::ForceEnergyLambda = f(topo, conf, &v, lambda, 1.0);
+        r.lambda_derivative
+    };
+    let bond = dl(calculate_perturbed_bond_forces) + dl(calculate_soft_bond_forces);
+    let angle = dl(calculate_perturbed_angle_forces) + dl(calculate_soft_angle_forces);
+    let improper =
+        dl(calculate_perturbed_improper_dihedral_forces) + dl(calculate_soft_improper_forces);
+    let dihedral = dl(calculate_perturbed_dihedral_forces);
+    close(d.bond_total, bond, 1e-9, "dH/dλ of the bonds");
+    close(d.angle_total, angle, 1e-9, "dH/dλ of the angles");
+    close(d.improper_total, improper, 1e-9, "dH/dλ of the impropers");
+    close(d.dihedral_total, dihedral, 1e-9, "dH/dλ of the dihedrals");
+    close(
+        d.bond_total + d.angle_total + d.improper_total + d.dihedral_total,
+        e[11],
+        1e-9,
+        "dH/dλ of the bonded terms",
+    );
 }
 
 #[test]
@@ -284,8 +316,8 @@ fn aladip_nonbonded_lambda_derivative_is_a_finite_difference() {
         e.lj_total + e.crf_total
     };
     let fd = (nb(lambda + eps) - nb(lambda - eps)) / (2.0 * eps);
-    let e = step0_energies(&sys, Some(1), None);
-    let analytic = e.dhdl_lj + e.dhdl_crf;
+    let d = step0_state(&sys, Some(1), None).perturbed_energy_derivatives;
+    let analytic = d.lj_total + d.crf_total;
     assert!(
         (fd - analytic).abs() < 1e-3 * analytic.abs().max(1.0),
         "nonbonded dH/dλ: finite difference {fd:.6} vs analytic {analytic:.6}"
@@ -361,5 +393,154 @@ fn aladip_dihedral_restraints_match_the_check_suite() {
         2127.910749,
         SUITE,
         "DihedralRestraint vs check-suite table",
+    );
+}
+
+#[test]
+fn aladip_perturbed_distance_restraint_lambda_derivative_is_a_finite_difference() {
+    // check_lambda_derivative on the special terms: (E(λ+ε) − E(λ−ε)) / 2ε, ε = δ = 0.001
+    let sys = load("aladip_distres.in", true, true);
+    let lambda = sys.imd.rlam;
+    let eps = 0.001;
+    let e = |l: f64| step0_energies(&sys, None, Some(l)).distanceres_total;
+    let fd = (e(lambda + eps) - e(lambda - eps)) / (2.0 * eps);
+    let analytic = step0_state(&sys, None, None)
+        .perturbed_energy_derivatives
+        .distanceres_total;
+    assert!(
+        (fd - analytic).abs() < 1e-3 * analytic.abs().max(1.0),
+        "distance-restraint dH/dλ: finite difference {fd:.6} vs analytic {analytic:.6}"
+    );
+}
+
+// ── lambdas.t.cc: individual λ, LAMBDAS on vs off, RLAM = 0.125 ──────────────────────────
+//
+// `lambdas.{on,off}.in` (byte-identical copies in `shared/check/`) set NSCALE = 1, and
+// `lambdas.pttopo` carries a SCALEDINTERACTIONS block. The scaling only touches the nonbonded
+// pairs it lists; gromos-rs does not implement it and refuses NSCALE ≠ 0, so both inputs are
+// evaluated with NSCALE forced to 0. The bonded terms and the individual-λ loop below do not
+// depend on it; the suite's NonBonded and NonBonded_newRF values do, and are left out. Its
+// kinetic check compares two zeros (`check_forcefield` runs no temperature calculation); the mass
+// L′ of the kinetic dH/dλ is judged by the `aladip_vacuum_fep_lambdas` reference instead.
+
+fn load_lambdas(input: &str) -> System {
+    let mut sys = load_with(input, Some("check/lambdas.pttopo"), false);
+    sys.imd.nscale = 0;
+    sys
+}
+
+#[test]
+fn lambdas_bonded_terms_of_the_on_run_match_the_check_suite() {
+    // check_forcefield on the "on" run: every perturbed term at its own individual λ
+    let sys = load_lambdas("lambdas.on.in");
+    let (topo, conf) = (&sys.prepared.topology, &sys.prepared.configuration);
+    let unpert = calculate_bonded_forces_ntf(
+        topo,
+        conf,
+        &vacuum(),
+        true,
+        gromos_forces::bonded::CovalentForm::default(),
+        true,
+        true,
+        true,
+        true,
+        &mut gromos_forces::bonded::BondedGroupEnergies::default(),
+    );
+    let pert = calculate_perturbed_bonded_forces(
+        topo,
+        conf,
+        &vacuum(),
+        &mut gromos_forces::bonded::BondedGroupEnergies::default(),
+        &mut gromos_forces::bonded::BondedGroupEnergies::default(),
+        None,
+    );
+    let table = |actual: f64, expected: f64, what: &str| {
+        close(
+            actual,
+            expected,
+            SUITE,
+            &format!("{what} vs check-suite table"),
+        )
+    };
+    table(unpert.bond_energy, 18.055276, "QuarticBond");
+    table(pert.bond_energy, 1.271962, "PerturbedQuarticBond");
+    table(unpert.angle_energy, 12.170290, "Angle");
+    table(pert.angle_energy, 0.500162, "PerturbedAngle");
+    table(unpert.improper_energy, 0.965060, "ImproperDihedral");
+    table(pert.improper_energy, 0.560988, "PerturbedImproperDihedral");
+    table(unpert.dihedral_energy, 2.255206, "Dihedral");
+    table(pert.dihedral_energy, 4.626301, "PerturbedDihedral");
+}
+
+#[test]
+fn lambdas_individual_lambdas_equal_the_off_run_at_their_own_lambda() {
+    // The individual-λ loop of lambdas.t.cc: for every interaction kind and energy group whose
+    // polynomial is not the identity, the "off" run at RLAM = L gives the "on" run's per-group
+    // energy, and dE_on = dE_off · L′ (δ = 1e-7). As there, a term whose dE_on is zero (no such
+    // interaction in that group: the restraint rows, group 2) is not counted as checked.
+    use gromos_core::lambdas::{InteractionLambda as K, IDENTITY_COEFFICIENTS};
+    let on = load_lambdas("lambdas.on.in");
+    let off = load_lambdas("lambdas.off.in");
+    let lam = on.imd.rlam;
+    assert_eq!(lam, off.imd.rlam, "on and off runs are at different λ");
+    let block = on.imd.lambdas.as_ref().expect("LAMBDAS block");
+    assert!(block.enabled);
+    assert!(!off.imd.lambdas.as_ref().expect("LAMBDAS block").enabled);
+    let s_on = step0_state(&on, None, None);
+    let n_groups = on.prepared.topology.energy_groups.len();
+    assert_eq!(n_groups, 2);
+
+    let mut checked = Vec::new();
+    for kind in [K::Bond, K::Angle, K::Improper, K::Dihedral, K::Disres] {
+        for n1 in 0..n_groups {
+            // gromosXX's coefficient matrices: the identity, overwritten by the rows in order
+            let [a, b, c, d, e] = block
+                .rows
+                .iter()
+                .rfind(|r| r.kind == kind && r.g1 == n1 + 1 && r.g2 == n1 + 1)
+                .map_or(IDENTITY_COEFFICIENTS, |r| r.coefficients);
+            if [a, b, c, d, e] == IDENTITY_COEFFICIENTS {
+                continue;
+            }
+            let l_int =
+                a * lam * lam * lam * lam + b * lam * lam * lam + c * lam * lam + d * lam + e;
+            let dl_int = 4.0 * a * lam * lam * lam + 3.0 * b * lam * lam + 2.0 * c * lam + d;
+            let s_off = step0_state(&off, None, Some(l_int));
+            let pick = |s: &gromos_core::State| {
+                let (e, d) = (&s.energies, &s.perturbed_energy_derivatives);
+                match kind {
+                    K::Bond => (e.bond_energy[n1], d.bond_energy[n1]),
+                    K::Angle => (e.angle_energy[n1], d.angle_energy[n1]),
+                    K::Improper => (e.improper_energy[n1], d.improper_energy[n1]),
+                    K::Dihedral => (e.dihedral_energy[n1], d.dihedral_energy[n1]),
+                    K::Disres => (e.distanceres_energy[n1], d.distanceres_energy[n1]),
+                    _ => unreachable!(),
+                }
+            };
+            let ((e_on, de_on), (e_off, de_off)) = (pick(&s_on), pick(&s_off));
+            if de_on == 0.0 {
+                continue;
+            }
+            let what = format!("{} (group {})", kind.gromos_name(), n1 + 1);
+            close(e_on, e_off, 1e-7, &format!("E_on = E_off(L), {what}"));
+            close(
+                de_on,
+                de_off * dl_int,
+                1e-7,
+                &format!("dE_on = dE_off(L)·L′, {what}"),
+            );
+            checked.push(what);
+        }
+    }
+    // gromosXX checks the same four: every perturbed bonded term of lambdas.pttopo is in group 1
+    assert_eq!(
+        checked,
+        [
+            "bond (group 1)",
+            "angle (group 1)",
+            "improper (group 1)",
+            "dihedral (group 1)"
+        ],
+        "individual-λ checks run"
     );
 }

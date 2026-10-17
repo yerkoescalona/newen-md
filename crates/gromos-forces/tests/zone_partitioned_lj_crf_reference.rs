@@ -35,7 +35,7 @@ use gromos_core::math::{Periodicity, Rectangular};
 use gromos_core::selection::AtomSelection;
 use gromos_core::spatial_index::{ConfigurationSpatialIndex, SpatialIndex};
 use gromos_forces::nonbonded::{
-    lj_crf_innerloop_novirial, CRFParameters, ForceStorage, LjCrfInteraction,
+    lj_crf_innerloop_novirial, CRFParameters, EnergyGroups, ForceStorage, LjCrfInteraction,
 };
 use gromos_forces::provider::PotentialProvider;
 use gromos_forces::zones::ZonePartition;
@@ -203,6 +203,7 @@ fn partitioned_plus_excluded_reconstructs_full_system_energy() {
         &periodicity,
         gromos_core::units::four_pi_eps_i,
         &mut lj_only_full_storage,
+        EnergyGroups::single(),
     );
     let lj_only_full_energy = lj_only_full_storage.e_lj + lj_only_full_storage.e_crf;
 
@@ -223,6 +224,7 @@ fn partitioned_plus_excluded_reconstructs_full_system_energy() {
         &periodicity,
         gromos_core::units::four_pi_eps_i,
         &mut lj_only_supplement_storage,
+        EnergyGroups::single(),
     );
     let lj_only_supplement_energy =
         lj_only_supplement_storage.e_lj + lj_only_supplement_storage.e_crf;
@@ -244,6 +246,7 @@ fn partitioned_plus_excluded_reconstructs_full_system_energy() {
         &periodicity,
         gromos_core::units::four_pi_eps_i,
         &mut excluded_storage,
+        EnergyGroups::single(),
     );
     let fully_excluded_energy = excluded_storage.e_lj + excluded_storage.e_crf;
 

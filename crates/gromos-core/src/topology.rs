@@ -34,6 +34,7 @@
 //! flat `iac`/`mass`/`charge` arrays into rebuildable caches; remove `Solute`
 //! and `Vec<Solvent>`; add `promote(instance)` with CG/exclusion renumbering.
 
+use crate::lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 use crate::math::Vec3;
 
 // ─── instancing model ───────────────────────────────────────────────────────
@@ -135,6 +136,9 @@ pub struct Bond {
     pub j: usize,
     /// Index into `Topology::bond_parameters`.
     pub bond_type: usize,
+    /// The bond is in the topology's BONDH block (a bond to hydrogen): the set NTC = 2
+    /// constrains (gromosXX `in_topology.cc:2143-2178`).
+    pub hydrogen: bool,
 }
 
 /// Three-body bonded term (angles)
@@ -213,31 +217,154 @@ pub struct PerturbedAtom {
     pub crf_soft: f64,
 }
 
-/// Perturbed atom pair — special LJ interaction between two perturbed atoms
-/// (PERTATOMPAIR block). These pairs are excluded from the regular pairlist
-/// and handled with their own A/B LJ types.
+/// Net charge (e) of a set of atoms in the two end states of a perturbation (1.8).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NetCharge {
+    /// State A.
+    pub a: f64,
+    /// State B.
+    pub b: f64,
+}
+
+impl NetCharge {
+    /// Charges summed in f64 differ from an exact sum by far less than this.
+    pub const TOLERANCE: f64 = 1e-6;
+
+    /// ΔQ = Q_B − Q_A, exactly 0 within [`NetCharge::TOLERANCE`].
+    pub fn delta(&self) -> f64 {
+        let d = self.b - self.a;
+        if d.abs() < Self::TOLERANCE {
+            0.0
+        } else {
+            d
+        }
+    }
+
+    /// The net charge of each molecule in `molecules` that holds an atom marked in
+    /// `perturbed`, with its index: `charge_a` and `charge_b` are the per-atom charges of the
+    /// two states. An empty `molecules` is one molecule over every atom.
+    pub fn of_perturbed_molecules(
+        molecules: &[std::ops::Range<usize>],
+        charge_a: &[f64],
+        charge_b: &[f64],
+        perturbed: &[bool],
+    ) -> Vec<(usize, NetCharge)> {
+        let whole = 0..charge_a.len();
+        let molecules = if molecules.is_empty() {
+            std::slice::from_ref(&whole)
+        } else {
+            molecules
+        };
+        molecules
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| (m.start..m.end).any(|i| perturbed.get(i).copied().unwrap_or(false)))
+            .map(|(k, m)| {
+                (
+                    k,
+                    NetCharge {
+                        a: m.clone().filter_map(|i| charge_a.get(i)).sum(),
+                        b: m.clone().filter_map(|i| charge_b.get(i)).sum(),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+/// `A 1.000 B 0.000 (ΔQ = -1.000)`: three decimals, a rounded −0 printed as 0.
+impl std::fmt::Display for NetCharge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = |x: f64| (x * 1e3).round() / 1e3 + 0.0;
+        write!(
+            f,
+            "A {:.3} B {:.3} (ΔQ = {:.3})",
+            r(self.a),
+            r(self.b),
+            r(self.delta())
+        )
+    }
+}
+
+/// How a perturbed atom pair interacts in one state (`PERTATOMPAIR` columns `i(A)`, `i(B)`).
 ///
-/// **INVARIANT: all index fields are 0-indexed.** GROMOS files store `A_type`
-/// and `B_type` as 1-indexed integers; `gromos-io/ptp.rs` subtracts 1 at the
-/// parse boundary.  Never store a raw file value here.
+/// The file values are read as they are, as gromosXX does (`in_perturbation.cc:1186`,
+/// `perturbed_nonbonded_pair.cc:328`): `0` excluded, `1` normal, `2` 1-4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairInteraction {
+    /// File `0`: excluded — only the reaction-field term of an excluded pair (with NSLFEXCL).
+    Excluded,
+    /// File `1`: a normal pair — LJ with c6/c12 and the full reaction field.
+    Normal,
+    /// File `2`: a 1-4 pair — LJ with cs6/cs12 and the full reaction field.
+    OneFour,
+}
+
+impl PairInteraction {
+    /// The interaction type of a `PERTATOMPAIR` file value; `None` for anything but 0, 1, 2.
+    pub fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Excluded),
+            1 => Some(Self::Normal),
+            2 => Some(Self::OneFour),
+            _ => None,
+        }
+    }
+}
+
+/// Perturbed atom pair (`PERTATOMPAIR` block): a pair whose interaction type differs between
+/// states A and B. Like gromosXX (`in_perturbation.cc:1207-1224`),
+/// [`Topology::apply_perturbation`] takes such a pair out of the exclusion and 1-4 lists and
+/// keeps it off the pairlist, so the perturbed atom-pair term is the only place it is computed.
 ///
-/// `B_type` is `Option` because the file value `0` is a sentinel meaning "the
-/// atom pair disappears in state B" (no interaction).  The parse boundary maps
-/// file 0 → `None` and file N → `Some(N-1)`.
-///
-/// Interaction type encoding (same for A and B):
-///   `0` (file 1) → normal full LJ (c6/c12)
-///   `1` (file 2) → 1-4 LJ (cs6/cs12)
+/// Atom indices are 0-indexed (the file's are 1-indexed).
 #[derive(Debug, Clone, Copy)]
 pub struct PerturbedAtomPair {
     /// First atom index (0-indexed, always i < j).
     pub i: usize,
     /// Second atom index (0-indexed).
     pub j: usize,
-    /// State A interaction type (0-indexed; 0 = full LJ, 1 = 1-4 LJ).
-    pub a_type: usize,
-    /// State B interaction type (0-indexed); `None` means the pair disappears in state B.
-    pub b_type: Option<usize>,
+    /// State A interaction type.
+    pub a_type: PairInteraction,
+    /// State B interaction type.
+    pub b_type: PairInteraction,
+}
+
+/// One atom of an EDS multi-state solute (`MPERTATOM`, gromosXX `EDS_Perturbed_Atom`): its
+/// atom type and charge in every end state, and the excluded and 1-4 partners whose
+/// state-dependent terms it owns. `iac`/`charge` are indexed by state; `topo.iac`/`topo.charge`
+/// keep the atom's topology values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdsPerturbedAtom {
+    /// 0-based atom index.
+    pub seq: usize,
+    /// Integer atom code per end state (0-indexed).
+    pub iac: Vec<usize>,
+    /// Partial charge per end state.
+    pub charge: Vec<f64>,
+    /// Excluded partners (sorted): their reaction-field term is computed per state for this
+    /// atom and nowhere else ([`Topology::apply_eds_perturbation`]).
+    pub exclusions: Vec<usize>,
+    /// 1-4 partners (sorted), likewise per state.
+    pub one_four_pairs: Vec<usize>,
+}
+
+/// The EDS multi-state solute (`MPERTATOM` block of the perturbation topology).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EdsSolute {
+    /// Number of end states (`NPTB`, the `EDS` block's NUMSTATES).
+    pub num_states: usize,
+    /// The end-state names of the block's second line.
+    pub state_names: Vec<String>,
+    /// The EDS atoms in ascending `seq` (gromosXX keeps them in a `std::map`).
+    pub atoms: Vec<EdsPerturbedAtom>,
+}
+
+impl EdsSolute {
+    /// No EDS atom.
+    pub fn is_empty(&self) -> bool {
+        self.atoms.is_empty()
+    }
 }
 
 /// Perturbed bond (for FEP calculations)
@@ -251,6 +378,9 @@ pub struct PerturbedBond {
     pub a_type: usize,
     /// State B bond type index.
     pub b_type: usize,
+    /// A bond to hydrogen: the topology bond it replaces is in BONDH (or, with no such bond,
+    /// it was read from PERTBONDSTRETCHH).
+    pub hydrogen: bool,
 }
 
 /// Perturbed angle (for FEP calculations)
@@ -466,15 +596,16 @@ impl Solute {
 
 /// Soft-core perturbed harmonic bond (PERTBONDSOFT).
 /// Used when a bond is absent in one state (K=0), requiring soft-core treatment.
-/// `b_type = None` means the bond is absent in state B (K_B = 0, r0_B = r0_A).
+/// A type `None` means the bond is absent in that state: K = 0 and the other state's r0
+/// (gromosXX `perturbed_soft_bond_interaction.cc:249-263`). At most one of the two is `None`.
 #[derive(Debug, Clone)]
 pub struct SoftBond {
     /// First atom index.
     pub i: usize,
     /// Second atom index.
     pub j: usize,
-    /// State A bond type index (uses `k_harmonic`).
-    pub a_type: usize,
+    /// State A bond type index (uses `k_harmonic`); `None` means K_A=0, r0_A=r0_B.
+    pub a_type: Option<usize>,
     /// State B bond type index; `None` means K_B=0, r0_B=r0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -482,7 +613,7 @@ pub struct SoftBond {
 }
 
 /// Soft-core perturbed cos-harmonic angle (PERTANGLESOFT).
-/// `b_type = None` means the angle is absent in state B (K_B = 0, cos0_B = cos0_A).
+/// A type `None` means the angle is absent in that state: K = 0 and the other state's cos0.
 #[derive(Debug, Clone)]
 pub struct SoftAngle {
     /// First atom index.
@@ -491,8 +622,8 @@ pub struct SoftAngle {
     pub j: usize,
     /// Third atom index.
     pub k: usize,
-    /// State A angle type index.
-    pub a_type: usize,
+    /// State A angle type index; `None` means K_A=0, cos0_A=cos0_B.
+    pub a_type: Option<usize>,
     /// State B angle type index; `None` means K_B=0, cos0_B=cos0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -500,7 +631,7 @@ pub struct SoftAngle {
 }
 
 /// Soft-core perturbed improper dihedral (PERTIMPROPERDIHSOFT).
-/// `b_type = None` means the improper is absent in state B (K_B = 0, q0_B = q0_A).
+/// A type `None` means the improper is absent in that state: K = 0 and the other state's q0.
 #[derive(Debug, Clone)]
 pub struct SoftImproper {
     /// First atom index.
@@ -511,8 +642,8 @@ pub struct SoftImproper {
     pub k: usize,
     /// Fourth atom index.
     pub l: usize,
-    /// State A improper dihedral type index.
-    pub a_type: usize,
+    /// State A improper dihedral type index; `None` means K_A=0, q0_A=q0_B.
+    pub a_type: Option<usize>,
     /// State B improper dihedral type index; `None` means K_B=0, q0_B=q0_A.
     pub b_type: Option<usize>,
     /// Soft-core coupling strength α.
@@ -543,6 +674,10 @@ pub struct PerturbedSolute {
     pub soft_angles: Vec<SoftAngle>,
     /// Soft-core perturbed impropers (PERTIMPROPERDIHSOFT): improper absent in one state.
     pub soft_impropers: Vec<SoftImproper>,
+    /// Perturbed bonds a constraint algorithm owns (gromosXX
+    /// `perturbed_solute().distance_constraints()`): with NTC = 3 every perturbed bond moves
+    /// here, out of `bonds`, and perturbed SHAKE holds it at the λ-mixed length.
+    pub distance_constraints: Vec<PerturbedBond>,
 }
 
 impl PerturbedSolute {
@@ -558,6 +693,7 @@ impl PerturbedSolute {
             soft_bonds: Vec::new(),
             soft_angles: Vec::new(),
             soft_impropers: Vec::new(),
+            distance_constraints: Vec::new(),
         }
     }
 
@@ -575,6 +711,7 @@ impl PerturbedSolute {
             && self.soft_bonds.is_empty()
             && self.soft_angles.is_empty()
             && self.soft_impropers.is_empty()
+            && self.distance_constraints.is_empty()
     }
 }
 
@@ -656,6 +793,8 @@ pub struct Topology {
     pub solute: Solute,
     /// FEP dual-topology perturbed terms (atoms, bonds, angles, dihedrals).
     pub perturbed_solute: PerturbedSolute,
+    /// EDS end states of the solute atoms listed in `MPERTATOM` (empty without EDS).
+    pub eds_solute: EdsSolute,
 
     // Per-atom properties (flat arrays for all atoms)
     /// Integer atom codes (atom types).
@@ -677,6 +816,11 @@ pub struct Topology {
     pub exclusions: Vec<Exclusions>,
     /// 1-4 atom pairs (receive special LJ/CRF scaling).
     pub one_four_pairs: Vec<Vec<usize>>,
+    /// Pairs in neither list above but kept off the pairlist (gromosXX's `all_exclusion` is
+    /// built before the perturbation topology is read), per atom, sorted and symmetric: the
+    /// `PERTATOMPAIR` pairs and the excluded and 1-4 pairs `MPERTATOM` hands to an EDS atom.
+    /// Empty without such pairs.
+    pub atom_pair_exclusions: Vec<Vec<usize>>,
 
     // Chargegroups
     /// All charge groups in the system (solute first, then solvent).
@@ -749,6 +893,16 @@ pub struct Topology {
 
     /// Per-solute-atom FEP flag; `true` if the atom appears in PERTATOMPARAM.
     pub is_perturbed: Vec<bool>,
+
+    /// The global λ of a perturbed run (gromosXX `topo.lambda()`, RLAM).
+    pub lambda: f64,
+    /// NLAM, the exponent of the nonbonded λ dependence (gromosXX `topo.lambda_exp()`).
+    pub lambda_exp: i32,
+    /// The individual λ of every interaction kind and energy-group pair, evaluated at
+    /// [`Self::lambda`] by [`Self::update_for_lambda`].
+    pub individual_lambdas: IndividualLambdas,
+    /// PRECALCLAM: the extended-TI λ grid and the steps it is evaluated on; `None` = off.
+    pub precalc_lambdas: Option<PrecalcLambdas>,
 }
 
 impl Topology {
@@ -757,12 +911,14 @@ impl Topology {
         Self {
             solute: Solute::new(),
             perturbed_solute: PerturbedSolute::new(),
+            eds_solute: EdsSolute::default(),
             iac: Vec::new(),
             mass: Vec::new(),
             inverse_mass: Vec::new(),
             charge: Vec::new(),
             exclusions: Vec::new(),
             one_four_pairs: Vec::new(),
+            atom_pair_exclusions: Vec::new(),
             chargegroups: Vec::new(),
             atom_to_chargegroup: Vec::new(),
             num_solute_chargegroups: 0,
@@ -802,6 +958,10 @@ impl Topology {
             distance_restraints: Vec::new(),
             perturbed_distance_restraints: Vec::new(),
             is_perturbed: Vec::new(),
+            lambda: 0.0,
+            lambda_exp: 1,
+            individual_lambdas: IndividualLambdas::identity(1),
+            precalc_lambdas: None,
         }
     }
 
@@ -866,7 +1026,8 @@ impl Topology {
                 })
                 .sum()
         } else {
-            self.num_solute_atoms()
+            // no instances: the solute is `moltypes[0]`
+            self.moltypes.first().map_or(0, |mt| mt.num_atoms())
         }
     }
 
@@ -891,7 +1052,7 @@ impl Topology {
         exclusion_list_contains(&self.exclusions[i], j)
     }
 
-    /// Check if atoms i and j are excluded OR are a 1-4 pair.
+    /// Check if atoms i and j are excluded, a 1-4 pair or a `PERTATOMPAIR` pair.
     /// Used for pairlist exclusion (GROMOS: all_exclusion).
     #[inline]
     pub fn is_excluded_or_14(&self, i: usize, j: usize) -> bool {
@@ -900,6 +1061,10 @@ impl Topology {
         // every rebuild — which is why the second lookup was worth removing.
         exclusion_list_contains(&self.exclusions[i], j)
             || (!self.one_four_pairs.is_empty() && self.one_four_pairs[i].contains(&j))
+            || self
+                .atom_pair_exclusions
+                .get(i)
+                .is_some_and(|l| l.contains(&j))
     }
 
     /// Get chargegroup index for atom i
@@ -918,6 +1083,27 @@ impl Topology {
     #[inline]
     pub fn energy_group(&self, i: usize) -> usize {
         self.atom_to_energy_group[i]
+    }
+
+    /// gromosXX `Topology::update_for_lambda` (`topology.cc:1419-1478`): evaluate the
+    /// individual λ at [`Self::lambda`] over the energy groups, then mix each perturbed atom's
+    /// mass with the mass λ of its own group, `m = (1 − L)·m_A + L·m_B` (no NLAM exponent).
+    /// Call it after the energy groups are assigned and whenever λ changes.
+    pub fn update_for_lambda(&mut self) {
+        let n_groups = self.energy_groups.len().max(1);
+        self.individual_lambdas.resize(n_groups);
+        self.individual_lambdas.update(self.lambda);
+        for a in &self.perturbed_solute.atoms {
+            let g = self.atom_to_energy_group.get(a.seq).copied().unwrap_or(0);
+            let l = self
+                .individual_lambdas
+                .lambda(InteractionLambda::Mass, g, g);
+            let mass = (1.0 - l) * a.a_mass + l * a.b_mass;
+            if a.seq < self.mass.len() && mass > 0.0 {
+                self.mass[a.seq] = mass;
+                self.inverse_mass[a.seq] = 1.0 / mass;
+            }
+        }
     }
 
     // ── instancing accessors ─────────────────────────────────────────────────
@@ -1062,7 +1248,7 @@ impl Topology {
             mt.bonds.iter().map(move |b| Bond {
                 i: off + b.i,
                 j: off + b.j,
-                bond_type: b.bond_type,
+                ..*b
             })
         })
     }
@@ -1247,10 +1433,106 @@ impl Topology {
     /// `NTG != 0`: the perturbed solute terms are stored in `perturbed_solute`, and the bonds,
     /// angles, improper and proper dihedrals they perturb are removed from the regular solute
     /// so the two sets stay disjoint. `is_perturbed` is resized to the solute atom count.
+    /// Each `PERTATOMPAIR` pair leaves the exclusion and 1-4 lists and goes to
+    /// `atom_pair_exclusions` (gromosXX `in_perturbation.cc:1207-1224`).
     ///
     /// Call after `build_topology()` and before `solvate()`; applying twice replaces the
-    /// previous perturbation's terms but cannot restore bonds already removed.
+    /// previous perturbation's terms but cannot restore bonds or exclusions already removed.
+    /// Returns the solute's net charge in the two states ([`Topology::perturbation_net_charge`]),
+    /// or an error, leaving the topology unchanged, when a perturbed or soft bond is not a bond
+    /// of the topology.
     pub fn apply_perturbation(
+        &mut self,
+        perturbed_solute: PerturbedSolute,
+        is_perturbed: Vec<bool>,
+    ) -> Result<NetCharge, String> {
+        self.check_perturbed_bonds_exist(&perturbed_solute)?;
+        self.merge_perturbation(perturbed_solute, is_perturbed);
+        Ok(self.perturbation_net_charge())
+    }
+
+    /// gromosXX's "Perturbation of a non-existing bond" errors (`in_perturbation.cc:232-247`,
+    /// 271-286, 420-425). Its match is on the ordered pair, so `j i` does not find bond `i j`.
+    /// gromosXX looks in the distance constraints instead when NTC = 3 (and, for PERTBONDSOFT,
+    /// always in both); every BONDH/BONDS bond of the topology counts here.
+    fn check_perturbed_bonds_exist(&self, ps: &PerturbedSolute) -> Result<(), String> {
+        use std::collections::HashSet;
+
+        let bonds: HashSet<(usize, usize)> = self
+            .moltypes
+            .first()
+            .map(|m| m.bonds.iter().map(|b| (b.i, b.j)).collect())
+            .unwrap_or_default();
+        let missing = |i: usize, j: usize, block: &str| {
+            Err(format!(
+                "Perturbation of a non-existing bond in {block} block. (atoms {} {})",
+                i + 1,
+                j + 1
+            ))
+        };
+        for b in &ps.bonds {
+            if !bonds.contains(&(b.i, b.j)) {
+                let block = if b.hydrogen {
+                    "PERTBONDSTRETCHH"
+                } else {
+                    "PERTBONDSTRETCH"
+                };
+                return missing(b.i, b.j, block);
+            }
+        }
+        // A soft bond absent in state A is a bond being made: it need not exist.
+        for b in ps.soft_bonds.iter().filter(|b| b.a_type.is_some()) {
+            if !bonds.contains(&(b.i, b.j)) {
+                return missing(b.i, b.j, "PERTBONDSOFT");
+            }
+        }
+        Ok(())
+    }
+
+    /// The solute's per-atom charges in state A and state B: the topology's charges with each
+    /// perturbed atom's `PERTATOMPARAM` charge of that state in its place.
+    pub fn end_state_charges(&self) -> (Vec<f64>, Vec<f64>) {
+        let n = self.num_solute_atoms().min(self.charge.len());
+        let mut a = self.charge[..n].to_vec();
+        let mut b = a.clone();
+        for p in &self.perturbed_solute.atoms {
+            if p.seq < n {
+                a[p.seq] = p.a_charge;
+                b[p.seq] = p.b_charge;
+            }
+        }
+        (a, b)
+    }
+
+    /// Net charge of the whole solute in state A and state B.
+    pub fn perturbation_net_charge(&self) -> NetCharge {
+        let (a, b) = self.end_state_charges();
+        NetCharge {
+            a: a.iter().sum(),
+            b: b.iter().sum(),
+        }
+    }
+
+    /// Net charge in state A and B of each solute molecule holding a perturbed atom, with the
+    /// molecule's index.
+    pub fn perturbed_molecule_charges(&self) -> Vec<(usize, NetCharge)> {
+        let (a, b) = self.end_state_charges();
+        let mut perturbed = vec![false; a.len()];
+        for p in &self.perturbed_solute.atoms {
+            if let Some(x) = perturbed.get_mut(p.seq) {
+                *x = true;
+            }
+        }
+        let solute: Vec<_> = self
+            .molecules
+            .iter()
+            .filter(|m| m.end <= a.len())
+            .cloned()
+            .collect();
+        NetCharge::of_perturbed_molecules(&solute, &a, &b, &perturbed)
+    }
+
+    fn merge_perturbation(
         &mut self,
         perturbed_solute: PerturbedSolute,
         mut is_perturbed: Vec<bool>,
@@ -1262,6 +1544,41 @@ impl Topology {
         self.is_perturbed = is_perturbed;
         self.perturbed_solute = perturbed_solute;
 
+        for ap in &self.perturbed_solute.atom_pairs {
+            for (a, b) in [(ap.i, ap.j), (ap.j, ap.i)] {
+                if let Some(l) = self.exclusions.get_mut(a) {
+                    l.retain(|&x| x != b);
+                }
+                if let Some(l) = self.one_four_pairs.get_mut(a) {
+                    l.retain(|&x| x != b);
+                }
+                if self.atom_pair_exclusions.len() <= a {
+                    self.atom_pair_exclusions.resize(a + 1, Vec::new());
+                }
+                let l = &mut self.atom_pair_exclusions[a];
+                if let Err(pos) = l.binary_search(&b) {
+                    l.insert(pos, b);
+                }
+            }
+        }
+
+        let bondh: HashSet<(usize, usize)> = self.moltypes[0]
+            .bonds
+            .iter()
+            .filter(|b| b.hydrogen)
+            .map(|b| (b.i.min(b.j), b.i.max(b.j)))
+            .collect();
+        let regular: HashSet<(usize, usize)> = self.moltypes[0]
+            .bonds
+            .iter()
+            .map(|b| (b.i.min(b.j), b.i.max(b.j)))
+            .collect();
+        for b in &mut self.perturbed_solute.bonds {
+            let key = (b.i.min(b.j), b.i.max(b.j));
+            if regular.contains(&key) {
+                b.hydrogen = bondh.contains(&key);
+            }
+        }
         let pb: HashSet<(usize, usize)> = self
             .perturbed_solute
             .bonds
@@ -1319,6 +1636,89 @@ impl Topology {
         self.moltypes[0]
             .proper_dihedrals
             .retain(|d| !pd.contains(&(d.i, d.j, d.k, d.l)));
+    }
+
+    /// Merge the EDS end states of an `MPERTATOM` block, as gromosXX's `In_Perturbation` does
+    /// (`in_perturbation.cc:1757-1777`). `atoms` come in file order with empty partner lists.
+    ///
+    /// Each atom takes over its remaining excluded and 1-4 partners: they leave
+    /// `exclusions`/`one_four_pairs` (so the standard reaction-field and 1-4 loops no longer
+    /// see the pair) and stay off the pairlist through `atom_pair_exclusions` (gromosXX's
+    /// `all_exclusion` is not updated). A pair of two EDS atoms belongs to the one listed
+    /// first. The atoms are stored in ascending `seq`, the order gromosXX's map visits them.
+    ///
+    /// Call after `build_topology()` (and `apply_perturbation`) and before `solvate()`.
+    pub fn apply_eds_perturbation(
+        &mut self,
+        num_states: usize,
+        state_names: Vec<String>,
+        atoms: Vec<EdsPerturbedAtom>,
+    ) -> Result<(), String> {
+        let n_solute = self.num_solute_atoms();
+        let n_types = self.lj_parameters.len();
+        let mut seen = vec![false; n_solute];
+        for a in &atoms {
+            if a.seq >= n_solute {
+                return Err(format!(
+                    "MPERTATOM: atom sequence number {} is not a solute atom (the solute has {n_solute})",
+                    a.seq + 1
+                ));
+            }
+            if std::mem::replace(&mut seen[a.seq], true) {
+                return Err(format!("MPERTATOM: atom {} listed twice", a.seq + 1));
+            }
+            if a.iac.len() != num_states || a.charge.len() != num_states {
+                return Err(format!(
+                    "MPERTATOM: atom {} has {} types and {} charges for {num_states} states",
+                    a.seq + 1,
+                    a.iac.len(),
+                    a.charge.len()
+                ));
+            }
+            if let Some(&t) = a.iac.iter().find(|&&t| t >= n_types) {
+                return Err(format!(
+                    "MPERTATOM: atom {} has atom type {} but the topology has {n_types}",
+                    a.seq + 1,
+                    t + 1
+                ));
+            }
+        }
+        let mut atoms = atoms;
+        for atom in &mut atoms {
+            let e = atom.seq;
+            for (lists, owned) in [
+                (&mut self.exclusions, &mut atom.exclusions),
+                (&mut self.one_four_pairs, &mut atom.one_four_pairs),
+            ] {
+                let Some(list) = lists.get_mut(e) else {
+                    continue;
+                };
+                *owned = std::mem::take(list);
+                for &j in owned.iter() {
+                    if let Some(l) = lists.get_mut(j) {
+                        l.retain(|&x| x != e);
+                    }
+                }
+            }
+            for &j in atom.exclusions.iter().chain(&atom.one_four_pairs) {
+                for (a, b) in [(e, j), (j, e)] {
+                    if self.atom_pair_exclusions.len() <= a {
+                        self.atom_pair_exclusions.resize(a + 1, Vec::new());
+                    }
+                    let l = &mut self.atom_pair_exclusions[a];
+                    if let Err(pos) = l.binary_search(&b) {
+                        l.insert(pos, b);
+                    }
+                }
+            }
+        }
+        atoms.sort_by_key(|a| a.seq);
+        self.eds_solute = EdsSolute {
+            num_states,
+            state_names,
+            atoms,
+        };
+        Ok(())
     }
 
     /// Expand solvent molecules (GROMOS: topo.solvate(0, nsm))
@@ -1379,8 +1779,10 @@ impl Topology {
             let base = n_solute + mol * atoms_per_solvent;
             // Populate molecules list
             self.molecules.push(base..base + atoms_per_solvent);
-            // Each solvent molecule is its own pressure group (GROMOS convention)
+            // Each solvent molecule is its own pressure and temperature group (GROMOS convention)
             self.pressure_groups.push(base..base + atoms_per_solvent);
+            self.temperature_groups
+                .push((base..base + atoms_per_solvent).collect());
             for a in 0..atoms_per_solvent {
                 for b in (a + 1)..atoms_per_solvent {
                     self.exclusions[base + a].push(base + b);
@@ -1475,6 +1877,126 @@ mod tests {
     use super::*;
 
     #[test]
+    fn solute_atoms_without_instances_come_from_the_solute_moltype() {
+        let mut topo = Topology::new();
+        topo.instances.clear();
+        assert_eq!(topo.num_solute_atoms(), 0);
+        assert_eq!(topo.num_atoms(), 0);
+        for name in ["C", "O"] {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: name.into(),
+                residue_nr: 1,
+                residue_name: "RES".into(),
+                iac: 0,
+                mass: 12.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        assert_eq!(topo.num_solute_atoms(), 2);
+        assert_eq!(topo.num_atoms(), 2);
+    }
+
+    /// Five solute atoms with symmetric exclusion and 1-4 lists and two atom types.
+    fn five_atoms() -> Topology {
+        let mut topo = Topology::new();
+        for i in 0..5 {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: format!("A{}", i + 1),
+                residue_nr: 1,
+                residue_name: "RES".into(),
+                iac: 0,
+                mass: 12.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        topo.lj_parameters = vec![vec![LJParameters::new(0.0, 0.0); 2]; 2];
+        // excluded: (0,1) (0,2) (1,2) (2,3); 1-4: (0,3) (1,4)
+        topo.exclusions = vec![vec![1, 2], vec![0, 2], vec![0, 1, 3], vec![2], vec![]];
+        topo.one_four_pairs = vec![vec![3], vec![4], vec![], vec![0], vec![1]];
+        topo
+    }
+
+    fn eds_atom(seq: usize) -> EdsPerturbedAtom {
+        EdsPerturbedAtom {
+            seq,
+            iac: vec![0, 1],
+            charge: vec![0.1, -0.1],
+            exclusions: Vec::new(),
+            one_four_pairs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn eds_atoms_take_their_excluded_and_one_four_pairs() {
+        let mut topo = five_atoms();
+        // atom 3 (seq 2) is listed before atom 1 (seq 0)
+        topo.apply_eds_perturbation(
+            2,
+            vec!["A".into(), "B".into()],
+            vec![eds_atom(2), eds_atom(0)],
+        )
+        .unwrap();
+        let eds = &topo.eds_solute;
+        assert_eq!(eds.atoms.iter().map(|a| a.seq).collect::<Vec<_>>(), [0, 2]);
+        // atom 2 (listed first) owns all of its partners, the EDS-EDS pair (0,2) included
+        assert_eq!(eds.atoms[1].exclusions, [0, 1, 3]);
+        assert_eq!(eds.atoms[1].one_four_pairs, Vec::<usize>::new());
+        // atom 0 keeps what atom 2 left: (0,1) excluded, (0,3) 1-4
+        assert_eq!(eds.atoms[0].exclusions, [1]);
+        assert_eq!(eds.atoms[0].one_four_pairs, [3]);
+        // the standard lists no longer hold any pair of an EDS atom, and stay symmetric
+        assert_eq!(
+            topo.exclusions,
+            vec![vec![], vec![], vec![], vec![], vec![]]
+        );
+        assert_eq!(
+            topo.one_four_pairs,
+            vec![vec![], vec![4], vec![], vec![], vec![1]]
+        );
+        // but the pairlist keeps every one of them out (gromosXX `all_exclusion`)
+        for (i, j) in [(0, 1), (0, 2), (1, 2), (2, 3), (0, 3), (1, 4)] {
+            assert!(
+                topo.is_excluded_or_14(i, j) && topo.is_excluded_or_14(j, i),
+                "({i},{j})"
+            );
+        }
+        assert!(!topo.is_excluded_or_14(0, 4));
+    }
+
+    #[test]
+    fn the_first_listed_eds_atom_owns_an_eds_eds_pair() {
+        let mut topo = five_atoms();
+        topo.apply_eds_perturbation(2, vec![], vec![eds_atom(0), eds_atom(2)])
+            .unwrap();
+        let eds = &topo.eds_solute;
+        assert_eq!(eds.atoms[0].exclusions, [1, 2]);
+        assert_eq!(eds.atoms[1].exclusions, [1, 3]);
+    }
+
+    #[test]
+    fn mpertatom_rows_are_checked_against_the_topology() {
+        let err = |atoms: Vec<EdsPerturbedAtom>| {
+            five_atoms()
+                .apply_eds_perturbation(2, vec![], atoms)
+                .unwrap_err()
+        };
+        assert!(err(vec![eds_atom(5)]).contains("not a solute atom"));
+        assert!(err(vec![eds_atom(1), eds_atom(1)]).contains("listed twice"));
+        let mut a = eds_atom(1);
+        a.iac = vec![0, 2];
+        assert!(err(vec![a]).contains("atom type 3"));
+        let mut a = eds_atom(1);
+        a.charge.pop();
+        assert!(err(vec![a]).contains("for 2 states"));
+    }
+
+    #[test]
     fn test_lj_parameters() {
         // For sigma = 0.34 nm and epsilon = 0.65 kJ/mol (typical for methane)
         // c6 = 4 * epsilon * sigma^6 = 4 * 0.65 * 0.34^6 = 0.00398
@@ -1542,11 +2064,13 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].bonds.push(Bond {
             i: 1,
             j: 2,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.moltypes[0].angles.push(Angle {
             i: 0,
@@ -1563,6 +2087,47 @@ mod tests {
 
         // 0-2 should be excluded (1-3 neighbors)
         assert!(topo.is_excluded(0, 2));
+    }
+
+    /// A PERTATOMPAIR pair leaves the exclusion and 1-4 lists but stays off the pairlist,
+    /// whatever it was in the topology (gromosXX `in_perturbation.cc:1207-1224`).
+    #[test]
+    fn perturbed_atom_pairs_leave_exclusion_and_one_four_lists() {
+        let mut topo = Topology::new();
+        for i in 0..4 {
+            topo.moltypes[0].atoms.push(MolTypeAtom {
+                name: format!("A{}", i + 1),
+                residue_nr: 1,
+                residue_name: "TEST".to_string(),
+                iac: 0,
+                mass: 1.0,
+                charge: 0.0,
+                is_perturbed: false,
+                is_polarisable: false,
+                is_coarse_grained: false,
+            });
+        }
+        topo.resize_atom_arrays();
+        topo.exclusions = vec![vec![1, 2], vec![0, 2], vec![0, 1], vec![]];
+        topo.one_four_pairs = vec![vec![3], vec![], vec![], vec![0]];
+        let mut ps = PerturbedSolute::new();
+        for (i, j) in [(0, 2), (0, 3), (1, 3)] {
+            ps.atom_pairs.push(PerturbedAtomPair {
+                i,
+                j,
+                a_type: PairInteraction::Normal,
+                b_type: PairInteraction::Excluded,
+            });
+        }
+        topo.apply_perturbation(ps, vec![false; 4]).unwrap();
+
+        assert_eq!(topo.exclusions, vec![vec![1], vec![0, 2], vec![1], vec![]]);
+        assert!(topo.one_four_pairs.iter().all(Vec::is_empty));
+        for (i, j) in [(0, 2), (0, 3), (1, 3), (0, 1)] {
+            assert!(topo.is_excluded_or_14(i, j), "({i}, {j}) on the pairlist");
+            assert!(topo.is_excluded_or_14(j, i), "({j}, {i}) on the pairlist");
+        }
+        assert!(!topo.is_excluded_or_14(2, 3));
     }
 
     #[test]
@@ -1584,5 +2149,28 @@ mod tests {
         // Check off-diagonal (geometric mean)
         let c6_01 = (0.001_f64 * 0.002_f64).sqrt();
         assert!((topo.lj_parameter(0, 1).c6 - c6_01).abs() < 1e-10);
+    }
+
+    #[test]
+    fn net_charge_of_the_perturbed_molecules() {
+        // two molecules; atom 3 (the second's first) goes from +1 to 0
+        let molecules = [0..2, 2..4];
+        let a = [-0.5, 0.5, 1.0, 0.0];
+        let b = [-0.5, 0.5, 0.0, 0.0];
+        let perturbed = [false, false, true, false];
+        let q = NetCharge::of_perturbed_molecules(&molecules, &a, &b, &perturbed);
+        assert_eq!(q, vec![(1, NetCharge { a: 1.0, b: 0.0 })]);
+        assert_eq!(q[0].1.delta(), -1.0);
+        // no molecule boundaries: one molecule over every atom
+        let q = NetCharge::of_perturbed_molecules(&[], &a, &b, &perturbed);
+        assert_eq!(q, vec![(0, NetCharge { a: 1.0, b: 0.0 })]);
+        // a sum that is zero up to rounding is exactly zero
+        let q = NetCharge {
+            a: 0.1 + 0.2,
+            b: 0.3,
+        };
+        assert_eq!(q.delta().to_bits(), 0.0_f64.to_bits());
+        let q = NetCharge { a: -1e-17, b: 1.0 };
+        assert_eq!(q.to_string(), "A 0.000 B 1.000 (ΔQ = 1.000)");
     }
 }

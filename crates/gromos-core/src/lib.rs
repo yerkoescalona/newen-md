@@ -31,6 +31,7 @@ pub mod algorithm;
 pub mod configuration;
 pub mod float;
 pub mod gather;
+pub mod lambdas;
 pub mod math;
 pub mod matrix;
 pub mod pairlist;
@@ -59,12 +60,19 @@ pub use vector::{Vec3d, Vec3f, Vector3, VEC3D_ZERO, VEC3F_ZERO};
 pub use math::{BoundaryCondition, Mat3, Periodicity, Rectangular, Triclinic, Vacuum, Vec3};
 
 // Re-export configuration types
-pub use configuration::{Box, BoxType, Configuration, Energy, State, StochasticVariables};
+pub use configuration::{
+    AedsSearch, Box, BoxType, Configuration, EdsEndStates, Energy, PrecalcEnergies, State,
+    StochasticVariables,
+};
+
+// Re-export the individual-λ table
+pub use lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 
 // Re-export topology types
 pub use topology::{
-    LJParameters, PerturbedAngle, PerturbedAtom, PerturbedAtomPair, PerturbedBond,
-    PerturbedDihedral, PerturbedSolute, SoftAngle, SoftBond, SoftImproper, Topology,
+    EdsPerturbedAtom, EdsSolute, LJParameters, NetCharge, PairInteraction, PerturbedAngle,
+    PerturbedAtom, PerturbedAtomPair, PerturbedBond, PerturbedDihedral, PerturbedSolute, SoftAngle,
+    SoftBond, SoftImproper, Topology,
 };
 
 // Re-export pairlist types

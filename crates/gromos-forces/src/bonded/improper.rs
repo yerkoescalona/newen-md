@@ -15,6 +15,17 @@ pub fn calculate_improper_dihedral_forces(
     conf: &Configuration,
     pbc: &Periodicity,
 ) -> ForceEnergy {
+    calculate_improper_dihedral_forces_grouped::<false>(topo, conf, pbc, &mut [])
+}
+
+/// [`calculate_improper_dihedral_forces`]; with `GROUPS` each term is also booked to the energy group of its first
+/// atom (gromosXX `improper_energy[atom_energy_group(i)]`).
+pub(crate) fn calculate_improper_dihedral_forces_grouped<const GROUPS: bool>(
+    topo: &Topology,
+    conf: &Configuration,
+    pbc: &Periodicity,
+    per_group: &mut [f64],
+) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
     for improper in topo.all_improper_dihedrals_global() {
@@ -96,6 +107,9 @@ pub fn calculate_improper_dihedral_forces(
         let f_k = -(f_i + f_j + f_l);
 
         result.energy += energy;
+        if GROUPS {
+            per_group[topo.atom_to_energy_group[improper.i]] += energy;
+        }
         result.forces[improper.i] += f_i;
         result.forces[improper.j] += f_j;
         result.forces[improper.k] += f_k;

@@ -66,7 +66,7 @@ fn rank_shares_sum_to_the_full_pair_terms() {
         "the system has pair terms"
     );
     for size in [2usize, 3, 5] {
-        let mut sum = ForceStorage::new(full.forces.len());
+        let mut sum = ForceStorage::with_groups(full.forces.len(), full.groups.n_groups);
         let mut nonempty = 0;
         for rank in 0..size {
             let share = pair_terms(Some((rank, size)));
@@ -101,6 +101,25 @@ fn rank_shares_sum_to_the_full_pair_terms() {
                     (sum.virial[a][b] - full.virial[a][b]).abs()
                         <= 1e-8 * (1.0 + full.virial[a][b].abs()),
                     "size {size}: virial"
+                );
+            }
+        }
+        // the energy-group-pair matrices travel with the shares and add up the same way
+        assert!(
+            full.groups.is_grouped(),
+            "the system has several energy groups"
+        );
+        for (m, (a, b)) in [
+            (&sum.groups.lj, &full.groups.lj),
+            (&sum.groups.crf, &full.groups.crf),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (k, (x, y)) in a.iter().zip(b).enumerate() {
+                assert!(
+                    (x - y).abs() <= 1e-9 * (1.0 + y.abs()),
+                    "size {size}: group matrix {m} cell {k}: {x} vs {y}"
                 );
             }
         }

@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_vacuum_fep_slowgrowth_shake"
+description = "aladip vacuum slow growth with perturbed SHAKE, two energy groups"
+level = 4
+isolates = "perturbed constraint lengths re-evaluated at the moving lambda every step"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_fep_slowgrowth_shake.in"
+pttopo = "../shared/aladip.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

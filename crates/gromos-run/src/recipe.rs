@@ -13,12 +13,19 @@
 //!   bath, no COM removal, no pressure coupling …) — never a "default" value smuggled in; the
 //! parameter defaults in `gromos-io` were aligned to that (3.9 A18).
 //!
-//! Blocks the recipe does not model (GAMD, EDS, QMMM, …) are refused unless the caller lists
+//! Blocks the recipe does not model (GAMD, QMMM, …) are refused unless the caller lists
 //! them in a [`PassthroughPolicy`]; allowed ones ride along verbatim in `passthrough`.
+//! REPLICA_EDS is refused whatever the policy: it acts together with the modelled EDS block.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gromos_io::imd::{ImdParameters, NonbondedExtra, PressureParameters, TempBathParameters};
+use gromos_core::lambdas::InteractionLambda;
+pub use gromos_forces::nonbonded::AtomPairKernel;
+pub use gromos_integrators::eds::{AedsColumns, AedsPrevalence, AedsTarget};
+use gromos_io::imd::{
+    AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
+    PrecalcLamBlock, PressureParameters, TempBathParameters,
+};
 use gromos_io::imd_write::{write_imd, MODELLED_BLOCKS};
 use serde::{Deserialize, Serialize};
 
@@ -531,7 +538,7 @@ pub struct Perturbation {
     pub nrdgl: i32,
     /// RLAM
     pub lambda: f64,
-    /// DLAMT
+    /// DLAMT, ps⁻¹: slow growth, λ += DLAMT·Δt after every step (`advance_lambda`)
     pub dlamt: f64,
     /// ALPHLJ
     pub alpha_lj: f64,
@@ -540,6 +547,301 @@ pub struct Perturbation {
     /// NLAM
     pub nlam: i32,
     pub nscale: i32,
+    /// LAMBDAS block: individual λ per interaction kind and energy-group pair; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lambdas: Option<Lambdas>,
+    /// PRECALCLAM block: energies at `nr_lambdas` extra λ points (extended TI); `None` = absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precalclam: Option<PrecalcLam>,
+    /// The kernel of the normal and 1-4 states of `PERTATOMPAIR` pairs with a perturbed atom:
+    /// `"intended"` (default) or `"gromosxx-shifted"`, gromosXX 247c95c4's arguments shifted by
+    /// one slot (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200`; 1.8). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_intended")]
+    pub atom_pair_kernel: AtomPairKernel,
+}
+
+fn is_intended(k: &AtomPairKernel) -> bool {
+    *k == AtomPairKernel::Intended
+}
+
+/// The `PRECALCLAM` block: the energies of every perturbed interaction (and their λ
+/// derivatives) at `nr_lambdas` points from `min_lambda` to `max_lambda`, written to the energy
+/// and free-energy trajectories on every NTWG step (gromosXX extended TI).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrecalcLam {
+    /// NRLAM: 0 = off
+    pub nr_lambdas: usize,
+    /// MINLAM
+    pub min_lambda: f64,
+    /// MAXLAM
+    pub max_lambda: f64,
+}
+
+/// The `LAMBDAS` block. Its rows act only when `enabled` and the run is perturbed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lambdas {
+    /// NTIL
+    pub enabled: bool,
+    #[serde(default)]
+    pub rows: Vec<LambdaRow>,
+}
+
+/// One `LAMBDAS` row: `L = a·λ⁴ + b·λ³ + c·λ² + d·λ + e` for `kind` between energy groups
+/// `g1 ≤ g2` (1-based, as in the file).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LambdaRow {
+    pub kind: LambdaKind,
+    pub g1: usize,
+    pub g2: usize,
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    pub e: f64,
+}
+
+/// A `LAMBDAS` NTLI: one of gromosXX's twelve names (`bond` … `mass`, `vdw` for Lennard-Jones)
+/// or its number 1-12 (as a number or a string); serialised as the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+pub struct LambdaKind(pub InteractionLambda);
+
+impl<'de> Deserialize<'de> for LambdaKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl serde::de::Visitor<'_> for Visitor {
+            type Value = LambdaKind;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a LAMBDAS kind: a gromosXX name or its number 1-12")
+            }
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<LambdaKind, E> {
+                LambdaKind::try_from(s.to_string()).map_err(E::custom)
+            }
+            fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<LambdaKind, E> {
+                self.visit_str(&n.to_string())
+            }
+            fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<LambdaKind, E> {
+                self.visit_str(&n.to_string())
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
+impl TryFrom<String> for LambdaKind {
+    type Error = String;
+    fn try_from(s: String) -> Result<Self, String> {
+        InteractionLambda::from_ntli(&s)
+            .map(LambdaKind)
+            .ok_or_else(|| {
+                format!(
+                    "unknown LAMBDAS kind {s:?}: expected bond, angle, dihedral, improper, vdw, \
+                 vdw_soft, crf, crf_soft, distanceres, distancefield, dihedralres or mass"
+                )
+            })
+    }
+}
+
+impl From<LambdaKind> for String {
+    fn from(k: LambdaKind) -> String {
+        k.0.gromos_name().to_string()
+    }
+}
+
+impl Lambdas {
+    fn from_block(b: &LambdasBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            rows: b
+                .rows
+                .iter()
+                .map(|r| {
+                    let [a, b, c, d, e] = r.coefficients;
+                    LambdaRow {
+                        kind: LambdaKind(r.kind),
+                        g1: r.g1,
+                        g2: r.g2,
+                        a,
+                        b,
+                        c,
+                        d,
+                        e,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn to_block(&self) -> LambdasBlock {
+        LambdasBlock {
+            enabled: self.enabled,
+            rows: self
+                .rows
+                .iter()
+                .map(|r| LambdasRow {
+                    kind: r.kind.0,
+                    g1: r.g1,
+                    g2: r.g2,
+                    coefficients: [r.a, r.b, r.c, r.d, r.e],
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The `EDS` block: enveloping distribution sampling over `num_states` end states, whose types
+/// and charges come from the perturbation topology's `MPERTATOM` block (gromosXX `read_EDS`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Eds {
+    /// EDS = 1 (`false`: the block is present and off).
+    pub enabled: bool,
+    /// FORM: 1 one smoothness parameter, 2 one per state pair, 3 one per listed pair.
+    pub form: i32,
+    /// NUMSTATES
+    pub num_states: usize,
+    /// S: FORM 1 one value, FORM 2 N(N−1)/2 in pair order (1,2), (1,3) … (2,3) …
+    #[serde(default)]
+    pub s: Vec<f64>,
+    /// FORM 3: N−1 rows `(i, j, s)`, states 1-based as in the file.
+    #[serde(default)]
+    pub pairs: Vec<(i32, i32, f64)>,
+    /// EIR: the energy offset of every state (kJ/mol).
+    #[serde(default)]
+    pub eir: Vec<f64>,
+}
+
+impl Eds {
+    fn from_block(b: &EdsBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            form: b.form,
+            num_states: b.num_states,
+            s: b.s.clone(),
+            pairs: b.pairs.iter().map(|p| (p.i, p.j, p.s)).collect(),
+            eir: b.eir.clone(),
+        }
+    }
+
+    fn to_block(&self) -> EdsBlock {
+        EdsBlock {
+            enabled: self.enabled,
+            form: self.form,
+            num_states: self.num_states,
+            s: self.s.clone(),
+            pairs: self
+                .pairs
+                .iter()
+                .map(|&(i, j, s)| EdsStatePair { i, j, s })
+                .collect(),
+            eir: self.eir.clone(),
+        }
+    }
+}
+
+/// The `AEDS` block: accelerated EDS over `num_states` end states (single s = 1, the boost
+/// between E_min and E_max, and in FORMS 2-6 the parameter search; gromosXX `read_AEDS`). The
+/// end states come from the perturbation topology's `MPERTATOM` block, as for EDS.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Aeds {
+    /// AEDS = 1 (`false`: the block is present and off).
+    pub enabled: bool,
+    /// FORM: 1 fixed; 2 search E^R; 3 search E_max/E_min; 4 search all; 5 E_max/E_min search
+    /// with the "advanced" offset update; 6 the advanced offset update alone.
+    pub form: i32,
+    /// NUMSTATES
+    pub num_states: usize,
+    /// EMAX (kJ/mol); FORMS 3-5 start the search at V_mix instead.
+    #[serde(default)]
+    pub emax: f64,
+    /// EMIN (kJ/mol)
+    #[serde(default)]
+    pub emin: f64,
+    /// EIR: the energy offset of every state (kJ/mol).
+    #[serde(default)]
+    pub eir: Vec<f64>,
+    /// NTIAEDSS: `true` start a fresh search; `false` continue the configuration's
+    /// `AEDSSEARCH` block, which then overrides EMAX, EMIN and EIR.
+    #[serde(default)]
+    pub ntiaedss: bool,
+    /// RESTREMIN: hold E_min at or above the lowest average end-state energy until every state
+    /// has been visited.
+    #[serde(default)]
+    pub restremin: bool,
+    /// BMAXTYPE: 1 BMAX in kJ/mol, 2 in standard deviations of the target state's energy.
+    #[serde(default)]
+    pub bmaxtype: i32,
+    /// BMAX: the maximum energy barrier parameter.
+    #[serde(default)]
+    pub bmax: f64,
+    /// ASTEPS: memory time (steps) at the start of each run; FORMS 5/6 offset step ASTEPS·Δt.
+    #[serde(default)]
+    pub asteps: u32,
+    /// BSTEPS: memory time (steps) at the end of each run.
+    #[serde(default)]
+    pub bsteps: u32,
+    /// The E_max, E_min and offsets the energy frames carry: `"intended"` (default), the ones
+    /// the frame's V_mix and V_R* used, or `"gromosxx-post-update"`, gromosXX 247c95c4's values
+    /// after the search update (`eds.cc:368-372`; 1.8 D16). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub energy_columns: AedsColumns,
+    /// The FORM 5/6 prevalences: `"intended"` (default), a log-sum-exp, or
+    /// `"gromosxx-plain-exp"`, gromosXX 247c95c4's plain exponentials, NaN once one overflows
+    /// (`eds.cc:339-343`; 1.8 D25). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub prevalence: AedsPrevalence,
+    /// The state whose mean and σ set E_min: `"intended"` (default), the lowest mean among the
+    /// states visited more than once, or `"gromosxx-state1-default"`, gromosXX 247c95c4's
+    /// state 1 whatever its visits (`eds.cc:252-261`; 1.8 D32). No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub target_state: AedsTarget,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+impl Aeds {
+    fn from_block(b: &AedsBlock) -> Self {
+        Self {
+            enabled: b.enabled,
+            form: b.form,
+            num_states: b.num_states,
+            emax: b.emax,
+            emin: b.emin,
+            eir: b.eir.clone(),
+            ntiaedss: b.ntiaedss,
+            restremin: b.restremin,
+            bmaxtype: b.bmaxtype,
+            bmax: b.bmax,
+            asteps: b.asteps,
+            bsteps: b.bsteps,
+            energy_columns: AedsColumns::default(),
+            prevalence: AedsPrevalence::default(),
+            target_state: AedsTarget::default(),
+        }
+    }
+
+    fn to_block(&self) -> AedsBlock {
+        AedsBlock {
+            enabled: self.enabled,
+            form: self.form,
+            num_states: self.num_states,
+            emax: self.emax,
+            emin: self.emin,
+            eir: self.eir.clone(),
+            ntiaedss: self.ntiaedss,
+            restremin: self.restremin,
+            bmaxtype: self.bmaxtype,
+            bmax: self.bmax,
+            asteps: self.asteps,
+            bsteps: self.bsteps,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -586,6 +888,12 @@ pub struct RunRecipe {
     pub ensemble: Ensemble,
     pub minimisation: Minimisation,
     pub perturbation: Perturbation,
+    /// EDS block; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eds: Option<Eds>,
+    /// AEDS block; `None` = absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aeds: Option<Aeds>,
     pub outputs: Outputs,
     pub execution: Execution,
     /// Auxiliary input files (perturbation topology, restraint specifications) — part of the run
@@ -721,10 +1029,23 @@ impl RunRecipe {
             }
         }
 
+        if let Some(l) = &imd.lambdas {
+            for w in l.warnings(imd.ntg) {
+                diag.notes
+                    .push(format!("LAMBDAS: {w} (gromosXX warns and runs)"));
+            }
+        }
+
         let mut passthrough = BTreeMap::new();
         for (name, lines) in &imd.raw_blocks {
             if MODELLED_BLOCKS.contains(&name.as_str()) {
                 continue;
+            }
+            // refused whatever the policy: it drives the EDS machinery
+            if name == "REPLICA_EDS" {
+                return Err(RunError::Recipe(
+                    "REPLICA_EDS block: replica-exchange EDS is not implemented".to_string(),
+                ));
             }
             if !policy.allowed.contains(name) {
                 return Err(RunError::UnknownBlock {
@@ -929,7 +1250,16 @@ impl RunRecipe {
                 alpha_c: imd.alphc,
                 nlam: imd.nlam,
                 nscale: imd.nscale,
+                lambdas: imd.lambdas.as_ref().map(Lambdas::from_block),
+                precalclam: imd.precalclam.map(|b| PrecalcLam {
+                    nr_lambdas: b.nr_lambdas,
+                    min_lambda: b.min_lambda,
+                    max_lambda: b.max_lambda,
+                }),
+                atom_pair_kernel: AtomPairKernel::default(),
             },
+            eds: imd.eds.as_ref().map(Eds::from_block),
+            aeds: imd.aeds.as_ref().map(Aeds::from_block),
             outputs: Outputs {
                 trajectory_every: imd.ntwx,
                 ntwse: imd.ntwse,
@@ -1081,6 +1411,14 @@ impl RunRecipe {
             alphc: r.perturbation.alpha_c,
             nlam: r.perturbation.nlam,
             nscale: r.perturbation.nscale,
+            lambdas: r.perturbation.lambdas.as_ref().map(Lambdas::to_block),
+            precalclam: r.perturbation.precalclam.map(|p| PrecalcLamBlock {
+                nr_lambdas: p.nr_lambdas,
+                min_lambda: p.min_lambda,
+                max_lambda: p.max_lambda,
+            }),
+            eds: r.eds.as_ref().map(Eds::to_block),
+            aeds: r.aeds.as_ref().map(Aeds::to_block),
             ntem: r.minimisation.method,
             nmin: r.minimisation.min_steps,
             dele: r.minimisation.tolerance,
@@ -1148,6 +1486,32 @@ impl RunRecipe {
 
     pub fn from_json(text: &str) -> Result<Self, RunError> {
         serde_json::from_str(text).map_err(|e| RunError::Serde(e.to_string()))
+    }
+
+    /// Set one field by its dotted path (`perturbation.atom_pair_kernel`), for the fields no
+    /// `.imd` block carries (`md @recipe_set`). `value` is read as JSON, or as a string when it
+    /// is not JSON; a path or value the recipe does not accept is an error.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), RunError> {
+        let err = |m: String| RunError::Recipe(format!("recipe field '{key}': {m}"));
+        let mut root = serde_json::to_value(&*self).map_err(|e| err(e.to_string()))?;
+        let mut slot = &mut root;
+        let mut parts = key.split('.').peekable();
+        while let Some(part) = parts.next() {
+            let serde_json::Value::Object(table) = slot else {
+                return Err(err(format!("'{part}' is not inside a group")));
+            };
+            slot = if parts.peek().is_some() {
+                table
+                    .get_mut(part)
+                    .ok_or_else(|| err(format!("no group '{part}'")))?
+            } else {
+                table.entry(part).or_insert(serde_json::Value::Null)
+            };
+        }
+        *slot = serde_json::from_str(value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+        *self = serde_json::from_value(root).map_err(|e| err(e.to_string()))?;
+        Ok(())
     }
 
     // --- Factories: the same runs `ImdParameters::{nve,nvt,npt,steepest_descent}` build ---

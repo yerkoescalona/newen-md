@@ -91,6 +91,10 @@ topo = Topology("pair_lj.topo")
 c6, c12, _, _ = topo.lj_parameters(topo.iac[0], topo.iac[1])   # kJ mol⁻¹ nm⁶, kJ mol⁻¹ nm¹²
 ```
 
+**`apply_perturbation(pttopo_file: str) -> tuple[float, float]`**  
+Merge a perturbation topology (`.ptp`) in place; returns the solute's net charge (e) in state
+A and state B.
+
 ---
 
 ## Configuration
@@ -293,8 +297,9 @@ ts.plot("bond", "angle")
 | `n_solvent_atoms` | `int` | Solvent atom count |
 | `algorithm_names` | `list[str]` | Names of algorithms in the sequence |
 | `term_energies` | `dict[str, float]` | Energy of each additive term at the last step, keyed by registry name (`xtb`, `xtb:1` for a repeated kind); their sum is what the terms add to `total_energy` |
-| `dhdl` | `float` | ∂H/∂λ at the last step (kJ/mol) — the TI integrand; 0 without a perturbation |
-| `dhdl_terms` | `dict[str, float]` | ∂H/∂λ split: `lj`, `crf`, `bonded` |
+| `dhdl` | `float` | ∂H/∂λ at the last step (kJ/mol) — the TI integrand, the whole derivative (the `.trg`'s first value); 0 without a perturbation |
+| `dhdl_terms` | `dict[str, float]` | ∂H/∂λ split: `lj`, `crf`, `bonded`, `kinetic`, `constraints`, `distanceres` |
+| `precalclam` | `dict[str, ndarray]` or `None` | Extended TI (`PRECALCLAM`) at the last step: `lambdas` (the grid), `energies` and `derivatives` (N × 12, the `.tre`'s and `.trg`'s `# precalclam` rows), `abdih`, `free_abdih` (A, B); computed on NTWG steps only; `None` without `PRECALCLAM` |
 | `recipe` | `Recipe` | The effective recipe the engine ran (`recipe_toml`: as TOML) |
 | `plan` | `Plan` | The plan the engine instantiated, a frozen snapshot (`plan_json`: as JSON) |
 | `diagnostics` | `list[str]` | Absent optional blocks (and what that means), passed-through blocks |
@@ -435,6 +440,30 @@ import gromos.timeseries
 gromos.timeseries.config.dataframe_backend = "pandas"   # or "polars" / "dict"
 gromos.timeseries.config.plot_backend = "matplotlib"     # or "plotly"
 ```
+
+---
+
+## Free-energy windows (`gromos.free_energy`)
+
+```python
+from gromos.free_energy import LambdaSchedule, run_windows, collect
+windows = run_windows(system, LambdaSchedule([0, 0.5, 1]).recipes(base), workdir="ti")
+dg, error = windows.ti(skip=2)
+dg, error = windows.bar(skip=2)    # with PRECALCLAM on a grid holding every window's λ
+dg, error = windows.mbar(skip=2)
+```
+
+| Name | Description |
+|------|-------------|
+| `LambdaSchedule(points, interaction_lambdas=None)` | `.recipes(base)`: one recipe per λ (`LAMBDAS` rows optional); `.names` |
+| `Perturbation` | `.mutate(system, atoms, *, charge_b=None, iac_b=None, mass_b=None, alpha_lj=1.51, alpha_crf=0.5)` (`make_pt_top`), `.from_ptp(path, topology=None)`; `.text`, `.net_charge_a`, `.net_charge_b`, `.delta_charge`, `.path`, `.write(path)`, `.end_state(system, "A"\|"B")` (`pt_top`) |
+| `run_windows(system, recipes, *, perturbation=None, workdir=None, dry_run=False, parallel=1)` | Runs each window in process (or `parallel` worker processes, same numbers) → `FreeEnergyWindows`; kept windows (`<workdir>/<name>.npz`) are read, not rerun |
+| `collect(workdir)` | The windows kept in `workdir` |
+| `FreeEnergyWindows` | `.lambdas`, `.mean_dhdl(skip)`, `.window_statistics(skip)`, `.ti(skip)` → `(ΔG, error)` kJ/mol, `.report(skip)`; `.bar(skip, temperature=None)`, `.mbar(skip, temperature=None)` → `Estimate`; `.bar_data(skip)` → the per-frame energies both use; iterable over `Window` (`.lam`, `.name`, `.recipe`, `.energies`, `.dhdl`, `.precalclam`) |
+| `Estimate` | `.method` (`"BAR"`, `"MBAR"`), `.lambdas`, `.dg`, `.error` (first → last window, kJ/mol), `.steps` (`(ΔG, error)` per neighbouring pair); unpacks as `dg, error` |
+| `Precalclam` | A window's `PRECALCLAM` frames (`.energies`, `.derivatives`, `.abdih`, `.free_abdih`) with `.grid`, `.nlam`, `.temperature` |
+
+See the user guide page *Free-energy windows*.
 
 ---
 

@@ -20,6 +20,42 @@ pub fn lnexp_ave(vals: &[f64]) -> f64 {
     ave - (vals.len() as f64).ln()
 }
 
+/// gromos++ `Stat::lnXexpave` (`Stat.cc:129-178`): ln |<X exp(Y)>| and its sign, the signed
+/// log-sum seeded with `eps = Y[0]` and that seed taken out again at the end. An X of 0 adds
+/// ln 0 = −∞ and leaves the sum unchanged. `x` and `y` must have the same, non-zero length.
+pub fn ln_x_exp_ave(x: &[f64], y: &[f64]) -> Result<(f64, i32), String> {
+    if x.len() != y.len() {
+        return Err("can't calculate ln|<Xexp[Y]>|: unequal number of elements".into());
+    }
+    if x.is_empty() {
+        return Err("can't calculate ln|<Xexp[Y]>| of no values".into());
+    }
+    let eps = y[0];
+    let mut ave = eps;
+    let mut sign_ave = 1i32;
+    for (&xi, &yi) in x.iter().zip(y) {
+        let sign_x = if xi < 0.0 { -1 } else { 1 };
+        let term = xi.abs().ln() + yi;
+        if sign_x * sign_ave > 0 {
+            ave = ln_add(ave, term);
+        } else {
+            if term > ave {
+                sign_ave = sign_x;
+            }
+            ave = ln_sub(ave, term);
+        }
+    }
+    if sign_ave < 0 {
+        ave = ln_add(ave, eps);
+    } else {
+        if ave < eps {
+            sign_ave = -1;
+        }
+        ave = ln_sub(ave, eps);
+    }
+    Ok((ave - (x.len() as f64).ln(), sign_ave))
+}
+
 /// gromos++ `lnexpcovariance`: ln |cov(exp X, exp Y)| with its sign.
 pub fn lnexp_covariance(x: &[f64], y: &[f64]) -> Result<(f64, i32), String> {
     if x.len() != y.len() {
@@ -88,6 +124,19 @@ mod tests {
     fn log_average_of_exponentials() {
         let v = [0.0, (2.0f64).ln(), (3.0f64).ln()]; // exp: 1, 2, 3 → mean 2
         assert!((lnexp_ave(&v) - 2f64.ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn signed_average_of_x_times_exponential() {
+        // <X e^Y> with mixed signs: (2·1 − 3·2 + 0·5 + 1·3) / 4 = −0.25
+        let x = [2.0, -3.0, 0.0, 1.0];
+        let y = [0.0, 2f64.ln(), 5f64.ln(), 3f64.ln()];
+        let (l, sign) = ln_x_exp_ave(&x, &y).unwrap();
+        assert_eq!(sign, -1);
+        assert!((l.exp() - 0.25).abs() < 1e-12);
+        let (l, sign) = ln_x_exp_ave(&[4.0, 2.0], &[0.0, 0.0]).unwrap();
+        assert_eq!(sign, 1);
+        assert!((l.exp() - 3.0).abs() < 1e-12);
     }
 
     #[test]

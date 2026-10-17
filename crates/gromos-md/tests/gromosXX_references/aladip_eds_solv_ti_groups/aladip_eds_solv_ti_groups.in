@@ -1,0 +1,114 @@
+TITLE
+Alanine dipeptide in 20 SPC, TI-EDS (EDS atoms N4, H11; perturbed CB1, C8, N10, CB12) with two energy groups (1-5, 6-72) and individual lambdas
+END
+SYSTEM
+#      NPM      NSM 
+         1       20
+END
+INITIALISE
+#  NTIVEL  NTISHK  NTINHT  NTINHB
+        0       0       0       0
+#  NTISHI  NTIRTC  NTICOM
+        1       0       1
+#  NTISTI
+        0
+#      IG   TEMPI
+   210185     0.0
+END
+STEP
+       10       0.0     0.002
+END
+BOUNDCOND
+#      NTB    NDFMIN
+         1         0
+END
+MULTIBATH
+    weak-coupling
+#   NBATHS
+    2
+#   TEMP0(1..NBATHS)  TAU(1..NBATHS)
+    300.0  0.1  300.0  0.1
+#   DOFSET
+    2
+#   LAST(1..DOFSET)  COMBATH(1..DOFSET)  IRBATH(1..DOFSET)
+    12  1  1  72  2  2
+END
+COMTRANSROT
+#     NSCM
+       10
+END
+PRINTOUT
+#     NTPR      NTPP
+        10         0
+END
+WRITETRAJ
+         1         0         0         1         1         1         0
+END
+CONSTRAINT
+#       NTC  NTCP  NTCP0(1)  NTCS  NTCS0(1)
+        3    1     0.0001    1     0.0001
+END
+FORCE
+#      NTF array
+# bonds    angles    imp.     dihe     charge nonbonded
+# H        H         H        H
+     1        1         1        1     1  1
+# NEGR    NRE(1)    NRE(2)    ...      NRE(NEGR)
+     2      5     72
+END
+PAIRLIST
+#       ALGORITHM       NSNB    RCUTP   RCUTL   SIZE    TYPE
+        standard        5       0.8     1.4     auto    chargegroup
+END
+NONBONDED
+#   NLRELE
+         1
+#    APPAK      RCRF     EPSRF  NSLFEXCL
+       0.0       1.4      62.0         1
+#   NSHAPE    ASHAPE    NA2CLC     TOLA2    EPSLS
+        -1       1.4         2    0.1E-9      0.0
+#      NKX       NKY       NKZ       NK2
+        10        10        10      100.0
+#      NGX       NGY       NGZ    NASORD    NFDORD    NALIAS    NSPORD
+        32        32        32         3         2         3         4
+#   NQEVAL    FACCUR    NRDGRD    NWRGDR
+    100000       1.6         0         0
+#    NLRLJ    SLVDNS
+         0      33.3
+END
+POSITIONRES
+#   NTPOR  NTPORB  NTPORS    CPOR
+        0       0       0   0.0
+END
+EDS
+# EDS
+  1
+# FORM  NUMSTATES
+  1     2
+# S
+  0.25
+# EIR
+  0.0   20.0
+END
+PERTURBATION
+#     NTG   NRDGL    RLAM   DLAMT
+        1       0     0.3     0.0
+#  ALPHLJ   ALPHC    NLAM  NSCALE
+      1.0     1.0       1       0
+END
+LAMBDAS
+    on
+# NTLI      NILG1 NILG2   ALI   BLI   CLI   DLI   ELI
+vdw             1     1   0.0   0.5   0.5   0.0   0.0
+vdw             1     2   0.0   0.0   0.1   0.9   0.0
+vdw             2     2   0.0   1.0   0.0   0.0   0.0
+vdw_soft        1     1   1.0   0.0   0.0   0.0   0.0
+vdw_soft        1     2   0.5   0.5   0.0   0.0   0.0
+vdw_soft        2     2   0.0   0.0   0.0   0.0   1.0
+crf             1     1   0.4   0.0   0.6   0.0   0.0
+crf             1     2   0.4   0.3   0.3   0.0   0.0
+crf             2     2   0.0   0.5   0.2   0.3   0.0
+crf_soft        1     1   1.0   0.0   0.0   0.0   0.0
+crf_soft        1     2   1.0   1.0  -1.0   0.0   0.0
+crf_soft        2     2   0.0   0.0   0.5   0.5   0.0
+END

@@ -54,14 +54,20 @@ pub mod prepare;
 pub mod recipe;
 
 pub use build::{
-    build_sequence_from_imd, build_sequence_from_plan, build_sequence_from_recipe, instantiate,
-    periodicity_of, start, BarostatSummary, BuildSummary, Built, Instantiated, ThermostatSummary,
+    advance_lambda, build_sequence_from_imd, build_sequence_from_plan, build_sequence_from_recipe,
+    instantiate, lambda_in_range, lambda_warning, periodicity_of, start, BarostatSummary,
+    BuildSummary, Built, Instantiated, ThermostatSummary,
 };
 pub use bundle::{load_bundle, read_imd, write_bundle, RunBundle};
 pub use constraints::ConstraintSelection;
-pub use dof::total_dof;
+pub use dof::{total_dof, BathDof};
 pub use error::RunError;
 pub use inputs::{ParallelPolicy, RunInputs, RunOptions};
-pub use plan::{build_plan, plan_from_json, plan_to_json, validate_plan, AlgorithmSpec};
-pub use prepare::{prepare_system, Coordinates, PrepareNote, Prepared};
-pub use recipe::{Diagnostics, PassthroughPolicy, RunRecipe, TermSpec, RECIPE_VERSION};
+pub use plan::{
+    build_plan, plan_from_json, plan_to_json, validate_plan, AedsPlan, AlgorithmSpec, EdsPlan,
+};
+pub use prepare::{
+    precalclam_longrange_gaps, precalclam_longrange_warning, prepare_system, Coordinates,
+    PrepareNote, Prepared,
+};
+pub use recipe::{Aeds, Diagnostics, Eds, PassthroughPolicy, RunRecipe, TermSpec, RECIPE_VERSION};

@@ -590,6 +590,21 @@ impl PyRecipe {
     fn perturbation<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "perturbation")
     }
+    /// The `EDS` block as a dict (`enabled`, `form`, `num_states`, `s`, `pairs`, `eir`), or
+    /// `None` without one.
+    #[getter]
+    fn eds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.group(py, "eds")
+    }
+    /// The `AEDS` block as a dict (`enabled`, `form`, `num_states`, `emax`, `emin`, `eir`,
+    /// `ntiaedss`, `restremin`, `bmaxtype`, `bmax`, `asteps`, `bsteps`), or `None` without one.
+    /// `energy_columns`, `prevalence` and `target_state` (no `.imd` block; listed only when not
+    /// `"intended"`) reproduce gromosXX's A-EDS defects (`"gromosxx-post-update"`,
+    /// `"gromosxx-plain-exp"`, `"gromosxx-state1-default"`).
+    #[getter]
+    fn aeds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.group(py, "aeds")
+    }
     #[getter]
     fn outputs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "outputs")
@@ -743,6 +758,8 @@ impl PyRecipe {
             positions: system.configuration.pos_data.clone(),
             velocities: system.configuration.vel_data.clone(),
             box_dims: system.configuration.box_dims,
+            pertdata: system.configuration.pertdata,
+            aedssearch: system.configuration.aedssearch.clone(),
         };
         let prepared = prepare_system(
             &imd,
@@ -755,7 +772,7 @@ impl PyRecipe {
         let specs = build_plan(
             &self.inner,
             &prepared.topology,
-            prepared.physical_constants.four_pi_eps_i,
+            &prepared.physical_constants,
         )
         .map_err(run_err)?;
         validate_plan(&specs).map_err(run_err)?;

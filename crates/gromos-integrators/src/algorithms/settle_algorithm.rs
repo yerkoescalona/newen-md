@@ -15,11 +15,16 @@ use crate::constraints::settle;
 ///
 /// Applied after the position update to analytically enforce the rigid
 /// 3-site water geometry. Equivalent to GROMOS's `Settle::apply`.
-pub struct SettleAlgorithm;
+pub struct SettleAlgorithm {
+    /// The run computes the atomic virial (`VIRIAL 1`): only then does SETTLE add its virial.
+    pub atomic_virial: bool,
+}
 
 impl SettleAlgorithm {
     pub fn new() -> Self {
-        Self
+        Self {
+            atomic_virial: false,
+        }
     }
 }
 
@@ -73,7 +78,7 @@ impl Algorithm for SettleAlgorithm {
         conf: &mut Configuration,
         sim: &SimulationState,
     ) -> Result<(), String> {
-        let result = settle(topo, conf, sim.dt);
+        let result = settle(topo, conf, sim.dt, self.atomic_virial);
         if result.converged {
             Ok(())
         } else {

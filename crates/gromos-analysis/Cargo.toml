@@ -15,6 +15,8 @@ needless_range_loop = "allow"
 gromos-core = { workspace = true }
 gromos-io = { workspace = true }
 gromos-forces = { workspace = true }
+# `ext_ti_ana @imd` reads the parameter file through the one IMD reader (G6)
+gromos-run = { workspace = true }
 
 # SIMD and math
 glam = { workspace = true }
@@ -22,6 +24,9 @@ nalgebra = { workspace = true }
 
 # Parallelism
 rayon = { workspace = true }
+
+# The periodic Poisson solver of dGslv_pbsolv
+rustfft = { workspace = true }
 
 # Progress bars (used by analysis bins)
 indicatif = { workspace = true }
@@ -200,6 +205,10 @@ name = "dg_ener"
 path = "src/bin/free_energy/dg_ener.rs"
 
 [[bin]]
+name = "dGslv_pbsolv"
+path = "src/bin/free_energy/dGslv_pbsolv.rs"
+
+[[bin]]
 name = "dfmult"
 path = "src/bin/free_energy/dfmult.rs"
 
@@ -212,6 +221,10 @@ name = "ext_ti_ana"
 path = "src/bin/free_energy/ext_ti_ana.rs"
 
 [[bin]]
+name = "mbar"
+path = "src/bin/free_energy/mbar.rs"
+
+[[bin]]
 name = "trs_ana"
 path = "src/bin/free_energy/trs_ana.rs"
 
@@ -222,10 +235,6 @@ path = "src/bin/free_energy/reweight.rs"
 [[bin]]
 name = "rep_ana"
 path = "src/bin/free_energy/rep_ana.rs"
-
-[[bin]]
-name = "eds_ana"
-path = "src/bin/free_energy/eds_ana.rs"
 
 [[bin]]
 name = "gamd_ana"

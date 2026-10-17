@@ -1,81 +1,36 @@
-//! Free Energy Perturbation (FEP) module
+//! Free Energy Perturbation (FEP) data types
 //!
-//! Direct translation of GROMOS FEP capabilities from:
-//! - md++/src/algorithm/integration/slow_growth.cc
+//! [`LambdaController`] (the global λ a replica carries, `replica.rs`) and the dual-state
+//! [`PerturbedAtom`] parameters, from:
 //! - md++/src/topology/perturbed_atom.h
 //! - md++/src/interaction/nonbonded/interaction/perturbed_nonbonded_term.h
+//!
+//! What `md` and `gromos.Simulation` run lives elsewhere: slow growth (gromosXX
+//! `slow_growth.cc`) is `gromos_run::advance_lambda`, which leaves λ unbounded as gromosXX does
+//! (its caller warns when λ leaves [0, 1], no clamp); the individual λ of every
+//! interaction are `Topology::individual_lambdas` (gromos-core); the perturbed kernels are in
+//! gromos-forces. [`LambdaController::update`] clamps to [0, 1] and is not that path.
 //!
 //! # Overview
 //!
 //! Free energy perturbation allows calculation of free energy differences by
 //! gradually transforming one molecular state (A) into another (B) using a
-//! coupling parameter λ ∈ [0,1]:
+//! coupling parameter λ:
 //!
 //! - λ = 0: Pure state A
 //! - λ = 1: Pure state B
 //! - 0 < λ < 1: Hybrid state
-//!
-//! # Methods
-//!
-//! - **Thermodynamic Integration (TI)**: ΔG = ∫₀¹ ⟨∂H/∂λ⟩_λ dλ
-//! - **Slow Growth**: Continuous λ evolution, λ(t) = λ₀ + (dλ/dt)·t
-//! - **Staged Windows**: Multiple simulations at fixed λ values
-//!
-//! # Features
-//!
-//! - Dual-state topology (A/B parameters for each perturbed atom)
-//! - Lambda-dependent parameter interpolation
-//! - Soft-core potentials (prevent singularities)
-//! - Individual lambda values per interaction type
-//! - Energy group-specific scaling
 
-use gromos_core::topology::Topology;
-
-/// Lambda controller for free energy perturbation
+/// The global λ of a replica and its slow-growth rate.
 ///
-/// Manages the coupling parameter λ and its evolution over time
+/// The individual λ of every interaction kind live in one place, `Topology::individual_lambdas`
+/// (gromos-core); this only carries the global value a replica advances.
 #[derive(Debug, Clone)]
 pub struct LambdaController {
     /// Current lambda value (0 to 1)
     pub lambda: f64,
     /// Lambda change rate (dλ/dt) in ps⁻¹
     pub dlambda_dt: f64,
-    /// Lambda exponent (for λⁿ coupling)
-    pub lambda_exponent: i32,
-    /// Individual lambda values per interaction type
-    pub interaction_lambdas: InteractionLambdas,
-}
-
-/// Individual lambda values for different interaction types
-///
-/// Allows independent control of different terms (bonds, LJ, electrostatics, etc.)
-#[derive(Debug, Clone)]
-pub struct InteractionLambdas {
-    pub bond: f64,
-    pub angle: f64,
-    pub dihedral: f64,
-    pub improper: f64,
-    pub lj: f64,
-    pub lj_softness: f64,
-    pub crf: f64,
-    pub crf_softness: f64,
-    pub mass: f64,
-}
-
-impl Default for InteractionLambdas {
-    fn default() -> Self {
-        Self {
-            bond: 0.0,
-            angle: 0.0,
-            dihedral: 0.0,
-            improper: 0.0,
-            lj: 0.0,
-            lj_softness: 0.0,
-            crf: 0.0,
-            crf_softness: 0.0,
-            mass: 0.0,
-        }
-    }
 }
 
 impl LambdaController {
@@ -84,15 +39,12 @@ impl LambdaController {
         Self {
             lambda: 0.0,
             dlambda_dt: 0.0,
-            lambda_exponent: 1,
-            interaction_lambdas: InteractionLambdas::default(),
         }
     }
 
     /// Set initial lambda value
     pub fn with_lambda(mut self, lambda: f64) -> Self {
         self.lambda = lambda.clamp(0.0, 1.0);
-        self.update_interaction_lambdas();
         self
     }
 
@@ -102,50 +54,11 @@ impl LambdaController {
         self
     }
 
-    /// Set lambda exponent for λⁿ coupling
-    pub fn with_exponent(mut self, n: i32) -> Self {
-        self.lambda_exponent = n;
-        self.update_interaction_lambdas();
-        self
-    }
-
-    /// Update lambda by timestep (slow growth)
-    ///
-    /// Direct translation from slow_growth.cc
+    /// Advance λ by `dlambda_dt · dt`, clamped to [0, 1].
     pub fn update(&mut self, dt: f64) {
         if self.dlambda_dt != 0.0 {
             self.lambda += self.dlambda_dt * dt;
             self.lambda = self.lambda.clamp(0.0, 1.0);
-            self.update_interaction_lambdas();
-        }
-    }
-
-    /// Update all interaction lambdas based on main lambda
-    fn update_interaction_lambdas(&mut self) {
-        let lambda_n = if self.lambda_exponent == 1 {
-            self.lambda
-        } else {
-            self.lambda.powi(self.lambda_exponent)
-        };
-
-        // Default: all interactions follow main lambda
-        self.interaction_lambdas.bond = lambda_n;
-        self.interaction_lambdas.angle = lambda_n;
-        self.interaction_lambdas.dihedral = lambda_n;
-        self.interaction_lambdas.improper = lambda_n;
-        self.interaction_lambdas.lj = lambda_n;
-        self.interaction_lambdas.lj_softness = self.lambda; // Softness uses λ, not λⁿ
-        self.interaction_lambdas.crf = lambda_n;
-        self.interaction_lambdas.crf_softness = self.lambda;
-        self.interaction_lambdas.mass = lambda_n;
-    }
-
-    /// Get lambda derivative (dλⁿ/dλ)
-    pub fn lambda_derivative(&self) -> f64 {
-        if self.lambda_exponent == 1 {
-            1.0
-        } else {
-            (self.lambda_exponent) as f64 * self.lambda.powi(self.lambda_exponent - 1)
         }
     }
 }
@@ -377,19 +290,6 @@ impl PerturbedTopology {
     pub fn add_perturbed_dihedral(&mut self, dihedral: PerturbedBondedTerm) {
         self.perturbed_dihedrals.push(dihedral);
     }
-
-    /// Update topology parameters for current lambda
-    pub fn update_for_lambda(&self, topo: &mut Topology, lambda: f64) {
-        // Update perturbed atom properties
-        for perturbed in &self.perturbed_atoms {
-            let idx = perturbed.atom_index;
-            if idx < topo.mass.len() {
-                topo.mass[idx] = perturbed.mass_at_lambda(lambda);
-                topo.charge[idx] = perturbed.charge_at_lambda(lambda);
-                topo.compute_inverse_masses();
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -415,15 +315,6 @@ mod tests {
         // Should clamp at 1.0
         controller.update(10.0);
         assert_eq!(controller.lambda, 1.0);
-    }
-
-    #[test]
-    fn test_lambda_exponent() {
-        let controller = LambdaController::new().with_lambda(0.5).with_exponent(2);
-
-        assert_eq!(controller.lambda, 0.5);
-        assert_eq!(controller.interaction_lambdas.bond, 0.25); // 0.5²
-        assert_eq!(controller.lambda_derivative(), 1.0); // d(λ²)/dλ = 2λ = 1.0
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! RF excluded-pair corrections and 1-4 interaction loop
 
-use super::{CRFParameters, ForceStorage, LJParamMatrix};
+use super::innerloops::with_groups;
+use super::{CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix};
 use gromos_core::math::{BoundaryCondition, Vec3};
 
 /// Calculate reaction-field excluded-pair corrections (energy + forces).
@@ -31,6 +32,35 @@ pub fn rf_excluded_interactions<BC: BoundaryCondition>(
     four_pi_eps_i: f64,
     storage: &mut ForceStorage,
     num_solute_atoms: usize,
+    egroups: EnergyGroups<'_>,
+) {
+    storage.check_groups(&egroups);
+    with_groups!(egroups, G => rf_excluded_impl::<BC, G>(
+        charges,
+        exclusions,
+        positions,
+        crf,
+        boundary,
+        four_pi_eps_i,
+        storage,
+        num_solute_atoms,
+        &egroups,
+    ));
+}
+
+/// [`rf_excluded_interactions`]; with `GROUPS` each term also goes to its group pair: the self
+/// term to `[eg(i)][eg(i)]`, an excluded pair to `[eg(i)][eg(j)]` (gromosXX
+/// `nonbonded_innerloop.cc:1706-1707, 1758-1759, 2129-2157`).
+fn rf_excluded_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    charges: &[f64],
+    exclusions: &[Vec<usize>],
+    positions: &[Vec3],
+    crf: &CRFParameters,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    storage: &mut ForceStorage,
+    num_solute_atoms: usize,
+    egroups: &EnergyGroups<'_>,
 ) {
     // === Solute atoms ===
     let mut e_self = 0.0;
@@ -42,6 +72,9 @@ pub fn rf_excluded_interactions<BC: BoundaryCondition>(
         let term = -0.5 * charges[i] * charges[i] * four_pi_eps_i * crf.crf_cut;
         e_self += term;
         storage.e_crf += term;
+        if GROUPS {
+            storage.groups.crf[egroups.cell(i, i)] += term;
+        }
 
         // Excluded pair RF correction (energy + forces)
         for &j in exclusions[i].iter() {
@@ -54,6 +87,9 @@ pub fn rf_excluded_interactions<BC: BoundaryCondition>(
                 let term = q_prod * (-crf.crf_2cut3i * r2 - crf.crf_cut);
                 e_excl_solute += term;
                 storage.e_crf += term;
+                if GROUPS {
+                    storage.groups.crf[egroups.cell(i, j)] += term;
+                }
                 n_solute_excl += 1;
 
                 // Force: q_prod * crf_cut3i * r_vec
@@ -88,6 +124,9 @@ pub fn rf_excluded_interactions<BC: BoundaryCondition>(
                 let term = -charges[i] * charges[j] * four_pi_eps_i * crf.crf_2cut3i * r2;
                 e_excl_solvent += term;
                 storage.e_crf += term;
+                if GROUPS {
+                    storage.groups.crf[egroups.cell(i, j)] += term;
+                }
                 n_solvent_excl += 1;
 
                 // NO force for solvent excluded pairs (rigid molecules)
@@ -139,6 +178,38 @@ pub fn one_four_interaction_loop<BC: BoundaryCondition>(
     four_pi_eps_i: f64,
     storage: &mut ForceStorage,
     coulomb_scaling: f64,
+    egroups: EnergyGroups<'_>,
+) {
+    storage.check_groups(&egroups);
+    with_groups!(egroups, G => one_four_impl::<BC, G>(
+        one_four_pairs,
+        positions,
+        charges,
+        iac,
+        lj_params,
+        crf,
+        boundary,
+        four_pi_eps_i,
+        storage,
+        coulomb_scaling,
+        &egroups,
+    ));
+}
+
+/// [`one_four_interaction_loop`]; with `GROUPS` each pair also goes to `[eg(i)][eg(j)]`
+/// (gromosXX `nonbonded_innerloop.cc:1383-1390`).
+fn one_four_impl<BC: BoundaryCondition, const GROUPS: bool>(
+    one_four_pairs: &[Vec<usize>],
+    positions: &[Vec3],
+    charges: &[f64],
+    iac: &[u32],
+    lj_params: &LJParamMatrix,
+    crf: &CRFParameters,
+    boundary: &BC,
+    four_pi_eps_i: f64,
+    storage: &mut ForceStorage,
+    coulomb_scaling: f64,
+    egroups: &EnergyGroups<'_>,
 ) {
     let mut e_lj_14 = 0.0;
     let mut e_crf_14 = 0.0;
@@ -182,6 +253,11 @@ pub fn one_four_interaction_loop<BC: BoundaryCondition>(
 
             e_lj_14 += e_lj;
             e_crf_14 += e_crf;
+            if GROUPS {
+                let k = egroups.cell(i, j);
+                storage.groups.lj[k] += e_lj;
+                storage.groups.crf[k] += e_crf;
+            }
 
             let rv = [r.x, r.y, r.z];
             let fv = [force.x, force.y, force.z];
@@ -230,6 +306,7 @@ mod tests {
             fpepsi,
             &mut storage,
             2,
+            EnergyGroups::single(),
         );
         let q_prod = charges[0] * charges[1] * fpepsi;
         let expected = -0.5 * (charges[0].powi(2) + charges[1].powi(2)) * fpepsi * crf.crf_cut
@@ -260,6 +337,7 @@ mod tests {
             1.0,
             &mut storage,
             1,
+            EnergyGroups::single(),
         );
         assert!((storage.e_crf - (-0.5 * crf.crf_cut)).abs() < 1e-15);
     }

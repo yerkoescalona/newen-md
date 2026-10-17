@@ -65,7 +65,8 @@ make test-python              # build-python + pytest
 ```bash
 cd py-gromos
 ../.venv/bin/maturin build --release
-# wheel written to: ../target/wheels/gromos-0.1.0-cp312-abi3-linux_x86_64.whl
+# wheel written to: ../target/wheels/gromos-<version>-cp312-abi3-linux_x86_64.whl
+# (<version> is the workspace version in the root Cargo.toml)
 pip install ../target/wheels/gromos-*.whl
 ```
 

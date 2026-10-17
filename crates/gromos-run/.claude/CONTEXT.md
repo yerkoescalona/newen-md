@@ -27,6 +27,31 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **Lattice sum refused (1.8, 0.0.65):** `check_electrostatics` (`plan.rs`, called by
+  `build_plan` and `build_sequence_from_plan`) refuses NLRELE 2/3 for every run, perturbed or
+  not: nothing calls gromos-forces' `electrostatics.rs`/`pme.rs`, and the reaction field would
+  run in their place. No reference input uses NLRELE 2/3.
+- **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
+  `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
+  DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)
+  call it after every step, `start`'s included. `check_slow_growth` (`plan.rs`) refuses gromosXX's
+  locks; DLAMT < 0 is refused whatever NTG says. Since 0.0.64 `advance_lambda` returns the new
+  λ on the step that takes it out of [0, 1] and `prepare_system` notes
+  `PrepareNote::LambdaOutOfRange { lambda }` when a run starts outside it (a `PERTDATA` λ); `md`
+  warns and `Simulation` raises a Python `UserWarning`, both with `lambda_warning`'s text. λ stays
+  unbounded, as in gromosXX (never a refusal).
+- **A-EDS (1.8, 0.0.60):** `RunRecipe::aeds` (the `AEDS` block), `check_aeds` (refusals, called
+  from `check_eds`), `EdsPlan::aeds` (FORM 1, s = 1, the search settings). `prepare_system` takes
+  the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the
+  configuration's `AEDSSEARCH` block into `Configuration::aeds` (required; with NTIAEDSS = 1
+  ignored, `PrepareNote::AedsSearchIgnored`). `Coordinates::aedssearch` carries the block's lines.
+  Since 0.0.63 `Aeds::{energy_columns, prevalence, target_state}` (`"intended"` by default,
+  `"gromosxx-post-update"` / `"gromosxx-plain-exp"` / `"gromosxx-state1-default"` reproduce D16,
+  D25, D32; no `.imd` token, set by `md @recipe_set` or `Recipe.update`) pass through
+  `AedsPlan` to `AedsParams`.
+- **Net charge of a perturbation (1.8, 0.0.59):** `prepare_system` notes the solute's net
+  charge in state A and B (`PrepareNote::PerturbationNetCharge`) on every perturbed run and
+  `NetChargeChanged` when ΔQ ≠ 0 under a reaction field (NLRELE −1/1/4): a warning, no refusal.
 - **MPI (2026-08-30):** `RunOptions::pair_partition: Option<(usize, usize)>` sets
   `Forcefield::pair_partition` on the built sequence; the caller installs the reducer
   (`sequence.find_mut::<Forcefield>()`). `tests/pair_partition.rs` checks that rank shares sum to

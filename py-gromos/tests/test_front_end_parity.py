@@ -47,6 +47,13 @@ from gromos import (
     terms,
 )
 
+# the slow-growth references that take λ past 1 warn, and so does
+# ch4_water_fep_precalc_twinrange (see test_gromosXX_references.py)
+pytestmark = [
+    pytest.mark.filterwarnings(r"ignore:slow growth takes lambda out of \[0, 1\]"),
+    pytest.mark.filterwarnings(r"ignore:PRECALCLAM with a twin-range pairlist"),
+]
+
 
 def _load(system_name: str):
     system_dir = REF_DIR / system_name
@@ -187,7 +194,6 @@ def test_plan_front_end_parity(system_name):
 # ---------------------------------------------------------------------------------------------
 UNCOVERED_KINDS: dict[str, str] = {
     "orchestrator": "needs a Term (xtb/schnet); no gromosXX reference has one — 3.9 step 5",
-    "rottrans": "no gromosXX reference system has a ROTTRANS block yet — 1.5c",
 }
 
 PYI = Path(__file__).resolve().parents[1] / "python" / "gromos" / "gromos.pyi"

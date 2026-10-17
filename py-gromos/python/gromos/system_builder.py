@@ -76,6 +76,9 @@ import numpy as np
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    # `MDResult.energies`: the package's one energy timeseries (`Simulation.run()`'s columns)
+    from .timeseries import EnergyTimeseries
+
 # ---------------------------------------------------------------------------
 # Internal helpers — binary discovery
 # ---------------------------------------------------------------------------
@@ -1369,142 +1372,6 @@ class Configuration:
 
 
 # ---------------------------------------------------------------------------
-# EnergyTimeseries
-# ---------------------------------------------------------------------------
-
-
-class EnergyTimeseries:
-    """Energy components as a function of simulation time.
-
-    Produced by :meth:`MDResult.energies`.  Supports DataFrame export and
-    optional matplotlib plotting.
-
-    Parameters
-    ----------
-    time : numpy.ndarray, shape (n_frames,)
-        Simulation times in ps.
-    data : dict mapping str → numpy.ndarray
-        Energy components keyed by name
-        (``"total"``, ``"kinetic"``, ``"potential"``, ``"lj"``, ``"crf"``,
-        ``"bond"``, ``"angle"``, ``"dihedral"``, ``"pressure"``, …).
-
-    Attributes
-    ----------
-    time : numpy.ndarray
-    components : list of str
-        Available energy component names.
-
-    Notes
-    -----
-    **DataFrame backend**: The method :meth:`to_dataframe` returns a Polars
-    DataFrame when Polars is installed, otherwise a pandas DataFrame, otherwise
-    a plain dict of numpy arrays.  The caller need not know which backend is
-    available.
-
-    **Energy unit**: All values are in kJ mol⁻¹ (GROMOS native).  A helper
-    ``to_kcal()`` converts to kcal mol⁻¹.
-
-    Examples
-    --------
-    >>> result = solvated.run(steps=10000)  # doctest: +SKIP
-    >>> ts = result.energies
-    >>> ts.components
-    ['total', 'kinetic', 'potential', 'lj', 'crf', 'bond', ...]
-    >>> ts["total"].mean()
-    -48231.4
-    >>> ts.plot("total", "kinetic")  # doctest: +SKIP
-    >>> df = ts.to_dataframe()
-    >>> type(df)  # doctest: +SKIP
-    <class 'polars.DataFrame'>
-    """
-
-    def __init__(self, time: np.ndarray, data: dict[str, np.ndarray]) -> None:
-        self.time = time
-        self._data = data
-
-    @property
-    def components(self) -> list[str]:
-        return list(self._data.keys())
-
-    def __getitem__(self, key: str) -> np.ndarray:
-        return self._data[key]
-
-    def to_dataframe(self):
-        """Return a DataFrame of all energy components.
-
-        Returns
-        -------
-        polars.DataFrame or pandas.DataFrame or dict
-            Type depends on which library is available.
-
-        Examples
-        --------
-        >>> ts.to_dataframe().describe()  # doctest: +SKIP
-        shape: (9, 8)
-        ┌──────────┬───────────┬──────────┬── ...
-        """
-        cols = {"time": self.time, **self._data}
-        try:
-            import polars as pl
-
-            return pl.DataFrame(cols)
-        except ImportError:
-            pass
-        try:
-            import pandas as pd
-
-            return pd.DataFrame(cols)
-        except ImportError:
-            pass
-        return cols
-
-    def plot(self, *components: str, **kwargs) -> None:
-        """Quick matplotlib line plot of selected energy components.
-
-        Parameters
-        ----------
-        *components : str
-            Component names to plot.  If empty, plots ``"total"``.
-        **kwargs
-            Passed to ``matplotlib.pyplot.plot``.
-        """
-        import matplotlib.pyplot as plt
-
-        keys = list(components) or ["total"]
-        fig, ax = plt.subplots()
-        for k in keys:
-            ax.plot(self.time, self._data[k], label=k, **kwargs)
-        ax.set_xlabel("Time (ps)")
-        ax.set_ylabel("Energy (kJ mol⁻¹)")
-        ax.legend()
-        plt.tight_layout()
-        plt.show()
-
-    def block_average(self, component: str, block_size: int = 100) -> tuple[float, float]:
-        """Block average for a single component.
-
-        Parameters
-        ----------
-        component : str
-        block_size : int, default 100
-
-        Returns
-        -------
-        (mean, error) : tuple of float
-            Mean and standard error in kJ mol⁻¹.
-        """
-        arr = self._data[component]
-        n_blocks = len(arr) // block_size
-        if n_blocks < 2:
-            return float(arr.mean()), float(arr.std())
-        blocks = arr[: n_blocks * block_size].reshape(n_blocks, block_size).mean(axis=1)
-        return float(blocks.mean()), float(blocks.std() / np.sqrt(n_blocks))
-
-    def __repr__(self) -> str:
-        return f"EnergyTimeseries(n_frames={len(self.time)}, components={self.components})"
-
-
-# ---------------------------------------------------------------------------
 # MDResult
 # ---------------------------------------------------------------------------
 
@@ -1544,7 +1411,7 @@ class MDResult:
     Examples
     --------
     >>> result = solvated.run(steps=10_000)  # doctest: +SKIP
-    >>> result.energies["total"].mean()
+    >>> result.energies.total.mean()
     -48231.4
     >>> result.conf.n_atoms
     648

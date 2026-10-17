@@ -21,6 +21,8 @@ pub struct ShakeAlgorithm {
     /// Whether SHAKE should also constrain the solvent (false when NTCS selects
     /// a different solvent algorithm, e.g. SETTLE/LINCS)
     pub include_solvent: bool,
+    /// The run computes the atomic virial (`VIRIAL 1`): only then does SHAKE add its virial.
+    pub atomic_virial: bool,
     /// Precomputed constraint data and reusable buffers (initialized in init())
     buffers: Option<ShakeBuffers>,
 }
@@ -32,6 +34,7 @@ impl ShakeAlgorithm {
             shake_initial_positions: false,
             shake_initial_velocities: false,
             include_solvent: true,
+            atomic_virial: false,
             buffers: None,
         }
     }
@@ -86,7 +89,16 @@ impl Algorithm for ShakeAlgorithm {
         sim: &SimulationState,
     ) -> Result<(), String> {
         let result = if let Some(ref mut buffers) = self.buffers {
-            shake_buffered(topo, conf, sim.dt, &self.params, buffers)
+            let precalc = topo.precalc_lambdas.filter(|p| p.active(sim.step));
+            shake_buffered(
+                topo,
+                conf,
+                sim.dt,
+                &self.params,
+                buffers,
+                precalc,
+                self.atomic_virial,
+            )
         } else {
             // Fallback if init() wasn't called (shouldn't happen in normal flow)
             shake(topo, conf, sim.dt, &self.params)
@@ -146,6 +158,7 @@ mod tests {
             i: 0,
             j: 1,
             bond_type: 0,
+            hydrogen: false,
         });
         topo.bond_parameters.push(BondParameters {
             k_quartic: 0.0,
@@ -216,5 +229,78 @@ mod tests {
         alg.init(&topo, &mut conf, &sim).unwrap();
         alg.apply(&topo, &mut conf, &sim).unwrap();
         assert_eq!(conf.current().pos[1].x, 0.16);
+    }
+
+    #[test]
+    fn a_perturbed_constraint_takes_the_bond_lambda_and_books_its_derivative() {
+        use gromos_core::lambdas::InteractionLambda;
+        use gromos_core::topology::PerturbedBond;
+        let mut topo = two_atom_bond_topology();
+        topo.bond_parameters.push(BondParameters {
+            k_quartic: 0.0,
+            k_harmonic: 0.0,
+            r0: 0.17,
+        });
+        // the bond is perturbed 0.15 → 0.17 nm and owned by SHAKE (NTC = 3)
+        topo.moltypes[0].bonds.clear();
+        topo.perturbed_solute
+            .distance_constraints
+            .push(PerturbedBond {
+                i: 0,
+                j: 1,
+                a_type: 0,
+                b_type: 1,
+                hydrogen: false,
+            });
+        topo.lambda = 0.5;
+        topo.individual_lambdas
+            .set_row(InteractionLambda::Bond, 0, 0, [0.0, 0.0, 1.0, 0.0, 0.0]);
+        topo.update_for_lambda(); // L = λ² = 0.25, L′ = 2λ = 1
+        let mut conf = stretched_pair();
+        let sim = SimulationState::new(0.002, 10);
+        let mut alg = ShakeAlgorithm::new(params());
+        alg.init(&topo, &mut conf, &sim).unwrap();
+        alg.apply(&topo, &mut conf, &sim).unwrap();
+        let d = (conf.current().pos[1] - conf.current().pos[0]).length();
+        assert!((d - 0.155).abs() < 1e-7, "length (1−L)·0.15 + L·0.17: {d}");
+        let de = &conf.old().perturbed_energy_derivatives;
+        assert!(de.constraint_total != 0.0, "no constraint dH/dλ booked");
+        assert_eq!(de.constraint_total, de.special_total);
+        assert_eq!(de.constraints_energy[0], de.constraint_total);
+    }
+
+    #[test]
+    fn a_perturbed_constraint_that_does_not_converge_is_named() {
+        use gromos_core::topology::PerturbedBond;
+        let mut topo = two_atom_bond_topology();
+        topo.bond_parameters.push(BondParameters {
+            k_quartic: 0.0,
+            k_harmonic: 0.0,
+            r0: 0.17,
+        });
+        topo.moltypes[0].bonds.clear();
+        topo.perturbed_solute
+            .distance_constraints
+            .push(PerturbedBond {
+                i: 0,
+                j: 1,
+                a_type: 0,
+                b_type: 1,
+                hydrogen: false,
+            });
+        topo.lambda = 0.25; // wants 0.155 nm, the pair is at 0.16
+        topo.update_for_lambda();
+        let mut conf = stretched_pair();
+        let sim = SimulationState::new(0.002, 10);
+        let mut alg = ShakeAlgorithm::new(ShakeParameters {
+            max_iterations: 1,
+            ..params()
+        });
+        alg.init(&topo, &mut conf, &sim).unwrap();
+        let err = alg.apply(&topo, &mut conf, &sim).unwrap_err();
+        assert!(
+            err.contains("atom 1 - atom 2") && err.contains("wants 0.1550 nm"),
+            "the perturbed constraint is named: {err}"
+        );
     }
 }

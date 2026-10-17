@@ -12,6 +12,16 @@ All lower crates (gromos-core, gromos-forces, gromos-integrators, gromos-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Slow growth (1.8, 0.0.61):** `md` calls `gromos_run::advance_lambda` after each step (not on
+  the step the minimiser stops at), writes the λ the step ran at into the `.trg` (`old_lambda`)
+  and, on a converged minimisation, the repeated `.trg` frame next to the repeated `.tre` one.
+  References `aladip_vacuum_fep_slowgrowth{,_shake,_cont}`, `ch4_water_fep_slowgrowth`,
+  `aladip_vacuum_em_slowgrowth`.
+- **Net charge (1.8, 0.0.59):** `md` prints `Perturbation net charge: A … B … (ΔQ = …)` on a
+  perturbed run and warns when ΔQ ≠ 0 under a reaction field (`fep_null_perturbation` pins
+  ΔQ = 0 and no warning for the null perturbation). Since 0.0.65 a charge change has native
+  references: `nacl_water_fep{,_precalc,_lambdas,_14}` (Na⁺ → dummy, ΔQ = −1, under RF: the
+  perturbed RF self term, the RF excluded and the 1-4 Na–Cl pair).
 - **MPI (2026-08-30):** `md` built with `--features use-mpi` (`LIBCLANG_PATH=/usr/lib/llvm-19/lib`)
   runs under `mpirun -np N`: every rank runs the whole driver on the same inputs, the pair terms are
   split by `RunOptions::pair_partition` and summed each step (`mod mpi_support` at the bottom of
@@ -20,12 +30,11 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **37/40 reference tests passing** (3 ignored: `aladip_vacuum_fep` known FEP mismatch,
-  `aladip_vacuum_em` EM frame-count off-by-one, `water_216_nve_nobath` — a *correct* reference the
-  engine fails because the IMD parser turns an absent MULTIBATH block into a Berendsen bath, 3.9 A18 — the full matrix is below)
+- **120 reference tests registered, 119 passing** in `tests/test_gromosXX_references.rs` (1
+  ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
-  9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic — all
-  37 active reference systems still use `standard`.
+  9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
+  every active reference system uses `standard` except `water_1000_spc_gridcell`.
 - `test_provider_reference.rs` / `test_orchestrator_reference.rs` — gromosXX-reference tests for the
   `PotentialProvider`/`ProviderOrchestrator` seam (2.6/P2.8-2), not the main `md` binary path.
   `schnet_nve_loop.rs` (feature `ml`) — real leapfrog loop driving `SchNetInteraction`;
@@ -51,6 +60,16 @@ matching gromosXX to reference tolerances.
   instantiate → start` — the same calls `py-gromos`'s `Simulation` makes. `md @dump` prints recipe
   + plan; `<tre>.recipe.toml` is written next to the energies. `just lint` (G6) fails on any second
   builder or reader.
+- **EDS through the recipe (1.8, 0.0.57).** The `EDS` block is modelled (`RunRecipe::eds`, the
+  `eds` step after the force field); the out-of-band EDS path (`EdsBlock`, `eds_stats.dat`,
+  `eds_vr.dat`, the `eds` binary) is gone and only `GAMD` still passes through the recipe.
+- **A-EDS through the recipe (1.8, 0.0.60).** The `AEDS` block runs (FORMS 1-6); `md` writes the
+  search state as the final configuration's `AEDSSEARCH` block (FORMS 2-6) and a run with
+  NTIAEDSS = 0 continues it. References `aladip_vacuum_aeds_*`; `tests/aeds_runs.rs` checks a
+  two-job search against one job and the refused inputs. Since 0.0.63 the defaults correct D16,
+  D25, D32 (`aladip_vacuum_aeds_*_fixed`, the patched oracle); the native search references set
+  the reproducing `[recipe_overrides]`; `aeds_runs.rs` also checks that a frame's V_mix/V_R*
+  follow from its own columns and that the E_min target is a sampled state.
 
 ## Key files
 ```
@@ -73,8 +92,8 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 
 ## Reference systems
 
-The per-system status matrix — which of the 45 levels pass and what each isolates — lives with the
-systems themselves: `tests/gromosXX_references/README.md`.
+The per-system status matrix — which of the 120 registered systems pass and what each isolates —
+lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test
 1. Create `tests/gromosXX_references/<name>/` with the `.imd` and an `input.toml` (copy a sibling's;

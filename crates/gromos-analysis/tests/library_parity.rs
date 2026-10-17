@@ -6,7 +6,7 @@
 //! caller takes is the *same* output, not a second implementation of it.
 //!
 //! A program joins the registry with a case here. Programs that write their results to files in
-//! the working directory (`ene_ana`, `mdf`, `dfgrid`, `edyn`, `pocket`, `eds_update_1`,
+//! the working directory (`ene_ana`, `mdf`, `dfgrid`, `edyn`, `pocket`, `eds_update_1`, `ext_ti_ana`,
 //! `frameout`) are given a missing required argument instead, so the parity check exercises the
 //! failure path without touching the working tree — the same choice `gromos-tools` makes.
 
@@ -97,8 +97,13 @@ fn cases() -> Vec<Case> {
 
     let eds = |n: &str| s(data("eds_update").join(n));
     let (e_r, e_a, e_b) = (eds("eR.dat"), eds("eA.dat"), eds("eB.dat"));
-    let trg = |w: &str| s(shared().join(format!("ch4_water_fep_{w}/expected/free_energy.trg")));
-    let (l000, l075, l100) = (trg("l000"), trg("l075"), trg("l100"));
+    let chain = |f: &str| s(data("ext_ti_ana").join("chain").join(f));
+    let (bar0, bar25, bar50) = (
+        chain("bar_data_l0.00.dat"),
+        chain("bar_data_l0.25.dat"),
+        chain("bar_data_l0.50.dat"),
+    );
+    let (pred0, pred25) = (chain("predicted_l0.00.dat"), chain("predicted_l0.25.dat"));
     let (m1, m2) = (
         s(data("matrix_overlap").join("m1.dat")),
         s(data("matrix_overlap").join("m2.dat")),
@@ -218,9 +223,19 @@ fn cases() -> Vec<Case> {
             ],
         ),
         (
-            "ext_ti_ana",
-            env!("CARGO_BIN_EXE_ext_ti_ana"),
-            vec!["@trg", &l000, &l075, &l100, "@lambda", "0.0", "0.75", "1.0"],
+            "bar",
+            env!("CARGO_BIN_EXE_bar"),
+            vec!["@files", &bar25, &bar0, &bar50, "@temp", "300"],
+        ),
+        (
+            "ext_ti_merge",
+            env!("CARGO_BIN_EXE_ext_ti_merge"),
+            vec!["@files", &pred25, &pred0],
+        ),
+        (
+            "mbar",
+            env!("CARGO_BIN_EXE_mbar"),
+            vec!["@files", &bar0, &bar25, &bar50, "@temp", "300"],
         ),
         // ── Trajectory manipulation ──────────────────────────────────
         (
@@ -279,6 +294,31 @@ fn cases() -> Vec<Case> {
             env!("CARGO_BIN_EXE_matrix_overlap"),
             vec!["@m1", &m1, "@m2", &m2, "@dim", "3"],
         ),
+        // A coarse grid keeps the four Poisson–Boltzmann solves fast; no @verbose, no file.
+        (
+            "dGslv_pbsolv",
+            env!("CARGO_BIN_EXE_dGslv_pbsolv"),
+            vec![
+                "@topo",
+                &topo,
+                "@coord",
+                &conf,
+                "@pbc",
+                "r",
+                "@atoms",
+                "1:a",
+                "@atomsTOcharge",
+                "1:a",
+                "@schemeELEC",
+                "LS",
+                "@epsSOLV",
+                "66.6",
+                "@gridspacing",
+                "0.3",
+                "@probeIAC",
+                "4",
+            ],
+        ),
     ];
 
     // These write their results into the working directory. A missing required argument makes
@@ -303,12 +343,10 @@ fn cases() -> Vec<Case> {
             env!("CARGO_BIN_EXE_frameout"),
             vec!["@topo", &topo],
         ),
-        // No fixture for these two: the failure path is what there is to compare.
-        ("bar", env!("CARGO_BIN_EXE_bar"), vec!["@forward", &ener_a]),
         (
-            "ext_ti_merge",
-            env!("CARGO_BIN_EXE_ext_ti_merge"),
-            vec!["@files", &l000],
+            "ext_ti_ana",
+            env!("CARGO_BIN_EXE_ext_ti_ana"),
+            vec!["@en_files", &bar0, "@library", &bar0],
         ),
     ];
 

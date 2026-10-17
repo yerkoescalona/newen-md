@@ -1,0 +1,21 @@
+# gromosXX md++ 2023-04-15 (native binary)
+
+[system]
+name = "aladip_vacuum_em_slowgrowth"
+description = "aladip vacuum steepest descent with slow growth"
+level = 1
+natoms = 12
+isolates = "lambda += DLAMT*dt after every minimisation step except the converged one"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum_em/aladip_vacuum_em.conf"
+parameters = "aladip_vacuum_em_slowgrowth.in"
+pttopo = "../shared/aladip.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"

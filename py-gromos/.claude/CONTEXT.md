@@ -77,6 +77,35 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   `Topology`/`Configuration`/`CheckReport`, and `System.solvate()`/`.add_ions()`/`.check()` over
   the same verbs. `gromos.ProgramError` carries the program's partial stdout. `tests/test_tools.py`
   (26) pins text ↔ object agreement across the boundary; the Rust side pins library ↔ binary.
+- **Free-energy windows (1.8, 0.0.59)** — `gromos.free_energy`: `LambdaSchedule(points,
+  interaction_lambdas)` → one `Recipe` per λ, `run_windows(system, recipes, workdir, dry_run)` in
+  process (kept windows `<workdir>/l0.250.npz` are read, not rerun), `collect(workdir)`,
+  `FreeEnergyWindows.ti()/.report()` (the `gromos_analysis::ti` estimator).
+  `tests/test_free_energy.py` reproduces every dH/dλ sample of the four `ch4_water_fep_l*`
+  references. `system_builder.py` no longer has a second `EnergyTimeseries`. User guide:
+  `docs/user-guide/free-energy.md`.
+- **BAR/MBAR of the windows (1.8, 0.0.62)** — a window run with `PRECALCLAM` keeps
+  `Simulation.precalclam` of every sampled frame (`Window.precalclam`, also in its `.npz`);
+  `FreeEnergyWindows.bar(skip)`/`.mbar(skip)` → `Estimate` (total and per neighbouring pair),
+  `.bar_data(skip)`: `ext_ti_ana`'s `@bar_data` energies, `bar` and `mbar` in Rust through
+  `_precalc_bar_data`/`_precalc_bar`/`_precalc_mbar`, no estimator arithmetic in Python. The grid
+  must hold every window's λ; `LAMBDAS` windows are refused. Tests: the nine `*precalc*`
+  references' rows frame by frame (rel 1e-9), `bar()`/`mbar()` = `analysis.bar`/`mbar` on the same
+  frames (1e-10), TI/BAR/MBAR agreement on nine CH4 windows.
+- **Charge changes end to end (1.8, 0.0.64)** — `Perturbation.mutate(system, atoms, charge_b=…,
+  iac_b=…, mass_b=…)` / `.from_ptp(path, topology)` (the `.ptp` text from gromos-tools'
+  `make_pt_top`, net charges as `Topology.apply_perturbation` gives them, `.end_state()` by
+  `pt_top`); `run_windows(..., perturbation=, parallel=N)`: N spawn worker processes (a
+  `Simulation` is unsendable and holds the GIL, so threads would not overlap), the same numbers
+  bit for bit; `FreeEnergyWindows.window_statistics(skip)`. `scripts/ti_ch4.py` runs gromos-rs
+  through the module and gromosXX on the same recipes' `.imd`. `tests/test_free_energy_charge.py`:
+  CH4 → CH4⁺ in 999 SPC, seven windows, TI/BAR/MBAR within 2σ, the `dGslv_pbsolv` correction on
+  the end states against gromos++ (0.01 kJ/mol).
+- Charge-change correction chain (1.8, 0.0.66): `gromos.analysis.charge_correction`,
+  `rf_self_energy` (the reaction-field self term the raw ΔG holds), `corrected_charging_dg`
+  ([raw − self] + PB(B) − PB(A) + C1 + C2, or + the five analytic terms); user guide "Correcting
+  a charge change". `scripts/na_hydration.py` runs Na⁺ → dummy in SPC through the whole chain
+  (`docs/free_energy_validation.md`).
 - Remaining P3 items:
   - [ ] `gromos.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
         `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.
@@ -88,6 +117,7 @@ python/gromos/__init__.py        — top-level API (the module contract; System/
 python/gromos/gromos.pyi         — type stubs (stubtest-clean; `_AlgorithmKind`/`_TermKind` literals)
 python/gromos/exceptions.py      — RecipeError / PlanError / MissingFeatureError / RunError
 python/gromos/timeseries.py      — EnergyTimeseries over run()'s array
+python/gromos/free_energy.py     — λ windows: Perturbation, LambdaSchedule, run_windows (parallel), TI, BAR, MBAR
 python/gromos/tools/             — the gromos++ programs: run()/programs() + the typed prep chain
 python/gromos/analysis.py        — the old subprocess stub; replaced by gromos/analysis/ in 3.10 step 6
 python/gromos/system_builder.py  — P3 design sketch: ForceField→BuildingBlock→Topology algebra

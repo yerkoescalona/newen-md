@@ -38,8 +38,7 @@ fn plan_for(topo: &PyTopology, params: &PyInputParameters) -> PyResult<PyPlan> {
     if unsolvated && params.inner.nsm > 0 && !topology.solvent_atom_template.is_empty() {
         topology.solvate(params.inner.nsm);
     }
-    let specs =
-        build_plan(&recipe, &topology, topo.physical_constants.four_pi_eps_i).map_err(run_err)?;
+    let specs = build_plan(&recipe, &topology, &topo.physical_constants).map_err(run_err)?;
     validate_plan(&specs).map_err(run_err)?;
     Ok(PyPlan { specs })
 }

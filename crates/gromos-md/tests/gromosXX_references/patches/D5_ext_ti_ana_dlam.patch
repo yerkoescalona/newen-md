@@ -1,0 +1,18 @@
+D5 (gromos++ 9cd9f6b3): ext_ti_ana books the dihedral dH/dl without dLambda/dlambda.
+gromos++/programs/ext_ti_ana.cc:819-828 multiply every term (kin, bond, ang, impr, disres, dihres, disfld) by X[p].dlam;
+:830 adds sfeDih[0] (FREEABDIH[0] = B - A) without dih[p].dlam, which is exact only for linear Lambda_dih.
+Fix: if(!no_dih) dE += sfeDih[0] * dih[p].dlam; (dih is the LambdaStruct vector of :600).
+
+diff --git a/gromos++/programs/ext_ti_ana.cc b/gromos++/programs/ext_ti_ana.cc
+index 107b0d17..3d32f32c 100644
+--- a/gromos++/programs/ext_ti_ana.cc
++++ b/gromos++/programs/ext_ti_ana.cc
+@@ -827,7 +827,7 @@ int main(int argc, char **argv){
+ 	if(!no_dihres)  dE += (dihres[p].wlow*sfe[dihres[p].idx_low][9] + dihres[p].whigh*sfe[dihres[p].idx_high][9]) *dihres[p].dlam;
+ 	if(!no_disfld)  dE += (disfld[p].wlow*sfe[disfld[p].idx_low][10] + disfld[p].whigh*sfe[disfld[p].idx_high][10]) *disfld[p].dlam;
+ 	// Betty
+-        if(!no_dih) dE += sfeDih[0]; 
++        if(!no_dih) dE += sfeDih[0] * dih[p].dlam; 
+ 
+         //calculate lj and crf contributions for all slj and scrf parameterizations
+         double Emult;

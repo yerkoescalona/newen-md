@@ -23,11 +23,14 @@ use crate::topology::PyTopology;
 /// print(system.charge)           # 0
 /// print(system.positions.shape)  # (648, 3)
 /// ```
-#[pyclass(name = "System")]
+#[pyclass(name = "System", module = "gromos")]
 #[derive(Debug)]
 pub struct PySystem {
     pub(crate) topology: PyTopology,
     pub(crate) configuration: PyConfiguration,
+    /// The (topology, coordinates) files of a `System.from_files` system, absolute: how it
+    /// pickles (a worker process reads the same files). `None` for a system built in memory.
+    source: Option<(String, String)>,
 }
 
 #[pymethods]
@@ -54,7 +57,10 @@ impl PySystem {
                 pos_data: conf_ref.pos_data.clone(),
                 vel_data: conf_ref.vel_data.clone(),
                 box_dims: conf_ref.box_dims,
+                pertdata: conf_ref.pertdata,
+                aedssearch: conf_ref.aedssearch.clone(),
             },
+            None,
         )
     }
 
@@ -63,7 +69,24 @@ impl PySystem {
     fn from_files(topo_file: &str, conf_file: &str) -> PyResult<Self> {
         let topo = PyTopology::from_file(topo_file)?;
         let conf = PyConfiguration::from_file(conf_file)?;
-        Self::paired(topo, conf)
+        let absolute = |p: &str| {
+            std::path::absolute(p).map_or_else(|_| p.to_string(), |a| a.display().to_string())
+        };
+        Self::paired(topo, conf, Some((absolute(topo_file), absolute(conf_file))))
+    }
+
+    /// Pickling: a `System.from_files` system is `System.from_files` on the same (absolute)
+    /// paths, which is how `gromos.free_energy.run_windows(parallel=N)` hands it to its worker
+    /// processes. A system built in memory has no such form and does not pickle.
+    fn __reduce__<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyAny>, (String, String))> {
+        let (topo, conf) = self.source.clone().ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                "only a System made by System.from_files pickles (as its two files); this one \
+                 was built in memory",
+            )
+        })?;
+        let from_files = py.get_type_bound::<Self>().getattr("from_files")?;
+        Ok((from_files, (topo, conf)))
     }
 
     // ── Properties ────────────────────────────────────────────────────────────
@@ -116,6 +139,8 @@ impl PySystem {
             pos_data: self.configuration.pos_data.clone(),
             vel_data: self.configuration.vel_data.clone(),
             box_dims: self.configuration.box_dims,
+            pertdata: self.configuration.pertdata,
+            aedssearch: self.configuration.aedssearch.clone(),
         }
     }
 
@@ -185,6 +210,7 @@ impl PySystem {
         Ok(Self {
             topology,
             configuration: PyConfiguration::from_atoms(result.atoms, result.box_dims),
+            source: None,
         })
     }
 
@@ -248,6 +274,7 @@ impl PySystem {
         Ok(Self {
             topology,
             configuration: PyConfiguration::from_atoms(result.atoms, result.box_dims),
+            source: None,
         })
     }
 
@@ -279,7 +306,11 @@ impl PySystem {
     /// Pair a topology with its configuration. A solute-only topology with a configuration of
     /// solute plus whole solvent molecules is solvated here, by the routine `prepare_system`
     /// uses (`Topology::solvate`), so the System's atom counts agree from the start.
-    fn paired(mut topology: PyTopology, configuration: PyConfiguration) -> PyResult<Self> {
+    fn paired(
+        mut topology: PyTopology,
+        configuration: PyConfiguration,
+        source: Option<(String, String)>,
+    ) -> PyResult<Self> {
         let n_conf = configuration.pos_data.len();
         validate_atom_count_match(&topology.inner, n_conf).map_err(RecipeError::new_err)?;
         if topology.inner.num_atoms() != n_conf {
@@ -289,6 +320,7 @@ impl PySystem {
         Ok(Self {
             topology,
             configuration,
+            source,
         })
     }
 }

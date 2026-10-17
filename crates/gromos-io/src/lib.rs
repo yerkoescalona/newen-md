@@ -42,12 +42,12 @@ pub mod trajectory_binary;
 // Re-export commonly used types
 pub use args::{run_main, Arguments, Program, Status};
 pub use coordinate::{
-    parse_coordinates, parse_g96_labeled, read_coordinates, read_g96_labeled, CoordinateData,
-    G96Atom, LabeledCoordinateData,
+    parse_aedssearch, parse_coordinates, parse_g96_labeled, read_coordinates, read_g96_labeled,
+    CoordinateData, G96Atom, LabeledCoordinateData,
 };
 pub use dlg::{DlgWriter, LambdaDerivativeFrame};
 pub use energy::read_energy_trajectory_native;
-pub use energy::{EnergyBlock, EnergyFrame, EnergyReader, EnergyWriter};
+pub use energy::{EnergyBlock, EnergyFrame, EnergyReader, EnergyWriter, VolumePressure};
 pub use energy_binary::{BinaryEnergyReader, BinaryEnergyWriter};
 pub use force::ForceWriter;
 pub use free_energy::{
@@ -55,11 +55,12 @@ pub use free_energy::{
 };
 pub use g96::{write_por, write_rpr};
 pub use imd::{
-    parse_imd_str, ImdParameters, NonbondedExtra, PressureParameters, TempBathParameters,
+    parse_imd_str, AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow,
+    NonbondedExtra, PrecalcLamBlock, PressureParameters, TempBathParameters,
 };
 pub use imd_write::{write_imd, write_imd_file};
-pub use input::{EdsBlock, GamdBlock, ReplicaBlock};
-pub use output::{EdsStatsWriter, EdsVrWriter, GamdBoostWriter, GamdStatsWriter};
+pub use input::{GamdBlock, ReplicaBlock};
+pub use output::{GamdBoostWriter, GamdStatsWriter};
 pub use pdb::write_pdb_positions;
 pub use ptp::{read_pttopo, PerturbedTopology, PtpWriter};
 pub use trajectory::TrajectoryWriter;

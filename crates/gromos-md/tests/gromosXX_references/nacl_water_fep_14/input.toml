@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "nacl_water_fep_14"
+description = "nacl_water_fep_precalc with the Na-Cl pair a 1-4 pair (shared/nacl_water_box_14.topo)"
+level = 4
+isolates = "charge-changing perturbation: the perturbed 1-4 pair (CS6/CS12), its dH/dlambda and ext rows at 11 lambdas, the RF self term"
+
+[input]
+topology = "../shared/nacl_water_box_14.topo"
+configuration = "../nacl_water_box/nacl_water_box.conf"
+parameters = "nacl_water_fep_14.in"
+pttopo = "../shared/nacl_na_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

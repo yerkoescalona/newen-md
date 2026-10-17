@@ -14,6 +14,7 @@ Usage style mirrors OpenMM but with gromosXX naming conventions:
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,15 @@ from gromos import (
     System,
     Topology,
 )
+
+# Two slow-growth references take λ past 1 on purpose (`aladip_vacuum_fep_slowgrowth_cont` pins
+# gromosXX's unbounded λ; `aladip_vacuum_em_slowgrowth` runs all its 500 steps here, where `md`
+# stops the minimiser at 13): `Simulation` warns, and these tests compare the numbers instead.
+pytestmark = [
+    pytest.mark.filterwarnings(r"ignore:slow growth takes lambda out of \[0, 1\]"),
+    # ch4_water_fep_precalc_twinrange (NSNB 5, NTWG 2) pins the PRECALCLAM long-range quirk
+    pytest.mark.filterwarnings(r"ignore:PRECALCLAM with a twin-range pairlist"),
+]
 
 # Paths
 REPO_ROOT = Path(__file__).parent.parent.parent
@@ -173,7 +183,28 @@ def _recipe_for(system_dir):
         for key in ("pttopo", "distrest", "posresspec", "refpos")
         if inputs.get(key)
     }
-    return Recipe.from_imd(str((system_dir / inputs["parameters"]).resolve())).with_inputs(**aux)
+    recipe = Recipe.from_imd(str((system_dir / inputs["parameters"]).resolve())).with_inputs(**aux)
+    return _apply_recipe_overrides(recipe, system_dir)
+
+
+def _apply_recipe_overrides(recipe, system_dir):
+    """The `[recipe_overrides]` of input.toml (dotted keys, e.g.
+    `"perturbation.atom_pair_kernel"`): recipe fields no `.imd` block carries, what the Rust
+    runner passes as `md @recipe_set key=value`. Only that table is parsed: not every
+    input.toml is valid TOML as a whole."""
+    section = re.search(
+        r"^\[recipe_overrides\]\n(.*?)(?=^\[|\Z)",
+        (system_dir / "input.toml").read_text(),
+        re.MULTILINE | re.DOTALL,
+    )
+    overrides = tomllib.loads(section.group(1)) if section else {}
+    for key, value in overrides.items():
+        group, *path = key.split(".")
+        patch = value
+        for part in reversed(path):
+            patch = {part: patch}
+        recipe = recipe.update(**{group: patch})
+    return recipe
 
 
 def _create_simulation(system_dir):
@@ -208,6 +239,29 @@ def _get_write_frequencies(system_dir):
 # ============================================================================
 # Reference test systems — same as test_gromosXX_references.rs
 # ============================================================================
+
+AEDS_SYSTEMS = [
+    "aladip_vacuum_aeds_below",
+    "aladip_vacuum_aeds_inside",
+    "aladip_vacuum_aeds_above",
+    "aladip_vacuum_aeds_f2",
+    "aladip_vacuum_aeds_f4",
+    "aladip_vacuum_aeds_f5",
+    "aladip_vacuum_aeds_f6",
+    "aladip_vacuum_aeds_sigma0",
+    "aladip_vacuum_aeds_cont1",
+    "aladip_vacuum_aeds_cont2",
+    "aladip_vacuum_aeds_f6_ovf",
+    # the same against gromosXX with D16, D25 and D32 patched (patches/): gromos-rs's defaults
+    "aladip_vacuum_aeds_f2_fixed",
+    "aladip_vacuum_aeds_f4_fixed",
+    "aladip_vacuum_aeds_f5_fixed",
+    "aladip_vacuum_aeds_f6_fixed",
+    "aladip_vacuum_aeds_f6_ovf_fixed",
+    "aladip_vacuum_aeds_sigma0_fixed",
+    "aladip_vacuum_aeds_cont1_fixed",
+    "aladip_vacuum_aeds_cont2_fixed",
+]
 
 REFERENCE_SYSTEMS = [
     # Level 0: Pair interactions
@@ -257,6 +311,7 @@ REFERENCE_SYSTEMS = [
     "aladip_solvated_em_shake",
     "aladip_solvated_em_posres",
     "aladip_solvated_em",
+    "aladip_solvated_em_posres_groups",
     # Free-energy perturbation (Topology.apply_perturbation + NTG != 0), 3.9 step 1
     "ch4_water_fep",
     "ch4_water_fep_l000",
@@ -265,7 +320,91 @@ REFERENCE_SYSTEMS = [
     "ch4_water_fep_l100",
     "meoh_water_fep",
     "aladip_vacuum_fep",
+    "aladip_vacuum_fep_groups",
+    "aladip_vacuum_fep_trg",
+    # Individual λ (LAMBDAS), NLAM, perturbed SHAKE and perturbed distance restraints (1.8)
+    "ch4_water_fep_lambdas",
+    "ch4_water_fep_lambdas_off",
+    "ch4_water_fep_nlam2",
+    "aladip_vacuum_fep_lambdas",
+    "aladip_vacuum_fep_nlam2",
+    "aladip_vacuum_fep_shake",
+    "aladip_vacuum_fep_shake_lambdas",
+    "aladip_vacuum_fep_distres",
+    "aladip_vacuum_fep_distres_lambdas",
+    # NRDGL = 1 (λ from PERTDATA), PERTBONDSTRETCHH order, time-averaged distance restraints,
+    # NLAM = 2 with LAMBDAS (1.8)
+    "ch4_water_fep_nrdgl",
+    "aladip_vacuum_fep_shake_hblock",
+    "aladip_vacuum_fep_distres_tavg",
+    "aladip_vacuum_fep_lambdas_nlam2",
+    # Energy groups across the solute, DOFSET ranges not in bath order (1.8)
+    "aladip_harmonic_covalent_groups",
+    "aladip_multibath_swapped",
+    # Barostat with SHAKE (constraint virial) and ROTTRANS degrees of freedom (1.8)
+    "aladip_solvated_npt_shake",
+    "aladip_multibath_rottrans",
+    # Extended TI (PRECALCLAM) and the reaction-field constant from RCRF / EPSRF = 0 (1.8)
+    "ch4_water_fep_precalc",
+    "meoh_water_fep_precalc",
+    "aladip_vacuum_fep_precalc",
+    "aladip_vacuum_fep_lambdas_precalc",
+    "aladip_vacuum_fep_shake_precalc",
+    "aladip_vacuum_fep_distres_precalc",
+    "aladip_vacuum_fep_pairpert_precalc",
+    "aladip_vacuum_fep_pairpert_precalc_fixed",
+    "ch4_water_fep_precalc_twinrange",
+    # A charge change (Na+ -> neutral dummy, dQ = -1) under reaction field: the perturbed RF self
+    # term, the RF excluded Na-Cl pair (as a 1-4 pair in `_14`); plain TI, PRECALCLAM, LAMBDAS
+    "nacl_water_fep",
+    "nacl_water_fep_precalc",
+    "nacl_water_fep_lambdas",
+    "nacl_water_fep_14",
+    # Slow growth (DLAMT != 0): lambda += DLAMT*dt after every step, masses and perturbed terms
+    # following it; with perturbed SHAKE, continued with NRDGL = 1 past lambda = 1, in solvent,
+    # and under steepest descent
+    "aladip_vacuum_fep_slowgrowth",
+    "aladip_vacuum_fep_slowgrowth_shake",
+    "aladip_vacuum_fep_slowgrowth_cont",
+    "ch4_water_fep_slowgrowth",
+    "aladip_vacuum_em_slowgrowth",
+    "aladip_solvated_epsrf0",
+    "aladip_solvated_rcrf",
+    # EDS through the recipe (1.8): FORM 1 against the released gromosXX, FORMS 2/3 against
+    # gromosXX with its force weights corrected (patches/D2_eds_weights.patch)
+    "aladip_vacuum_eds",
+    "aladip_vacuum_eds3",
+    "aladip_eds_solv",
+    "two_waters_eds",
+    "aladip_vacuum_eds_multis_fixed",
+    "aladip_vacuum_eds_pairs_fixed",
+    # TI-EDS: EDS with perturbed atoms (FORM 2 against the D2-patched gromosXX)
+    "aladip_eds_solv_ti",
+    "aladip_eds_solv_ti_groups",
+    "aladip_eds_solv_ti_multis_fixed",
+    # Accelerated EDS (1.8): FORM 1 at three window placements, the searches (FORMS 2, 4, 5,
+    # 6, and 3 with a zero-variance target held by RESTREMIN 1), a search over two jobs, FORM 6
+    # with overflowing prevalences; the released gromosXX (its D16, D25, D32 reproduced by the
+    # recipe overrides) and the patched one
+    *AEDS_SYSTEMS,
 ]
+
+# EDS references compared end-state by end-state at frame 0 (`Simulation.eds_vi`,
+# `Simulation.eds_vr`): the whole-block ones above, and the released gromosXX's FORMS 2/3, whose
+# defective force weights leave only frame 0's end-state energies (and FORM 3's V_R) comparable.
+EDS_SYSTEMS = {
+    "aladip_vacuum_eds": True,
+    "aladip_vacuum_eds3": True,
+    "aladip_eds_solv": True,
+    "two_waters_eds": True,
+    "aladip_vacuum_eds_multis_fixed": True,
+    "aladip_vacuum_eds_pairs_fixed": True,
+    "aladip_vacuum_eds_multis": False,
+    "aladip_vacuum_eds_pairs": True,
+    "aladip_eds_solv_ti": True,
+    "aladip_eds_solv_ti_groups": True,
+    "aladip_eds_solv_ti_multis_fixed": True,
+}
 
 # Systems with a known, pre-existing position-output mismatch that is not a
 # pyo3-binding gap: `aladip_trunc_oct`'s truncated-octahedron box means
@@ -280,8 +419,9 @@ REFERENCE_SYSTEMS = [
 # trajectories (the `md` binary does the same since 0.0.34 and the Rust suite
 # passes); `Simulation` has no "converged, stop" step, so its position frame 6
 # is the state after one more (no-op) minimisation step, not the repeat.
-# Energies and forces validate; only positions are excluded here.
-POSITION_MISMATCH_SYSTEMS = {"aladip_trunc_oct", "aladip_vacuum_em"}
+# Energies and forces validate; only positions are excluded here. `aladip_vacuum_em_slowgrowth`:
+# the same minimisation with slow growth, the same repeated frame.
+POSITION_MISMATCH_SYSTEMS = {"aladip_trunc_oct", "aladip_vacuum_em", "aladip_vacuum_em_slowgrowth"}
 
 # Systems whose gromos-rs result is known to be WRONG against a correct reference — an engine
 # defect, not a binding gap. `strict=True` so the fix is noticed and the entry removed.
@@ -372,6 +512,146 @@ def test_reference_energies(system_name):
                 )
             else:
                 assert abs(a - e) < 1e-10, f"{system_name} frame {i} {key}: {a} vs {e}"
+
+
+# ============================================================================
+# EDS end states — through Python Simulation API
+# ============================================================================
+
+
+def _parse_expected_eds_frame0(tre_path):
+    """Frame 0 of an EDS `.tre`: the V_i of the `# eds` rows and V_R (totals slot 35)."""
+    lines = tre_path.read_text().splitlines()
+    totals = lines.index("# totals")
+    vr = float(lines[totals + 35])
+    n_at = lines.index("# numstates")
+    n = int(lines[n_at + 1])
+    vi = [float(lines[n_at + 3 + k].split()[0]) for k in range(n)]
+    return vi, vr
+
+
+@pytest.mark.parametrize("system_name", sorted(EDS_SYSTEMS))
+def test_reference_eds_end_states(system_name):
+    """`Simulation.eds_vi` / `eds_vr` at frame 0 are gromosXX's `# eds` rows and slot 35."""
+    system_dir = REF_DIR / system_name
+    if not system_dir.exists():
+        pytest.skip(f"Reference system {system_name} not found")
+    vi_exp, vr_exp = _parse_expected_eds_frame0(system_dir / "expected" / "energies.tre")
+    sim = _create_simulation(system_dir)
+    assert len(sim.eds_vi) == len(vi_exp)
+    for a, e in zip(sim.eds_vi, vi_exp, strict=True):
+        assert abs(a - e) <= max(abs(e) * ENERGY_REL_TOL, 1e-10), f"{system_name}: {a} vs {e}"
+    if EDS_SYSTEMS[system_name]:
+        assert abs(sim.eds_vr - vr_exp) <= abs(vr_exp) * ENERGY_REL_TOL
+    assert _recipe_for(system_dir).eds["enabled"]
+
+
+def _parse_expected_aeds(tre_path):
+    """Every frame of an A-EDS `.tre`: slots 34 (V_mix), 36 (E_max), 37 (E_min) and the
+    `# eds` offset column."""
+    frames = []
+    lines = tre_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line == "# totals":
+            vmix, emax, emin = (float(lines[i + k]) for k in (34, 36, 37))
+            n_at = lines.index("# numstates", i)
+            n = int(lines[n_at + 1])
+            eir = [float(lines[n_at + 3 + k].split()[3]) for k in range(n)]
+            frames.append((vmix, emax, emin, eir))
+    return frames
+
+
+@pytest.mark.parametrize("system_name", AEDS_SYSTEMS)
+def test_reference_aeds_search(system_name):
+    """`Simulation.eds_vmix` / `eds_emax` / `eds_emin` / `eds_eir` every frame are gromosXX's
+    slots 34, 36, 37 and offset column (the released binary's written after the search update,
+    the patched one's before it, as the recipe overrides say); the continuation jobs read their
+    start state from the configuration's AEDSSEARCH block."""
+    system_dir = REF_DIR / system_name
+    expected = _parse_expected_aeds(system_dir / "expected" / "energies.tre")
+    sim = _create_simulation(system_dir)
+    assert _recipe_for(system_dir).aeds["enabled"]
+
+    def close(a, e):
+        return abs(a - e) <= max(abs(e) * ENERGY_REL_TOL, 1e-9)
+
+    for k, (vmix, emax, emin, eir) in enumerate(expected):
+        if k:
+            sim.step(1)
+        assert close(sim.eds_vmix, vmix), f"{system_name} frame {k}: {sim.eds_vmix} vs {vmix}"
+        assert close(sim.eds_emax, emax), f"{system_name} frame {k}: {sim.eds_emax} vs {emax}"
+        assert close(sim.eds_emin, emin), f"{system_name} frame {k}: {sim.eds_emin} vs {emin}"
+        assert all(close(a, e) for a, e in zip(sim.eds_eir, eir, strict=True)), (
+            f"{system_name} frame {k}: {sim.eds_eir} vs {eir}"
+        )
+
+
+def test_aeds_continuation_needs_the_aedssearch_block():
+    """NTIAEDSS = 0 without an AEDSSEARCH block in the configuration is refused, as gromosXX
+    does."""
+    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2"
+    inputs = _parse_input_toml(system_dir)
+    system = System.from_files(
+        str((system_dir / inputs["topology"]).resolve()),
+        str((REF_DIR / "aladip_vacuum" / "aladip_vacuum.conf").resolve()),
+    )
+    with pytest.raises(Exception, match="no AEDSSEARCH block"):
+        Simulation(system, _recipe_for(system_dir))
+
+
+# ============================================================================
+# dH/dλ tests — through Python Simulation API
+# ============================================================================
+
+
+def _parse_expected_dhdl(trg_path, slot=1):
+    """Value `slot` (1-based) of every FREEENERDERIVS03 block's totals; the first is the whole
+    dH/dλ, the 35th the EDS reference state's ∂V_R/∂λ."""
+    values = []
+    lines = trg_path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == "# totals":
+            values.append(float(lines[i + slot]))
+    return values
+
+
+@pytest.mark.parametrize("system_name", REFERENCE_PARAMS)
+def test_reference_dhdl(system_name):
+    """`Simulation.dhdl` is the whole derivative gromosXX writes first in each `.trg` frame
+    (kinetic + potential + constraints + restraints), and `dhdl_terms` splits it."""
+    system_dir = REF_DIR / system_name
+    expected_trg = system_dir / "expected" / "free_energy.trg"
+    if not expected_trg.exists():
+        pytest.skip(f"No expected free-energy trajectory for {system_name}")
+
+    expected = _parse_expected_dhdl(expected_trg)
+    if not expected:
+        pytest.skip(f"{system_name}: its .trg has no frames (NTWG = 0)")
+    every = _recipe_for(system_dir).outputs["ntwg"] or 1
+
+    sim = _create_simulation(system_dir)
+    actual = [sim.dhdl]
+    terms = [sim.dhdl_terms]
+    step = 0
+    while len(actual) < len(expected):
+        sim.step(1)
+        step += 1
+        if step % every == 0:
+            actual.append(sim.dhdl)
+            terms.append(sim.dhdl_terms)
+
+    for i, (a, e) in enumerate(zip(actual, expected, strict=True)):
+        assert abs(a - e) <= max(abs(e) * 1e-6, 1e-8), (
+            f"{system_name} frame {i} dhdl: {a} vs {e}"
+        )
+    for t in terms:
+        assert set(t) == {"lj", "crf", "bonded", "kinetic", "constraints", "distanceres", "eds"}
+    for i, (t, e) in enumerate(
+        zip(terms, _parse_expected_dhdl(expected_trg, slot=35), strict=True)
+    ):
+        assert abs(t["eds"] - e) <= max(abs(e) * 1e-6, 1e-8), (
+            f"{system_name} frame {i} dV_R/dλ: {t['eds']} vs {e}"
+        )
 
 
 # ============================================================================

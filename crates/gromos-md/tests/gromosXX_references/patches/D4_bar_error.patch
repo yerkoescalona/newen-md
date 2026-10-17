@@ -1,0 +1,18 @@
+D4 (gromos++ 9cd9f6b3): bar divides the Bennett error by d^2 twice.
+gromos++/programs/bar.cc:620-621 (and :636-637) already form error_i2 = exp(d2i - 2*d_ij) = (sigma/mu)^2, the linearised
+variance of d_ij = ln<f>; :639 divides it by d_ij^2 (and error_j2 by d_ji^2) again. dfmult.cc:217 and Bennett (1976) Eq. (10)
+do not. Fix: error = sqrt(error_i2 + error_j2). DG and @bootstrap are unaffected.
+
+diff --git a/gromos++/programs/bar.cc b/gromos++/programs/bar.cc
+index a57910e4..8769f76b 100644
+--- a/gromos++/programs/bar.cc
++++ b/gromos++/programs/bar.cc
+@@ -636,7 +636,7 @@ double do_bar(std::vector<double> &E_ii, std::vector<double> &E_ij,
+     double d2j = var_j - log(double(N_j)) + si_j;
+     double error_j2 = exp(d2j - 2*d_ji);
+ 
+-    error = sqrt(error_i2 / (d_ij*d_ij) + error_j2 / (d_ji*d_ji));
++    error = sqrt(error_i2 + error_j2);
+   }
+   
+   return DG;

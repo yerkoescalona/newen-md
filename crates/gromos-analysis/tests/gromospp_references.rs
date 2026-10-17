@@ -906,3 +906,737 @@ fn ene_ana_matches_gromospp() {
     ene_ana_case("direct_refs", &["@prop", "ENER[1]", "ENER[11]"]);
     ene_ana_case("two_files", &["@en_files", "%TRE%", "@prop", "totene"]);
 }
+
+/// A token of a `dGslv_pbsolv` FFT log line or table row equals gromos++'s: text that is not a
+/// decimal number exactly, a decimal number within one unit of its last printed digit (`tol`
+/// when given). The FFT solves use rustfft instead of FFTW, so their numbers may differ from
+/// gromos++'s in the last bits, which can move a rounding.
+fn fft_token_matches(ours: &str, theirs: &str, tol: Option<f64>) -> bool {
+    if ours == theirs {
+        return true;
+    }
+    let decimals = match theirs.split_once('.') {
+        Some((_, d)) if d.chars().all(|c| c.is_ascii_digit()) => d.len(),
+        _ => return false,
+    };
+    match (ours.parse::<f64>(), theirs.parse::<f64>()) {
+        (Ok(a), Ok(b)) => {
+            let tol = tol.unwrap_or(10f64.powi(-(decimals as i32)));
+            (a - b).abs() <= tol * (1.0 + 1e-9)
+        },
+        _ => false,
+    }
+}
+
+/// One `dGslv_pbsolv` case (`tests/data/dgslv_pbsolv/README.md`). Everything the
+/// finite-difference solves produce is byte-identical to gromos++: their solver stops on an L1
+/// residual test, so a change in floating-point order shows up as a different iteration count and
+/// different digits. The FFT columns of the table agree within 1e-7 and the FFT part of the log
+/// (after `# DGRESULT PBC`) line for line, with the same iteration counts and its numbers within
+/// one unit of the last printed digit.
+fn dgslv_pbsolv_case(case: &str, args: &[&str]) {
+    let dir = tmp_dir(&format!("dgslv_pbsolv_{case}"));
+    let log_name = format!("{case}.log");
+    let mut argv: Vec<String> = args
+        .iter()
+        .map(|a| {
+            a.replace("%SHARED%", &shared().join("shared").to_string_lossy())
+                .replace("%DATA%", &data("dgslv_pbsolv").to_string_lossy())
+        })
+        .collect();
+    argv.extend(["@verbose".to_string(), log_name.clone()]);
+    let out = run(env!("CARGO_BIN_EXE_dGslv_pbsolv"), &argv, Some(&dir));
+    let reference = data("dgslv_pbsolv");
+    let expected = read(&reference.join(format!("{case}.stdout")));
+    assert_eq!(
+        out.lines().count(),
+        expected.lines().count(),
+        "{case}: stdout"
+    );
+    for (a, b) in out.lines().zip(expected.lines()) {
+        // `# atom nres name charge` and four FD columns exact, the two FFT columns within 1e-7.
+        let (at, bt): (Vec<&str>, Vec<&str>) = (
+            a.split_whitespace().collect(),
+            b.split_whitespace().collect(),
+        );
+        let fd_columns = 8;
+        if at.len() <= fd_columns || b.starts_with("# atom") {
+            assert_eq!(a, b, "{case}: stdout");
+            continue;
+        }
+        assert_eq!(at.len(), bt.len(), "{case}: stdout row\n{a}\n{b}");
+        assert_eq!(
+            at[..fd_columns],
+            bt[..fd_columns],
+            "{case}: stdout FD columns"
+        );
+        for (x, y) in at[fd_columns..].iter().zip(&bt[fd_columns..]) {
+            assert!(
+                fft_token_matches(x, y, Some(1e-7)),
+                "{case}: stdout FFT column {x} vs {y}"
+            );
+        }
+    }
+
+    let ours = read(&dir.join(&log_name));
+    let theirs = read(&reference.join(&log_name));
+    // The FFT solves (@schemeELEC RF) follow the last FD result.
+    let split = |log: &str| -> (String, String) {
+        match log.find("# DGRESULT PBC ") {
+            Some(at) => {
+                let end = at + log[at..].find('\n').map_or(log.len() - at, |n| n + 1);
+                (log[..end].to_string(), log[end..].to_string())
+            },
+            None => (log.to_string(), String::new()),
+        }
+    };
+    let (ours, ours_fft) = split(&ours);
+    let (theirs, theirs_fft) = split(&theirs);
+    let ol: Vec<&str> = ours_fft.lines().collect();
+    let tl: Vec<&str> = theirs_fft.lines().collect();
+    let steps = |lines: &[&str]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.starts_with("# Convergence after") || l.starts_with("# Terminated after"))
+            .map(|l| l.split_whitespace().take(4).collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(steps(&ol), steps(&tl), "{case}: FFT iteration counts");
+    assert_eq!(ol.len(), tl.len(), "{case}: FFT log line count");
+    for (n, (a, b)) in ol.iter().zip(&tl).enumerate() {
+        let (at, bt): (Vec<&str>, Vec<&str>) = (
+            a.split_whitespace().collect(),
+            b.split_whitespace().collect(),
+        );
+        assert!(
+            at.len() == bt.len()
+                && at
+                    .iter()
+                    .zip(&bt)
+                    .all(|(x, y)| fft_token_matches(x, y, None)),
+            "{case}: FFT log line {}\nours:     {a}\ngromos++: {b}",
+            n + 1
+        );
+    }
+    // The lines that carry results first, so a failure names what moved.
+    let results = |log: &str| -> Vec<String> {
+        log.lines()
+            .filter(|l| {
+                [
+                    "# CONVERGED AFTER",
+                    "# NO CONVERGENCE AFTER",
+                    "# DG RETURNED",
+                    "# DGRESULT",
+                    "# gridstart",
+                ]
+                .iter()
+                .any(|p| l.starts_with(p))
+            })
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(results(&ours), results(&theirs), "{case}: log results");
+    for (n, (a, b)) in ours.lines().zip(theirs.lines()).enumerate() {
+        assert_eq!(a, b, "{case}: log line {}", n + 1);
+    }
+    assert_eq!(ours, theirs, "{case}: log");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn dgslv_pbsolv_matches_gromospp() {
+    let coord = [
+        "@topo",
+        "%SHARED%/aladip.topo",
+        "@coord",
+        "%SHARED%/aladip.conf",
+    ];
+    let with = |extra: &[&'static str]| -> Vec<&'static str> {
+        coord.iter().copied().chain(extra.iter().copied()).collect()
+    };
+    dgslv_pbsolv_case(
+        "c1",
+        &with(&[
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:a",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "sigma",
+        &with(&[
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:4,5",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@increasegrid",
+            "2",
+            "2",
+            "2",
+            "@rminORsigma",
+            "1",
+            "@radscal",
+            "1.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "order",
+        &with(&[
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:5,3,1",
+            "1:7",
+            "@atomsTOcharge",
+            "1:9,2",
+            "@schemeELEC",
+            "ls",
+            "@epsSOLV",
+            "66.6",
+            "@epsNPBC",
+            "66.6",
+            "@gridspacing",
+            "0.13",
+            "@probeIAC",
+            "5",
+            "@probeRAD",
+            "0.12",
+            "@maxiter",
+            "40",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "pqr",
+        &[
+            "@pqr",
+            "%DATA%/aladip.pqr",
+            "@coordinates",
+            "3.767055681",
+            "3.767055681",
+            "3.767055681",
+            "@nogridpoints",
+            "24",
+            "@gridspacing",
+            "0.15",
+            "@atoms",
+            "1-12",
+            "@atomsTOcharge",
+            "2,3,5",
+            "@schemeELEC",
+            "LS",
+            "@epsSOLV",
+            "66.6",
+            "@radscal",
+            "1.1",
+        ],
+    );
+    // @schemeELEC RF: the FD solves of `sigma`, then the LS and RF FFT solves.
+    dgslv_pbsolv_case(
+        "c2",
+        &with(&[
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:4,5",
+            "@schemeELEC",
+            "RF",
+            "@epsSOLV",
+            "66.6",
+            "@epsRF",
+            "66.6",
+            "@rcut",
+            "1.4",
+            "@cubesFFT",
+            "4",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@increasegrid",
+            "2",
+            "2",
+            "2",
+            "@rminORsigma",
+            "1",
+            "@radscal",
+            "1.1",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+    dgslv_pbsolv_case(
+        "c3b",
+        &with(&[
+            "@pbc",
+            "r",
+            "cog",
+            "@atoms",
+            "1:1-4",
+            "@atomsTOcharge",
+            "1:2-4",
+            "@schemeELEC",
+            "RF",
+            "@epsSOLV",
+            "78.4",
+            "@epsRF",
+            "0",
+            "@rcut",
+            "0.9",
+            "@gridspacing",
+            "0.12",
+            "@probeIAC",
+            "4",
+        ]),
+    );
+}
+
+/// The two systems of the 1.8 step-4b gate, each with `@schemeELEC LS` and `RF`: one Na⁺
+/// (`na.top`, 54A8) and the CH4 of `ch4_water_fep` with a unit charge (`ch4q.top`, `pt_top`
+/// with `ch4_plus.ptp`), both at the CH4's place in its cubic box of 999 SPC; grids 32³ and 50³.
+#[test]
+fn dgslv_pbsolv_unit_charges_in_spc_match_gromospp() {
+    for (system, top) in [("na", "%DATA%/na.top"), ("ch4q", "%DATA%/ch4q.top")] {
+        let common = [
+            "@topo",
+            top,
+            "@coord",
+            "%SHARED%/ch4_spc.cnf",
+            "@pbc",
+            "r",
+            "@atoms",
+            "1:a",
+            "@atomsTOcharge",
+            "1:a",
+            "@epsSOLV",
+            "66.6",
+            "@gridspacing",
+            "0.1",
+            "@NPBCsize",
+            "5.0",
+            "@probeIAC",
+            "5",
+        ];
+        let ls: Vec<&str> = common
+            .iter()
+            .copied()
+            .chain(["@schemeELEC", "LS"])
+            .collect();
+        dgslv_pbsolv_case(&format!("{system}_ls"), &ls);
+        let rf: Vec<&str> = common
+            .iter()
+            .copied()
+            .chain(["@schemeELEC", "RF", "@epsRF", "78.5", "@rcut", "1.4"])
+            .collect();
+        dgslv_pbsolv_case(&format!("{system}_rf"), &rf);
+    }
+}
+
+// ── ext_ti_ana → bar → ext_ti_merge (item 1.8): files and stdout byte for byte ─────────────
+// `@parity gromospp` against gromos++ 9cd9f6b3 (`A1`–`A4`, `chain`); the default (corrected)
+// against gromos++ 9cd9f6b3 + the D4/D5/D8 patches (`A2_fixed`, `chain_fixed`).
+
+fn eti(name: &str) -> String {
+    data("ext_ti_ana").join(name).to_string_lossy().into_owned()
+}
+
+/// Run `bin` in `cwd`; the exit status, stdout and stderr.
+fn run_raw(bin: &str, args: &[String], cwd: &Path) -> (bool, String, String) {
+    let out = Command::new(bin)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("run");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Every file of `expected` exists in `ours` with the same bytes, and `ours` has no `.dat` file
+/// gromos++ did not write.
+fn assert_same_files(ours: &Path, expected: &Path) {
+    let names = |d: &Path| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".dat"))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(names(ours), names(expected), "the files written");
+    for n in names(expected) {
+        assert_eq!(
+            read(&ours.join(&n)),
+            read(&expected.join(&n)),
+            "{n} differs from gromos++'s"
+        );
+    }
+}
+
+/// `@parity gromospp`, which every case against the released gromos++ is run with.
+const GROMOSPP: [&str; 2] = ["@parity", "gromospp"];
+
+fn ext_ti_ana_case(case: &str, args: &[&str]) {
+    let dir = tmp_dir(&format!("ext_ti_ana_{case}"));
+    let (ok, stdout, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_ana"), &strs(args), &dir);
+    assert!(ok, "{case}: {stderr}");
+    assert_eq!(stdout, "", "{case}: ext_ti_ana prints nothing on stdout");
+    assert_same_files(&dir, &data("ext_ti_ana").join(case));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The flags of the single-file cases on the aladip precalc reference (RLAM 0.125, 11 λ).
+fn aladip_flags(tre: &str, trg: &str) -> Vec<String> {
+    let mut v = vec![
+        "@en_files".to_string(),
+        eti(tre),
+        "@fr_files".into(),
+        eti(trg),
+    ];
+    v.extend(strs(&[
+        "@temp",
+        "300",
+        "@nrlambdas",
+        "11",
+        "@minlam",
+        "0",
+        "@maxlam",
+        "1",
+        "@slam",
+        "0.125",
+        "@NLAMs",
+        "1",
+    ]));
+    v.extend(["@library".to_string(), eti("ene_ana.md++.lib")]);
+    v
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a1_core() {
+    // interpolated reference energy, every column incl. ABDIH, the frame counts, all three
+    // writers, and 0.125 printed as 0.12 in the file names (round half to even)
+    let mut a = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    a.extend(strs(&["@countframes", "@bar_data", "@dHdl_data"]));
+    a.extend(strs(&GROMOSPP));
+    ext_ti_ana_case("A1", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+/// A2: every coefficient path, the dihedral one quadratic (Λ_dih = λ²).
+fn a2_flags() -> Vec<String> {
+    let mut a = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    a.extend(strs(&[
+        "@NLAMp",
+        "2",
+        "@lamlj",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lamslj",
+        "0",
+        "0",
+        "0",
+        "0.5",
+        "0.25",
+        "@lamcrf",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lambond",
+        "-0.4",
+        "0.4",
+        "-0.3",
+        "1.3",
+        "0",
+        "@lamdih",
+        "0",
+        "0",
+        "1",
+        "0",
+        "0",
+        "@lam_precision",
+        "3",
+        "@pmax",
+        "9",
+        "@bar_data",
+        "0",
+        "0.2",
+        "0.5",
+        "@verbose",
+    ]));
+    a
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a2_coefficients() {
+    let mut a = a2_flags();
+    a.extend(strs(&GROMOSPP));
+    ext_ti_ana_case("A2", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+/// A2 by default: the dihedral ∂H/∂λ carries dΛ_dih/dλ = 2λ (gromos++ with D5).
+#[test]
+fn ext_ti_ana_matches_patched_gromospp_a2_fixed() {
+    let a = a2_flags();
+    ext_ti_ana_case(
+        "A2_fixed",
+        &a.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a3_softness_sets() {
+    let mut a = aladip_flags("aladip_distres_precalc.tre", "aladip_distres_precalc.trg");
+    a.extend(strs(&[
+        "@countframes",
+        "@bar_data",
+        "@dHdl_data",
+        "@no_crf",
+    ]));
+    a.extend(["@slj_scrf_file".to_string(), eti("slj_scrf.txt")]);
+    a.extend(strs(&GROMOSPP));
+    ext_ti_ana_case("A3", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_matches_gromospp_a4_imd() {
+    // temp, slam, NLAMs and the grid from the .imd (gromos++'s stdout there is mk_script's
+    // parser noise, not compared)
+    let a = [
+        "@imd".to_string(),
+        eti("ch4_precalc.in"),
+        "@en_files".into(),
+        eti("ch4_precalc.tre"),
+        "@fr_files".into(),
+        eti("ch4_precalc.trg"),
+        "@library".into(),
+        eti("ene_ana.md++.lib"),
+        "@bar_data".into(),
+        GROMOSPP[0].into(),
+        GROMOSPP[1].into(),
+    ];
+    ext_ti_ana_case("A4", &a.iter().map(String::as_str).collect::<Vec<_>>());
+}
+
+#[test]
+fn ext_ti_ana_refuses_what_gromospp_refuses_a5() {
+    let dir = tmp_dir("ext_ti_ana_A5");
+    let bin = env!("CARGO_BIN_EXE_ext_ti_ana");
+    let fail = |args: Vec<String>, meaning: &[&str]| {
+        let (ok, stdout, stderr) = run_raw(bin, &args, &dir);
+        assert!(!ok, "expected a refusal: {args:?}");
+        assert_eq!(stdout, "");
+        for m in meaning {
+            assert!(stderr.contains(m), "{m:?} not in:\n{stderr}");
+        }
+    };
+    // the LAMBDAS-block input samples λ in [0.2, 0.7]; RLAM 0.125 is outside for kin
+    fail(
+        vec![
+            "@imd".into(),
+            eti("aladip_lambdas_precalc.in"),
+            "@en_files".into(),
+            eti("aladip_precalc.tre"),
+            "@fr_files".into(),
+            eti("aladip_precalc.trg"),
+            "@library".into(),
+            eti("ene_ana.md++.lib"),
+        ],
+        &[
+            "at lambda=0.125: with lambda coefficients [ 0 0 0 1 0 ]",
+            "range [0.2-0.7], interpolation not possible.",
+        ],
+    );
+    let mut cpus = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    cpus.extend(strs(&["@cpus", "2"]));
+    fail(cpus, &["@cpus"]);
+    let mut both = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
+    both.extend(strs(&[
+        "@lamslj",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0",
+        "@slj_scrf_file",
+    ]));
+    both.push(eti("slj_scrf.txt"));
+    fail(both, &["specify slj_scrf_file OR lamslj/lamscrf"]);
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+    assert!(left.is_empty(), "a refused run wrote files");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Five gromosXX λ windows of CH4 in water through the whole gromos++ chain: ext_ti_ana on each
+/// window, bar on the five `bar_data` files (given out of order), ext_ti_merge on the five
+/// predictions (out of order; its error column is the frame count, as gromos++ reads it).
+/// `extra` goes to all three programs; `case` is the fixture directory.
+fn ti_chain(case: &str, extra: &[&str]) {
+    let dir = tmp_dir(&format!("ti_{case}"));
+    let lams = ["0.00", "0.25", "0.50", "0.75", "1.00"];
+    for l in lams {
+        let mut a = vec![
+            "@en_files".to_string(),
+            eti(&format!("windows/ch4_l{l}.tre")),
+            "@fr_files".into(),
+            eti(&format!("windows/ch4_l{l}.trg")),
+            "@library".into(),
+            eti("ene_ana.md++.lib"),
+        ];
+        a.extend(strs(&[
+            "@temp",
+            "300",
+            "@nrlambdas",
+            "21",
+            "@minlam",
+            "0",
+            "@maxlam",
+            "1",
+            "@slam",
+            l,
+            "@NLAMs",
+            "1",
+            "@countframes",
+            "@bar_data",
+        ]));
+        a.extend(strs(&lams));
+        a.push("@dHdl_data".into());
+        a.extend(strs(&lams));
+        a.extend(strs(&["@outdir", "chain"]));
+        a.extend(strs(extra));
+        let (ok, stdout, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_ana"), &a, &dir);
+        assert!(ok, "ext_ti_ana @slam {l}: {stderr}");
+        assert_eq!(stdout, "");
+    }
+    let chain = dir.join("chain");
+    let mut bar_args = strs(&[
+        "@files",
+        "bar_data_l1.00.dat",
+        "bar_data_l0.00.dat",
+        "bar_data_l0.50.dat",
+        "bar_data_l0.25.dat",
+        "bar_data_l0.75.dat",
+        "@temp",
+        "300",
+        "@convergence",
+        "1E-10",
+        "@printdist",
+    ]);
+    bar_args.extend(strs(extra));
+    let (ok, bar_out, stderr) = run_raw(env!("CARGO_BIN_EXE_bar"), &bar_args, &chain);
+    assert!(ok, "bar: {stderr}");
+    let mut merge_args = strs(&[
+        "@files",
+        "predicted_l0.50.dat",
+        "predicted_l0.00.dat",
+        "predicted_l1.00.dat",
+        "predicted_l0.25.dat",
+        "predicted_l0.75.dat",
+    ]);
+    merge_args.extend(strs(extra));
+    let (ok, merge_out, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_merge"), &merge_args, &chain);
+    assert!(ok, "ext_ti_merge: {stderr}");
+    let expected = data("ext_ti_ana").join(case);
+    assert_eq!(bar_out, read(&expected.join("bar.stdout")), "bar stdout");
+    assert_eq!(
+        merge_out,
+        read(&expected.join("merge.stdout")),
+        "ext_ti_merge stdout"
+    );
+    assert_same_files(&chain, &expected);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn ext_ti_ana_bar_ext_ti_merge_chain_matches_gromospp() {
+    ti_chain("chain", &GROMOSPP);
+}
+
+/// By default: bar's error without the second 1/d² (D4), the merge error with the point N−2
+/// (D8); the ext_ti_ana files are unchanged (linear λ-dependences, D5 multiplies by 1).
+#[test]
+fn ext_ti_ana_bar_ext_ti_merge_chain_matches_patched_gromospp() {
+    ti_chain("chain_fixed", &[]);
+}
+
+#[test]
+fn bar_and_ext_ti_merge_refuse_bad_input() {
+    let dir = tmp_dir("bar_bad");
+    let chain = data("ext_ti_ana").join("chain");
+    let good = s(chain.join("bar_data_l0.00.dat"));
+    let text = read(&chain.join("bar_data_l0.25.dat"));
+    for (tag, bad) in [
+        ("blank", format!("{text}\n")),
+        ("short", text.replacen("     88.96947497", "", 1)),
+        ("nan", text.replacen("88.96947497", "nan", 1)),
+    ] {
+        let f = dir.join(format!("{tag}.dat"));
+        std::fs::write(&f, bad).unwrap();
+        let (ok, _, stderr) = run_raw(
+            env!("CARGO_BIN_EXE_bar"),
+            &[
+                "@files".into(),
+                good.clone(),
+                s(f),
+                "@temp".into(),
+                "300".into(),
+            ],
+            &dir,
+        );
+        assert!(!ok, "{tag}");
+        assert!(
+            stderr.contains("failed to read E_s and or E_p values"),
+            "{tag}: {stderr}"
+        );
+    }
+    let (ok, _, stderr) = run_raw(
+        env!("CARGO_BIN_EXE_bar"),
+        &["@files".into(), good, "@temp".into(), "300".into()],
+        &dir,
+    );
+    assert!(!ok && stderr.contains("At least two data files required!"));
+    // an unknown @parity is refused before any file is read
+    for (bin, temp) in [
+        (env!("CARGO_BIN_EXE_bar"), &["@temp", "300"][..]),
+        (env!("CARGO_BIN_EXE_ext_ti_merge"), &[][..]),
+    ] {
+        let mut args = strs(&["@files", "a.dat", "b.dat", "@parity", "released"]);
+        args.extend(strs(temp));
+        let (ok, _, stderr) = run_raw(bin, &args, &dir);
+        assert!(
+            !ok && stderr.contains("@parity: 'released'"),
+            "{bin}: {stderr}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+fn s(p: PathBuf) -> String {
+    p.to_string_lossy().into_owned()
+}

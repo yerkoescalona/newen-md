@@ -1,0 +1,18 @@
+D8 (gromos++ 9cd9f6b3): ext_ti_merge error sum skips point N-2.
+gromos++/programs/ext_ti_merge.cc:277-287 integrate_error sums the trapezoid variance w_i^2 y_i^2; interior points are
+1 <= i <= N-2, but the loop at :282 runs i < N-2, dropping y_{N-2}^2 (x_{N-1} - x_{N-3})^2 / 4. The integral is unaffected.
+Fix: for (unsigned int i=1; i<N-1; i++).
+
+diff --git a/gromos++/programs/ext_ti_merge.cc b/gromos++/programs/ext_ti_merge.cc
+index e6972bd0..8f19e46f 100644
+--- a/gromos++/programs/ext_ti_merge.cc
++++ b/gromos++/programs/ext_ti_merge.cc
+@@ -279,7 +279,7 @@ double integrate_error(vector<double> x, vector<double> y) {
+   int N=x.size();
+   if (N != y.size()) throw gromos::Exception("integrate", "Vectors are not the same length!");
+   integral = 0.25 * (x[1]-x[0]) * (x[1]-x[0]) * y[0] * y[0];
+-  for (unsigned int i=1; i<N-2; i++) {
++  for (unsigned int i=1; i<N-1; i++) {
+     integral+= y[i] * y[i] * (x[i+1]-x[i-1]) * (x[i+1]-x[i-1]) / 4;
+   }
+   integral += 0.25 * (x[N-1]-x[N-2]) * (x[N-1]-x[N-2]) * y[N-1] * y[N-1];

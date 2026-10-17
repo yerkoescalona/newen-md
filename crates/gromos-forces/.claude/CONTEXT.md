@@ -15,6 +15,8 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
+- EDS end states ✓ (`nonbonded/eds.rs`, 1.8): per-state pairs, 1-4, RF self/excluded; with
+  perturbed partners (TI-EDS, 0.0.58) the soft-core A/B pair per state and its ∂V_s/∂λ
 - Position restraints ✓; distance restraints ✓
 - `energy.rs` ✓ — `single_point_energy(topo, positions, box_dims, params)` — used by `ener` analysis binary
 - ⚠️ Perturbed RF self-term needs second-sourcing from GROMOS book (`perturbed_nonbonded_term.cc:596,749,1444`)
