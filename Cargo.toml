@@ -30,6 +30,8 @@ gromos-analysis = { path = "crates/gromos-analysis" }
 gromos-md = { path = "crates/gromos-md" }
 # Run assembly shared by the md binary and py-gromos (3.9)
 gromos-run = { path = "crates/gromos-run" }
+# Integer decision logic with a Lean specification (spec/)
+gromos-logic = { path = "crates/gromos-logic" }
 gromos-tools = { path = "crates/gromos-tools" }
 # Facade crate that re-exports everything
 gromos = { path = "crates/gromos" }

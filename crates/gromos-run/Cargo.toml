@@ -13,6 +13,7 @@ gromos-forces = { workspace = true, features = ["serde"] }
 # `serde`: the plan carries `BathRange` (the DOFSET ranges) as data
 gromos-integrators = { workspace = true, features = ["serde"] }
 gromos-io = { workspace = true }
+gromos-logic = { workspace = true }
 
 # The recipe and the plan are plain data: serde is the Rust<->Python bridge (3.9 A12),
 # TOML the human-readable echo (`<run>.recipe.toml`), JSON the machine dump (`md @dump`).
