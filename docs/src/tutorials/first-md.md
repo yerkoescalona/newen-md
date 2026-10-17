@@ -6,11 +6,11 @@ data, break that step on purpose, measure how the energy error depends on the ti
 read the Lennard-Jones well depth off a run.
 
 The runnable version is the notebook
-[`py-gromos/notebooks/03_two_argon_atoms.ipynb`](../../../py-gromos/notebooks/03_two_argon_atoms.ipynb).
+[`py-newen/notebooks/03_two_argon_atoms.ipynb`](../../../py-newen/notebooks/03_two_argon_atoms.ipynb).
 This page follows its four sections and gives the numbers you should see. The notebook also
 asks you to predict each result before you run it.
 
-> gromos-rs is an educational reimplementation of GROMOS. It is not intended for research
+> newen is an educational reimplementation of GROMOS. It is not intended for research
 > work; see the repository README.
 
 ## Before you start
@@ -18,13 +18,13 @@ asks you to predict each result before you run it.
 From a checkout of the repository:
 
 ```sh
-cd py-gromos
+cd py-newen
 uv sync --group notebooks      # Python dependencies and Jupyter; builds the engine
 uv run --group notebooks jupyter lab notebooks/03_two_argon_atoms.ipynb
 ```
 
 The first `uv sync` compiles the Rust extension, which takes a minute or more. The input files
-come from `crates/gromos-md/tests/gromosXX_references/pair_lj/`, a reference system that the
+come from `crates/newen-md/tests/gromosXX_references/pair_lj/`, a reference system that the
 test suite checks against gromosXX.
 
 ## 1. The system and the recipe
@@ -34,7 +34,7 @@ plus a *configuration* (where they are, how fast they move, and the box). A **re
 how to run it: time step, number of steps, ensemble, cut-offs.
 
 ```python
-from gromos import Recipe, Simulation, System
+from newen import Recipe, Simulation, System
 
 system = System.from_files("pair_lj.topo", "pair_lj.conf")  # two argon atoms, 0.35 nm apart
 recipe = Recipe.from_imd("pair_lj.in")                      # NVE, dt = 0.002 ps
@@ -85,7 +85,7 @@ over 8 ps of simulated time:
 
 ```python
 import numpy as np
-from gromos import EnergyTimeseries
+from newen import EnergyTimeseries
 
 def energy_range(system, recipe, dt, duration):
     n_steps = round(duration / dt)
@@ -114,8 +114,8 @@ potential energy is `−ε` and the kinetic energy is largest.
 
 ## Where next
 
-- `py-gromos/notebooks/01_load_and_inspect.ipynb` loads larger systems: bulk water and a
+- `py-newen/notebooks/01_load_and_inspect.ipynb` loads larger systems: bulk water and a
   solvated alanine dipeptide.
-- `py-gromos/notebooks/02_short_md.ipynb` adds solvent, heat baths and constraints.
+- `py-newen/notebooks/02_short_md.ipynb` adds solvent, heat baths and constraints.
 - [Pairlist & Neighbor Search](../algorithms/pairlist.md) explains how the engine finds the
   pairs that `forcefield` evaluates.

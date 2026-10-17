@@ -3,16 +3,16 @@
 
 [[function]]
 key = "schedule.output_misses_longrange"
-rust = "crates/gromos-logic/src/schedule.rs::output_misses_longrange"
-used_by = ["crates/gromos-run/src/prepare.rs::precalclam_longrange_gaps"]
+rust = "crates/newen-logic/src/schedule.rs::output_misses_longrange"
+used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
 origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
-# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in GromosTheory
-theory = "GromosTheory.Dynamics.Schedule.Misses"
-model = "GromosSpec.Schedule.missesModel"
-theorem = "GromosSpec.Schedule.missesModel_iff"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.Misses"
+model = "NewenSpec.Schedule.missesModel"
+theorem = "NewenSpec.Schedule.missesModel_iff"
 # Layer 2, Rust = model (Aeneas)
-extracted = "GromosSpec.Extracted.GromosLogic: gromos_logic.schedule.output_misses_longrange"
-refinement = "GromosSpec.Refinement.output_misses_longrange_eq"
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output_misses_longrange"
+refinement = "NewenSpec.Refinement.output_misses_longrange_eq"
 # Layer 3, Rust = meaning and Rust = model on 1 <= nsnb, ntwg <= 200 (cargo test)
-test = "crates/gromos-logic/tests/schedule_spec.rs"
+test = "crates/newen-logic/tests/schedule_spec.rs"
 vectors = "spec/vectors/schedule.json"

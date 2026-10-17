@@ -1,0 +1,19 @@
+# gromosXX v1.6.0, double precision
+# 1000 SPC water molecules, equilibrated box (3.1057 nm, vol7 TI tutorial)
+# ALGORITHM grid_cell: validates newen CellList against gromosXX Grid_Cell_Pairlist
+# Box satisfies grid_cell constraint: 2*RCUTL=1.8 <= box-cell_size=2.662
+
+[system]
+name = "water_1000_spc_gridcell"
+description = "Level 2: 1000 SPC, grid_cell pairlist — direct gromosXX Grid_Cell validation"
+level = 2
+natoms = 3000
+
+[input]
+topology = "water_1000_spc.topo"
+configuration = "water_1000_spc.cnf"
+parameters = "water_1000_spc_gridcell.in"
+
+[expected]
+energies = "expected/energies.tre"
+forces = "expected/forces.trf"

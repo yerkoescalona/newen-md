@@ -1,0 +1,35 @@
+[package]
+name = "py-newen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Python bindings for newen molecular dynamics engine"
+
+[lib]
+name = "newen"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 bindings crate
+pyo3-newen = { workspace = true }
+
+# Core Rust library (facade crate)
+newen = { workspace = true }
+
+# Python bindings
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }
+numpy = { workspace = true }
+
+# SIMD and math
+glam = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
+
+[features]
+default = []
+ml = ["pyo3-newen/ml"]
+
+[build-dependencies]
+pyo3-build-config = "0.21"

@@ -28,7 +28,7 @@ approximation.
 > **Implementation note.** The cutoff test is performed on the **center of geometry (COG)** of
 > each charge group. If two CG COGs are within the cutoff, *all* atom pairs between those two
 > CGs are added to the pairlist — regardless of the individual atom-atom distances. This is the
-> GROMOS standard and is reproduced exactly in gromos-rs.
+> GROMOS standard and is reproduced exactly in newen.
 
 ## Twin-range cutoffs
 

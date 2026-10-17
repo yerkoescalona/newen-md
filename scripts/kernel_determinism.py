@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure run-to-run and thread-count determinism of the gromos-rs `md` binary.
+"""Measure run-to-run and thread-count determinism of the newen `md` binary.
 
 3.9 step 0 / assumption A2–A3: the parallel nonbonded kernels reduce through rayon
 `fold/reduce`, whose merge tree depends on work-stealing, so results may differ (a) between
@@ -25,10 +25,10 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REF_DIR = REPO_ROOT / "crates" / "gromos-md" / "tests" / "gromosXX_references"
+REF_DIR = REPO_ROOT / "crates" / "newen-md" / "tests" / "gromosXX_references"
 MD_BIN = REPO_ROOT / "target" / "release" / "md"
 
-# ENERTRJ column layout written by crates/gromos-md/src/bin/md.rs (see the header it emits).
+# ENERTRJ column layout written by crates/newen-md/src/bin/md.rs (see the header it emits).
 COLUMNS = [
     "time", "kinetic", "potential", "total", "temperature", "volume", "pressure",
     "bond", "angle", "improper", "dihedral", "lj", "coulomb_real", "coulomb_recip",
@@ -127,7 +127,7 @@ def main() -> None:
 
     print("| system | comparison | n pairs | bit-identical | worst column | max abs Δ | max rel Δ |")
     print("|---|---|---|---|---|---|---|")
-    with tempfile.TemporaryDirectory(prefix="gromos_determinism_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="newen_determinism_") as tmp:
         tmp = Path(tmp)
         for system in args.system:
             runs: dict[int, list[np.ndarray]] = {}

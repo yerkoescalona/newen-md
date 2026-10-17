@@ -26,7 +26,7 @@
 
 # Verification
 
-- [Verifying gromos-rs against its theory](verification/index.md)
+- [Verifying newen against its theory](verification/index.md)
 
 ---
 

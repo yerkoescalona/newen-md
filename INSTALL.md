@@ -1,6 +1,6 @@
 # Installation guide
 
-This lists every dependency you might need for gromos-rs, from "just build and test the
+This lists every dependency you might need for newen, from "just build and test the
 Rust/Python workspace" up to "compile the real gromosXX/gromos++ reference binaries and run
 the real QM/ML engines." Install only the layers you need — layers 1-2 cover `make ci` and
 `make test-python`; everything after that is optional and additive.
@@ -17,7 +17,7 @@ different names (see comments).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup component add rustfmt clippy
 
-# Python tooling — py-gromos is managed by uv (see py-gromos/pyproject.toml), not raw pip.
+# Python tooling — py-newen is managed by uv (see py-newen/pyproject.toml), not raw pip.
 sudo apt install -y python3-venv python3-dev
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -27,10 +27,10 @@ nothing else installed.
 
 ## 2. Python extension build (required for `make test-python`)
 
-py-gromos compiles a Rust extension via maturin, orchestrated by `uv`:
+py-newen compiles a Rust extension via maturin, orchestrated by `uv`:
 
 ```bash
-cd py-gromos
+cd py-newen
 uv sync --all-groups      # installs deps + compiles the extension (make build-python)
 uv run pytest tests/ -v   # make test-python
 ```
@@ -40,7 +40,7 @@ uv run pytest tests/ -v   # make test-python
 Needed to compile `.local/gromosXX` (md++) and `.local/gromosPlsPls` (gromos++) from source
 (see `.claude/overview.md` "Reference sources"). Not needed to run `cargo test` — the
 reference tests compare against fixtures already checked into
-`crates/gromos-md/tests/gromosXX_references/`, generated ahead of time by
+`crates/newen-md/tests/gromosXX_references/`, generated ahead of time by
 `scripts/regen_gromosXX_references.py`.
 
 ```bash
@@ -79,7 +79,7 @@ Both are packaged (no license step, no build-from-source) on Debian trixie:
 sudo apt install -y xtb mopac
 ```
 
-Without these, `crates/gromos-forces/tests/xtb_qmmm_water_dimer_reference.rs` and
+Without these, `crates/newen-forces/tests/xtb_qmmm_water_dimer_reference.rs` and
 `mopac_reference.rs` self-skip at runtime (they check `which xtb` / `which mopac` first) —
 `cargo test` still reports success, just without exercising the real engine.
 
@@ -87,23 +87,23 @@ Without these, `crates/gromos-forces/tests/xtb_qmmm_water_dimer_reference.rs` an
 
 Version-pinned exactly — `tch = "0.24.0"` links only against **libtorch 2.11.0**; any other
 version fails to build rather than silently misbehaving. Full rationale in
-`crates/gromos-forces/src/nonbonded/schnet.rs` module docs.
+`crates/newen-forces/src/nonbonded/schnet.rs` module docs.
 
 `torch==2.11.0` (CPU wheel) and `schnetpack` are declared as the `ml` dependency-group in
-`py-gromos/pyproject.toml`, pulled from the official PyTorch CPU index via
+`py-newen/pyproject.toml`, pulled from the official PyTorch CPU index via
 `[tool.uv.sources]`/`[[tool.uv.index]]` — reproducible via `uv sync`, no hand-built throwaway
 venv:
 
 ```bash
-cd py-gromos
-uv sync --group ml            # resolves torch==2.11.0+cpu, schnetpack, into py-gromos/.venv
+cd py-newen
+uv sync --group ml            # resolves torch==2.11.0+cpu, schnetpack, into py-newen/.venv
 
 cd ..
-source py-gromos/.venv/bin/activate
+source py-newen/.venv/bin/activate
 export LIBTORCH_USE_PYTORCH=1
 export LD_LIBRARY_PATH="$(python3 -c 'import torch,os;print(os.path.dirname(torch.__file__))')/lib:$LD_LIBRARY_PATH"
 
-cargo test -p gromos-forces --features ml schnet::
+cargo test -p newen-forces --features ml schnet::
 ```
 
 Note `uv sync --group ml` only syncs the default + `ml` groups (dropping `dev`/`notebooks` from
@@ -148,6 +148,6 @@ cargo install cargo-edit cargo-audit cargo-outdated cargo-llvm-cov
 | Layer 1 | `cargo build --workspace` |
 | Layer 2 | `make test-python` |
 | Layer 3 | `.local/gromosXX/md++/BUILD/program/md` runs and prints usage |
-| Layer 4 | `cargo test -p gromos-forces xtb`/`mopac` shows real runs, not "skipping: ... not found" |
-| Layer 5 | `cargo test -p gromos-forces --features ml schnet::` passes |
+| Layer 4 | `cargo test -p newen-forces xtb`/`mopac` shows real runs, not "skipping: ... not found" |
+| Layer 5 | `cargo test -p newen-forces --features ml schnet::` passes |
 | Layer 6 | `cargo build --features use-mpi` (or `use-cuda`) succeeds |

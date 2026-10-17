@@ -1,6 +1,6 @@
 {
   "spec": "schedule.output_misses_longrange",
-  "generator": "lake exe spec-vectors (GromosSpec.Schedule.missesModel)",
+  "generator": "lake exe spec-vectors (NewenSpec.Schedule.missesModel)",
   "layout": "rows[nsnb - 1][ntwg - 1] for 1 <= nsnb, ntwg <= 200; 1 = true",
   "rows": [
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",

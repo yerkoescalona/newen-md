@@ -8,15 +8,15 @@ open Lake DSL
 require aeneas from git
   "https://github.com/AeneasVerif/aeneas" @ "e62dd83d133d9043e7d3628096838b7430f36565" / "backends/lean"
 
-package «gromos-spec»
+package «newen-spec»
 
 /-- The physics and bookkeeping of GROMOS, organised like the physics. Imports neither
-`GromosSpec` nor Aeneas. -/
-@[default_target] lean_lib GromosTheory
+`NewenSpec` nor Aeneas. -/
+@[default_target] lean_lib NewenTheory
 
-/-- What gromos-rs computes: models of `crates/gromos-logic`, bridges to `GromosTheory`, and the
+/-- What newen computes: models of `crates/newen-logic`, bridges to `NewenTheory`, and the
 Aeneas refinement proofs. -/
-@[default_target] lean_lib GromosSpec
+@[default_target] lean_lib NewenSpec
 
 /-- Writes `vectors/schedule.json`: the Lean model on the grid the Rust test sweeps. -/
 lean_exe «spec-vectors» where

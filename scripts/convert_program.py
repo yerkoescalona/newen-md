@@ -130,7 +130,7 @@ def add_imports(text: str, category: str) -> str:
     if "io_err" not in text:
         wanted.append(f"use {'crate::programs' if category else 'super'}::io_err;")
     if not re.search(r"\bStatus\b", text):
-        wanted.append("use gromos_io::args::{Program, Status};")
+        wanted.append("use newen_io::args::{Program, Status};")
     if not re.search(r"^use std::io::(\{[^}]*\bWrite\b|Write;)", text, flags=re.M):
         wanted.append("use std::io::Write;")
     if not wanted:
@@ -216,7 +216,7 @@ def main() -> int:
     keys = ", ".join(f'"{k}"' for k in known.split(",") if k)
     header = (
         f"use {'crate::programs' if category else 'super'}::io_err;\n"
-        "use gromos_io::args::{Arguments, Program, Status};\n"
+        "use newen_io::args::{Arguments, Program, Status};\n"
         "use std::io::Write;\n"
     )
     literal = '"' + usage.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
@@ -272,7 +272,7 @@ def write_shim(src_path: pathlib.Path, lib: str, name: str) -> None:
     src_path.write_text(
         f"//! `{name}` — the body is `{lib}::programs::{name}`.\n\n"
         f"fn main() {{\n"
-        f"    gromos_io::run_main(&{lib}::programs::{name}::PROGRAM)\n"
+        f"    newen_io::run_main(&{lib}::programs::{name}::PROGRAM)\n"
         f"}}\n"
     )
 

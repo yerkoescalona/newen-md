@@ -8,7 +8,7 @@
 #
 # The last two are pyo3 0.21.2, pending an upgrade to pyo3 >= 0.29 with numpy and pythonize
 # moving in step. Neither vulnerable API is reachable here: no `PyCFunction::new_closure` and
-# no `PyString::from_object` anywhere in crates/ or py-gromos/.
+# no `PyString::from_object` anywhere in crates/ or py-newen/.
 [advisories]
 ignore = [
     "RUSTSEC-2020-0159", # chrono 0.2.25, via fftw-src -> ftp

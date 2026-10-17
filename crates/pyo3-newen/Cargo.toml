@@ -1,0 +1,39 @@
+[package]
+name = "pyo3-newen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Low-level PyO3 bindings for newen molecular dynamics engine"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+# Core Rust library
+newen-core = { workspace = true }
+newen-forces = { workspace = true }
+newen-integrators = { workspace = true }
+newen-io = { workspace = true }
+newen-analysis = { workspace = true }
+# The gromos++-style programs as library functions (3.10)
+newen-tools = { workspace = true }
+# The one run builder shared with the md binary (3.9)
+newen-run = { workspace = true }
+
+# Python bindings
+pyo3 = { workspace = true }
+numpy = { workspace = true }
+# serde <-> Python objects: Recipe / Term / Algorithm are the Rust data types, not copies
+pythonize = "0.21"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# SIMD and math
+
+# Parallelism
+rayon = { workspace = true }
+
+[features]
+default = []
+ml = ["newen-forces/ml", "newen-run/ml"]

@@ -1,14 +1,14 @@
 # Architecture guidelines — how to shape code
 
 These are the durable shapes every refactor should honor. They are *guidelines, not tasks* — the
-"why" lives beside the code it explains: the instancing model in `gromos-core/.claude/CONTEXT.md`, the
-provider constraints P1–P9 in `gromos-forces/.claude/CONTEXT.md`, and "Why one core" below. When a
+"why" lives beside the code it explains: the instancing model in `newen-core/.claude/CONTEXT.md`, the
+provider constraints P1–P9 in `newen-forces/.claude/CONTEXT.md`, and "Why one core" below. When a
 change would violate one of
 these, that's a signal to stop and reconsider, not a rule to route around quietly.
 
 ## The one principle everything else serves
 
-**gromos-rs is one machine, not two.** GROMOS's fatal split is that its engine (gromosXX) and its
+**newen is one machine, not two.** GROMOS's fatal split is that its engine (gromosXX) and its
 analysis suite (gromos++) never shared a core, so the physics is implemented twice. Our entire
 architecture exists to make the engine and the analysis facade *the same machine* over a shared core.
 Every other guideline is in service of this.
@@ -17,7 +17,7 @@ Every other guideline is in service of this.
 
 Think in layers; keep them from leaking into each other.
 
-- **L0 — Data core.** One `(Topology, State)`, owned in `gromos-core`. Storage is data-oriented
+- **L0 — Data core.** One `(Topology, State)`, owned in `newen-core`. Storage is data-oriented
   (Structure-of-Arrays, not Array-of-Structs) so it's cache-friendly and SIMD/GPU-ready. Repeated
   molecules are *instanced* (stored once, referenced N times), not expanded. "Solvent-ness", QM-zone
   membership, constraint/temperature/energy group are **attributes**, never structural partitions.
@@ -29,13 +29,13 @@ Think in layers; keep them from leaking into each other.
 - **L3 — Orchestration.** A run is a composition. An MD step composes L0+L1+L2 and loops over *time*;
   an analysis composes L0+L1 and loops over *frames*. Default orchestration is an explicit, ordered
   sequence (GROMOS-faithful, debuggable). Don't foreclose a lazy compute-graph orchestration later.
-  The MD side of this layer is the `gromos-run` crate: a run is described once as data
+  The MD side of this layer is the `newen-run` crate: a run is described once as data
   (`RunRecipe`, the content of a `.imd` grouped by concern), turned into a plan (`Vec<AlgorithmSpec>`,
   validated against the GROMOS step-order rules) and only then instantiated. There is exactly one
-  such builder; the `md` binary and py-gromos both call it (3.9).
-- **L4 — Facade & bindings.** The gromos++-style analysis API and py-gromos are thin over L0–L3 and
-  contain **zero physics** — and, since 3.9, zero run assembly: `gromos.Recipe`/`Plan`/`Term` *are*
-  the L3 data types (serde ↔ Python), and `Simulation` hands them to `gromos-run`.
+  such builder; the `md` binary and py-newen both call it (3.9).
+- **L4 — Facade & bindings.** The gromos++-style analysis API and py-newen are thin over L0–L3 and
+  contain **zero physics** — and, since 3.9, zero run assembly: `newen.Recipe`/`Plan`/`Term` *are*
+  the L3 data types (serde ↔ Python), and `Simulation` hands them to `newen-run`.
 
 The payoff: `ener` calls the same provider an MD step calls; `rmsd` calls shared geometry; gathering
 is one L0 service. The ~79k lines gromos++ spent re-implementing physics simply never get written.
@@ -43,7 +43,7 @@ is one L0 service. The ~79k lines gromos++ spent re-implementing physics simply 
 ## The "lock now" invariants
 
 Settle these on paper before the refactor; they cost almost nothing now and are very expensive to
-retrofit (see the P1–P9 constraints in `gromos-forces/.claude/CONTEXT.md`):
+retrofit (see the P1–P9 constraints in `newen-forces/.claude/CONTEXT.md`):
 
 1. **One owned `(Topology, State)` core — never grow a second `System`/`gcore`.** This is the single
    thing gromos++ got wrong.
@@ -86,7 +86,7 @@ more providers — additive, touching no existing physics. That is the whole poi
 ## Performance philosophy (don't chase C++ micro-opts)
 
 C++ gromos has no secret weapon: templates are Rust monomorphization, OpenMP is `rayon`, intrinsics
-are `wide`/SIMD — gromos-rs already matches these. **Don't try to out-tune the inner loop; you'll
+are `wide`/SIMD — newen already matches these. **Don't try to out-tune the inner loop; you'll
 tie.** Win by refusing the architecture C++ was forced into: gromosXX forks the same physics per
 backend (serial/omp/mpi/cuda) and per variant (perturbed). Write the physics **once** and let a
 *scheduler* choose the backend. Prefer SoA, one kernel many schedulers, and a spatial-index service

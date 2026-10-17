@@ -1,0 +1,63 @@
+[package]
+name = "newen-forces"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Force calculations for newen molecular dynamics"
+
+# Physics-convention variable names (kT, dH_dL, etc.) are intentional.
+[lints.rust]
+non_snake_case = "allow"
+
+[lints.clippy]
+# Numeric kernels index several arrays with one loop variable, as the C++ they port does.
+needless_range_loop = "allow"
+
+[dependencies]
+newen-core = { workspace = true }
+
+# SIMD and math
+glam = { workspace = true }
+wide = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# FFT for PME electrostatics
+rustfft = { workspace = true }
+fftw = { workspace = true, optional = true }
+num-complex = { workspace = true }
+
+# MPI for distributed PME
+mpi = { workspace = true, optional = true }
+
+# Serialization
+serde = { workspace = true, optional = true }
+
+# In-process ML potential inference (TorchScript via libtorch). Optional: default
+# builds/CI are untouched. Building with --features ml requires a matching local
+# libtorch — see crates/newen-forces/src/nonbonded/schnet.rs module docs.
+tch = { version = "0.24.0", optional = true }
+
+[features]
+default = []
+use-fftw = ["fftw"]
+use-mpi = ["mpi"]
+mpi = ["dep:mpi"]
+gpu = []
+simd = []
+serde = ["dep:serde", "newen-core/serde"]
+ml = ["dep:tch"]
+
+[dev-dependencies]
+newen-io = { workspace = true }
+approx = "0.5"
+criterion = { workspace = true }
+
+[[bench]]
+name = "nonbonded_bench"
+harness = false

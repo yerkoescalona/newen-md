@@ -1,0 +1,4 @@
+# Present only in a `--features ml` build; run stubtest without this allowlist on one.
+newen.newen.SchNetPotential
+newen.newen.resolve_zone_partition
+newen.newen.__all__

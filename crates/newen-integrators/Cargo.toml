@@ -1,0 +1,46 @@
+[package]
+name = "newen-integrators"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Time integration algorithms for newen molecular dynamics"
+
+# Physics-convention variable names (kT, dH_dL, etc.) are intentional.
+[lints.rust]
+non_snake_case = "allow"
+
+[lints.clippy]
+# Numeric kernels index several arrays with one loop variable, as the C++ they port does.
+needless_range_loop = "allow"
+
+[dependencies]
+newen-core = { workspace = true }
+newen-forces = { workspace = true }
+
+# SIMD and math
+glam = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
+
+# Random number generation for stochastic dynamics
+rand = { workspace = true }
+rand_distr = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# Serialization
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde", "newen-core/serde"]
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "thermostat_bench"
+harness = false

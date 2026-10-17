@@ -33,7 +33,7 @@ def main() -> None:
     runs = load(sys.argv[1:])
     systems = sorted({k[0] for k in runs})
     for system in systems:
-        # Rust first so the cross-engine column reads gromosXX / Rust (> 1 = gromos-rs faster).
+        # Rust first so the cross-engine column reads gromosXX / Rust (> 1 = newen faster).
         engines = sorted({k[1] for k in runs if k[0] == system}, key=lambda e: (e != "rust", e))
         threads = sorted({k[2] for k in runs if k[0] == system})
         print(f"\n**{system}** (n per cell = timed repeats; mean ± std s)\n")

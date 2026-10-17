@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Engine-vs-engine benchmark driver: gromos-rs `md` vs gromosXX `md`.
+Engine-vs-engine benchmark driver: newen `md` vs gromosXX `md`.
 
 Implements the protocol in BENCHMARKING.md. Patches a reference `.imd` to the
 requested step count with all trajectory output disabled, runs each engine
@@ -17,11 +17,11 @@ Usage
     scripts/bench_engines.py --list
     scripts/bench_engines.py --engines rust --rust-md bin/md_old --system ch4_water_fep
 
-`--rust-md PATH` (repeatable) adds another gromos-rs build as an engine named
+`--rust-md PATH` (repeatable) adds another newen build as an engine named
 `rust-<file name>`, run on the same patched input and interleaved with the
 others, so two Rust builds can be compared directly.
 
-Wall time is taken from each engine's own report (gromos-rs "Simulation wall
+Wall time is taken from each engine's own report (newen "Simulation wall
 time", gromosXX "Wall time simulation") when available, so start-up parsing is
 excluded; the externally measured total is recorded alongside it.
 """
@@ -41,7 +41,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-REF_DIR = REPO / "crates" / "gromos-md" / "tests" / "gromosXX_references"
+REF_DIR = REPO / "crates" / "newen-md" / "tests" / "gromosXX_references"
 RUST_MD = REPO / "target" / "release" / "md"
 
 # gromosXX build variants, in preference order for the serial baseline.
@@ -124,7 +124,7 @@ def rust_wall(stderr: str) -> float | None:
 
 def gromosxx_wall(stdout: str) -> float | None:
     # md++ epilogue: "Wall time simulation (s):   1.190" — excludes initialisation,
-    # matching what gromos-rs reports as "Simulation wall time".
+    # matching what newen reports as "Simulation wall time".
     m = re.search(r"Wall time simulation \(s\):\s*([0-9.]+)", stdout)
     return float(m.group(1)) if m else None
 
@@ -304,7 +304,7 @@ def main() -> None:
     ap.add_argument("--engines", "-e", default="rust,native",
                     help="comma-separated: rust + any of " + ",".join(GROMOSXX_BUILDS))
     ap.add_argument("--rust-md", type=Path, action="append", default=[],
-                    help="another gromos-rs md binary to time as engine rust-<file name> "
+                    help="another newen md binary to time as engine rust-<file name> "
                          "(repeatable)")
     ap.add_argument("--ref-dir", type=Path, default=REF_DIR,
                     help="directory of system subdirectories with input.toml "

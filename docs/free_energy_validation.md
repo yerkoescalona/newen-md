@@ -1,6 +1,6 @@
 # Free-energy validation: the hydration free energy of Na⁺
 
-**Purpose.** This page checks the whole charge-change chain of gromos-rs on one system: the λ
+**Purpose.** This page checks the whole charge-change chain of newen on one system: the λ
 windows, the TI, BAR and MBAR estimators, the reaction-field self term, `dGslv_pbsolv` and the
 Kastenholz–Hünenberger correction terms. The result is compared with the methodology-independent
 hydration free energy of Na⁺ that Kastenholz and Hünenberger derived. This is a **check of the
@@ -13,7 +13,7 @@ number below is in `box3.0/analysis.json`, `box3.0/pb.json` or `box3.0/correctio
 
 ## System
 
-- One Na⁺ (atom 1 of `crates/gromos-md/tests/gromosXX_references/nacl_water_box/nacl_water_box.topo`,
+- One Na⁺ (atom 1 of `crates/newen-md/tests/gromosXX_references/nacl_water_box/nacl_water_box.topo`,
   IAC 34, +1 e) in 878 SPC. The box is cubic, 3.0 nm at the start (2635 atoms; `sim_box` from the
   LiveCoMS t_01 SPC box) and 2.9984 ± 0.0022 nm on average under NPT (mean ± std over the 33
   window means).
@@ -32,8 +32,8 @@ number below is in `box3.0/analysis.json`, `box3.0/pb.json` or `box3.0/correctio
 | equilibration | `na_eq.imd`: state A, 100 ps NPT, 298.15 K / 1 atm (Berendsen 0.1 / 0.5 ps), from an earlier session (`prepare.out`, 286 s) |
 | windows | `na_window.imd`: λ = 0, 0.1, …, 1 (11 windows), each started from `eq.cnf`; NPT as above; 2 fs; SHAKE; reaction field RCRF 1.4 nm, EPSRF 61, EPSCS 1, κ 0; pair list every 5 steps (NSNB 5), RCUTP = RCUTL = 1.4; NTWG = NTWE = 50 (a multiple of NSNB); `PRECALCLAM 11 0 1` |
 | length | **10 000 steps = 20 ps per window**, n = 3 replicas (seed 210185 + 1000·r + i for replica r, window i) |
-| analysis | the first 4 ps (40 of 200 frames, 20 %) of each window dropped, so 160 frames are kept; TI by trapezoid, BAR and MBAR over the `PRECALCLAM` rows (`gromos.free_energy.collect`) |
-| PB | `gromos.analysis.dgslv_pbsolv` on `eq.cnf` for both end states: `@pbc r`, `@atoms 1:a`, `@atomsTOcharge 1:a`, `@epsSOLV 66.6`, `@probeIAC 5`, `@gridspacing 0.1`, `@NPBCsize 5.0`, RF with `@epsRF 61 @rcut 1.4`, and LS for comparison |
+| analysis | the first 4 ps (40 of 200 frames, 20 %) of each window dropped, so 160 frames are kept; TI by trapezoid, BAR and MBAR over the `PRECALCLAM` rows (`newen.free_energy.collect`) |
+| PB | `newen.analysis.dgslv_pbsolv` on `eq.cnf` for both end states: `@pbc r`, `@atoms 1:a`, `@atomsTOcharge 1:a`, `@epsSOLV 66.6`, `@probeIAC 5`, `@gridspacing 0.1`, `@NPBCsize 5.0`, RF with `@epsRF 61 @rcut 1.4`, and LS for comparison |
 
 The window length was set from a timing probe: 33 windows × 1500 steps, all at once, took 96 s
 (`probe33/`), about 64 ms per step per window with 33 single-threaded processes on 8 cores /
@@ -44,7 +44,7 @@ Committed inputs: `docs/free_energy_validation/na_em.imd`, `na_eq.imd`, `na_wind
 `scripts/na_hydration.py`. Run them as follows:
 
 ```bash
-cd py-gromos
+cd py-newen
 W=~/.cache/gromos-rs-item-1.8/fe11/box3.0
 uv run python ../scripts/na_hydration.py build    --workdir $W --box 3.0
 uv run python ../scripts/na_hydration.py prepare  --workdir $W

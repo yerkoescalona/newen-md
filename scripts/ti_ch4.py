@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
 Free energy of CH4 -> dummy in SPC water (the vol. 7 tutorial system), through gromosXX and
-gromos-rs, from the reference inputs that are proven bit-for-bit at five λ values
-(`crates/gromos-md/tests/gromosXX_references/ch4_water_fep*`).
+newen, from the reference inputs that are proven bit-for-bit at five λ values
+(`crates/newen-md/tests/gromosXX_references/ch4_water_fep*`).
 
-The windows are one `gromos.free_energy.LambdaSchedule` over the reference recipe (NVT 300 K,
+The windows are one `newen.free_energy.LambdaSchedule` over the reference recipe (NVT 300 K,
 velocities generated with seed `--seed` + window index, dH/dλ written every `--ntwg` steps).
-gromos-rs runs them in process (`gromos.free_energy.run_windows`, `--parallel` worker
+newen runs them in process (`newen.free_energy.run_windows`, `--parallel` worker
 processes); gromosXX runs the same recipes written out as `.imd` files (`Recipe.to_imd`). The
 windows are analysed with one of three estimators (`--estimator`):
 
 - `ti` (default): the trapezoid over ⟨∂H/∂λ⟩_λ, error from the per-window block-averaging
   errors, the first `--skip` frames of each window dropped (`FreeEnergyWindows.ti`; gromosXX's
-  `.trg` files through `gromos.analysis.ti_trapezoid`, the same estimator);
+  `.trg` files through `newen.analysis.ti_trapezoid`, the same estimator);
 - `bar`: every window also precalculates its energies on a λ grid (PRECALCLAM) and BAR combines
   neighbouring windows (`FreeEnergyWindows.bar`; gromosXX's files through
-  `gromos.analysis.ext_ti_ana @bar_data` + `gromos.analysis.bar`);
+  `newen.analysis.ext_ti_ana @bar_data` + `newen.analysis.bar`);
 - `mbar`: the same energies, all windows at once (`FreeEnergyWindows.mbar`;
-  `gromos.analysis.mbar`).
+  `newen.analysis.mbar`).
 
 gromos++'s ext_ti_ana has no frame skip, so `--skip` applies to `ti` only, for both engines.
 ΔG(CH4 -> dummy) is the negative hydration free energy: experiment ΔG_hyd(CH4) ≈ +8.4 kJ/mol,
 so ΔG here is expected around −8 kJ/mol for 54a7 (the tutorial's own result).
 
-    cd py-gromos && uv run python ../scripts/ti_ch4.py --steps 5000      # 11 windows, both engines
-    cd py-gromos && uv run python ../scripts/ti_ch4.py --engine gromosxx --estimator mbar
+    cd py-newen && uv run python ../scripts/ti_ch4.py --steps 5000      # 11 windows, both engines
+    cd py-newen && uv run python ../scripts/ti_ch4.py --engine gromosxx --estimator mbar
 
-Needs the py-gromos extension (`uv run maturin develop --release`) and (for gromosXX) the native
+Needs the py-newen extension (`uv run maturin develop --release`) and (for gromosXX) the native
 build at `.local/gromosXX/md++/BUILD/program/md`. Re-running reads the windows already in
 `--workdir` instead of running them again. Writes `<workdir>/README.md` (the table) and
 `<workdir>/results.json`.
@@ -42,17 +42,17 @@ from pathlib import Path
 
 import numpy as np
 
-from gromos import Recipe, System, analysis
-from gromos.free_energy import LambdaSchedule, Perturbation, run_windows
+from newen import Recipe, System, analysis
+from newen.free_energy import LambdaSchedule, Perturbation, run_windows
 
 REPO = Path(__file__).resolve().parent.parent
-REF = REPO / "crates/gromos-md/tests/gromosXX_references"
+REF = REPO / "crates/newen-md/tests/gromosXX_references"
 TEMPLATE = REF / "ch4_water_fep/ch4_water_fep.in"
 TOPO = REF / "shared/ch4_spc.top"
 CONF = REF / "shared/ch4_spc.cnf"
 PTTOPO = REF / "shared/ch4_spc_dummy.ptp"
 GROMOSXX = REPO / ".local/gromosXX/md++/BUILD/program/md"
-ENGINES = ["gromosxx", "gromos-rs"]
+ENGINES = ["gromosxx", "newen"]
 
 
 def window_recipes(
@@ -89,7 +89,7 @@ def grid_size(lambdas: list[float]) -> int:
     raise SystemExit("the windows are on no PRECALCLAM grid of up to 1001 points: give --nrlam")
 
 
-def run_gromos_rs(
+def run_newen(
     recipes: list[Recipe], wdir: Path, estimator: str, skip: int, parallel: int
 ) -> dict:
     system = System.from_files(str(TOPO), str(CONF))
@@ -174,7 +174,7 @@ def run_gromosxx(recipes: list[Recipe], wdir: Path, estimator: str, skip: int, n
         )
         preds.append(r)
         files.append(next(f for f in r["files"] if Path(f).name.startswith("bar_data")))
-    # ⟨∂H/∂λ⟩ per window from the .trg totals, as for gromos-rs
+    # ⟨∂H/∂λ⟩ per window from the .trg totals, as for newen
     t = analysis.ti_trapezoid(trgs, lambdas, 0)
     stats = [
         {"lambda": lam, "mean": m, "ee": e, "n": n}
@@ -253,7 +253,7 @@ def table(args: argparse.Namespace, results: dict, engines: list[str], lambdas: 
         )
     if two and all(results["engines"][e]["dG"] is not None for e in engines):
         a, b = (results["engines"][e]["dG"] for e in engines)
-        lines.append(f"- ΔG(gromos-rs) − ΔG(gromosXX) = {b - a:+.3f} kJ/mol")
+        lines.append(f"- ΔG(newen) − ΔG(gromosXX) = {b - a:+.3f} kJ/mol")
     lines.append(
         "- Reference: ΔG_hyd(CH4) experiment ≈ +8.4 kJ/mol, i.e. ΔG(CH4→dummy) ≈ −8 kJ/mol; the "
         "tutorial's 54a7 result is of that size. Windows are independent short runs, not a converged study."
@@ -286,7 +286,7 @@ def main() -> None:
         help="PRECALCLAM grid size for bar/mbar (default: the coarsest grid holding every window)",
     )
     ap.add_argument(
-        "--parallel", type=int, default=1, help="gromos-rs windows run at once (processes)"
+        "--parallel", type=int, default=1, help="newen windows run at once (processes)"
     )
     args = ap.parse_args()
 
@@ -314,8 +314,8 @@ def main() -> None:
     }
     for engine in engines:
         wdir = args.workdir / engine / kind
-        if engine == "gromos-rs":
-            r = run_gromos_rs(recipes, wdir, args.estimator, skip, args.parallel)
+        if engine == "newen":
+            r = run_newen(recipes, wdir, args.estimator, skip, args.parallel)
         else:
             r = run_gromosxx(recipes, wdir, args.estimator, skip, nrlam)
         print(f"{engine:10s} {len(lambdas)} windows  {r['wall_s']:7.1f} s", flush=True)

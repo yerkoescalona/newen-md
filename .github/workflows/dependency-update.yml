@@ -57,7 +57,7 @@ jobs:
           pip install pip-tools
 
       - name: Update Python dependencies
-        working-directory: py-gromos
+        working-directory: py-newen
         run: |
           # This would update requirements if you have a requirements.in file
           # pip-compile --upgrade requirements.in

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MPI scaling of gromos-rs `md` (feature `use-mpi`): wall time and energy agreement across
+"""MPI scaling of newen `md` (feature `use-mpi`): wall time and energy agreement across
 `mpirun -np N` for one system (BENCHMARKING.md §6).
 
     scripts/bench_mpi.py --system water_1000_spc_gridcell --np 1,2,4 --steps 200 --repeats 3
@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-REF_DIR = REPO / "crates/gromos-md/tests/gromosXX_references"
+REF_DIR = REPO / "crates/newen-md/tests/gromosXX_references"
 AUX_INPUTS = [("pttopo", "@pttopo"), ("posresspec", "@posresspec"), ("refpos", "@refpos"), ("distrest", "@distrest")]
 
 

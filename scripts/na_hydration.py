@@ -13,13 +13,13 @@ writes into `--workdir` and reads what an earlier step left there:
               `shared/nacl_na_dummy.ptp` (Na+ IAC 34, +1 -> DUM IAC 19, 0; mass kept; α 0.5/0.5)
     prepare   steepest descent and the state-A equilibration (`md`, --md)
     windows   the λ windows of --replicas, --workers at a time, each one through
-              gromos.free_energy.run_windows in its own process (one engine thread each)
+              newen.free_energy.run_windows in its own process (one engine thread each)
     analyse   TI, BAR and MBAR per replica after --skip-ps, mean ± std over replicas
-    pb        gromos.analysis.dgslv_pbsolv on both end states of the equilibrated box
+    pb        newen.analysis.dgslv_pbsolv on both end states of the equilibrated box
     correct   the chain per estimator: [raw − rf_self_energy] + PB(B) − PB(A) + C1 + C2, and
               ΔG°_slv(Na⁺) = −that + ΔG_cmp (`correction.json`; needs `analysis` and `pb`)
 
-    cd py-gromos && uv run python ../scripts/na_hydration.py build --box 3.0 --workdir W
+    cd py-newen && uv run python ../scripts/na_hydration.py build --box 3.0 --workdir W
 """
 
 from __future__ import annotations
@@ -36,12 +36,12 @@ from typing import Any
 
 import numpy as np
 
-from gromos import Recipe, System, Topology, analysis, tools
-from gromos.free_energy import LambdaSchedule, Perturbation, collect, run_windows
+from newen import Recipe, System, Topology, analysis, tools
+from newen.free_energy import LambdaSchedule, Perturbation, collect, run_windows
 
 REPO = Path(__file__).resolve().parent.parent
 INPUTS = REPO / "docs/free_energy_validation"
-REF = REPO / "crates/gromos-md/tests/gromosXX_references"
+REF = REPO / "crates/newen-md/tests/gromosXX_references"
 TOPO = REF / "nacl_water_box/nacl_water_box.topo"
 PTP = REF / "shared/nacl_na_dummy.ptp"
 SOLVENT = REPO / ".local/gromos_tutorial_livecoms/tutorial_files/t_01/box/spc.cnf"

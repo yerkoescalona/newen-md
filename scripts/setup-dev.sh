@@ -36,15 +36,15 @@ echo "==> Installing optional Cargo tools..."
 echo "This may take a while..."
 cargo install cargo-edit cargo-audit cargo-outdated cargo-llvm-cov 2>/dev/null || echo "Some tools already installed"
 
-# Build gromos-rs
-echo "==> Building gromos-rs..."
-cd gromos-rs
+# Build newen
+echo "==> Building newen..."
+cd newen
 cargo build
 cd ..
 
-# Setup py-gromos
-echo "==> Setting up py-gromos..."
-cd py-gromos
+# Setup py-newen
+echo "==> Setting up py-newen..."
+cd py-newen
 make venv
 make install-dev
 make build

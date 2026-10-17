@@ -7,7 +7,7 @@ Run from the repo root:
     python3 scripts/regen_gromosXX_references.py --binary PATH name   # another md binary
 
 The script runs the gromosXX md binary (patched to use CODATA 2018 constants)
-on every system in crates/gromos-md/tests/gromosXX_references/ and overwrites
+on every system in crates/newen-md/tests/gromosXX_references/ and overwrites
 the expected/ output files in place.
 
 Requires the patched binary at:
@@ -23,7 +23,7 @@ import shutil
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
-REF_DIR = REPO_ROOT / "crates" / "gromos-md" / "tests" / "gromosXX_references"
+REF_DIR = REPO_ROOT / "crates" / "newen-md" / "tests" / "gromosXX_references"
 MD_BIN = REPO_ROOT / ".local" / "gromosXX" / "md++" / "BUILD" / "program" / "md"
 
 

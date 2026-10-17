@@ -1,6 +1,6 @@
-# Verifying gromos-rs against its theory
+# Verifying newen against its theory
 
-This chapter explains how parts of gromos-rs are checked against a mathematical specification
+This chapter explains how parts of newen are checked against a mathematical specification
 written in the Lean theorem prover, and how the Rust code is tied to that specification. You do
 not need to know Lean or Aeneas to read it. By the end you should know why we do this, how the
 pieces fit together, how to run them, what is and is not guaranteed, and how to add a function of
@@ -8,16 +8,16 @@ your own.
 
 Everything described here lives in two places in the repository:
 
-- `crates/gromos-logic`: the Rust functions that carry a specification;
+- `crates/newen-logic`: the Rust functions that carry a specification;
 - `spec/`: the Lean project that states and proves what those functions mean (`spec/README.md` is
   the short operational summary of this chapter).
 
 ## Why
 
-gromos-rs is a port of gromosXX. The obvious way to check a port is to run both programs on the
-same input and compare the output, and gromos-rs does that on every reference system in
-`crates/gromos-md/tests/gromosXX_references/`. That test answers one question very well: *does
-gromos-rs do what gromosXX does?*
+newen is a port of gromosXX. The obvious way to check a port is to run both programs on the
+same input and compare the output, and newen does that on every reference system in
+`crates/newen-md/tests/gromosXX_references/`. That test answers one question very well: *does
+newen do what gromosXX does?*
 
 It cannot answer a second question: *does gromosXX do what the equations say?* While porting we
 found 39 places where gromosXX disagrees with the equations it was meant to implement. Few of them
@@ -29,7 +29,7 @@ are deep. Most are bookkeeping:
 - a missing time step Δt in a running sum;
 - a long-range term missing on some output steps.
 
-Each of these produces plausible numbers. A comparison against gromosXX passes, because gromos-rs
+Each of these produces plausible numbers. A comparison against gromosXX passes, because newen
 faithfully reproduces the defect. A comparison against gromosXX only proves that we copy it,
 defects included.
 
@@ -38,7 +38,7 @@ any code: a specification. The 39 findings are collected, with reproducers and p
 the divergence dossier of the gromos-divergences repository. Each has a number D1 to D39; this
 chapter uses one of them, D34, as its worked example.
 
-gromos-rs keeps reproducing gromosXX where it differs from the equations (so the reference tests
+newen keeps reproducing gromosXX where it differs from the equations (so the reference tests
 stay bit-for-bit), warns about it, and corrects it separately. The specification is what tells us
 where those places are.
 
@@ -63,7 +63,7 @@ connected by a check done with a different tool:
        |  and a Lean refinement proof shows the translation returns the model
        |  for every machine input, and never panics (`lake build`)
        v
-   RUST               the function gromos-run actually calls
+   RUST               the function newen-run actually calls
    output_misses_longrange
 
    and, closing the loop from the other side:
@@ -76,21 +76,21 @@ connected by a check done with a different tool:
 The proofs cover all inputs but look at Lean code. The test looks at the compiled binary but only
 at a finite grid of inputs. Together they leave very little room for a mistake to hide.
 
-The Lean side is two libraries of one project. The meaning lives in `GromosTheory`
-(`spec/GromosTheory/`): the physics and bookkeeping of a GROMOS run, organised like the physics
+The Lean side is two libraries of one project. The meaning lives in `NewenTheory`
+(`spec/NewenTheory/`): the physics and bookkeeping of a GROMOS run, organised like the physics
 (this pilot's meaning is in `Dynamics/Schedule.lean`), and it never imports the code's
-specification. The model and the bridge theorem linking it to the meaning live in `GromosSpec`
-(`spec/GromosSpec/`), one file per module of `crates/gromos-logic`, next to the refinement proofs.
-The same definitions can then judge gromos-rs here and gromosXX in the divergence dossier.
+specification. The model and the bridge theorem linking it to the meaning live in `NewenSpec`
+(`spec/NewenSpec/`), one file per module of `crates/newen-logic`, next to the refinement proofs.
+The same definitions can then judge newen here and gromosXX in the divergence dossier.
 
 ## Two kinds of code, two techniques
 
-Not all code can be verified the same way. gromos-rs splits it in two.
+Not all code can be verified the same way. newen splits it in two.
 
 **Integer decision logic.** Which step writes output, how many degrees of freedom a system has,
 which atom belongs to which temperature bath, which index in one list matches which in another.
 These are small functions over integers and booleans. They are where most of the 39 defects live,
-and they are exactly what current tools can prove. They go into `crates/gromos-logic`: safe Rust,
+and they are exactly what current tools can prove. They go into `crates/newen-logic`: safe Rust,
 no floating point, no dependencies, the subset that Charon and Aeneas translate into Lean. A Lean
 proof then shows that the Rust function equals the model for every input.
 
@@ -105,7 +105,7 @@ kernel against the model on many random inputs (differential random testing).
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
 | Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, Berendsen, Nosé–Hoover |
-| Rust lives in | `crates/gromos-logic` | the existing kernel crates |
+| Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
 | Status | working (one function, the pilot below) | planned |
@@ -145,13 +145,13 @@ rows miss the long-range term. In the dossier's methane-in-water reproducer this
 biased. With `NTWG = 10` instead, every output step reuses an output pairlist step and nothing is
 missed.
 
-gromos-rs reproduces this behaviour (so its output matches gromosXX bit for bit) and warns before
+newen reproduces this behaviour (so its output matches gromosXX bit for bit) and warns before
 the run. The warning asks one integer question: *for this `NSNB` and `NTWG`, does some output step
 miss its long-range part?* That question is the pilot function.
 
 ### The Rust code
 
-`crates/gromos-logic/src/schedule.rs`:
+`crates/newen-logic/src/schedule.rs`:
 
 ```rust
 /// Whether some free-energy output step (every `ntwg` steps) follows a pairlist step (every
@@ -179,23 +179,23 @@ Three lines of logic and a doc comment making a claim: the answer is "yes" exact
 number divides the other. The line `/// spec: schedule.output_misses_longrange` is the key that
 connects this function to its entry in `spec/SPEC.toml`.
 
-The caller in `crates/gromos-run/src/prepare.rs` adds the conditions that are not integer logic
-(PRECALCLAM on, twin range present) and leaves the schedule question to `gromos-logic`:
+The caller in `crates/newen-run/src/prepare.rs` adds the conditions that are not integer logic
+(PRECALCLAM on, twin range present) and leaves the schedule question to `newen-logic`:
 
 ```rust
 pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> {
     let precalc = imd.ntg != 0 && imd.precalclam.is_some_and(|b| b.nr_lambdas > 0);
     let twin_range = imd.rcutp < imd.rcutl - 1e-10;
     let (nsnb, ntwg) = (imd.nsnb, imd.ntwg);
-    (precalc && twin_range && gromos_logic::schedule::output_misses_longrange(nsnb, ntwg))
+    (precalc && twin_range && newen_logic::schedule::output_misses_longrange(nsnb, ntwg))
         .then_some((nsnb, ntwg))
 }
 ```
 
 ### The meaning, in Lean
 
-`spec/GromosTheory/Dynamics/Schedule.lean` states what the question *means*, without any formula
-and without any reference to gromos-rs:
+`spec/NewenTheory/Dynamics/Schedule.lean` states what the question *means*, without any formula
+and without any reference to newen:
 
 ```lean
 /-- The pairlist step whose long-range interactions step `s` reuses: the last multiple of `nsnb`
@@ -229,7 +229,7 @@ It is the thing we want to be true.
 
 ### The model and the theorem `missesModel_iff`
 
-Next comes the model, in `spec/GromosSpec/Schedule.lean`: a Lean function written branch for
+Next comes the model, in `spec/NewenSpec/Schedule.lean`: a Lean function written branch for
 branch like the Rust.
 
 ```lean
@@ -277,7 +277,7 @@ So the guards in the Rust are not just defensive programming: each one is a case
 
 Charon reads the compiled Rust (its MIR, the compiler's mid-level representation) and Aeneas
 turns it into a pure Lean function. `spec/scripts/extract.sh` writes the result to
-`spec/GromosSpec/Extracted/GromosLogic.lean`; you never edit that file by hand.
+`spec/NewenSpec/Extracted/NewenLogic.lean`; you never edit that file by hand.
 
 ```lean
 def schedule.output_misses_longrange
@@ -311,7 +311,7 @@ in a language Lean can reason about.
 
 ### The refinement theorem `output_misses_longrange_iff`
 
-`spec/GromosSpec/Refinement.lean` proves that the extracted function computes the model:
+`spec/NewenSpec/Refinement.lean` proves that the extracted function computes the model:
 
 ```lean
 /-- **Rust = model**: for all `usize` inputs, `output_misses_longrange` returns `missesModel`. -/
@@ -331,7 +331,7 @@ Chaining this with `missesModel_iff` gives the statement we wanted from the star
 pairlist step that was not an output step. -/
 theorem output_misses_longrange_iff (nsnb ntwg : Usize) :
     output_misses_longrange nsnb ntwg = ok true ↔
-      GromosTheory.Dynamics.Schedule.Misses nsnb.val ntwg.val := by
+      NewenTheory.Dynamics.Schedule.Misses nsnb.val ntwg.val := by
   rw [output_misses_longrange_eq, Result.ok.injEq, Schedule.missesModel_iff]
 ```
 
@@ -346,7 +346,7 @@ divisor is nonzero, using the facts the earlier branches established.
 
 ### The exhaustive test
 
-`crates/gromos-logic/tests/schedule_spec.rs` runs the *compiled* Rust on every
+`crates/newen-logic/tests/schedule_spec.rs` runs the *compiled* Rust on every
 `1 ≤ nsnb, ntwg ≤ 200` (40 000 inputs) and compares it with two independent references:
 
 - `misses_by_simulation`, which walks the MD steps one by one, the way a run does, remembering the
@@ -439,14 +439,14 @@ The last line is a useful sanity check. Put this in a scratch file and run it wi
 `cd spec && lake env lean <file>`:
 
 ```lean
-import GromosSpec
-#print axioms GromosSpec.Refinement.output_misses_longrange_iff
+import NewenSpec
+#print axioms NewenSpec.Refinement.output_misses_longrange_iff
 ```
 
 It should list only Lean's three standard axioms:
 
 ```text
-'GromosSpec.Refinement.output_misses_longrange_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
+'NewenSpec.Refinement.output_misses_longrange_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
 ```
 
 Anything else, in particular `sorryAx`, means part of the proof is missing.
@@ -459,13 +459,13 @@ account.
 | Check | Guarantees | Trusts | Does not cover |
 |---|---|---|---|
 | Lean theorem `missesModel_iff` (model ⇔ meaning) | for **all** natural numbers, the model returns `true` exactly when `Misses` holds | the Lean kernel; that `Misses` is a correct reading of the GROMOS behaviour (a human reading of `perturbed_nonbonded_set.cc`, backed by the reference test `ch4_water_fep_precalc_twinrange`) | whether the physics behind `Misses` is the physics you want |
-| Aeneas refinement `output_misses_longrange_iff` (Rust ⇔ model) | for **all** `usize` inputs, the Rust function never panics and returns the model's answer | the Lean kernel; that Charon and Aeneas translate the Rust faithfully (both are nightly research tools); the Rust compiler | the callers, such as `precalclam_longrange_gaps` in `gromos-run`, which add their own conditions |
+| Aeneas refinement `output_misses_longrange_iff` (Rust ⇔ model) | for **all** `usize` inputs, the Rust function never panics and returns the model's answer | the Lean kernel; that Charon and Aeneas translate the Rust faithfully (both are nightly research tools); the Rust compiler | the callers, such as `precalclam_longrange_gaps` in `newen-run`, which add their own conditions |
 | Exhaustive test (Rust ⇔ simulation, Rust ⇔ model) | the compiled binary agrees with an independent simulation and with the Lean model on 40 000 inputs | the test's simulation; the checked-in vector file being current | inputs outside `1 ≤ nsnb, ntwg ≤ 200` (the proofs cover those) |
 
 And at the level of the whole project:
 
-- **Not covered: everything outside `crates/gromos-logic`.** Today that is one function. The rest of
-  gromos-rs is checked the way it always was, by reference tests and unit tests.
+- **Not covered: everything outside `crates/newen-logic`.** Today that is one function. The rest of
+  newen is checked the way it always was, by reference tests and unit tests.
 - **Not covered: floating-point kernels**, until the differential-testing layer for them exists.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
@@ -476,7 +476,7 @@ And at the level of the whole project:
 **Rust only.** The exhaustive test needs nothing but cargo, and runs in the normal test suite:
 
 ```sh
-cargo test -p gromos-logic
+cargo test -p newen-logic
 ```
 
 **Lean.** Install elan, Lean's toolchain manager; `spec/lean-toolchain` pins the Lean version
@@ -496,7 +496,7 @@ cd spec && lake exe spec-vectors
 ```
 
 `lake build` alone needs only elan. You need Aeneas only when you change Rust code in
-`gromos-logic` and must regenerate the extracted Lean.
+`newen-logic` and must regenerate the extracted Lean.
 
 **Aeneas and Charon.** Use the prebuilt release, not a source build. The release must be the one
 whose commit is pinned in `spec/lakefile.lean`; today that is `nightly-2026.10.17-e62dd83`. It
@@ -523,8 +523,8 @@ Then, from the repository root:
 spec/scripts/extract.sh
 ```
 
-It runs Charon on `crates/gromos-logic`, then Aeneas, and rewrites
-`spec/GromosSpec/Extracted/`. It refuses to run if the Aeneas binary and the Aeneas Lean library
+It runs Charon on `crates/newen-logic`, then Aeneas, and rewrites
+`spec/NewenSpec/Extracted/`. It refuses to run if the Aeneas binary and the Aeneas Lean library
 pinned in `spec/lakefile.lean` are different commits, because a mismatched pair produces Lean the
 library cannot check. After extracting, run `cd spec && lake build` again.
 
@@ -535,20 +535,20 @@ installed binary.
 ## Adding a new function: the checklist
 
 1. **Decide which kind it is.** Integers and booleans only, and small: it goes into
-   `crates/gromos-logic` and gets an Aeneas proof. Floating point: it stays in its kernel crate and
+   `crates/newen-logic` and gets an Aeneas proof. Floating point: it stays in its kernel crate and
    gets a Lean model plus a differential test.
 
 2. **Write the Lean first.** Before the Rust, write:
-   - in `spec/GromosTheory/<Area>/<Topic>.lean`, placed by its physics, the meaning: a `Prop` over
+   - in `spec/NewenTheory/<Area>/<Topic>.lean`, placed by its physics, the meaning: a `Prop` over
      all inputs, transcribed from the physics or the GROMOS manual and containing no algorithm;
-   - in `spec/GromosSpec/<Module>.lean`, the model, a Lean function shaped like the Rust you
+   - in `spec/NewenSpec/<Module>.lean`, the model, a Lean function shaped like the Rust you
      intend to write;
    - a theorem `model ↔ meaning` (or, for a float model, the properties the model must have).
 
    This is verification-guided development, model first: writing the meaning before the code is
    where the specification catches a misreading, before it is ported.
 
-3. **Write the Rust.** In `crates/gromos-logic`, in the subset Aeneas translates: safe Rust,
+3. **Write the Rust.** In `crates/newen-logic`, in the subset Aeneas translates: safe Rust,
    integers and booleans, no floats, simple loops, no dependencies. End the doc comment with
    `/// spec: <module>.<name>`.
 
@@ -557,52 +557,52 @@ installed binary.
    ```toml
    [[function]]
    key = "schedule.output_misses_longrange"
-   rust = "crates/gromos-logic/src/schedule.rs::output_misses_longrange"
-   used_by = ["crates/gromos-run/src/prepare.rs::precalclam_longrange_gaps"]
+   rust = "crates/newen-logic/src/schedule.rs::output_misses_longrange"
+   used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
    origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
-   # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in GromosTheory
-   theory = "GromosTheory.Dynamics.Schedule.Misses"
-   model = "GromosSpec.Schedule.missesModel"
-   theorem = "GromosSpec.Schedule.missesModel_iff"
+   # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+   theory = "NewenTheory.Dynamics.Schedule.Misses"
+   model = "NewenSpec.Schedule.missesModel"
+   theorem = "NewenSpec.Schedule.missesModel_iff"
    # Layer 2, Rust = model (Aeneas)
-   extracted = "GromosSpec.Extracted.GromosLogic: gromos_logic.schedule.output_misses_longrange"
-   refinement = "GromosSpec.Refinement.output_misses_longrange_eq"
+   extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output_misses_longrange"
+   refinement = "NewenSpec.Refinement.output_misses_longrange_eq"
    # Layer 3, Rust = meaning and Rust = model on 1 <= nsnb, ntwg <= 200 (cargo test)
-   test = "crates/gromos-logic/tests/schedule_spec.rs"
+   test = "crates/newen-logic/tests/schedule_spec.rs"
    vectors = "spec/vectors/schedule.json"
    ```
 
 5. **Extract and prove refinement.** Run `spec/scripts/extract.sh`, then add a theorem to
-   `spec/GromosSpec/Refinement.lean`: the extracted function `= ok (model ...)`. The pilot's proof
+   `spec/NewenSpec/Refinement.lean`: the extracted function `= ok (model ...)`. The pilot's proof
    is the pattern: `step*`, then `scalar_tac` or `simp_all` for what remains. For a float kernel
    this step is the differential test instead: generate random inputs, evaluate the Lean model and
    the Rust kernel, compare within a stated tolerance.
 
-6. **Add the test.** In `crates/gromos-logic/tests/`, compare the Rust against an independent
+6. **Add the test.** In `crates/newen-logic/tests/`, compare the Rust against an independent
    brute-force version of the meaning and, through vectors written by `spec/SpecVectors.lean`,
    against the model. Check that the test can fail: plant a bug, watch it fail, remove it.
 
-7. **Gate.** `cd spec && lake build` with no `sorry` warning, and `cargo test -p gromos-logic`.
+7. **Gate.** `cd spec && lake build` with no `sorry` warning, and `cargo test -p newen-logic`.
 
-**When a refactor breaks a proof.** You changed Rust in `gromos-logic`, re-extracted, and
+**When a refactor breaks a proof.** You changed Rust in `newen-logic`, re-extracted, and
 `lake build` now fails in `Refinement.lean`. One of two things happened:
 
 - *The behaviour changed.* Then the exhaustive test usually fails too. Decide which is right, the
   new code or the meaning. If the code is wrong, fix it. If the meaning was wrong, fix the meaning
   and the model, re-prove `model ↔ meaning`, and say so in the commit message: that is a change
-  in what gromos-rs claims.
+  in what newen claims.
 - *Only the shape changed* (a branch reordered, a helper extracted). Then the theorem is still
   true and only the proof script needs updating; usually re-running `step*` on the new shape is
   enough.
 
 Never commit a `sorry` to get the build green, and never edit the files in
-`spec/GromosSpec/Extracted/` by hand.
+`spec/NewenSpec/Extracted/` by hand.
 
 ## Verified core and experimental zone
 
 Verification is a gate for **promotion**, not for entry.
 
-gromos-rs is also a research code. New methods change daily while they are being tried, and
+newen is also a research code. New methods change daily while they are being tried, and
 requiring a Lean model and proof before every experiment would stop the experiments. Cedar can
 afford model first for every change because its specification, an authorization language, is
 stable. Ours is not, while a method is still being developed.
@@ -621,7 +621,7 @@ This keeps the cost of verification where its value is: on code that other peopl
 
 ## Prior art
 
-None of this is new in kind; gromos-rs combines existing pieces.
+None of this is new in kind; newen combines existing pieces.
 
 - **LeanLJ.** Ugwuanyi, Jones, Velkey & Josephson (2025), [arXiv:2505.09095](https://arxiv.org/abs/2505.09095).
   Lennard-Jones energies in Lean, with functions polymorphic over ℝ and `Float`, so the same
@@ -654,5 +654,5 @@ Planned, in the order chosen:
   [Nonbonded Interactions](../algorithms/nonbonded.md)).
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
-  `crates/gromos-logic` changes, since the Mathlib cache is large; and nightly long runs of the
+  `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the
   differential tests with many more random inputs than a pull request can afford.

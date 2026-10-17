@@ -1,0 +1,27 @@
+/* Extra CSS for py-newen documentation */
+
+/* Warning banners */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-left-color: #ff9800;
+}
+
+.md-typeset .admonition.danger,
+.md-typeset details.danger {
+  border-left-color: #f44336;
+}
+
+/* Code blocks */
+.md-typeset pre > code {
+  font-size: 0.85em;
+}
+
+/* Tables */
+.md-typeset table:not([class]) {
+  font-size: 0.9em;
+}
+
+/* Educational disclaimer styling */
+.md-typeset .admonition.warning.educational {
+  background-color: rgba(255, 152, 0, 0.1);
+}

@@ -6,14 +6,14 @@ set -e
 echo "==> Running quick test suite..."
 
 # Test Rust library (library only, faster)
-echo "==> Testing gromos-rs (lib only)..."
-cd gromos-rs
+echo "==> Testing newen (lib only)..."
+cd newen
 cargo test --lib
 cd ..
 
 # Test Python bindings (basic tests only)
-echo "==> Testing py-gromos (basic tests)..."
-cd py-gromos
+echo "==> Testing py-newen (basic tests)..."
+cd py-newen
 if [ ! -d ".venv" ]; then
     echo "Virtual environment not found. Run 'make venv' first."
     exit 1
