@@ -2,7 +2,8 @@
 
 Full explanation (why, how the pieces fit, guarantees, adding a function): [docs/src/verification/index.md](../docs/src/verification/index.md).
 
-A pilot on one function: `output_misses_longrange(nsnb, ntwg)` in
+Verified so far: `schedule::output_misses_longrange` (the pilot, explained below) and
+`thermo::dof::total_dof` (see `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
 `crates/newen-logic/src/schedule.rs`. It answers: with a twin-range pairlist updated every
 `nsnb` steps and free-energy output every `ntwg` steps, does some output step reuse long-range
 terms from a pairlist step that was *not* an output step? (Under PRECALCLAM gromosXX then writes

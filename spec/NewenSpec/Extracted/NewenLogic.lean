@@ -36,4 +36,20 @@ def schedule.output_misses_longrange
            ok (i1 != 0#usize)
       else ok false
 
+/-- [newen_logic::thermo::dof::total_dof]:
+    Source: 'crates/newen-logic/src/thermo/dof.rs', lines 22:0-30:1
+    Visibility: public -/
+def thermo.dof.total_dof
+  (n_atoms : Std.U64) (solvent_constraints : Std.U64)
+  (solute_constraints : Std.U64) (ndfmin : Std.I64) :
+  Result Std.I64
+  := do
+  let i ← lift (UScalar.hcast .I64 n_atoms)
+  let coordinates ← 3#i64 * i
+  let i1 ← lift (UScalar.hcast .I64 solvent_constraints)
+  let i2 ← coordinates - i1
+  let i3 ← lift (UScalar.hcast .I64 solute_constraints)
+  let i4 ← i2 - i3
+  i4 - ndfmin
+
 end newen_logic

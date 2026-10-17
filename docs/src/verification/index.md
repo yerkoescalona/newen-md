@@ -464,8 +464,9 @@ account.
 
 And at the level of the whole project:
 
-- **Not covered: everything outside `crates/newen-logic`.** Today that is one function. The rest of
-  newen is checked the way it always was, by reference tests and unit tests.
+- **Not covered: everything outside `crates/newen-logic`.** Today that is two functions:
+  `schedule::output_misses_longrange` and `thermo::dof::total_dof`. The rest of newen is checked
+  the way it always was, by reference tests and unit tests.
 - **Not covered: floating-point kernels**, until the differential-testing layer for them exists.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and

@@ -16,3 +16,19 @@ refinement = "NewenSpec.Refinement.output_misses_longrange_eq"
 # Layer 3, Rust = meaning and Rust = model on 1 <= nsnb, ntwg <= 200 (cargo test)
 test = "crates/newen-logic/tests/schedule_spec.rs"
 vectors = "spec/vectors/schedule.json"
+
+[[function]]
+key = "thermo.dof.total_dof"
+rust = "crates/newen-logic/src/thermo/dof.rs::total_dof"
+used_by = ["crates/newen-run/src/dof.rs::total_dof"]
+origin = "3·N − constraints − NDFMIN for one bath (gromosXX multibath.cc:43-184, topology.cc:1053-1416); signed, so a non-physical input is negative instead of a wrapped usize"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.dof"
+model = "NewenSpec.Thermo.Dof.totalDofModel"
+theorem = "NewenSpec.Thermo.Dof.totalDofModel_eq_dof"
+# Layer 2, Rust = model (Aeneas), for 3·n_atoms + solvent + solute + |ndfmin| <= i64::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.dof.total_dof"
+refinement = "NewenSpec.Refinement.total_dof_eq"
+# Layer 3, Rust = molecule-by-molecule count and Rust = model on 0 <= counts <= 10, -3 <= ndfmin <= 6 (cargo test)
+test = "crates/newen-logic/tests/dof_spec.rs"
+vectors = "spec/vectors/dof.json"

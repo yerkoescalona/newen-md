@@ -133,7 +133,8 @@ pub fn rottrans_dof(topo: &Topology, rottrans: bool) -> f64 {
     }
 }
 
-/// Total kinetic degrees of freedom of the system.
+/// Total kinetic degrees of freedom of the system: counts the constraints the run imposes and
+/// hands them to [`newen_logic::thermo::dof::total_dof`], which carries the Lean proof.
 pub fn total_dof(topo: &Topology, sel: &ConstraintSelection, ntc: NtcMode, ndfmin: i32) -> f64 {
     let n_atoms = topo.num_atoms();
     let solvent_constraints = if sel.solvent_constrained() {
@@ -148,7 +149,13 @@ pub fn total_dof(topo: &Topology, sel: &ConstraintSelection, ntc: NtcMode, ndfmi
     } else {
         0
     };
-    (3 * n_atoms - solvent_constraints - solute_constraints) as f64 - ndfmin as f64
+    // Negative only for a non-physical input: more constraints and NDFMIN than 3N coordinates.
+    newen_logic::thermo::dof::total_dof(
+        n_atoms as u64,
+        solvent_constraints as u64,
+        solute_constraints as u64,
+        i64::from(ndfmin),
+    ) as f64
 }
 
 #[cfg(test)]

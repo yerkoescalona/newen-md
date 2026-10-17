@@ -1,3 +1,4 @@
+import NewenTheory.Dynamics.DegreesOfFreedom
 import NewenTheory.Dynamics.Schedule
 
 /-!

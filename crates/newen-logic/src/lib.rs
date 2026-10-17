@@ -6,3 +6,4 @@
 #![forbid(unsafe_code)]
 
 pub mod schedule;
+pub mod thermo;

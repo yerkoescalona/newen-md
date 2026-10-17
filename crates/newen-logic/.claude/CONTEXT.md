@@ -33,6 +33,8 @@ the dependency graph; newen-core, newen-run, newen-forces and newen-integrators 
 ## Outputs
 ```
 schedule::output_misses_longrange(nsnb, ntwg) -> bool     spec: schedule.output_misses_longrange
+thermo::dof::total_dof(n_atoms: u64, solvent_constraints: u64, solute_constraints: u64,
+                       ndfmin: i64) -> i64              spec: thermo.dof.total_dof
 ```
 
 ## Crate rules
@@ -56,7 +58,7 @@ schedule::output_misses_longrange(nsnb, ntwg) -> bool     spec: schedule.output_
 ```
 src/
 ├── schedule/      L3 timing: pairlist steps, output steps, continuation counters    (D34; now: schedule.rs)
-├── thermo/        L2: degrees of freedom per bath, atom → bath mapping              (target)
+├── thermo/        L2: degrees of freedom per bath, atom → bath mapping   (now: dof.rs, total only)
 ├── topology/      L0 bookkeeping: index conversions, exclusions and 1-4 ownership,
 │                  groups, perturbed atoms and bond matching                         (target)
 └── plan/          L3 composition: step-order rules, the compatibility/refusal matrix (target)
@@ -68,7 +70,7 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
 ├── StatMech/      canonical ensemble, free energy (Zwanzig, TI identity), BAR, MBAR
 ├── Interactions/  bonded, Lennard-Jones, Coulomb, reaction field, soft-core, λ-mixing
 ├── Dynamics/      leap-frog, constraints, thermostats (incl. equipartition and dof), barostats;
-│                  pairlist and output steps (now: Schedule.lean)
+│                  pairlist and output steps (now: Schedule.lean, DegreesOfFreedom.lean)
 ├── EnhancedSampling/  EDS, A-EDS
 └── Corrections/   Kastenholz–Hünenberger charging terms
 ```
@@ -81,6 +83,18 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
   `output_misses_longrange_iff` in `spec/NewenSpec/Refinement.lean`; exhaustive test
   `tests/schedule_spec.rs` (1 ≤ nsnb, ntwg ≤ 200, against a step-by-step simulation and
   Lean-generated vectors). 119/120 gromosXX references unchanged.
+- **Degrees of freedom (2026-10-18):** `thermo::dof::total_dof`, the integer core of
+  `newen-run::total_dof` (which still counts the constraints and converts to `f64`). Signed
+  `u64`/`i64` arithmetic: a non-physical input gives a negative count instead of a wrapped
+  `usize`. Meaning (`Molecule`, `internalDof`, `dof`; additivity `internalDof_append`,
+  identical molecules `internalDof_replicate`, physicality `dof_nonneg_iff`) in
+  `spec/NewenTheory/Dynamics/DegreesOfFreedom.lean`; model and bridge `totalDofModel_eq_dof`
+  (solute plus `k` solvent copies) in `spec/NewenSpec/Thermo/Dof.lean`; Aeneas refinement
+  `total_dof_eq` / `total_dof_eq_dof` in `spec/NewenSpec/Refinement.lean`, for
+  `3·n_atoms + solvent + solute + |ndfmin| ≤ i64::MAX`, and `total_dof_overflow` (a `3·n_atoms`
+  past `i64::MAX` fails, never returns); test `tests/dof_spec.rs` (molecule-by-molecule count,
+  128-bit arithmetic on large counts, Lean vectors `spec/vectors/dof.json`). Per-bath counting
+  (`newen-run::bath_dofs`) is not covered yet.
 - **NewenTheory (2026-10-17):** created as a second default library of the `spec/` Lake project,
   core Lean only (imports neither `NewenSpec` nor Aeneas); the pilot's meaning moved there with
   no change to any statement beyond its namespace. `SPEC.toml` names it in the `theory` field.
@@ -90,5 +104,6 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
 
 ## Key files
 `src/schedule.rs`, `tests/schedule_spec.rs`, `spec/NewenTheory/Dynamics/Schedule.lean`,
-`spec/NewenSpec/{Schedule,Refinement}.lean`, `spec/NewenSpec/Extracted/NewenLogic.lean`
+`spec/NewenSpec/{Schedule,Refinement}.lean`, `src/thermo/dof.rs`, `tests/dof_spec.rs`,
+`spec/NewenTheory/Dynamics/DegreesOfFreedom.lean`, `spec/NewenSpec/Thermo/Dof.lean`, `spec/NewenSpec/Extracted/NewenLogic.lean`
 (generated), `spec/scripts/extract.sh`, `spec/SPEC.toml`, `docs/src/verification/index.md`.
