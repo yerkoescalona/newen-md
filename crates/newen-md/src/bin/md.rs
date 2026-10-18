@@ -21,9 +21,10 @@ use newen::{
         energy::{EnergyWriter, VolumePressure},
         force::ForceWriter,
         free_energy::FreeEnergyWriter,
+        input::gamd_block::{GamdGroups, GamdStat},
         topology::{build_topology, read_topology_file},
         trajectory::TrajectoryWriter,
-        GamdBlock, GamdBoostWriter, GamdStatsWriter,
+        GamdBlock,
     },
     math::{truncoct_triclinic_rotmat, Vec3},
     validation::validate_energy,
@@ -298,6 +299,92 @@ fn volume_pressure(
         }
     }
     vp
+}
+
+/// This step's GaMD rows of the energy record (`None` without GaMD).
+fn gamd_rows(seq: &mut newen::algorithm::AlgorithmSequence) -> Option<Vec<[f64; 5]>> {
+    seq.find_mut::<newen_integrators::algorithms::Forcefield>()?
+        .gamd
+        .as_ref()
+        .map(|g| g.rows.clone())
+}
+
+/// gromosXX's GAMD set-up for a run with GAMD = 1: the `@gamd` groups (`read_special.cc:490-513`),
+/// the statistics a search continues from (`read_gamdstat`, `in_configuration.cc:1458-1507`) and
+/// `GAMD::init`. newen splits the force evaluation for one interaction group, so every
+/// interaction must be booked to the same one; the combinations whose terms it cannot yet split
+/// as gromosXX does are refused.
+fn gamd_setup(
+    block: &GamdBlock,
+    imd: &newen::io::imd::ImdParameters,
+    recipe: &newen_run::RunRecipe,
+    args: &MDArgs,
+    (num_atoms, num_solute): (usize, usize),
+) -> Result<newen_integrators::gamd::Gamd, String> {
+    use newen_integrators::gamd::{Gamd, GamdGroupStats, SearchMode};
+    let refuse = |what: &str| {
+        Err(format!(
+            "Gaussian accelerated MD (GAMD) together with {what} is not supported: newen \
+             cannot yet book those terms to the GaMD interaction groups as gromosXX does"
+        ))
+    };
+    if imd.ntg != 0 {
+        return refuse("a perturbation (PERTURBATION NTG = 1)");
+    }
+    if imd.nlrele != 1 {
+        return refuse(&format!(
+            "NONBONDED NLRELE = {} (only the reaction field, 1)",
+            imd.nlrele
+        ));
+    }
+    if !recipe.forcefield.terms.is_empty() {
+        return refuse("QM/ML terms");
+    }
+    let path = args
+        .gamd_file
+        .as_ref()
+        .ok_or("gaussian accelerated MD: no data file specified (use @gamd)")?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("gaussian accelerated MD: could not open {path}: {e}"))?;
+    let groups = GamdGroups::parse(&text, num_atoms, block.agroups, block.igroups)?;
+    let split = || {
+        "GAMD: the GAMDATOMS/GAMDGROUPS assignment books the interactions to more than one \
+         interaction group; newen applies GaMD only when every interaction belongs to one"
+            .to_string()
+    };
+    let group = groups.single_interaction_group().ok_or_else(split)?;
+    let excluded_group = groups.excluded_pair_group(num_solute).ok_or_else(split)?;
+    let n = block.n_interaction_groups();
+    let search = block.search_mode();
+    let mut warnings = Vec::new();
+    let mut stats = vec![GamdGroupStats::default(); n];
+    let mut stepsdone = 0;
+    if search != SearchMode::NoSearch {
+        let conf = std::fs::read_to_string(&args.conf_file)
+            .map_err(|e| format!("could not read {}: {e}", args.conf_file))?;
+        match GamdStat::from_configuration(&conf, n)? {
+            Some(stat) if !block.ntigamds => {
+                stepsdone = stat.stepsdone;
+                stats = stat
+                    .rows
+                    .into_iter()
+                    .map(GamdGroupStats::from_row)
+                    .collect();
+            },
+            Some(_) => warnings.push(
+                "Initial settings for GAMD from a previous search simulation found but not read! \
+                 This happended because NTIAEDSS = 1."
+                    .to_string(),
+            ),
+            None if !block.ntigamds => return Err("no GAMDSTAT block in configuration.".into()),
+            None => {},
+        }
+    }
+    let groups = (group as usize, excluded_group as usize);
+    let mut gamd = Gamd::new(block.settings(), groups, stats, stepsdone);
+    warnings.append(&mut gamd.warnings);
+    gamd.warnings = warnings;
+    Ok(gamd)
 }
 
 /// The scaling factor of every bath at the last step, from the run's thermostat (none without).
@@ -611,38 +698,29 @@ fn main() {
         println!();
     }
 
-    // Parse input file for the GAMD block
-    let gamd_block = {
-        log::debug!("Parsing input file for GAMD block: {}", md_args.input_file);
-        match GamdBlock::parse_file(&md_args.input_file) {
-            Ok(block) => block,
-            Err(e) => {
-                log::warn!("Failed to parse GAMD block: {}", e);
-                None
-            },
-        }
+    // The GAMD block (gromosXX `read_GAMD`), read in full whatever its GAMD switch says; the
+    // force field applies it (`Forcefield::gamd`, set up once the sequence is built).
+    let gamd_block = match imd.raw_blocks.get("GAMD").map(|l| GamdBlock::from_lines(l)) {
+        None => None,
+        Some(Ok(b)) => Some(b),
+        Some(Err(e)) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        },
     };
-
-    if let Some(ref block) = gamd_block {
+    if let Some(block) = gamd_block.as_ref().filter(|b| b.enabled) {
         println!();
         println!("GAMD Parameters detected:");
-        println!("  Search mode:  {:?}", block.search_mode);
-        println!("  Boost form:   {:?}", block.boost_form);
-        println!("  Threshold:    {:?}", block.threshold_type);
-        println!("  Sigma0 dih:   {:.2}", block.sigma0_dih);
-        println!("  Sigma0 tot:   {:.2}", block.sigma0_tot);
-        if let (Some(k), Some(e)) = (block.k_tot, block.e_tot) {
-            println!("  K_tot:        {:.6}", k);
-            println!("  E_tot:        {:.2}", e);
-        }
+        println!("  Search mode:  {:?}", block.search_mode());
+        println!("  Boost form:   {:?}", block.boost_form());
+        println!("  Threshold:    {:?}", block.threshold());
+        println!("  DIHSTD/TOTSTD {:.2} {:.2}", block.dihstd, block.totstd);
+        println!(
+            "  Groups:       {} atom, {} interaction",
+            block.agroups, block.igroups
+        );
         println!();
     }
-
-    // Create GAMD parameters if enabled
-    let mut gamd_params = gamd_block.as_ref().map(|block| {
-        log::info!("Creating GAMD parameters from input block");
-        block.to_parameters()
-    });
 
     // === 4. Build the algorithm sequence (newen-run: the one builder) ===
     println!("Setting up nonbonded interactions:");
@@ -678,6 +756,30 @@ fn main() {
     } = built;
     #[cfg(feature = "use-mpi")]
     mpi_run.install_reducer(&mut md_sequence);
+    if let Some(block) = gamd_block.as_ref().filter(|b| b.enabled) {
+        let atoms = (
+            prepared.topology.num_atoms(),
+            prepared.topology.num_solute_atoms(),
+        );
+        match gamd_setup(block, &imd, &recipe, &md_args, atoms) {
+            Ok(gamd) => {
+                for w in &gamd.warnings {
+                    println!("  WARNING: {}", w);
+                }
+                match md_sequence.find_mut::<newen_integrators::algorithms::Forcefield>() {
+                    Some(ff) => ff.gamd = Some(gamd),
+                    None => {
+                        eprintln!("Error: GAMD needs a force field in the algorithm sequence");
+                        process::exit(1);
+                    },
+                }
+            },
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            },
+        }
+    }
     for note in &diagnostics.notes {
         println!("  NOTE: {}", note);
     }
@@ -864,7 +966,14 @@ fn main() {
             .map(|w| w.with_layout(imd.num_temp_baths, topo.energy_groups.len()))
             .and_then(|w| w.with_provenance(&provenance))
         {
-            Ok(w) => Some(w),
+            Ok(mut w) => {
+                // gromosXX sizes the `# gamd` rows IGROUPS + 1 whenever it reads a GAMD block
+                // (`configuration.cc:422-444`), GAMD on or off
+                if let Some(b) = &gamd_block {
+                    w.set_gamd_rows(&vec![[0.0; 5]; b.n_interaction_groups()]);
+                }
+                Some(w)
+            },
             Err(e) => {
                 eprintln!("Error creating energy file: {}", e);
                 process::exit(1);
@@ -887,40 +996,6 @@ fn main() {
             Err(e) => {
                 eprintln!("Error creating force file: {}", e);
                 process::exit(1);
-            },
-        }
-    } else {
-        None
-    };
-
-    // Setup GaMD writers if enabled
-    let mut gamd_stats_writer = if writes_files && gamd_params.is_some() {
-        let stats_file = "gamd_stats.dat";
-        match GamdStatsWriter::new(stats_file, "newen GaMD Statistics") {
-            Ok(mut w) => {
-                w.set_write_interval(10); // Write every 10 steps
-                println!("  GaMD stats:   {}", stats_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create GaMD stats file: {}", e);
-                None
-            },
-        }
-    } else {
-        None
-    };
-
-    let mut gamd_boost_writer = if writes_files && gamd_params.is_some() {
-        let boost_file = "gamd_boost.dat";
-        match GamdBoostWriter::new(boost_file, "newen GaMD Boost Potential") {
-            Ok(w) => {
-                println!("  GaMD boost:   {}", boost_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create GaMD boost file: {}", e);
-                None
             },
         }
     } else {
@@ -1067,60 +1142,6 @@ fn main() {
             }
         }
 
-        // Apply GAMD boost if enabled
-        if let Some(ref mut gamd) = gamd_params {
-            let dihedral_energy = conf.current().energies.dihedral_total;
-            let total_potential = conf.current().energies.potential_total;
-
-            // Update GAMD statistics
-            gamd.update_statistics(dihedral_energy, total_potential);
-
-            // Update parameters if in GaMD search mode
-            if gamd.search_mode == newen::gamd::SearchMode::GamdSearch {
-                gamd.update_all_parameters();
-            }
-
-            // Apply boost potential
-            // For now, use simplified version with only total potential boost
-            // TODO: Separate dihedral forces for dual boost
-            let dihedral_forces = vec![Vec3::ZERO; topo.num_atoms()];
-            let other_forces: Vec<Vec3> = conf.current().force.clone();
-
-            let boost = gamd.apply_boost(
-                &mut conf,
-                dihedral_energy,
-                &dihedral_forces,
-                total_potential,
-                &other_forces,
-            );
-
-            // Add boost to potential energy
-            conf.current_mut().energies.potential_total += boost;
-
-            log::debug!(
-                "GAMD boost applied: ΔV={:.4}, V_new={:.4}",
-                boost,
-                conf.current().energies.potential_total
-            );
-
-            // Write GaMD statistics
-            if let Some(ref mut writer) = gamd_stats_writer {
-                if let Err(e) = writer.write_frame(step, dihedral_energy, total_potential, gamd) {
-                    log::warn!("Failed to write GaMD stats at step {}: {}", step, e);
-                }
-            }
-
-            // Write GaMD boost potential
-            if let Some(ref mut writer) = gamd_boost_writer {
-                // For now, assume boost is only from total potential
-                let boost_dih = 0.0;
-                let boost_pot = boost;
-                if let Err(e) = writer.write_frame(step, time, boost, boost_dih, boost_pot) {
-                    log::warn!("Failed to write GaMD boost at step {}: {}", step, e);
-                }
-            }
-        }
-
         // Validate energy
         // GROMOS convention: after the algorithm sequence, energies are in old()
         // (Forcefield wrote to current(), exchange_state moved it to old(),
@@ -1196,6 +1217,9 @@ fn main() {
             }
             if let (true, Some(ew)) = (due(last, nstener), ene_writer.as_mut()) {
                 let scales = thermostat_scales(&mut md_sequence);
+                if let Some(rows) = gamd_rows(&mut md_sequence) {
+                    ew.set_gamd_rows(&rows);
+                }
                 let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
                 let e = ew.write_energy(last, last_time, &conf.old().energies, &vp);
                 if let Err(e) = e {
@@ -1280,6 +1304,9 @@ fn main() {
         // last step is in the final configuration, not in the energy trajectory).
         if let (true, Some(ew)) = (due(step, nstener) && step < n_steps, &mut ene_writer) {
             let scales = thermostat_scales(&mut md_sequence);
+            if let Some(rows) = gamd_rows(&mut md_sequence) {
+                ew.set_gamd_rows(&rows);
+            }
             let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
             if let Err(e) = ew.write_energy(step, time, &conf.old().energies, &vp) {
                 eprintln!("Error writing energy: {}", e);
@@ -1366,25 +1393,6 @@ fn main() {
         }
     }
 
-    // Finalize GaMD writers if enabled
-    if let Some(ref mut writer) = gamd_stats_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize GaMD stats file: {}", e);
-            eprintln!("Error finalizing GaMD stats file: {}", e);
-        } else {
-            log::debug!("GaMD stats file finalized");
-        }
-    }
-
-    if let Some(ref mut writer) = gamd_boost_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize GaMD boost file: {}", e);
-            eprintln!("Error finalizing GaMD boost file: {}", e);
-        } else {
-            log::debug!("GaMD boost file finalized");
-        }
-    }
-
     // Finalize free-energy trajectory if enabled
     if let Some(ref mut fw) = free_energy_writer {
         if let Err(e) = fw.flush() {
@@ -1459,6 +1467,16 @@ fn main() {
         } else {
             None
         };
+        // gromosXX `out_configuration.cc:619-621`: a GaMD search adds its statistics (GAMDSTAT),
+        // what a run with NTIGAMDS = 0 continues from
+        let gamd_stat = md_sequence
+            .find_mut::<newen_integrators::algorithms::Forcefield>()
+            .and_then(|ff| ff.gamd.as_ref())
+            .filter(|g| g.settings.search != newen_integrators::gamd::SearchMode::NoSearch)
+            .map(|g| GamdStat {
+                stepsdone: g.stepsdone,
+                rows: g.stats.iter().map(|s| s.to_row()).collect(),
+            });
         let write = || -> Result<(), String> {
             let mut w = newen::io::g96::G96Writer::new(fin_path)?;
             w.write_title(&title)?;
@@ -1482,7 +1500,11 @@ fn main() {
             if let Some(s) = aeds_search {
                 w.write_aedssearch(s)?;
             }
-            w.close()
+            w.close()?;
+            if let Some(stat) = &gamd_stat {
+                stat.append_to(fin_path)?;
+            }
+            Ok(())
         };
         if let Err(e) = write() {
             eprintln!("Error writing final configuration: {}", e);

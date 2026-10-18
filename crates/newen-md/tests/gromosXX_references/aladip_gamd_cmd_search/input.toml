@@ -1,0 +1,27 @@
+# Reference for a GROMOS input style the original suite did not cover
+# (see crates/newen-md/tests/gromosXX_references/README-livecoms.md).
+# gromosXX v1.6.0, double precision, 72 atoms
+
+[system]
+name = "aladip_gamd_cmd_search"
+description = "aladip_gamd with SEARCH 1, NTIGAMDS 1: a cMD search from scratch, no boost"
+level = 5
+natoms = 72
+isolates = "GaMD cMD search: the dihedral-energy statistics and the GAMDSTAT block of the final configuration"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_gamd_cmd_search.in"
+gamd = "../aladip_gamd/aladip.gamd"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

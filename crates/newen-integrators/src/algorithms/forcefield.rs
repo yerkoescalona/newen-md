@@ -189,6 +189,12 @@ pub struct Forcefield {
     eds: Option<EdsNonbonded>,
     /// Scratch for the molecular-virial correction of every EDS end state.
     eds_virial_correction: Vec<[[f64; 3]; 3]>,
+    /// Gaussian accelerated MD (gromosXX's `GAMD` algorithm, run right after the force field,
+    /// `create_md_sequence.cc:143-146`); `None` without a GAMD block or with GAMD = 0.
+    pub gamd: Option<crate::gamd::Gamd>,
+    /// GaMD: the exclusion lists with only the solute's, and with none (built once), to take
+    /// the reaction-field excluded solute pairs apart.
+    gamd_exclusions: Option<[Vec<Vec<usize>>; 2]>,
 }
 
 /// The EDS part of the force field: the atoms with end states, their pairlist pairs and the
@@ -328,6 +334,8 @@ impl Forcefield {
             longrange_perturbed: Default::default(),
             eds: None,
             eds_virial_correction: Vec::new(),
+            gamd: None,
+            gamd_exclusions: None,
         }
     }
 
@@ -629,6 +637,28 @@ impl Algorithm for Forcefield {
         } else {
             newen_forces::bonded::ForceEnergy::new(n_atoms)
         };
+        // GaMD books the dihedral terms (proper, improper) and the potential terms (bonds,
+        // angles) apart (`dihedral_interaction.cc:173-192`, `harmonic_bond_interaction.cc:109-125`)
+        let gamd_bonded = self.gamd.is_some().then(|| {
+            let mut scratch = BondedGroupEnergies::default();
+            let mut term = |b: bool, a: bool, d: bool, i: bool| {
+                calculate_bonded_forces_ntf(
+                    topo,
+                    conf,
+                    &self.periodicity,
+                    self.use_quartic_bonds,
+                    self.covalent_form,
+                    b,
+                    a,
+                    d,
+                    i,
+                    &mut scratch,
+                )
+            };
+            let dihedral = term(false, false, self.ntf_dihedral, self.ntf_improper);
+            let potential = term(self.ntf_bond, self.ntf_angle, false, false);
+            (dihedral, potential)
+        });
         if let Some(t) = t_bonded {
             self.timing.bonded += t.elapsed();
         }
@@ -2036,6 +2066,90 @@ impl Algorithm for Forcefield {
             );
         }
 
+        // --- 6. GaMD (gromosXX `GAMD::apply`, after the whole force field): the potential terms
+        // are the bonds and angles and every unperturbed nonbonded pair term, their virial only
+        // with a virial (`nonbonded_set.cc:431-441`); the bonded virials always. The
+        // reaction-field excluded solute pairs go to `excluded_group`.
+        if let (Some(gamd), Some((dihedral, potential))) = (self.gamd.as_ref(), gamd_bonded) {
+            let (group, excluded_group) = (gamd.group, gamd.excluded_group);
+            let nb = &self.nonbonded_storage;
+            let nb_virial = if need_virial {
+                nb.virial
+            } else {
+                [[0.0; 3]; 3]
+            };
+            let mut f_potential = potential.forces;
+            for (f, g) in f_potential.iter_mut().zip(&nb.forces) {
+                *f += *g;
+            }
+            let mut vir_potential = potential.virial;
+            add_virial(&mut vir_potential, &nb_virial, 1.0);
+            let mut v_potential =
+                potential.bond_energy + potential.angle_energy + (nb.e_lj + nb.e_crf);
+            let mut terms = vec![crate::gamd::GamdGroupTerms::default(); gamd.n_groups()];
+            if self.rf_excluded && excluded_group != group {
+                let n_solute = topo.num_solute_atoms();
+                let lists = self.gamd_exclusions.get_or_insert_with(|| {
+                    let solute_only = (0..n_atoms)
+                        .map(|i| {
+                            if i < n_solute {
+                                topo.exclusions.get(i).cloned().unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            }
+                        })
+                        .collect();
+                    [solute_only, vec![Vec::new(); n_atoms]]
+                });
+                let run = |exclusions: &[Vec<usize>]| {
+                    let mut st = ForceStorage::new(n_atoms);
+                    rf_excluded_interactions(
+                        &self.charges,
+                        exclusions,
+                        &conf.current().pos,
+                        &self.crf_params,
+                        &self.periodicity,
+                        self.four_pi_eps_i,
+                        &mut st,
+                        n_solute,
+                        EnergyGroups::single(),
+                    );
+                    st
+                };
+                // self term and solute pairs, minus the self term
+                let (with_pairs, self_only) = (run(&lists[0]), run(&lists[1]));
+                let mut excl = crate::gamd::GamdGroupTerms {
+                    v_potential: with_pairs.e_crf - self_only.e_crf,
+                    f_potential: with_pairs.forces,
+                    ..Default::default()
+                };
+                for (i, f) in excl.f_potential.iter_mut().enumerate() {
+                    *f -= self_only.forces[i];
+                    f_potential[i] -= *f;
+                }
+                v_potential -= excl.v_potential;
+                if need_virial {
+                    let mut v = with_pairs.virial;
+                    add_virial(&mut v, &self_only.virial, -1.0);
+                    add_virial(&mut vir_potential, &v, -1.0);
+                    excl.vir_potential = virial_mat3(&v);
+                }
+                terms[excluded_group] = excl;
+            }
+            terms[group] = crate::gamd::GamdGroupTerms {
+                v_dihedral: dihedral.dihedral_energy + dihedral.improper_energy,
+                v_potential,
+                f_dihedral: dihedral.forces,
+                f_potential,
+                vir_dihedral: virial_mat3(&dihedral.virial),
+                vir_potential: virial_mat3(&vir_potential),
+            };
+            let state = conf.current_mut();
+            let gamd = self.gamd.as_mut().expect("checked above");
+            let dv = gamd.apply(sim.step, &terms, &mut state.force, &mut state.virial_tensor);
+            state.energies.special_total += dv;
+        }
+
         Ok(())
     }
 
@@ -2150,6 +2264,15 @@ fn build_cg_groups_serial(topo: &Topology, pairs: &[(u32, u32)], offset: u32) ->
 
 /// `dst += sign · src`, element by element.
 #[inline]
+/// A `[a][b]` virial as `State::virial_tensor` holds it (element (a, b) = `v[a][b]`).
+fn virial_mat3(v: &[[f64; 3]; 3]) -> Mat3 {
+    Mat3::from_cols(
+        Vec3::new(v[0][0], v[1][0], v[2][0]),
+        Vec3::new(v[0][1], v[1][1], v[2][1]),
+        Vec3::new(v[0][2], v[1][2], v[2][2]),
+    )
+}
+
 fn add_virial(dst: &mut [[f64; 3]; 3], src: &[[f64; 3]; 3], sign: f64) {
     for (d, s) in dst.iter_mut().flatten().zip(src.iter().flatten()) {
         *d += sign * s;

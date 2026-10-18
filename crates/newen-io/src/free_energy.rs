@@ -269,7 +269,7 @@ impl FreeEnergyWriter {
         writeln!(w, "FREEENERDERIVS03")?;
         writeln!(w, "# lambda")?;
         writeln!(w, "{:>18.9e}", lambda)?;
-        write_energyred_body(w, derivatives, 0)?;
+        write_energyred_body(w, derivatives, &[])?;
         writeln!(w, "END")?;
         Ok(())
     }
