@@ -344,6 +344,8 @@ REFERENCE_SYSTEMS = [
     # Barostat with SHAKE (constraint virial) and ROTTRANS degrees of freedom (1.8)
     "aladip_solvated_npt_shake",
     "aladip_multibath_rottrans",
+    # NDFMIN over two baths with integer degrees of freedom
+    "aladip_vacuum_multibath_ndfmin3",
     # Extended TI (PRECALCLAM) and the reaction-field constant from RCRF / EPSRF = 0 (1.8)
     "ch4_water_fep_precalc",
     "meoh_water_fep_precalc",

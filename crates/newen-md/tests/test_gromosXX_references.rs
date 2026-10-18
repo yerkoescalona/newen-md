@@ -1237,6 +1237,12 @@ ref_test!(aladip_multibath_swapped, "aladip_multibath_swapped");
 // ROTTRANS on the solute of the two-bath system: 3 COM and 3 internal-rotational degrees of
 // freedom leave the solute's baths (gromosXX `topology.cc:1370-1402`).
 ref_test!(aladip_multibath_rottrans, "aladip_multibath_rottrans");
+// NDFMIN 3 over two baths whose degrees of freedom are integers (12, 13): gromosXX spreads it
+// through an `int` total (`multibath.cc:145-152`), exact here; half-integer baths are D40.
+ref_test!(
+    aladip_vacuum_multibath_ndfmin3,
+    "aladip_vacuum_multibath_ndfmin3"
+);
 // Three energy groups: harmonic bonds/angles and dihedrals booked by first atom across groups.
 ref_test!(
     aladip_harmonic_covalent_groups,
