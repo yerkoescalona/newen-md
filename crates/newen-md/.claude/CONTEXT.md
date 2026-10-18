@@ -13,11 +13,10 @@ matching gromosXX to reference tolerances.
 
 ## Status
 - **Nosé–Hoover restart (0.0.69, D41):** the final configuration carries NHCVARIABLES (the ζ of
-  every bath, `G96Writer::write_nhcvariables`, from `Configuration::nose_hoover`) for a chain, and
-  for plain Nosé–Hoover unless `ensemble.thermostat.nh_restart = "gromosxx"`. References
-  `water_216_nvt_{nosehoover,nhc}_cont` (native, switch on) and `_cont_fixed` (D41 patch);
-  `water_216_nvt_nosehoover` runs with the switch (gromosXX writes no block there);
-  `tests/nh_restart.rs`: 100 + 100 steps follow 200 as closely as weak coupling does.
+  every bath, `G96Writer::write_nhcvariables`, from `Configuration::nose_hoover`) for a chain and
+  for plain Nosé–Hoover. References `water_216_nvt_{nosehoover,nhc}_cont_fixed` (D41 patch; the
+  released-binary reproducer lives in gromos-divergences); `tests/nh_restart.rs`: 100 + 100 steps
+  follow 200 as closely as weak coupling does.
 - **Output times and schedules (0.0.68):** every written time is T + step·DT
   (`SimulationState::time_of`, STEP T from the recipe); forces follow NTWF; a converged
   minimisation repeats the previous step's force, energy and dH/dλ frame on that step's
@@ -43,7 +42,7 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **129 reference tests registered, all passing** in `tests/test_gromosXX_references.rs`
+- **118 reference tests registered, all passing** in `tests/test_gromosXX_references.rs`
   (GaMD: `aladip_gamd`, `_dual`, `_cmd_search`; the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
@@ -79,10 +78,10 @@ matching gromosXX to reference tolerances.
 - **A-EDS through the recipe (1.8, 0.0.60).** The `AEDS` block runs (FORMS 1-6); `md` writes the
   search state as the final configuration's `AEDSSEARCH` block (FORMS 2-6) and a run with
   NTIAEDSS = 0 continues it. References `aladip_vacuum_aeds_*`; `tests/aeds_runs.rs` checks a
-  two-job search against one job and the refused inputs. Since 0.0.63 the defaults correct D16,
-  D25, D32 (`aladip_vacuum_aeds_*_fixed`, the patched oracle); the native search references set
-  the reproducing `[recipe_overrides]`; `aeds_runs.rs` also checks that a frame's V_mix/V_R*
-  follow from its own columns and that the E_min target is a sampled state.
+  two-job search against one job and the refused inputs. Since 0.0.63 D16, D25, D32 are
+  corrected; the searches are pinned by `aladip_vacuum_aeds_*_fixed` (the patched oracle; the
+  released-binary reproducers live in gromos-divergences); `aeds_runs.rs` also checks that a
+  frame's V_mix/V_R* follow from its own columns and that the E_min target is a sampled state.
 
 ## Key files
 ```

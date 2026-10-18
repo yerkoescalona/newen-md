@@ -29,12 +29,11 @@ RunError                                                                 -> ever
 ## Status
 - **Nosé–Hoover restart (0.0.69, D41):** `prepare_system` parses the configuration's NHCVARIABLES
   into `Configuration::nose_hoover` for a Nosé–Hoover run with NTINHT = 0 (with NTINHT = 1:
-  `PrepareNote::NoseHooverVariablesIgnored`); the plan's `Thermostat` carries `read_variables`
-  and `nh_restart` (`Thermostat::nh_restart`, `"intended"` by default, `"gromosxx"` reproduces
-  D41; no `.imd` token, `md @recipe_set ensemble.thermostat.nh_restart=gromosxx` or
-  `Recipe.update`). `check_nh_restart` (`plan.rs`, both build paths) refuses NTINHT = 1 without
-  a chain under `"gromosxx"` (`check_parameter.cc:92`). The legacy-builder parity test skips a
-  run that restores NHCVARIABLES (the frozen builder never did).
+  `PrepareNote::NoseHooverVariablesIgnored`; without a block,
+  `PrepareNote::NoseHooverVariablesMissing`, a warning); the plan's `Thermostat` carries
+  `read_variables`. Every link of every bath is restored, plain Nosé–Hoover included. The
+  legacy-builder parity test skips a run that restores NHCVARIABLES (the frozen builder never
+  did).
 - **gromosXX's refusals (0.0.68):** `check_start_time` (STEP T outside ">=0", and T = −1, the
   time from the TIMESTEP block, which newen does not read), `check_pairlist` (grid pairlist with
   NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a
@@ -58,10 +57,6 @@ RunError                                                                 -> ever
   the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the
   configuration's `AEDSSEARCH` block into `Configuration::aeds` (required; with NTIAEDSS = 1
   ignored, `PrepareNote::AedsSearchIgnored`). `Coordinates::aedssearch` carries the block's lines.
-  Since 0.0.63 `Aeds::{energy_columns, prevalence, target_state}` (`"intended"` by default,
-  `"gromosxx-post-update"` / `"gromosxx-plain-exp"` / `"gromosxx-state1-default"` reproduce D16,
-  D25, D32; no `.imd` token, set by `md @recipe_set` or `Recipe.update`) pass through
-  `AedsPlan` to `AedsParams`.
 - **Net charge of a perturbation (1.8, 0.0.59):** `prepare_system` notes the solute's net
   charge in state A and B (`PrepareNote::PerturbationNetCharge`) on every perturbed run and
   `NetChargeChanged` when ΔQ ≠ 0 under a reaction field (NLRELE −1/1/4): a warning, no refusal.

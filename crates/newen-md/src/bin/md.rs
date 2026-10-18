@@ -109,7 +109,7 @@ fn print_usage() {
     eprintln!("  @develop    Run untested development code");
     eprintln!("  @dump       Print the run recipe and algorithm plan (JSON) and exit");
     eprintln!("  @recipe_set key=value  Set a recipe field no .imd block carries (repeatable),");
-    eprintln!("              e.g. perturbation.atom_pair_kernel=gromosxx-shifted");
+    eprintln!("              e.g. execution.parallel=serial");
     eprintln!();
     eprintln!("All simulation parameters (timestep, cutoffs, thermostat, etc.)");
     eprintln!("are specified in the @input file, following GROMOS conventions.");
@@ -648,7 +648,7 @@ fn main() {
             PrepareNote::NoseHooverVariablesIgnored => {
                 println!("  WARNING: Nose-Hoover-Chains variables found but not read (NTINHT = 1)")
             },
-            // reported once the recipe is built: it depends on `nh_restart`
+            // reported once the recipe is built (`nose_hoover_missing_warning`)
             PrepareNote::NoseHooverVariablesMissing => {},
             PrepareNote::LambdaOutOfRange { lambda } => {
                 log::warn!("{}", newen_run::lambda_warning(None, *lambda))
@@ -1445,20 +1445,19 @@ fn main() {
             .as_ref()
             .filter(|a| a.enabled && a.form != 1)
             .and(conf.aeds.as_ref());
-        // gromosXX `out_configuration.cc:606-607`: the Nosé–Hoover variables (NHCVARIABLES), what
-        // a run with NTINHT = 0 continues from; for plain Nosé–Hoover only under the intended
-        // `nh_restart` (gromosXX writes them for chains only, D41)
+        // the Nosé–Hoover variables (NHCVARIABLES), what a run with NTINHT = 0 continues from;
+        // plain Nosé–Hoover included (D41)
         let nose_hoover = recipe.ensemble.thermostat.as_ref().and_then(|t| {
             let nhc = match t.algorithm {
                 newen_run::recipe::ThermostatAlgorithm::Berendsen => return None,
                 newen_run::recipe::ThermostatAlgorithm::NoseHoover => 1,
                 newen_run::recipe::ThermostatAlgorithm::NoseHooverChain(n) => n.max(2),
             };
-            t.nh_restart.writes(nhc).then(|| {
+            Some(
                 conf.nose_hoover
                     .clone()
-                    .unwrap_or_else(|| vec![vec![0.0; nhc]; t.baths.len().max(1)])
-            })
+                    .unwrap_or_else(|| vec![vec![0.0; nhc]; t.baths.len().max(1)]),
+            )
         });
         let disres_averages = if imd.ntdir < 0 {
             md_sequence

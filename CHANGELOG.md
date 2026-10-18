@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.70] (2026-10-18)
+
+### Changed: one behaviour per feature
+
+newen no longer carries options that reproduce known gromosXX defects. A defect is corrected in
+newen and gated on gromosXX with that defect patched (`tests/gromosXX_references/patches/`); the
+released-binary reproducer lives in gromos-divergences. The rule is in `.claude/porting.md`
+("One behaviour per feature") and is prime directive 5 in `.claude/overview.md`. Each switch
+doubled the behaviours the code could have, and agents copied the pattern from one defect to the
+next.
+
+### Removed (breaking)
+
+- **`ensemble.thermostat.nh_restart`** (D41). Every Nosé–Hoover run writes `NHCVARIABLES`, plain
+  NH included, and NTINHT = 0 restores every link. `NhRestart` and `check_nh_restart` are gone.
+- **`perturbation.atom_pair_kernel`** (D1). `AtomPairKernel` and the shifted kernel are gone;
+  PERTATOMPAIR pairs with a perturbed atom always use the intended kernel.
+- **`aeds.energy_columns`** (D16), **`aeds.prevalence`** (D25), **`aeds.target_state`** (D32).
+  `AedsColumns`, `AedsPrevalence` and `AedsTarget` are gone: A-EDS writes the parameters the
+  frame's V_R* used, sums FORMS 5/6 prevalences as a log-sum-exp and takes the E_min target
+  among the states visited more than once.
+- A saved recipe or plan that still sets one of these keys is rejected (unknown field). Recipes
+  that never set them are unchanged.
+
+### References
+
+- Removed the eleven released-binary references that pinned a defect under a switch:
+  `water_216_nvt_nosehoover_cont`, `water_216_nvt_nhc_cont`, `aladip_vacuum_fep_pairpert_precalc`
+  and `aladip_vacuum_aeds_{f2,f4,f5,f6,f6_ovf,sigma0,cont1,cont2}`. Each has a `_fixed` twin
+  from the patched binary, which stays; the tests that read their `.in` files now read the twin's.
+- `water_216_nvt_nosehoover` starts fresh (NTINHT 1, it was 0 with no block to read) and is
+  regenerated with the D41-patched binary: energies and trajectory byte-identical, `final.conf`
+  gains plain NH's `NHCVARIABLES`.
+- 118 references, all passing.
+
+### Tests
+
+- Removed the tests that only exercised a gromosXX mode (the shifted pair kernel, the
+  gromosXX NH restart, six released A-EDS replays, the two recipe-path tests of the switches);
+  the others keep the intended case. The D15 refusal (zero-variance E_min target) is now pinned
+  by its unit test only: the `md` input that reached it needed D32's never-visited target.
+- `RunRecipe::set` keeps a test of its own (`set_takes_a_dotted_path`); `[recipe_overrides]`
+  and `md @recipe_set` stay, with no reference using them now.
+
 ## [0.0.69] (2026-10-18)
 
 ### Fixed (GaMD)

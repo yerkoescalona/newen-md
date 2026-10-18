@@ -368,8 +368,9 @@ mod tests {
         std::fs::remove_file(path).ok();
     }
 
-    /// The block gromosXX wrote after 100 steps of a 3-link chain (`water_216_nvt_nhc_cont`'s
-    /// start configuration), byte for byte, and read back through the coordinate parser.
+    /// The block gromosXX wrote after 100 steps of a 3-link chain (the start configuration of
+    /// `water_216_nvt_nhc_cont_fixed`), byte for byte, and read back through the coordinate
+    /// parser.
     #[test]
     fn nhcvariables_are_written_as_gromosxx_does_and_read_back() {
         let block = "NHCVARIABLES\n    0.883220231   20.087328305   72.553842985\nEND\n";

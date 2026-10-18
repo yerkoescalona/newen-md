@@ -1176,24 +1176,6 @@ pub fn rf_soft_interaction(
     (force, e_rf, de_rf)
 }
 
-/// How [`perturbed_atom_pair_interactions`] computes a normal or 1-4 state of a `PERTATOMPAIR`
-/// pair with a perturbed atom (1.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "kebab-case")
-)]
-pub enum AtomPairKernel {
-    /// The soft-core kernel with its outputs in their own slots, Coulomb scaling 1 for a normal
-    /// and the 1-4 scaling for a 1-4 state: what `perturbed_nonbonded_pair.cc:469, 677, 992,
-    /// 1200` intend.
-    #[default]
-    Intended,
-    /// gromosXX 247c95c4 as it runs: the kernel's outputs shifted by one slot (`atom_pair_state`).
-    GromosxxShifted,
-}
-
 /// The `PERTATOMPAIR` pairs (gromosXX `Perturbed_Nonbonded_Pair`,
 /// `perturbed_nonbonded_pair.cc:118-1612`). [`Topology::apply_perturbation`] took them out of
 /// the exclusion and 1-4 lists and off the pairlist, so this is the only place they are
@@ -1204,8 +1186,7 @@ pub enum AtomPairKernel {
 /// The force, the energies and the dH/dλ go to `out`; with more than one energy group also to
 /// cell `[eg(i)][eg(j)]` of `sink` (`:1583-1611`); with `precalc` the pair's ext energies at
 /// every λ_k (`:343-365, 410-420, 479-525, 600-612, 685-731, 803-815` and the B mirrors).
-/// `kernel` selects the normal and 1-4 states of pairs with a perturbed atom; `coulomb_scaling`
-/// is the 1-4 Coulomb scaling the [`AtomPairKernel::Intended`] kernel gives a 1-4 state.
+/// `coulomb_scaling` is the 1-4 Coulomb scaling of a 1-4 state with a perturbed atom.
 ///
 /// [`Topology::apply_perturbation`]: newen_core::Topology::apply_perturbation
 pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
@@ -1220,7 +1201,6 @@ pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
     bc: &BC,
     four_pi_eps_i: f64,
     rf_excluded: bool,
-    kernel: AtomPairKernel,
     coulomb_scaling: f64,
     out: &mut PertNBCorrection,
     egroups: EnergyGroups<'_>,
@@ -1229,32 +1209,24 @@ pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
 ) {
     let mut none = PrecalcNonbonded::default();
     let pc = precalc.unwrap_or(&mut none);
-    macro_rules! run {
-        ($shifted:literal) => {
-            with_groups!(egroups, G => atom_pair_impl::<BC, G, $shifted>(
-                atom_pairs,
-                pos,
-                pert,
-                charges,
-                iac,
-                lj,
-                crf,
-                lps,
-                bc,
-                four_pi_eps_i,
-                rf_excluded,
-                coulomb_scaling,
-                out,
-                &egroups,
-                sink,
-                pc,
-            ))
-        };
-    }
-    match kernel {
-        AtomPairKernel::Intended => run!(false),
-        AtomPairKernel::GromosxxShifted => run!(true),
-    }
+    with_groups!(egroups, G => atom_pair_impl::<BC, G>(
+        atom_pairs,
+        pos,
+        pert,
+        charges,
+        iac,
+        lj,
+        crf,
+        lps,
+        bc,
+        four_pi_eps_i,
+        rf_excluded,
+        coulomb_scaling,
+        out,
+        &egroups,
+        sink,
+        pc,
+    ))
 }
 
 /// The parameters of one end state of a perturbed atom pair.
@@ -1269,10 +1241,9 @@ struct PairState {
 /// One end state of a `PERTATOMPAIR` pair — the body of gromosXX's `switch (A_type)` /
 /// `switch (B_type)` for `lj_crf_func` (`perturbed_nonbonded_pair.cc:328-868`, `:875-1414`).
 /// Returns `[force, e_lj, e_crf, de_lj, de_crf]`, the force a scalar along `r`, already
-/// λ-weighted. `SHIFTED` selects [`AtomPairKernel::GromosxxShifted`] for the normal and 1-4
-/// states with a perturbed atom.
+/// λ-weighted.
 #[inline]
-fn atom_pair_state<const SHIFTED: bool>(
+fn atom_pair_state(
     s: &PairState,
     perturbed: bool,
     r: Vec3,
@@ -1359,55 +1330,28 @@ fn atom_pair_state<const SHIFTED: bool>(
                     four_pi_eps_i,
                 );
             }
-            if SHIFTED {
-                // gromosXX defect, reproduced on request (1.8): perturbed_nonbonded_pair.cc:469,
-                // 677, 992, 1200 pass the outputs of an older `eds_pert_lj_crf_interaction(…,
-                // f1, f6, f12, e_lj, e_crf, de_lj, de_crf)`, shifted by one slot against today's
-                // signature (`…, force, e_lj, e_crf, de_lj, de_crf, eps, coulomb_scaling`,
-                // perturbed_nonbonded_term.h:65-72): the zero `X_de_lj` and `X_de_crf` become
-                // `eps` and `coulomb_scaling` = 0 (no 1/r Coulomb), the state's force is
-                // (force + e_lj + e_crf)·r, its energies are the kernel's dH/dλ and its dH/dλ
-                // is 0.
-                let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
-                    r,
-                    a_lj.0,
-                    a_lj.1,
-                    b_lj.0,
-                    b_lj.1,
-                    a_q,
-                    b_q,
-                    alpha_lj,
-                    alpha_crf,
-                    lp,
-                    crf,
-                    four_pi_eps_i,
-                    0.0,
-                );
-                [f + e_lj + e_crf, de_lj, de_crf, 0.0, 0.0]
-            } else {
-                // the outputs in their own slots, Coulomb scaling 1 for a normal state and the
-                // 1-4 one for a 1-4 state (perturbed_nonbonded_innerloop.cc:2102)
-                let scaling = match kind {
-                    PairInteraction::OneFour => coulomb_scaling,
-                    _ => 1.0,
-                };
-                let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
-                    r,
-                    a_lj.0,
-                    a_lj.1,
-                    b_lj.0,
-                    b_lj.1,
-                    a_q,
-                    b_q,
-                    alpha_lj,
-                    alpha_crf,
-                    lp,
-                    crf,
-                    four_pi_eps_i,
-                    scaling,
-                );
-                [f, e_lj, e_crf, de_lj, de_crf]
-            }
+            // the outputs in their own slots (D1), Coulomb scaling 1 for a normal state and the
+            // 1-4 one for a 1-4 state (perturbed_nonbonded_innerloop.cc:2102)
+            let scaling = match kind {
+                PairInteraction::OneFour => coulomb_scaling,
+                _ => 1.0,
+            };
+            let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
+                r,
+                a_lj.0,
+                a_lj.1,
+                b_lj.0,
+                b_lj.1,
+                a_q,
+                b_q,
+                alpha_lj,
+                alpha_crf,
+                lp,
+                crf,
+                four_pi_eps_i,
+                scaling,
+            );
+            [f, e_lj, e_crf, de_lj, de_crf]
         },
         (kind, false) => {
             // pair.cc:582-612, 788-815, 1105-1131, 1319-1345
@@ -1431,7 +1375,7 @@ fn atom_pair_state<const SHIFTED: bool>(
     }
 }
 
-fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool, const SHIFTED: bool>(
+fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool>(
     atom_pairs: &[PerturbedAtomPair],
     pos: &[Vec3],
     pert: &[Option<PertAtomInfo>],
@@ -1474,7 +1418,7 @@ fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool, const SHIFTED: bool
 
         let r = bc.nearest_image(pos[i], pos[j]);
         let state = |s: PairState, precalc: &mut PrecalcNonbonded| {
-            atom_pair_state::<SHIFTED>(
+            atom_pair_state(
                 &s,
                 perturbed,
                 r,
@@ -1727,7 +1671,6 @@ mod tests {
     }
 
     fn one_pair(
-        kernel: AtomPairKernel,
         types: (PairInteraction, PairInteraction),
         pos0: Vec3,
         lam: f64,
@@ -1769,7 +1712,6 @@ mod tests {
             &newen_core::math::Vacuum,
             newen_core::units::four_pi_eps_i,
             true,
-            kernel,
             coulomb_scaling,
             &mut out,
             EnergyGroups::single(),
@@ -1839,7 +1781,7 @@ mod tests {
             ),
         ];
         for (types, lam, c6, c12, q0) in cases {
-            let got = one_pair(AtomPairKernel::Intended, types, PAIR_POS, lam, 1, 1.0);
+            let got = one_pair(types, PAIR_POS, lam, 1, 1.0);
             let (f, e_lj, e_crf) = lj_crf_interaction(PAIR_POS, c6, c12, q0 * PAIR_Q.2 * fpe, &crf);
             let want = PAIR_POS * f;
             let tag = format!("{types:?} at λ = {lam}");
@@ -1879,9 +1821,7 @@ mod tests {
             for scaling in [1.0, 0.5] {
                 for n in [1, 2] {
                     for lam in [0.25, 0.5, 0.75] {
-                        let run = |p: Vec3, l: f64| {
-                            one_pair(AtomPairKernel::Intended, types, p, l, n, scaling)
-                        };
+                        let run = |p: Vec3, l: f64| one_pair(types, p, l, n, scaling);
                         let tag = format!("{types:?} scaling {scaling} n {n} λ {lam}");
                         let at = run(PAIR_POS, lam);
                         let h = 1e-6;
@@ -1906,31 +1846,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The switch selects the reproduced defect: a normal state then books no dH/dλ and other
-    /// energies.
-    #[test]
-    fn shifted_atom_pair_kernel_differs_from_the_intended_one() {
-        use PairInteraction::{Normal, OneFour};
-        let i = one_pair(
-            AtomPairKernel::Intended,
-            (Normal, OneFour),
-            PAIR_POS,
-            0.5,
-            1,
-            1.0,
-        );
-        let s = one_pair(
-            AtomPairKernel::GromosxxShifted,
-            (Normal, OneFour),
-            PAIR_POS,
-            0.5,
-            1,
-            1.0,
-        );
-        assert_eq!(s.dhdl, 0.0);
-        assert!(i.dhdl != 0.0 && (i.e_crf - s.e_crf).abs() > 1.0);
     }
 
     #[test]

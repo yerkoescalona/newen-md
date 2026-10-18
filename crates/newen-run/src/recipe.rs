@@ -20,9 +20,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use newen_core::lambdas::InteractionLambda;
-pub use newen_forces::nonbonded::AtomPairKernel;
-pub use newen_integrators::algorithms::NhRestart;
-pub use newen_integrators::eds::{AedsColumns, AedsPrevalence, AedsTarget};
 use newen_io::imd::{
     AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
     PrecalcLamBlock, PressureParameters, TempBathParameters,
@@ -460,13 +457,6 @@ pub struct Thermostat {
     /// DOFSET lines: [LAST, COM-BATH, IR-BATH]; empty = one set over all atoms.
     #[serde(default)]
     pub dof_sets: Vec<[usize; 3]>,
-    /// The Nosé–Hoover variables of a continued run (`NHCVARIABLES`, read when NTINHT = 0):
-    /// `"intended"` (default), every variable written and restored, plain Nosé–Hoover included,
-    /// or `"gromosxx"`, gromosXX 247c95c4's: none for plain Nosé–Hoover, only a chain's first
-    /// link restored (`out_configuration.cc:606`, `in_configuration.cc:1156, 3444`; D41).
-    /// No `.imd` block.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub nh_restart: NhRestart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -561,15 +551,6 @@ pub struct Perturbation {
     /// PRECALCLAM block: energies at `nr_lambdas` extra λ points (extended TI); `None` = absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precalclam: Option<PrecalcLam>,
-    /// The kernel of the normal and 1-4 states of `PERTATOMPAIR` pairs with a perturbed atom:
-    /// `"intended"` (default) or `"gromosxx-shifted"`, gromosXX 247c95c4's arguments shifted by
-    /// one slot (`perturbed_nonbonded_pair.cc:469, 677, 992, 1200`; 1.8). No `.imd` block.
-    #[serde(default, skip_serializing_if = "is_intended")]
-    pub atom_pair_kernel: AtomPairKernel,
-}
-
-fn is_intended(k: &AtomPairKernel) -> bool {
-    *k == AtomPairKernel::Intended
 }
 
 /// The `PRECALCLAM` block: the energies of every perturbed interaction (and their λ
@@ -792,25 +773,6 @@ pub struct Aeds {
     /// BSTEPS: memory time (steps) at the end of each run.
     #[serde(default)]
     pub bsteps: u32,
-    /// The E_max, E_min and offsets the energy frames carry: `"intended"` (default), the ones
-    /// the frame's V_mix and V_R* used, or `"gromosxx-post-update"`, gromosXX 247c95c4's values
-    /// after the search update (`eds.cc:368-372`; 1.8 D16). No `.imd` block.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub energy_columns: AedsColumns,
-    /// The FORM 5/6 prevalences: `"intended"` (default), a log-sum-exp, or
-    /// `"gromosxx-plain-exp"`, gromosXX 247c95c4's plain exponentials, NaN once one overflows
-    /// (`eds.cc:339-343`; 1.8 D25). No `.imd` block.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub prevalence: AedsPrevalence,
-    /// The state whose mean and σ set E_min: `"intended"` (default), the lowest mean among the
-    /// states visited more than once, or `"gromosxx-state1-default"`, gromosXX 247c95c4's
-    /// state 1 whatever its visits (`eds.cc:252-261`; 1.8 D32). No `.imd` block.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub target_state: AedsTarget,
-}
-
-fn is_default<T: Default + PartialEq>(v: &T) -> bool {
-    *v == T::default()
 }
 
 impl Aeds {
@@ -828,9 +790,6 @@ impl Aeds {
             bmax: b.bmax,
             asteps: b.asteps,
             bsteps: b.bsteps,
-            energy_columns: AedsColumns::default(),
-            prevalence: AedsPrevalence::default(),
-            target_state: AedsTarget::default(),
         }
     }
 
@@ -1091,7 +1050,6 @@ impl RunRecipe {
                     algorithm,
                     baths,
                     dof_sets: b.dof_sets.clone(),
-                    nh_restart: NhRestart::default(),
                 })
             },
         };
@@ -1265,7 +1223,6 @@ impl RunRecipe {
                     min_lambda: b.min_lambda,
                     max_lambda: b.max_lambda,
                 }),
-                atom_pair_kernel: AtomPairKernel::default(),
             },
             eds: imd.eds.as_ref().map(Eds::from_block),
             aeds: imd.aeds.as_ref().map(Aeds::from_block),
@@ -1497,7 +1454,7 @@ impl RunRecipe {
         serde_json::from_str(text).map_err(|e| RunError::Serde(e.to_string()))
     }
 
-    /// Set one field by its dotted path (`perturbation.atom_pair_kernel`), for the fields no
+    /// Set one field by its dotted path (`execution.parallel`), for the fields no
     /// `.imd` block carries (`md @recipe_set`). `value` is read as JSON, or as a string when it
     /// is not JSON; a path or value the recipe does not accept is an error.
     pub fn set(&mut self, key: &str, value: &str) -> Result<(), RunError> {

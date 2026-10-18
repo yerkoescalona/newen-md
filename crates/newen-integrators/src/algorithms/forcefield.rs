@@ -26,10 +26,9 @@ use newen_forces::nonbonded::{
     one_four_interaction_loop, perturbed_atom_pair_interactions, perturbed_excluded_correction,
     perturbed_one_four_correction, perturbed_pairlist_correction, perturbed_self_energy_correction,
     rf_excluded_interactions, solvent_innerloop, solvent_innerloop_novirial,
-    solvent_innerloop_parallel, solvent_innerloop_parallel_novirial, split_eds_pairs,
-    AtomPairKernel, CGPairGroup, CRFParameters, EdsAtoms, EdsStorage, EnergyGroups, ForceStorage,
-    GroupEnergies, LJParamMatrix, LJParameters, PertAtomInfo, PertNBCorrection,
-    PerturbedLambdaParams, PrecalcNonbonded,
+    solvent_innerloop_parallel, solvent_innerloop_parallel_novirial, split_eds_pairs, CGPairGroup,
+    CRFParameters, EdsAtoms, EdsStorage, EnergyGroups, ForceStorage, GroupEnergies, LJParamMatrix,
+    LJParameters, PertAtomInfo, PertNBCorrection, PerturbedLambdaParams, PrecalcNonbonded,
 };
 use newen_forces::restraints::{
     DisresPrecalc, DistanceRestraints, PerturbedDistanceRestraints, PositionRestraints,
@@ -89,8 +88,6 @@ pub struct Forcefield {
     /// (gromosXX `sim.param().nonbonded.rf_excluded`, which gates `RF_excluded_outerloop`,
     /// the perturbed variant, and the excluded-state term of perturbed atom pairs).
     pub rf_excluded: bool,
-    /// The kernel of the normal and 1-4 states of `PERTATOMPAIR` pairs with a perturbed atom.
-    pub atom_pair_kernel: AtomPairKernel,
     /// Boundary conditions
     pub periodicity: Periodicity,
     /// Pairlist container
@@ -288,7 +285,6 @@ impl Forcefield {
             local_storage: ForceStorage::new(0),
             nonbonded_reducer: None,
             rf_excluded: true,
-            atom_pair_kernel: AtomPairKernel::default(),
             periodicity,
             pairlist,
             pairlist_algorithm,
@@ -1543,7 +1539,6 @@ impl Algorithm for Forcefield {
                         &self.periodicity,
                         self.four_pi_eps_i,
                         self.rf_excluded,
-                        self.atom_pair_kernel,
                         1.0, // 1-4 coulomb_scaling, as for the plain 1-4 pairs
                         &mut corr_ap,
                         egroups,

@@ -131,8 +131,7 @@ pub enum PrepareNote {
     NoseHooverVariablesIgnored,
     /// A Nosé–Hoover run asks for its variables from the configuration (NTINHT = 0) but the
     /// configuration has no `NHCVARIABLES` block: they start at zero. A warning, not a refusal
-    /// (gromosXX refuses it for a chain and reads nothing for plain Nosé–Hoover); callers report
-    /// it under the intended `nh_restart` only ([`nose_hoover_missing_warning`]).
+    /// ([`nose_hoover_missing_warning`]).
     NoseHooverVariablesMissing,
     /// The run starts at a λ outside [0, 1] (a `PERTDATA` λ; RLAM is checked to [0, 1]): every
     /// perturbed term and mass is extrapolated. A warning, not a refusal; gromosXX says nothing
@@ -275,7 +274,7 @@ pub fn prepare_system(
     } = coords;
     // gromosXX `read_nose_hoover_chains` (`in_configuration.cc:1148-1178`): with NTINHT = 0 the
     // variables come from the configuration's NHCVARIABLES block. Kept whole here; the
-    // thermostat restores them per `nh_restart` (`restored_zeta`).
+    // thermostat restores them (`restored_zeta`).
     let nose_hoover_run = imd.temp_bath.first().is_some_and(|b| b.algorithm >= 1);
     let nose_hoover = match nhcvariables.as_ref().filter(|_| nose_hoover_run) {
         Some(lines) if imd.ntinht == 0 => Some(
@@ -789,18 +788,15 @@ pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> 
 }
 
 /// The warning for [`PrepareNote::NoseHooverVariablesMissing`] (`md` and Python print the
-/// same), or `None` when `recipe` does not ask for it: a thermostat other than Nosé–Hoover, or
-/// gromosXX's restart (`nh_restart = "gromosxx"`), whose plain Nosé–Hoover never reads them.
+/// same), or `None` when `recipe`'s thermostat is not Nosé–Hoover.
 pub fn nose_hoover_missing_warning(recipe: &crate::RunRecipe) -> Option<String> {
-    use crate::recipe::{NhRestart, ThermostatAlgorithm};
+    use crate::recipe::ThermostatAlgorithm;
     let t = recipe.ensemble.thermostat.as_ref()?;
-    (t.algorithm != ThermostatAlgorithm::Berendsen && t.nh_restart == NhRestart::Intended).then(
-        || {
-            "INITIALISE NTINHT = 0 asks for the Nose-Hoover thermostat variables from the \
-             configuration, but it has no NHCVARIABLES block: they start at zero"
-                .to_string()
-        },
-    )
+    (t.algorithm != ThermostatAlgorithm::Berendsen).then(|| {
+        "INITIALISE NTINHT = 0 asks for the Nose-Hoover thermostat variables from the \
+         configuration, but it has no NHCVARIABLES block: they start at zero"
+            .to_string()
+    })
 }
 
 /// The warning for [`PrepareNote::PrecalclamLongRangeGaps`] (`md` and Python print the same).
@@ -840,15 +836,16 @@ mod tests {
         prepare_system(imd, topo, constants, coords, &inputs).unwrap()
     }
 
-    /// NTINHT = 0 without an NHCVARIABLES block is noted (variables start at zero), reported
-    /// under the intended restart only; NTINHT = 1, a block, or no Nosé–Hoover say nothing.
+    /// NTINHT = 0 without an NHCVARIABLES block is noted (variables start at zero); NTINHT = 1,
+    /// a block, or no Nosé–Hoover say nothing.
     #[test]
     fn missing_nose_hoover_variables_are_noted() {
         let refs = shared().join("..");
-        let imd = newen_io::imd::read_imd_file(
+        let mut imd = newen_io::imd::read_imd_file(
             refs.join("water_216_nvt_nosehoover/water_216_nvt_nosehoover.in"),
         )
         .unwrap();
+        imd.ntinht = 0;
         let run = |imd: &ImdParameters, conf: &str| {
             let parsed = read_topology_file(refs.join("water_216_box/water_216_box.topo")).unwrap();
             let constants = parsed.physical_constants;
@@ -878,14 +875,10 @@ mod tests {
         weak.temp_bath[0].algorithm = 0;
         assert!(!run(&weak, fresh));
 
-        let (mut recipe, _) = crate::RunRecipe::from_imd(&imd).unwrap();
+        let (recipe, _) = crate::RunRecipe::from_imd(&imd).unwrap();
         assert!(nose_hoover_missing_warning(&recipe)
             .unwrap()
             .contains("no NHCVARIABLES block: they start at zero"));
-        recipe
-            .set("ensemble.thermostat.nh_restart", "gromosxx")
-            .unwrap();
-        assert!(nose_hoover_missing_warning(&recipe).is_none());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # gromosXX md++ 247c95c4 + patches/D41_nh_restart.patch (.local/gromosXX-patched/md++/BUILD/program/md), item D41
 [system]
 name = "water_216_nvt_nosehoover_cont_fixed"
-description = "216 waters, plain Nose-Hoover: steps 100-199 of a 100 + 100 run, NTINHT 0, from the patched first half's final configuration (NTINHT 1 there), against gromosXX with D41 patched: every variable written and restored, the default nh_restart = intended"
+description = "216 waters, plain Nose-Hoover: steps 100-199 of a 100 + 100 run, NTINHT 0, from the patched first half's final configuration (NTINHT 1 there), against gromosXX with D41 patched: every variable written and restored"
 level = 3
 natoms = 648
 isolates = "the intended NHCVARIABLES restart (D41 corrected): the whole chain of every bath, plain Nose-Hoover included"

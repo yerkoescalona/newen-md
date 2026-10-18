@@ -129,19 +129,18 @@ Each entry: what gromosXX does, which bucket, what newen does.
   (`nonbonded.rf_cutoff`, `in_parameter.cc:4606`) and accepts RCRF ≠ RCUTL silently
   (`check_parameter.cc` has no rule); newen built them from RCUTL. Now from RCRF, silently,
   pinned by `aladip_solvated_rcrf`.
-- **PERTATOMPAIR argument shift** (A; corrected in 0.0.56, the reference pins the defect under
-  `gromosxx-shifted`; patched oracle `tests/gromosXX_references/patches/D1_pair_kernel_args.patch`).
+- **PERTATOMPAIR argument shift** (A, D1; corrected in 0.0.56; patched oracle
+  `tests/gromosXX_references/patches/D1_pair_kernel_args.patch`).
   `perturbed_nonbonded_pair.cc:469, 677, 992, 1200` call `eds_pert_lj_crf_interaction` with the
   outputs shifted by one slot against `perturbed_nonbonded_term.h:65-72`: for a pair with a
   perturbed atom and a normal or 1-4 state type the energies receive the kernel's dH/dλ, the
   force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and `eps = 0`, `coulomb_scaling = 0` drop the 1/r
-  Coulomb term. newen computes the intended kernel by default (outputs in their slots,
-  Coulomb scaling 1, the 1-4 scaling for 1-4 states), pinned by
-  `aladip_vacuum_fep_pairpert_precalc_fixed` (native 247c95c4 + D1 patch); the recipe's
-  `perturbation.atom_pair_kernel = "gromosxx-shifted"` reproduces the defect
-  (`atom_pair_state`, `newen-forces/src/nonbonded/perturbed.rs`), pinned by
-  `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`, `OAI.Physics.Gromos.Divergences`):
-  `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`, `crfSoftEnergy_shift`.
+  Coulomb term. newen computes the intended kernel (outputs in their slots, Coulomb scaling 1,
+  the 1-4 scaling for 1-4 states; `atom_pair_state`, `newen-forces/src/nonbonded/perturbed.rs`),
+  pinned by `aladip_vacuum_fep_pairpert_precalc_fixed` (native 247c95c4 + D1 patch). The
+  released-binary reproducer lives in `gromos-divergences`. Lean (`math`,
+  `OAI.Physics.Gromos.Divergences`): `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`,
+  `crfSoftEnergy_shift`.
 - **EDS multi-s / pair-s weights** (A; corrected without a reproducing mode, decided in 1.8:
   the released branch's forces are not the gradient of any energy it reports, and the patch
   reproduces it). gromosXX 247c95c4 seeds the per-state log-prefactors with 0 instead of −∞
@@ -175,24 +174,22 @@ Each entry: what gromosXX does, which bucket, what newen does.
   (unsigned `bsteps − asteps`, τ ≈ 4·10⁹ steps, offsets frozen, `eds.cc:186`; D13 — the pure
   `memory_time` reproduces the wrap); BMAXTYPE 2 with a target state without variance, unless
   the RESTREMIN clamp catches it (division by b_max = 0 at `eds.cc:314`, E_min = −∞, V_R* NaN;
-  D15). Pinned by unit tests and `newen-md/tests/aeds_runs.rs`.
-- **A-EDS defects corrected by default** (A; corrected in 0.0.63, each reproduced by a recipe
-  switch; patched oracle `tests/gromosXX_references/patches/D16_*`, `D25_*`, `D32_*`;
-  `newen-integrators/src/eds.rs`):
+  D15). Pinned by unit tests and `newen-md/tests/aeds_runs.rs` (D15 by the unit test only: the
+  `md` input that reached it needs D32's never-visited target, see below).
+- **A-EDS defects corrected** (A; corrected in 0.0.63; patched oracle
+  `tests/gromosXX_references/patches/D16_*`, `D25_*`, `D32_*`; `newen-integrators/src/eds.rs`):
   - the energy columns (`eds_emax`, `eds_emin`, the offsets) written after the search update, so
     a frame's `eds_vmix`/`eds_vr` belong to the previous frame's printed parameters
-    (`eds.cc:368-372`; D16). Default: the parameters the frame's V_R* used;
-    `aeds.energy_columns = "gromosxx-post-update"` reproduces.
+    (`eds.cc:368-372`; D16). newen writes the parameters the frame's V_R* used.
   - the FORMS 5/6 prevalences as plain exponentials (`:339-343`, NaN and frozen offsets once
-    −β(V_i − E_i^R) > 709.78; D25). Default: log-sum-exp; `aeds.prevalence =
-    "gromosxx-plain-exp"` reproduces (`aladip_vacuum_aeds_f6_ovf`).
+    −β(V_i − E_i^R) > 709.78; D25). newen uses a log-sum-exp (`aladip_vacuum_aeds_f6_ovf_fixed`).
   - a never-visited state 1 as the default E_min target (`:252-261`; D32, its mean 0 a fake G,
-    σ 0 the D15 division). Default: the lowest mean among the states visited more than once,
-    state 1 only when none is; `aeds.target_state = "gromosxx-state1-default"` reproduces.
-  The native search references set the reproducing switches; the `aladip_vacuum_aeds_*_fixed`
-  references pin the defaults against the patched binary; `newen-run/tests/aeds_replay.rs`
-  replays both. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md` (not yet
-  in `math`).
+    σ 0 the D15 division). newen takes the lowest mean among the states visited more than once,
+    state 1 only when none is.
+  The `aladip_vacuum_aeds_*_fixed` references pin them against the patched binary;
+  `newen-run/tests/aeds_replay.rs` replays them. The released-binary reproducers live in
+  `gromos-divergences`. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md`
+  (not yet in `math`).
 - **A-EDS bookkeeping** (B, reproduced behaviour documented in GROMOS Vol. 2, not defects;
   `newen-integrators/src/eds.rs`): the FORMS 5/6 offset step is ASTEPS·Δt (`:355`; D33, not the
   dossier's D17, which is the extended-TI 1-4 scaling) — a
@@ -282,26 +279,25 @@ Each entry: what gromosXX does, which bucket, what newen does.
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
   printed unrotated while the trace uses the rotated tensor (`out_configuration.cc:3331-3344`);
   the last two in `volume_pressure` (`newen-md/src/bin/md.rs`).
-- **Nosé–Hoover variables of a continued run** (A, D41; corrected in 0.0.69, reproduced by a
-  recipe switch; patched oracle `tests/gromosXX_references/patches/D41_nh_restart.patch`).
+- **Nosé–Hoover variables of a continued run** (A, D41; corrected in 0.0.69; patched oracle
+  `tests/gromosXX_references/patches/D41_nh_restart.patch`).
   gromosXX writes and reads `NHCVARIABLES` for chains only (`out_configuration.cc:606`,
   `in_configuration.cc:1156`) although plain Nosé–Hoover integrates `zeta[0]`
   (`nosehoover_thermostat.cc:142-143`), and refuses NTINHT = 1 without a chain
   (`check_parameter.cc:92`), so a continued plain-NH run restarts from ζ = 0; for a chain it reads
   `zeta.size()` = 1 value per bath before `NoseHoover_Thermostat::init` sizes the chain
   (`in_configuration.cc:3444`, `md.cc:150, 167`, `nosehoover_thermostat.cc:69`), so links 2..M
-  restart from 0. newen wrote and read nothing until 0.0.69 (NTINHT parsed, unused). Default
-  (`ensemble.thermostat.nh_restart = "intended"`): every variable of every bath written in
-  gromosXX's block format and restored when NTINHT = 0 (`restored_zeta`,
+  restart from 0. newen wrote and read nothing until 0.0.69 (NTINHT parsed, unused). newen
+  writes every variable of every bath in gromosXX's block format, plain NH included, and
+  restores them when NTINHT = 0 (`restored_zeta`,
   `newen-integrators/src/algorithms/nosehoover_thermostat.rs`; `prepare_system` parses the block
-  into `Configuration::nose_hoover`); NTINHT = 1 starts from zero; NTINHT = 0 without a block
-  starts from zero too (gromosXX refuses that for a chain). `"gromosxx"` reproduces: no block for
-  plain NH, a chain's first link only, a chain asked to read without a block and NTINHT = 1
-  without a chain refused (`check_nh_restart`, `plan.rs`). Pinned by `water_216_nvt_nosehoover_cont`
-  / `water_216_nvt_nhc_cont` (native, switch on) and their `_fixed` twins (patched, default);
-  `newen-md/tests/nh_restart.rs` checks that 100 + 100 intended steps follow the 200-step run as
-  closely as weak coupling does. Lean (`gromos-divergences`): `nhScale_restart_eq_iff`,
-  `nhScale_restart_sub`, `nhcReadTranscribed_eq_iff`.
+  into `Configuration::nose_hoover`); NTINHT = 1 starts from zero, plain NH included; NTINHT = 0
+  without a block starts from zero too, with a warning (gromosXX refuses that for a chain).
+  Pinned by `water_216_nvt_nosehoover_cont_fixed` / `water_216_nvt_nhc_cont_fixed` (patched);
+  `newen-md/tests/nh_restart.rs` checks that 100 + 100 steps follow the 200-step run as closely
+  as weak coupling does. The released-binary reproducer lives in `gromos-divergences`. Lean
+  (`gromos-divergences`): `nhScale_restart_eq_iff`, `nhScale_restart_sub`,
+  `nhcReadTranscribed_eq_iff`.
 - **Perturbed RF self term, "Chris: CHECK!"** (false alarm; not a quirk). The comment at
   `perturbed_nonbonded_term.cc:749-751` (`gromosXX-patched`; `:596-598` in the non-ext
   variant) worries that the `selfterm_correction` adds `+A_q·FPEPSI·crf_cut` with no B-state

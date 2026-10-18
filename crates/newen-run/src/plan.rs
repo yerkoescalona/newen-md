@@ -22,7 +22,7 @@ use crate::recipe::{
     BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
     ThermostatAlgorithm,
 };
-use crate::recipe::{NhRestart, RunRecipe, TermSpec, Thermostat, VirialKind};
+use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
 use crate::{total_dof, ConstraintSelection, RunError};
 use newen_integrators::algorithms::{in_bath, BathRange};
 use newen_integrators::constraints::NtcMode;
@@ -65,13 +65,6 @@ pub struct PerturbationPlan {
     /// `individual_lambdas`), as in gromosXX.
     #[serde(default)]
     pub individual_lambdas: bool,
-    /// `Perturbation::atom_pair_kernel`.
-    #[serde(default, skip_serializing_if = "is_intended")]
-    pub atom_pair_kernel: crate::recipe::AtomPairKernel,
-}
-
-fn is_intended(k: &crate::recipe::AtomPairKernel) -> bool {
-    *k == crate::recipe::AtomPairKernel::Intended
 }
 
 /// The EDS reference Hamiltonian, resolved (gromosXX `algorithm::EDS`).
@@ -113,15 +106,6 @@ pub struct AedsPlan {
     pub bmax: f64,
     pub asteps: u32,
     pub bsteps: u32,
-    /// `Aeds::energy_columns`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub energy_columns: crate::recipe::AedsColumns,
-    /// `Aeds::prevalence`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub prevalence: crate::recipe::AedsPrevalence,
-    /// `Aeds::target_state`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub target_state: crate::recipe::AedsTarget,
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -208,9 +192,6 @@ pub enum AlgorithmSpec {
         /// Nosé–Hoover with NTINHT = 0: start from the configuration's `NHCVARIABLES`.
         #[serde(default, skip_serializing_if = "is_default")]
         read_variables: bool,
-        /// `Thermostat::nh_restart`.
-        #[serde(default, skip_serializing_if = "is_default")]
-        nh_restart: NhRestart,
     },
     LeapFrogPosition,
     Shake {
@@ -407,7 +388,6 @@ impl AlgorithmSpec {
                     ir_bath: 0,
                 }],
                 read_variables: false,
-                nh_restart: NhRestart::Intended,
             },
             AlgorithmSpec::LeapFrogPosition,
             AlgorithmSpec::Shake {
@@ -1036,9 +1016,6 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
                 bmax: a.bmax,
                 asteps: a.asteps,
                 bsteps: a.bsteps,
-                energy_columns: a.energy_columns,
-                prevalence: a.prevalence,
-                target_state: a.target_state,
             }),
         });
     }
@@ -1088,25 +1065,6 @@ pub(crate) fn check_start_time(recipe: &RunRecipe) -> Result<(), RunError> {
         return Err(RunError::Recipe(format!(
             "STEP T = {t0}: must be >= 0 (or -1)"
         )));
-    }
-    Ok(())
-}
-
-/// INITIALISE NTINHT = 1 (Nosé–Hoover variables set to zero) without a Nosé–Hoover chain:
-/// gromosXX refuses it (`check_parameter.cc:92-94`), so a plain Nosé–Hoover run must ask to
-/// read variables it never reads (D41). Refused only under `nh_restart = "gromosxx"`; the
-/// intended mode honours NTINHT. Every build path runs it.
-pub(crate) fn check_nh_restart(recipe: &RunRecipe) -> Result<(), RunError> {
-    let Some(t) = &recipe.ensemble.thermostat else {
-        return Ok(());
-    };
-    let chain = matches!(t.algorithm, ThermostatAlgorithm::NoseHooverChain(_));
-    if t.nh_restart == NhRestart::Gromosxx && recipe.control.ntinht == 1 && !chain {
-        return Err(RunError::Recipe(
-            "MULTIBATH block: NTINHT must be 0 when not using Nose-Hoover chains for temperature \
-             coupling (gromosXX; thermostat nh_restart = \"gromosxx\")"
-                .to_string(),
-        ));
     }
     Ok(())
 }
@@ -1425,7 +1383,6 @@ pub fn build_plan(
         None
     };
     check_start_time(recipe)?;
-    check_nh_restart(recipe)?;
     check_electrostatics(recipe)?;
     check_pairlist(recipe)?;
     check_dihedral_phases(recipe, topo)?;
@@ -1436,7 +1393,6 @@ pub fn build_plan(
         alpha_lj: recipe.perturbation.alpha_lj,
         alpha_c: recipe.perturbation.alpha_c,
         individual_lambdas: individual_lambdas_on(recipe),
-        atom_pair_kernel: recipe.perturbation.atom_pair_kernel,
     });
 
     let is_minimization = recipe.is_minimization();
@@ -1582,7 +1538,6 @@ pub fn build_plan(
                     ranges,
                     read_variables: t.algorithm != ThermostatAlgorithm::Berendsen
                         && recipe.control.ntinht == 0,
-                    nh_restart: t.nh_restart,
                 });
             }
         }
@@ -2133,7 +2088,6 @@ mod tests {
                 tau: 0.1,
             }],
             dof_sets: Vec::new(),
-            nh_restart: Default::default(),
         });
         r.constraints.solvent_algorithm = Some(ConstraintAlgorithm::Shake);
         r
@@ -2247,7 +2201,7 @@ mod tests {
     }
 
     // ── AEDS refusals (gromosXX read_AEDS, check_parameter.cc:146-175, the aeds locks) ───────
-    /// An AEDS run gromosXX accepts (`aladip_vacuum_aeds_f4`'s settings): no solvent
+    /// An AEDS run gromosXX accepts (`aladip_vacuum_aeds_f4_fixed`'s settings): no solvent
     /// constraints needed, unlike EDS.
     fn aeds_run(form: i32) -> RunRecipe {
         let mut r = eds_run(1, 3);
@@ -2266,9 +2220,6 @@ mod tests {
             bmax: 0.1,
             asteps: 20,
             bsteps: 20,
-            energy_columns: Default::default(),
-            prevalence: Default::default(),
-            target_state: Default::default(),
         });
         r
     }
@@ -2421,7 +2372,6 @@ mod tests {
             alpha_lj: 0.5,
             alpha_c: 0.5,
             individual_lambdas: true,
-            atom_pair_kernel: Default::default(),
         });
         let err = validate_plan(&plan).unwrap_err().to_string();
         assert!(err.contains("individual λ"), "{err}");

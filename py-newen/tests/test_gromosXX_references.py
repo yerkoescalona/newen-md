@@ -189,7 +189,7 @@ def _recipe_for(system_dir):
 
 def _apply_recipe_overrides(recipe, system_dir):
     """The `[recipe_overrides]` of input.toml (dotted keys, e.g.
-    `"perturbation.atom_pair_kernel"`): recipe fields no `.imd` block carries, what the Rust
+    `"execution.parallel"`): recipe fields no `.imd` block carries, what the Rust
     runner passes as `md @recipe_set key=value`. Only that table is parsed: not every
     input.toml is valid TOML as a whole."""
     section = re.search(
@@ -244,15 +244,7 @@ AEDS_SYSTEMS = [
     "aladip_vacuum_aeds_below",
     "aladip_vacuum_aeds_inside",
     "aladip_vacuum_aeds_above",
-    "aladip_vacuum_aeds_f2",
-    "aladip_vacuum_aeds_f4",
-    "aladip_vacuum_aeds_f5",
-    "aladip_vacuum_aeds_f6",
-    "aladip_vacuum_aeds_sigma0",
-    "aladip_vacuum_aeds_cont1",
-    "aladip_vacuum_aeds_cont2",
-    "aladip_vacuum_aeds_f6_ovf",
-    # the same against gromosXX with D16, D25 and D32 patched (patches/): newen's defaults
+    # the searches against gromosXX with D16, D25 and D32 patched (patches/)
     "aladip_vacuum_aeds_f2_fixed",
     "aladip_vacuum_aeds_f4_fixed",
     "aladip_vacuum_aeds_f5_fixed",
@@ -298,10 +290,7 @@ REFERENCE_SYSTEMS = [
     "water_216_nvt",
     "water_216_nvt_nosehoover",
     "water_216_nvt_nhc_chain",
-    # Nosé–Hoover continued from a first half (NHCVARIABLES, NTINHT 0): gromosXX's restart (the
-    # nh_restart override) against the released binary, the intended one against the D41 patch
-    "water_216_nvt_nosehoover_cont",
-    "water_216_nvt_nhc_cont",
+    # Nosé–Hoover continued from a first half (NHCVARIABLES, NTINHT 0) against the D41 patch
     "water_216_nvt_nosehoover_cont_fixed",
     "water_216_nvt_nhc_cont_fixed",
     "water_216_npt",
@@ -360,7 +349,6 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_lambdas_precalc",
     "aladip_vacuum_fep_shake_precalc",
     "aladip_vacuum_fep_distres_precalc",
-    "aladip_vacuum_fep_pairpert_precalc",
     "aladip_vacuum_fep_pairpert_precalc_fixed",
     "ch4_water_fep_precalc_twinrange",
     # A charge change (Na+ -> neutral dummy, dQ = -1) under reaction field: the perturbed RF self
@@ -599,7 +587,7 @@ def test_reference_aeds_search(system_name):
 def test_aeds_continuation_needs_the_aedssearch_block():
     """NTIAEDSS = 0 without an AEDSSEARCH block in the configuration is refused, as gromosXX
     does."""
-    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2"
+    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2_fixed"
     inputs = _parse_input_toml(system_dir)
     system = System.from_files(
         str((system_dir / inputs["topology"]).resolve()),

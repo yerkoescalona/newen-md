@@ -13,8 +13,8 @@ Berendsen barostat, COM removal.
 
 ## Status
 - **Nosé–Hoover restart (0.0.69, D41):** `NoseHooverThermostat::init` restores ζ from
-  `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), per `NhRestart`
-  (`restored_zeta`: every link, or gromosXX's first link of a chain and nothing of plain NH);
+  `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), every link of every bath,
+  plain NH included (`restored_zeta`);
   `apply` mirrors ζ back into the configuration for the final NHCVARIABLES block.
 - **MPI seam (2026-08-30):** `Forcefield::pair_partition = Some((rank, size))` keeps the pairs
   whose first atom index ≡ rank (mod size) after every pairlist update (and for the initial list);
@@ -39,10 +39,9 @@ Berendsen barostat, COM removal.
   search through the pure functions `memory_time`, `initialise_search`, `offset_update`,
   `track_state`, `emax_emin_update`, `advanced_offset_update` (`search_step`), on the
   configuration's `AedsSearch` (the `AEDSSEARCH` block); reference-tested and replayed against
-  gromosXX (`newen-run/tests/aeds_replay.rs`). Since 0.0.63 three gromosXX defects are corrected
-  by default, each reproduced on request through `AedsParams`: `AedsColumns` (D16, the energy
-  columns before the update), `AedsPrevalence` (D25, log-sum-exp prevalences), `AedsTarget` (D32,
-  a sampled state as the E_min target)
+  gromosXX with the D16, D25 and D32 patches (`newen-run/tests/aeds_replay.rs`). Since 0.0.63
+  three gromosXX defects are corrected: the energy columns before the update (D16), log-sum-exp
+  prevalences (D25), a sampled state as the E_min target (D32)
 - GaMD ✓ (gromosXX's algorithm, `gamd::Gamd`, run at the end of `Forcefield::apply` when
   `Forcefield::gamd` is set by `md`): FORMS 1-3, SEARCH 0-2, the statistics and `GAMDSTAT`;
   one accelerated interaction group (plus the group gromosXX books the RF excluded solute pairs

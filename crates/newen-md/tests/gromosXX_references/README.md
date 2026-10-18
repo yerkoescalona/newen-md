@@ -14,9 +14,11 @@ the comparison to frame 0's EDS end-state energies (and V_R), for references who
 from a defective gromosXX branch.
 `README-livecoms.md` covers the three systems that came from real LiveCoMS tutorial input.
 An optional `[recipe_overrides]` table in `input.toml` sets recipe fields no `.imd` block carries
-(`"perturbation.atom_pair_kernel" = "gromosxx-shifted"`, the A-EDS `"aeds.energy_columns"`,
-`"aeds.prevalence"`, `"aeds.target_state"`); both runners apply it (`md @recipe_set key=value`,
-`Recipe.update`).
+(e.g. `"execution.parallel" = "serial"`); both runners apply it (`md @recipe_set key=value`,
+`Recipe.update`). No reference uses it now.
+Where gromosXX has a defect newen corrects, the reference is a `_fixed` one: expected output from
+gromosXX with the defect patched (`patches/`). The released-binary reproducers of those defects
+live in `gromos-divergences`, not here.
 
 ## Status
 
@@ -48,10 +50,9 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 3   | water_216_box_com| 648   | bulk NVE + COM removal (NTICOM=1, NSCM=10) | **PASS** |
 | 3   | water_216_box_com_rot | 648 | COM translation+rotation removal (NTICOM=2, NSCM=-10) | **PASS** |
 | 3   | water_216_nvt    | 648   | Berendsen thermostat                 | **PASS** |
-| 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC); run with `nh_restart = "gromosxx"`, whose final configuration has no NHCVARIABLES block, as gromosXX's (D41) | **PASS** |
+| 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC), fresh start (NTINHT 1); expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: the final configuration carries plain Nosé–Hoover's NHCVARIABLES block (D41) | **PASS** |
 | 3   | water_216_nvt_nhc_chain | 648 | Nosé-Hoover-Chain (3 chains)        | **PASS** |
-| 3   | water_216_nvt_nosehoover_cont / water_216_nvt_nhc_cont | 648 | steps 100-199 of a 100 + 100 run (NTINHT 0) from the native first half's final configuration, run with `ensemble.thermostat.nh_restart = "gromosxx"`: plain Nosé–Hoover restarts from ζ = 0 (no NHCVARIABLES block written or read), the chain from its first link only (D41) | **PASS** |
-| 3   | water_216_nvt_nosehoover_cont_fixed / water_216_nvt_nhc_cont_fixed | 648 | the same continuations from the patched first half, expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: every variable of every bath restored, newen's default (D41) | **PASS** |
+| 3   | water_216_nvt_nosehoover_cont_fixed / water_216_nvt_nhc_cont_fixed | 648 | steps 100-199 of a 100 + 100 run (NTINHT 0) from the patched first half's final configuration, expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: every variable of every bath written and restored, plain Nosé–Hoover included (D41) | **PASS** |
 | 3   | water_216_npt    | 648   | Berendsen barostat                   | **PASS** |
 | 4   | aladip_vacuum_lincs | 12 | LINCS (solute, NTC=2)               | **PASS** |
 | 4   | aladip_solvated  | 72    | SHAKE + solute-solvent               | **PASS** |
@@ -84,8 +85,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | ch4_water_fep_precalc | 2998 | `PRECALCLAM 11 0 1` (extended TI): the A/B LJ energies and derivatives at eleven λ points in the `# precalclam` rows of the `.tre` and `.trg`, AB_kinetic of the perturbed atom (1.8) | **PASS** |
 | 4   | meoh_water_fep_precalc | 2862 | the same for charged perturbed atoms: the CRF pair, RF self and RF exclusion ext terms (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_precalc | 12 | AB_bond/AB_angle/AB_improper (regular and soft-core), AB_kinetic, the ABdih row and the PERTATOMPAIR's constant A/B energies at every λ point (1.8) | **PASS** |
-| 4   | aladip_vacuum_fep_pairpert_precalc | 12 | `../shared/aladip_pairpert.pttopo`: PERTATOMPAIR rows 4-10 (normal/excluded), 1-11 (excluded/1-4), 4-7 (1-4/normal) with perturbed atoms, next to the unperturbed 7-10: main energies and the ext rows of the filled state; run with `atom_pair_kernel = "gromosxx-shifted"`, it pins gromosXX's argument-shift defect (CHANGELOG 0.0.55) (1.8) | **PASS** |
-| 4   | aladip_vacuum_fep_pairpert_precalc_fixed | 12 | the same run, expected output from native 247c95c4 + D1 patch (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`: the pair kernel's outputs in their own slots, Coulomb scaling 1, the 1-4 scaling for 1-4 states): the intended kernel, newen's default (1.8, 0.0.56) | **PASS** |
+| 4   | aladip_vacuum_fep_pairpert_precalc_fixed | 12 | `../shared/aladip_pairpert.pttopo`: PERTATOMPAIR rows 4-10 (normal/excluded), 1-11 (excluded/1-4), 4-7 (1-4/normal) with perturbed atoms, next to the unperturbed 7-10: main energies and the ext rows of the filled state; expected output from native 247c95c4 + D1 patch (`patches/D1_pair_kernel_args.patch`: the pair kernel's outputs in their own slots, Coulomb scaling 1, the 1-4 scaling for 1-4 states) (1.8, 0.0.56) | **PASS** |
 | 4   | aladip_vacuum_fep_lambdas_precalc | 12 | `LAMBDAS` on and `PRECALCLAM 6 0.2 0.7`: the grid ignores the individual-λ polynomials, except the current mass λ in AB_kinetic (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_shake_precalc | 12 | perturbed SHAKE (NTC = 3) with PRECALCLAM: its contribution to the AB_bond derivatives only (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_distres_precalc | 12 | perturbed distance restraints with PRECALCLAM: AB_disres energies and derivatives (1.8) | **PASS** |
@@ -118,13 +118,9 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_eds_multis | 12 | the FORM 2 run on the released gromosXX: only frame 0's end-state energies are compared — its force weights are defective (zero-seeded log-sum-exp, missing `− max`, pairs (0, j≥2) skipped, which also makes its V_R wrong for N ≥ 3), so its forces and trajectory are not those of its V_R (`compare` in `input.toml`) (1.8) | **PASS** |
 | 4   | aladip_vacuum_eds_pairs | 12 | the FORM 3 run on the released gromosXX: frame 0's end-state energies and V_R (right for any N); forces and trajectory not compared for the same reason (1.8) | **PASS** |
 | 4   | aladip_vacuum_aeds_below / _inside / _above | 12 | A-EDS FORM 1 over the two end states of `../shared/aladip_eds2.mpt`, EIR 0 10, (EMAX, EMIN) = (50, −10) / (40, −60) / (−40, −80): V_mix below, inside and above the window — V_mix (slot 34), V_R* (35), E_max/E_min (36/37), the offset column, the EDS forces and virial scaled by the boost factor inside (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_f2 / _f4 / _f5 / _f6 | 12 | A-EDS searches over three gentle end states (`../shared/aladip_aeds3.mpt`, N4/H5 charges), EIR 0 0 −3, from Maxwell-Boltzmann velocities, 300 steps (FORM 5: 250): FORM 2 offsets (τ 20 → 50 steps), FORM 4 offsets + E_max/E_min (all four E_min branches, 16 round trips), FORM 5 and 6 prevalence-driven offsets; slots 34-39 and the offsets every frame, and the final AEDSSEARCH block; run with the overrides reproducing gromosXX's D16 (and D25/D32 where the FORM reaches them) (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_sigma0 | 12 | A-EDS FORM 3, BMAXTYPE 2, EIR −20 0: the never-visited default target state 1 has no variance (b_max = 0); RESTREMIN 1 holds E_min at its fake mean 0 (with RESTREMIN 0 gromosXX divides by zero; refused); run with the D16/D32 reproducing overrides (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_cont1 / _cont2 | 12 | an A-EDS FORM 4 search in two jobs of 100 steps: job 2 starts from job 1's native final configuration, NTIAEDSS 0, its AEDSSEARCH block overriding the input EMAX 50, EMIN −50, EIR 9 9 9; run with the D16/D32 reproducing overrides (1.8) | **PASS** |
-| 4   | aladip_vacuum_aeds_f6_ovf | 12 | A-EDS FORM 6 with EIR 0 6000 0, 100 steps: e^{−β(V_2 − E_2^R)} overflows every step, the released gromosXX's prevalences are NaN and its offsets stay at the step-0 centring (−2000, 4000, −2000); run with the reproducing overrides (1.8 D25) | **PASS** |
-| 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | the same runs, expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0); newen's defaults (1.8, 0.0.63) | **PASS** |
+| 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | A-EDS searches over three gentle end states (`../shared/aladip_aeds3.mpt`, N4/H5 charges), EIR 0 0 −3, from Maxwell-Boltzmann velocities, 300 steps (FORM 5: 250): FORM 2 offsets (τ 20 → 50 steps), FORM 4 offsets + E_max/E_min (all four E_min branches, 16 round trips), FORM 5 and 6 prevalence-driven offsets, slots 34-39 and the offsets every frame, and the final AEDSSEARCH block; `_sigma0_fixed`: FORM 3, BMAXTYPE 2, EIR −20 0, RESTREMIN 1; `_cont1_fixed` / `_cont2_fixed`: a FORM 4 search in two jobs of 100 steps, job 2 from job 1's final configuration (NTIAEDSS 0, its AEDSSEARCH block overriding the input EMAX 50, EMIN −50, EIR 9 9 9); `_f6_ovf_fixed`: FORM 6 with EIR 0 6000 0, where e^{−β(V_2 − E_2^R)} overflows. Expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0) (1.8, 0.0.63) | **PASS** |
 
-**129 of 129 registered tests pass** (2026-10-18). Besides the
+**118 of 118 registered tests pass** (2026-10-18). Besides the
 energies, forces, trajectory and final configuration, every TIMESTEP block (step and time) of the
 `.tre`, `.trf`, `.trc`, `.trg` and final configuration is compared, and the force frame count. Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

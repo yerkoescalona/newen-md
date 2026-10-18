@@ -1080,20 +1080,12 @@ ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
 
 // ── Level 3: thermostats / barostats ────────────────────────────────────────
 ref_test!(water_216_nvt, "water_216_nvt");
-// The final configuration's NHCVARIABLES block: written for a chain, for plain Nosé–Hoover only
-// under the intended `nh_restart`, so `_nosehoover` runs with gromosXX's (D41).
+// The final configuration's NHCVARIABLES block, plain Nosé–Hoover included (D41).
 ref_test!(water_216_nvt_nosehoover, "water_216_nvt_nosehoover");
 ref_test!(water_216_nvt_nhc_chain, "water_216_nvt_nhc_chain");
-// Steps 100-199 of a 100 + 100 run, continued from the native first half (NTINHT 0) with
-// gromosXX's restart (D41): plain Nosé–Hoover from ζ = 0, the chain from its first link only.
-// The intended restart is checked against the single run by `tests/nh_restart.rs`.
-ref_test!(
-    water_216_nvt_nosehoover_cont,
-    "water_216_nvt_nosehoover_cont"
-);
-ref_test!(water_216_nvt_nhc_cont, "water_216_nvt_nhc_cont");
-// The same continuations against gromosXX with D41 patched (`patches/D41_nh_restart.patch`):
-// newen's default, every variable of every bath restored.
+// Steps 100-199 of a 100 + 100 run, continued (NTINHT 0) against gromosXX with D41 patched
+// (`patches/D41_nh_restart.patch`): every variable of every bath restored. The continued run is
+// checked against the single run by `tests/nh_restart.rs`.
 ref_test!(
     water_216_nvt_nosehoover_cont_fixed,
     "water_216_nvt_nosehoover_cont_fixed"
@@ -1201,15 +1193,8 @@ ref_test!(
     "aladip_vacuum_fep_distres_precalc"
 );
 // PERTATOMPAIR rows with a perturbed atom, one per state type (excluded / normal / 1-4) in A and
-// in B: the ext energies of the filled state only, the other state's parameters set to 0. The
-// main energies carry gromosXX's argument-shift defect in the perturbed pair branches, run with
-// `atom_pair_kernel = "gromosxx-shifted"` (see `perturbed_atom_pair_interactions`).
-ref_test!(
-    aladip_vacuum_fep_pairpert_precalc,
-    "aladip_vacuum_fep_pairpert_precalc"
-);
-// The same run against native gromosXX 247c95c4 with the argument shift patched
-// (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`): the intended kernel, newen's default.
+// in B: the ext energies of the filled state only, the other state's parameters set to 0. Against
+// gromosXX with the argument shift patched (D1, `patches/D1_pair_kernel_args.patch`).
 ref_test!(
     aladip_vacuum_fep_pairpert_precalc_fixed,
     "aladip_vacuum_fep_pairpert_precalc_fixed"
@@ -1291,24 +1276,12 @@ ref_test!(aladip_vacuum_eds_pairs, "aladip_vacuum_eds_pairs");
 ref_test!(aladip_vacuum_aeds_below, "aladip_vacuum_aeds_below");
 ref_test!(aladip_vacuum_aeds_inside, "aladip_vacuum_aeds_inside");
 ref_test!(aladip_vacuum_aeds_above, "aladip_vacuum_aeds_above");
-// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block, against the
-// released gromosXX: its defects D16, D25 and D32 reproduced by the `[recipe_overrides]` of each
-// input.toml.
-ref_test!(aladip_vacuum_aeds_f2, "aladip_vacuum_aeds_f2");
-ref_test!(aladip_vacuum_aeds_f4, "aladip_vacuum_aeds_f4");
-ref_test!(aladip_vacuum_aeds_f5, "aladip_vacuum_aeds_f5");
-ref_test!(aladip_vacuum_aeds_f6, "aladip_vacuum_aeds_f6");
-// BMAXTYPE 2 with a target state without variance, held by RESTREMIN 1.
-ref_test!(aladip_vacuum_aeds_sigma0, "aladip_vacuum_aeds_sigma0");
-// A search in two jobs: the second continues the first's AEDSSEARCH block (NTIAEDSS 0).
-ref_test!(aladip_vacuum_aeds_cont1, "aladip_vacuum_aeds_cont1");
-ref_test!(aladip_vacuum_aeds_cont2, "aladip_vacuum_aeds_cont2");
-// FORM 6 with E_2^R = 6000: e^{−β(V_2 − E_2^R)} overflows, the released gromosXX freezes the
-// offsets (D25 reproduced).
-ref_test!(aladip_vacuum_aeds_f6_ovf, "aladip_vacuum_aeds_f6_ovf");
-// The same searches against gromosXX with D16, D25 and D32 patched
-// (`tests/gromosXX_references/patches/`): newen's defaults — the columns a frame's V_R* used,
-// log-sum-exp prevalences, a sampled state as the E_min target.
+// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block, against
+// gromosXX with D16, D25 and D32 patched (`tests/gromosXX_references/patches/`): the columns a
+// frame's V_R* used, log-sum-exp prevalences, a sampled state as the E_min target. `_sigma0`:
+// BMAXTYPE 2 with a target state without variance, held by RESTREMIN 1. `_cont1/2`: a search in
+// two jobs, the second continuing the first's AEDSSEARCH block (NTIAEDSS 0). `_f6_ovf`: FORM 6
+// with E_2^R = 6000, where e^{−β(V_2 − E_2^R)} overflows.
 ref_test!(aladip_vacuum_aeds_f2_fixed, "aladip_vacuum_aeds_f2_fixed");
 ref_test!(aladip_vacuum_aeds_f4_fixed, "aladip_vacuum_aeds_f4_fixed");
 ref_test!(aladip_vacuum_aeds_f5_fixed, "aladip_vacuum_aeds_f5_fixed");

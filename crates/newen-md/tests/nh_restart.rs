@@ -1,9 +1,7 @@
-//! Nosé–Hoover runs continued through the final configuration's NHCVARIABLES block (D41): with
-//! the intended `nh_restart` (the default) 100 + 100 steps follow the 200-step run frame by frame,
-//! for plain Nosé–Hoover and for a 3-link chain, as closely as weak coupling (no thermostat
-//! state) does: what is left is the 9-decimal round-off of the restart, grown over 100 steps.
-//! gromosXX's restart (ζ = 0 for plain NH, links 2..M = 0 for a chain) is pinned against the
-//! native binary by the `water_216_nvt_nosehoover_cont` / `water_216_nvt_nhc_cont` references.
+//! Nosé–Hoover runs continued through the final configuration's NHCVARIABLES block (D41):
+//! 100 + 100 steps follow the 200-step run frame by frame, for plain Nosé–Hoover and for a 3-link
+//! chain, as closely as weak coupling (no thermostat state) does: what is left is the 9-decimal
+//! round-off of the restart, grown over 100 steps.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -186,57 +184,10 @@ fn continued_run_follows_the_single_run(name: &str, chain: bool) {
 
 #[test]
 fn plain_nose_hoover_continued_follows_the_single_run() {
-    continued_run_follows_the_single_run("water_216_nvt_nosehoover_cont", false);
+    continued_run_follows_the_single_run("water_216_nvt_nosehoover_cont_fixed", false);
 }
 
 #[test]
 fn nose_hoover_chain_continued_follows_the_single_run() {
-    continued_run_follows_the_single_run("water_216_nvt_nhc_cont", true);
-}
-
-/// gromosXX's restart writes no NHCVARIABLES for plain Nosé–Hoover and refuses NTINHT = 1
-/// without a chain (`check_parameter.cc:92`); the intended one honours NTINHT = 1.
-#[test]
-fn gromosxx_restart_of_plain_nose_hoover() {
-    let name = "water_216_nvt_nosehoover_cont";
-    let (first, _, _) = three_inputs(name, false, false);
-    let start = refs().join("water_216_box/water_216_box.conf");
-    let gx = scratch("gx");
-    md(
-        &gx,
-        &first.replace(
-            "       100       0.0     0.002",
-            "        5       0.0     0.002",
-        ),
-        &start,
-        &["@recipe_set", "ensemble.thermostat.nh_restart=gromosxx"],
-    );
-    assert!(blocks(&gx.join("final.cnf"), "NHCVARIABLES").is_empty());
-    let reset = first
-        .replace(
-            "       100       0.0     0.002",
-            "        5       0.0     0.002",
-        )
-        .replace(
-            "        0       0       0       0\n",
-            "        0       0       1       0\n",
-        );
-    let input = gx.join("reset.imd");
-    std::fs::write(&input, &reset).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_md"))
-        .arg("@topo")
-        .arg(refs().join("water_216_box/water_216_box.topo"))
-        .arg("@conf")
-        .arg(&start)
-        .arg("@input")
-        .arg(&input)
-        .args(["@recipe_set", "ensemble.thermostat.nh_restart=gromosxx"])
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success());
-    assert!(text.contains("NTINHT must be 0"), "{text}");
-    md(&gx, &reset, &start, &[]);
-    assert_eq!(blocks(&gx.join("final.cnf"), "NHCVARIABLES")[0].len(), 1);
-    let _ = std::fs::remove_dir_all(gx);
+    continued_run_follows_the_single_run("water_216_nvt_nhc_cont_fixed", true);
 }
