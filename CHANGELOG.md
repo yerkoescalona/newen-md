@@ -28,6 +28,14 @@ next.
   among the states visited more than once.
 - A saved recipe or plan that still sets one of these keys is rejected (unknown field). Recipes
   that never set them are unchanged.
+- **`@parity gromospp`** in `bar` (D4), `ext_ti_ana` (D5) and `ext_ti_merge` (D8), and Python's
+  `parity=` on `newen.analysis.bar`, `ext_ti_ana` and `ext_ti_merge`. The programs always print
+  the corrected values (their default output is unchanged), and `@parity` is now refused as an
+  unknown argument. Python: the keys `error_corrected`, `error_total_corrected` (bar) and
+  `integral_error_corrected` (ext_ti_merge) are gone; `error`, `error_total` and `integral_error`
+  hold the corrected values, as they already did by default. Rust: `Parity` is gone,
+  `BarStep.error` is `Option<f64>`, `ext_ti_merge::merge` and `integrate_error` lose their mode
+  arguments.
 
 ### References
 
@@ -48,6 +56,10 @@ next.
   by its unit test only: the `md` input that reached it needed D32's never-visited target.
 - `RunRecipe::set` keeps a test of its own (`set_takes_a_dotted_path`); `[recipe_overrides]`
   and `md @recipe_set` stay, with no reference using them now.
+- gromos++: the A1, A3 and A4 `ext_ti_ana` cases, which D4/D5/D8 do not touch, still run against
+  released 9cd9f6b3. The released-output tests for A2 and for the `bar`/`ext_ti_merge` chain are
+  removed with their data (`ext_ti_ana/A2/`, `chain/bar.stdout`, `chain/merge.stdout`); the
+  patched `A2_fixed` and `chain_fixed` stay.
 
 ## [0.0.69] (2026-10-18)
 

@@ -894,7 +894,6 @@ def _bar(
     bootstrap: int = 0,
     seed: int | None = None,
     printdist: str | None = None,
-    parity: str | None = None,
 ) -> dict[str, Any]:
     """`bar` in process on `ext_ti_ana @bar_data` files: per-interval and total ΔG, kJ/mol."""
     ...

@@ -6,7 +6,8 @@ Binaries: <gromos++ 9cd9f6b3 + patches, BUILD/programs/>{ext_ti_ana,bar,ext_ti_m
 Commands: exactly those of `../README.md` (chain), as `the regeneration scripts kept outside the repository PROGRAMS chain_fixed`
 run them; the same script with the unpatched programs reproduces `../chain/` byte for byte.
 
-Against `../chain/` only two files change:
+Against the released gromos++ output (not kept in newen; the reproducer is in gromos-divergences,
+`sims/e3_analysis`) only two files change:
 - `bar.stdout`: the four window errors and the total (D4: no second division by d^2):
   2.11698, 2.40196, 1.49959, 0.44748, total 3.56370 (was 2.56637, 2.41098, 1.23029, 0.54694, 3.76986).
   DG, the overlap integrals and `dist_*.dat` are unchanged.

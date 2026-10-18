@@ -11,13 +11,9 @@
 //! derivatives per frame for `bar` and `mbar`.
 //!
 //! Deliberate differences from gromos++ (item 1.8):
-//! - The dihedral term of the predicted ∂H/∂λ. gromos++ 9cd9f6b3 adds `FREEABDIH` without the
-//!   factor dΛ_dih/dλ every other term carries (`ext_ti_ana.cc:830`), exact only for a linear
-//!   `@lamdih`. Corrected by default since 0.0.57; `@parity gromospp`
-//!   ([`Parity::GromosppReleased`]) reproduces the defect. The oracle of the corrected output is
-//!   gromos++ 9cd9f6b3 patched with `D5_ext_ti_ana_dlam.patch`
-//!   (`crates/newen-md/tests/gromosXX_references/patches/`), that of the reproduced one the
-//!   released build.
+//! - The dihedral term of the predicted ∂H/∂λ (D5) carries the factor dΛ_dih/dλ like every
+//!   other term. The oracle is gromos++ 9cd9f6b3 patched with `D5_ext_ti_ana_dlam.patch`
+//!   (`crates/newen-md/tests/gromosXX_references/patches/`).
 //! - `@imd` goes through newen's IMD reader, which knows gromosXX's `LAMBDAS` rows by name
 //!   as well as by number and maps NTLI 10/11 as gromosXX does (distancefield/dihedralres;
 //!   gromos++'s own type table swaps them, `ext_ti_ana.cc:404` used at `:1371-1385`; its
@@ -39,7 +35,6 @@ use super::bar::BarFile;
 use super::common::{
     cpow, draw_index, get_value, get_values, population_variance, wall_clock_seed,
 };
-use super::Parity;
 use crate::args::Arguments;
 use crate::energy_sequence::EnergySequence;
 use crate::lnexp::{ln_x_exp_ave, lnexp_ave};
@@ -80,8 +75,7 @@ pub const USAGE: &str = "# ext_ti_ana
 \t[@lam_precision <lambda value precision in outfiles, default: 2>]
 \t[@verbose       <print used parameters to file header>]
 \t[@bar_data      <print energies to be used for BAR (not reweighted)>]
-\t[@dHdl_data     <print dHdl values to be used for MBAR (not reweighted)>]
-\t[@parity        <gromospp: the dihedral dHdl as gromos++ 9cd9f6b3 computes it (default: corrected)>]";
+\t[@dHdl_data     <print dHdl values to be used for MBAR (not reweighted)>]";
 
 pub const KNOWN: &[&str] = &[
     "en_files",
@@ -140,7 +134,6 @@ pub const KNOWN: &[&str] = &[
     "cpus",
     "bar_data",
     "dHdl_data",
-    "parity",
 ];
 
 pub const PROGRAM: Program = Program {
@@ -224,8 +217,6 @@ pub struct Options {
     /// `@dHdl_data`, the same way.
     pub dhdl_data: Option<Vec<f64>>,
     pub cpus: u32,
-    /// `@parity`: whether the dihedral ∂H/∂λ carries dΛ_dih/dλ.
-    pub parity: Parity,
 }
 
 /// One interpolated λ: its value and derivative from the polynomial, and the two grid points
@@ -466,7 +457,6 @@ impl Options {
             bar_data: Some(bar_data),
             dhdl_data: None,
             cpus: 1,
-            parity: Parity::default(),
         })
     }
 
@@ -499,7 +489,6 @@ impl Options {
             disfld: present("no_disfld"),
         };
         let countframes = args.count("countframes") == 0;
-        let parity = Parity::from_args(args)?;
         let outdir: String = get_value(args, "outdir", Some(".".to_string()))?;
 
         let mut coefficients_sim = [IDENTITY; 12];
@@ -669,7 +658,6 @@ impl Options {
             bar_data,
             dhdl_data,
             cpus: cpus as u32,
-            parity,
         })
     }
 }
@@ -1132,12 +1120,7 @@ fn analyse_source(o: &Options, frames: Option<&[PrecalcFrame]>) -> Result<Analys
                 de += l(DISFLD).at(sfe, c_disfld) * l(DISFLD).dlam;
             }
             if !ex.dih {
-                // gromos++ 9cd9f6b3 leaves out dΛ_dih/dλ (ext_ti_ana.cc:830); x·1.0 is x exactly
-                let dlam = match o.parity {
-                    Parity::Corrected => l(DIH).dlam,
-                    Parity::GromosppReleased => 1.0,
-                };
-                de += sfe_dih[0] * dlam;
+                de += sfe_dih[0] * l(DIH).dlam;
             }
 
             for (i, slj_i) in slj.iter().enumerate() {

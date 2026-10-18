@@ -19,12 +19,13 @@ Analysis binaries producing results comparable to GROMOS analysis tools.
   all I/O through newen-io; 8 integration tests
 - `ener` ✓ — energy recalculation from trajectory via `newen-forces::energy::single_point_energy`
 - `ext_ti_ana`, `bar`, `ext_ti_merge` ✓ verified (1.8) — the gromos++ programs, byte for byte
-  on the oracle cases (`tests/data/README.md`: A1–A5 and the five-window CH4 chain): PRECALCLAM
-  reweighting, BAR and its error, the merge with its error integral. Three gromos++ 9cd9f6b3
-  defects (BAR error ÷ (ln⟨f⟩)² twice, merge error without point N−2, dihedral ∂H/∂λ without
-  dΛ/dλ) are corrected by default and reproduced under `@parity gromospp`
-  (`programs::free_energy::Parity`); the corrected output is checked against patched gromos++
-  (`A2_fixed`, `chain_fixed`). Deliberate differences in each module's header. Library API:
+  on the oracle cases (`tests/data/README.md`: A1, A3–A5, `A2_fixed` and the five-window CH4
+  chain `chain_fixed`): PRECALCLAM reweighting, BAR and its error, the merge with its error
+  integral. Three gromos++ 9cd9f6b3 defects are corrected, with no option to reproduce them:
+  D4 (BAR error ÷ (ln⟨f⟩)² twice), D5 (dihedral ∂H/∂λ without dΛ/dλ), D8 (merge error without
+  point N−2). Where they act, the oracle is gromos++ with the D4/D5/D8 patches (`A2_fixed`,
+  `chain_fixed`); the released-gromos++ reproducer lives in gromos-divergences
+  (`sims/e3_analysis`, `data/e3_*.csv`). Deliberate differences in each module's header. Library API:
   `programs::ext_ti_ana::{Options, analyse, write_files}` (and over frames held in memory,
   0.0.62: `Options::for_frames`, `analyse_frames`, `bar_file` → a `bar::BarFile`, what
   `newen.free_energy`'s BAR/MBAR run on), `programs::bar::{read_bar_file, bar,

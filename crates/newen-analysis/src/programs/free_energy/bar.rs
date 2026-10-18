@@ -8,19 +8,14 @@
 //! two ΔE distributions (`@printdist` writes them to `dist_<k>_<k+1>.dat`).
 //!
 //! Deliberate differences from gromos++ (item 1.8):
-//! - The analytical error. gromos++ 9cd9f6b3 divides each side's relative variance by an extra
-//!   (ln⟨f⟩)² (`bar.cc:639`; dfmult has no such factor, `dfmult.cc:212-217`). Corrected by
-//!   default since 0.0.57;`@parity gromospp` ([`Parity::GromosppReleased`]) reproduces the
-//!   defect. The oracle of the corrected output is gromos++ 9cd9f6b3 patched with
-//!   `D4_bar_error.patch` (`crates/newen-md/tests/gromosXX_references/patches/`), that of the
-//!   reproduced one the released build. [`Interval::error_corrected`] is the corrected error in
-//!   both modes.
+//! - The analytical error (D4): each side's relative variance is not divided by (ln⟨f⟩)² a
+//!   second time. The oracle is gromos++ 9cd9f6b3 patched with `D4_bar_error.patch`
+//!   (`crates/newen-md/tests/gromosXX_references/patches/`).
 //! - The bootstrap seed can be given (library); gromos++ takes `time(NULL)`.
 
 use super::common::{
     cmax, cmin, draw_index, get_value, parse_finite, population_variance, wall_clock_seed,
 };
-use super::Parity;
 use crate::args::Arguments;
 use crate::distribution::Distribution;
 use crate::lnexp::{lnexp_ave, lnexp_covariance, lnexp_stat_ineff};
@@ -36,8 +31,7 @@ pub const USAGE: &str = "# bar
 \t[@maxiterations   <maximum number of iterations (default: 500)>]
 \t[@convergence     <relative change in free energy for convergence (default: 1E-5)>]
 \t[@printdist       <write out distributions>]
-\t[@bootstrap       <number of bootstrap estimates for error estimates (default: 0)>]
-\t[@parity          <gromospp: the error as gromos++ 9cd9f6b3 prints it (default: corrected)>]";
+\t[@bootstrap       <number of bootstrap estimates for error estimates (default: 0)>]";
 
 pub const KNOWN: &[&str] = &[
     "files",
@@ -46,7 +40,6 @@ pub const KNOWN: &[&str] = &[
     "bootstrap",
     "temp",
     "printdist",
-    "parity",
 ];
 
 pub const PROGRAM: Program = Program {
@@ -79,8 +72,6 @@ pub struct BarOptions {
     pub seed: Option<u32>,
     /// Where `dist_<k>_<k+1>.dat` go (`@printdist`: the working directory); `None` writes none.
     pub printdist: Option<PathBuf>,
-    /// `@parity`: which analytical error [`Interval::error`] is.
-    pub parity: Parity,
 }
 
 /// One neighbouring pair, kJ/mol.
@@ -90,11 +81,8 @@ pub struct Interval {
     pub lam_j: f64,
     /// G(λ_j) − G(λ_i).
     pub dg: f64,
-    /// The analytical error printed: [`Interval::error_corrected`], or under
-    /// [`Parity::GromosppReleased`] gromos++'s (with the extra 1/(ln⟨f⟩)², `bar.cc:639`).
+    /// The analytical error √(σ²⟨f_i⟩/⟨f_i⟩² + σ²⟨f_j⟩/⟨f_j⟩²)·kT.
     pub error: f64,
-    /// The analytical error √(σ²⟨f_i⟩/⟨f_i⟩² + σ²⟨f_j⟩/⟨f_j⟩²)·kT, whatever the parity.
-    pub error_corrected: f64,
     /// The bootstrap standard deviation (`@bootstrap`).
     pub bootstrap: Option<f64>,
     /// Overlap integral of the two ΔE distributions (100 bins).
@@ -107,10 +95,7 @@ pub struct Interval {
 pub struct BarResult {
     pub intervals: Vec<Interval>,
     pub dg_total: f64,
-    /// The printed total error (from [`Interval::error`]).
     pub error_total: f64,
-    /// The total from [`Interval::error_corrected`].
-    pub error_total_corrected: f64,
     pub bootstrap_total: Option<f64>,
 }
 
@@ -126,7 +111,6 @@ pub fn evaluate(argv: &[String], out: &mut dyn Write) -> Result<BarResult, Strin
     let temp: f64 = get_value(&args, "temp", None)?;
     let printdist = args.has("printdist");
     let bootstrap: i64 = get_value(&args, "bootstrap", Some(0))?;
-    let parity = Parity::from_args(&args)?;
     if args.count("files") <= 1 {
         return Err(format!("At least two data files required!\n{USAGE}"));
     }
@@ -145,7 +129,6 @@ pub fn evaluate(argv: &[String], out: &mut dyn Write) -> Result<BarResult, Strin
         bootstrap: bootstrap as usize,
         seed: None,
         printdist: printdist.then(|| PathBuf::from(".")),
-        parity,
     };
     bar(&files, &opts, out)
 }
@@ -277,7 +260,7 @@ pub fn bar(files: &[BarFile], o: &BarOptions, out: &mut dyn Write) -> Result<Bar
     out.write_all(head.as_bytes()).map_err(io_err)?;
 
     let seed0 = o.seed.unwrap_or_else(wall_clock_seed);
-    let (mut dg_tot, mut err_tot, mut err_tot_c, mut boot_tot) = (0.0, 0.0, 0.0, 0.0);
+    let (mut dg_tot, mut err_tot, mut boot_tot) = (0.0, 0.0, 0.0);
     let mut intervals = Vec::with_capacity(files.len() - 1);
     for k in 0..files.len() - 1 {
         // literal gromos++ matching: the last file and the last column that fit win
@@ -328,15 +311,10 @@ pub fn bar(files: &[BarFile], o: &BarOptions, out: &mut dyn Write) -> Result<Bar
             o.convergence,
             true,
         )?;
-        let (error_gpp, error_c) = r.error.expect("asked for the error");
-        let error = match o.parity {
-            Parity::Corrected => error_c,
-            Parity::GromosppReleased => error_gpp,
-        };
-        let (dg, error, error_c) = (r.dg * kbt, error * kbt, error_c * kbt);
+        let error = r.error.expect("asked for the error");
+        let (dg, error) = (r.dg * kbt, error * kbt);
         dg_tot += dg;
         err_tot += error * error;
-        err_tot_c += error_c * error_c;
 
         let boot = if o.bootstrap > 0 {
             let mut seed = seed0.wrapping_add(k as u32);
@@ -397,7 +375,6 @@ pub fn bar(files: &[BarFile], o: &BarOptions, out: &mut dyn Write) -> Result<Bar
             lam_j: lam_s[k + 1],
             dg,
             error,
-            error_corrected: error_c,
             bootstrap: boot.map(f64::sqrt),
             overlap,
             iterations: r.iterations,
@@ -417,7 +394,6 @@ pub fn bar(files: &[BarFile], o: &BarOptions, out: &mut dyn Write) -> Result<Bar
         intervals,
         dg_total: dg_tot,
         error_total: err_tot.sqrt(),
-        error_total_corrected: err_tot_c.sqrt(),
         bootstrap_total: (o.bootstrap > 0).then(|| boot_tot.sqrt()),
     })
 }
@@ -427,8 +403,8 @@ pub fn bar(files: &[BarFile], o: &BarOptions, out: &mut dyn Write) -> Result<Bar
 pub struct BarStep {
     /// G(j) − G(i) / kT.
     pub dg: f64,
-    /// gromos++ 9cd9f6b3's analytical error and the corrected one, when asked for.
-    pub error: Option<(f64, f64)>,
+    /// The analytical error, when asked for.
+    pub error: Option<f64>,
     pub iterations: usize,
 }
 
@@ -517,7 +493,7 @@ pub fn do_bar(
     let delta_ji: Vec<f64> = (0..n_j)
         .map(|n| -max_ji - (exp_mx_ji + exp_ji[n]).ln() + e_jj[n] - e_ji[n])
         .collect();
-    let side = |d: &[f64], n: usize| -> Result<(f64, f64), String> {
+    let side = |d: &[f64], n: usize| -> Result<f64, String> {
         let ave = lnexp_ave(d);
         let (var, sign) = lnexp_covariance(d, d)?;
         if sign < 0 {
@@ -525,16 +501,13 @@ pub fn do_bar(
         }
         let si = lnexp_stat_ineff(d, d)?;
         let d2 = var - (n as f64).ln() + si;
-        Ok((ave, (d2 - 2.0 * ave).exp()))
+        Ok((d2 - 2.0 * ave).exp())
     };
-    let (d_ij, error_i2) = side(&delta_ij, n_i)?;
-    let (d_ji, error_j2) = side(&delta_ji, n_j)?;
-    // gromos++ 9cd9f6b3 divides by d² a second time (bar.cc:639)
-    let error = (error_i2 / (d_ij * d_ij) + error_j2 / (d_ji * d_ji)).sqrt();
-    let corrected = (error_i2 + error_j2).sqrt();
+    let error_i2 = side(&delta_ij, n_i)?;
+    let error_j2 = side(&delta_ji, n_j)?;
     Ok(BarStep {
         dg,
-        error: Some((error, corrected)),
+        error: Some((error_i2 + error_j2).sqrt()),
         iterations: k,
     })
 }

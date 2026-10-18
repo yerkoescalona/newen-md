@@ -1253,8 +1253,8 @@ fn dgslv_pbsolv_unit_charges_in_spc_match_gromospp() {
 }
 
 // ── ext_ti_ana → bar → ext_ti_merge (item 1.8): files and stdout byte for byte ─────────────
-// `@parity gromospp` against gromos++ 9cd9f6b3 (`A1`–`A4`, `chain`); the default (corrected)
-// against gromos++ 9cd9f6b3 + the D4/D5/D8 patches (`A2_fixed`, `chain_fixed`).
+// Against gromos++ 9cd9f6b3 where D4/D5/D8 do not act (`A1`, `A3`, `A4`), and against it with
+// the D4/D5/D8 patches where they do (`A2_fixed`, `chain_fixed`).
 
 fn eti(name: &str) -> String {
     data("ext_ti_ana").join(name).to_string_lossy().into_owned()
@@ -1295,9 +1295,6 @@ fn assert_same_files(ours: &Path, expected: &Path) {
         );
     }
 }
-
-/// `@parity gromospp`, which every case against the released gromos++ is run with.
-const GROMOSPP: [&str; 2] = ["@parity", "gromospp"];
 
 fn ext_ti_ana_case(case: &str, args: &[&str]) {
     let dir = tmp_dir(&format!("ext_ti_ana_{case}"));
@@ -1340,7 +1337,6 @@ fn ext_ti_ana_matches_gromospp_a1_core() {
     // writers, and 0.125 printed as 0.12 in the file names (round half to even)
     let mut a = aladip_flags("aladip_precalc.tre", "aladip_precalc.trg");
     a.extend(strs(&["@countframes", "@bar_data", "@dHdl_data"]));
-    a.extend(strs(&GROMOSPP));
     ext_ti_ana_case("A1", &a.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
@@ -1393,14 +1389,7 @@ fn a2_flags() -> Vec<String> {
     a
 }
 
-#[test]
-fn ext_ti_ana_matches_gromospp_a2_coefficients() {
-    let mut a = a2_flags();
-    a.extend(strs(&GROMOSPP));
-    ext_ti_ana_case("A2", &a.iter().map(String::as_str).collect::<Vec<_>>());
-}
-
-/// A2 by default: the dihedral ∂H/∂λ carries dΛ_dih/dλ = 2λ (gromos++ with D5).
+/// A2: the dihedral ∂H/∂λ carries dΛ_dih/dλ = 2λ (gromos++ with D5).
 #[test]
 fn ext_ti_ana_matches_patched_gromospp_a2_fixed() {
     let a = a2_flags();
@@ -1420,7 +1409,6 @@ fn ext_ti_ana_matches_gromospp_a3_softness_sets() {
         "@no_crf",
     ]));
     a.extend(["@slj_scrf_file".to_string(), eti("slj_scrf.txt")]);
-    a.extend(strs(&GROMOSPP));
     ext_ti_ana_case("A3", &a.iter().map(String::as_str).collect::<Vec<_>>());
 }
 
@@ -1438,8 +1426,6 @@ fn ext_ti_ana_matches_gromospp_a4_imd() {
         "@library".into(),
         eti("ene_ana.md++.lib"),
         "@bar_data".into(),
-        GROMOSPP[0].into(),
-        GROMOSPP[1].into(),
     ];
     ext_ti_ana_case("A4", &a.iter().map(String::as_str).collect::<Vec<_>>());
 }
@@ -1496,8 +1482,8 @@ fn ext_ti_ana_refuses_what_gromospp_refuses_a5() {
 /// Five gromosXX λ windows of CH4 in water through the whole gromos++ chain: ext_ti_ana on each
 /// window, bar on the five `bar_data` files (given out of order), ext_ti_merge on the five
 /// predictions (out of order; its error column is the frame count, as gromos++ reads it).
-/// `extra` goes to all three programs; `case` is the fixture directory.
-fn ti_chain(case: &str, extra: &[&str]) {
+/// `case` is the fixture directory.
+fn ti_chain(case: &str) {
     let dir = tmp_dir(&format!("ti_{case}"));
     let lams = ["0.00", "0.25", "0.50", "0.75", "1.00"];
     for l in lams {
@@ -1529,13 +1515,12 @@ fn ti_chain(case: &str, extra: &[&str]) {
         a.push("@dHdl_data".into());
         a.extend(strs(&lams));
         a.extend(strs(&["@outdir", "chain"]));
-        a.extend(strs(extra));
         let (ok, stdout, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_ana"), &a, &dir);
         assert!(ok, "ext_ti_ana @slam {l}: {stderr}");
         assert_eq!(stdout, "");
     }
     let chain = dir.join("chain");
-    let mut bar_args = strs(&[
+    let bar_args = strs(&[
         "@files",
         "bar_data_l1.00.dat",
         "bar_data_l0.00.dat",
@@ -1548,10 +1533,9 @@ fn ti_chain(case: &str, extra: &[&str]) {
         "1E-10",
         "@printdist",
     ]);
-    bar_args.extend(strs(extra));
     let (ok, bar_out, stderr) = run_raw(env!("CARGO_BIN_EXE_bar"), &bar_args, &chain);
     assert!(ok, "bar: {stderr}");
-    let mut merge_args = strs(&[
+    let merge_args = strs(&[
         "@files",
         "predicted_l0.50.dat",
         "predicted_l0.00.dat",
@@ -1559,7 +1543,6 @@ fn ti_chain(case: &str, extra: &[&str]) {
         "predicted_l0.25.dat",
         "predicted_l0.75.dat",
     ]);
-    merge_args.extend(strs(extra));
     let (ok, merge_out, stderr) = run_raw(env!("CARGO_BIN_EXE_ext_ti_merge"), &merge_args, &chain);
     assert!(ok, "ext_ti_merge: {stderr}");
     let expected = data("ext_ti_ana").join(case);
@@ -1573,16 +1556,11 @@ fn ti_chain(case: &str, extra: &[&str]) {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-#[test]
-fn ext_ti_ana_bar_ext_ti_merge_chain_matches_gromospp() {
-    ti_chain("chain", &GROMOSPP);
-}
-
-/// By default: bar's error without the second 1/d² (D4), the merge error with the point N−2
-/// (D8); the ext_ti_ana files are unchanged (linear λ-dependences, D5 multiplies by 1).
+/// bar's error without the second 1/d² (D4), the merge error with the point N−2 (D8); the
+/// ext_ti_ana files are those of the released gromos++ (linear λ-dependences, D5 multiplies by 1).
 #[test]
 fn ext_ti_ana_bar_ext_ti_merge_chain_matches_patched_gromospp() {
-    ti_chain("chain_fixed", &[]);
+    ti_chain("chain_fixed");
 }
 
 #[test]
@@ -1621,19 +1599,6 @@ fn bar_and_ext_ti_merge_refuse_bad_input() {
         &dir,
     );
     assert!(!ok && stderr.contains("At least two data files required!"));
-    // an unknown @parity is refused before any file is read
-    for (bin, temp) in [
-        (env!("CARGO_BIN_EXE_bar"), &["@temp", "300"][..]),
-        (env!("CARGO_BIN_EXE_ext_ti_merge"), &[][..]),
-    ] {
-        let mut args = strs(&["@files", "a.dat", "b.dat", "@parity", "released"]);
-        args.extend(strs(temp));
-        let (ok, _, stderr) = run_raw(bin, &args, &dir);
-        assert!(
-            !ok && stderr.contains("@parity: 'released'"),
-            "{bin}: {stderr}"
-        );
-    }
     std::fs::remove_dir_all(&dir).ok();
 }
 
