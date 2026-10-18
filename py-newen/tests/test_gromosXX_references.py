@@ -306,6 +306,7 @@ REFERENCE_SYSTEMS = [
     "nacl_1water_distres",
     # Steepest-descent energy minimization
     "aladip_vacuum_em",
+    "aladip_vacuum_em_ntw5",
     "aladip_vacuum_em_shake",
     "aladip_solvated_em_noshake",
     "aladip_solvated_em_shake",
@@ -368,6 +369,7 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_slowgrowth",
     "aladip_vacuum_fep_slowgrowth_shake",
     "aladip_vacuum_fep_slowgrowth_cont",
+    "aladip_vacuum_fep_slowgrowth_t10",
     "ch4_water_fep_slowgrowth",
     "aladip_vacuum_em_slowgrowth",
     "aladip_solvated_epsrf0",
@@ -1042,6 +1044,18 @@ def test_run_matches_step_loop():
     manual = np.array(manual)
 
     assert np.allclose(frames[:, energy_cols], manual)
+
+
+def test_start_time_stamps_every_row():
+    """STEP T = 10 ps: `Simulation.time` and the energy rows carry T + step*DT, the times of
+    gromosXX's `.tre` (`md.cc:241`)."""
+    system_dir = REF_DIR / "aladip_vacuum_fep_slowgrowth_t10"
+    lines = (system_dir / "expected" / "energies.tre").read_text().splitlines()
+    expected = [float(lines[i + 1].split()[1]) for i, x in enumerate(lines) if x == "TIMESTEP"]
+    sim = _create_simulation(system_dir)
+    assert sim.time == expected[1]
+    frames = sim.run(4, ene_freq=1)
+    assert np.allclose(frames[:, 0], expected[:5], rtol=0, atol=1e-12)
 
 
 def test_energy_timeseries():

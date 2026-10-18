@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "aladip_vacuum_fep_slowgrowth_t10"
+description = "aladip_vacuum_fep_slowgrowth started at STEP T = 10 ps"
+level = 4
+isolates = "the start time T: every written time is T + step*DT (.tre, .trg, .trf, .trc and the final TIMESTEP block); the physics is that of aladip_vacuum_fep_slowgrowth"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_fep_slowgrowth_t10.in"
+pttopo = "../shared/aladip.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

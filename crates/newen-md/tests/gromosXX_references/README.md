@@ -54,6 +54,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_lincs | 12 | LINCS (solute, NTC=2)               | **PASS** |
 | 4   | aladip_solvated  | 72    | SHAKE + solute-solvent               | **PASS** |
 | 4   | aladip_vacuum_em | 12    | steepest descent EM, vacuum          | **PASS** |
+| 4   | aladip_vacuum_em_ntw5 | 12 | the same with NTWX = NTWF = NTWE = 5, converging at step 6: no position frame for step 6, the repeated force and energy frame of step 5 (0.0.68) | **PASS** |
 | 4   | aladip_vacuum_em_shake | 12 | SD EM + SHAKE, vacuum             | **PASS** |
 | 4   | aladip_solvated_em_noshake | 72 | SD EM, solvated, no SHAKE      | **PASS** |
 | 4   | aladip_solvated_em_shake | 72 | SD EM + SHAKE, solvated          | **PASS** |
@@ -92,6 +93,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_fep_slowgrowth | 12 | slow growth, RLAM 0.125, DLAMT 2/ps, 100 steps (λ 0.125 → 0.525), `.trg` every step: λ += DLAMT·Δt after every step, the λ-mixed masses (kinetic dH/dλ, leap-frog) and every perturbed bonded and nonbonded term following it; the `.trg` prints the λ the step ran at, the `.tre` mass the masses at the next λ, the final PERTDATA 0.525 (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_slowgrowth_shake | 12 | the same with NTC = 3 and two energy groups: the perturbed constraint lengths re-evaluated at the moving λ (1.8) | **PASS** |
 | 4   | aladip_vacuum_fep_slowgrowth_cont | 12 | NRDGL = 1 from `aladip_vacuum_fep_slowgrowth`'s native final configuration (λ 0.525 from PERTDATA, RLAM 0 ignored), DLAMT 6/ps, 50 steps: λ runs past 1 to 1.125 unbounded, as in gromosXX (1.8) | **PASS** |
+| 4   | aladip_vacuum_fep_slowgrowth_t10 | 12 | `aladip_vacuum_fep_slowgrowth` from STEP T = 10 ps: every TIMESTEP time (`.tre`, `.trg`, `.trf`, `.trc`, final configuration) is T + step·DT; gromosXX's output differs from the T = 0 run in the times and the title only (0.0.68) | **PASS** |
 | 4   | ch4_water_fep_slowgrowth | 2998 | `ch4_water_fep_l025` with DLAMT 5/ps, 50 steps (λ 0.25 → 0.75), energies and `.trg` every step, positions and forces every 25: soft-core pairs at a moving λ in a periodic box with solvent SHAKE (1.8) | **PASS** |
 | 4   | aladip_vacuum_em_slowgrowth | 12 | `aladip_vacuum_em` with `aladip.pttopo`, RLAM 0.125, DLAMT 2/ps: λ moves on every minimisation step but the one the minimiser stops at (final PERTDATA 0.173); the repeated converged `.trg` frame carries the previous step's λ (1.8) | **PASS** |
 | 4   | aladip_solvated_epsrf0 | 72 | EPSRF = 0: a conducting boundary, C_RF = −1 (1.8) | **PASS** |
@@ -120,7 +122,9 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_aeds_f6_ovf | 12 | A-EDS FORM 6 with EIR 0 6000 0, 100 steps: e^{−β(V_2 − E_2^R)} overflows every step, the released gromosXX's prevalences are NaN and its offsets stay at the step-0 centring (−2000, 4000, −2000); run with the reproducing overrides (1.8 D25) | **PASS** |
 | 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | the same runs, expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0); newen's defaults (1.8, 0.0.63) | **PASS** |
 
-**119 of 120 registered tests pass** (2026-10-16; `aladip_gamd` ignored). Plus gromosXX's own regression oracle,
+**122 of 123 registered tests pass** (2026-10-18; `aladip_gamd` ignored). Besides the
+energies, forces, trajectory and final configuration, every TIMESTEP block (step and time) of the
+`.tre`, `.trf`, `.trc`, `.trg` and final configuration is compared, and the force frame count. Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,
 aladip_special}.t.cc` per-term energies (bonded, perturbed, soft-core, both reaction-field
 variants, atomic cutoff, distance restraints, λ-derivatives) — 7 pass against the *current*

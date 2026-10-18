@@ -24,6 +24,8 @@ pub struct SimulationState {
     pub n_steps: usize,
     /// Current simulation time (ps)
     pub time: f64,
+    /// Time of step 0 (ps), STEP T.
+    pub t0: f64,
 }
 
 impl SimulationState {
@@ -34,13 +36,26 @@ impl SimulationState {
             step: 0,
             n_steps,
             time: 0.0,
+            t0: 0.0,
         }
+    }
+
+    /// Start the clock at `t0` (ps) instead of 0.
+    pub fn with_start_time(mut self, t0: f64) -> Self {
+        self.t0 = t0;
+        self.time = self.time_of(self.step);
+        self
+    }
+
+    /// The time of `step`: t0 + step·dt, as gromosXX computes it (`md.cc:241`).
+    pub fn time_of(&self, step: usize) -> f64 {
+        self.t0 + step as f64 * self.dt
     }
 
     /// Advance by one step, updating step counter and simulation time.
     pub fn advance(&mut self) {
         self.step += 1;
-        self.time = self.step as f64 * self.dt;
+        self.time = self.time_of(self.step);
     }
 }
 
@@ -398,6 +413,15 @@ mod tests {
         sim.advance();
         assert_eq!(sim.step, 2);
         assert!((sim.time - 0.004).abs() < 1e-15);
+    }
+
+    #[test]
+    fn test_simulation_state_start_time() {
+        let mut sim = SimulationState::new(0.002, 100).with_start_time(10.0);
+        assert_eq!(sim.time, 10.0);
+        sim.advance();
+        assert_eq!(sim.time, 10.0 + 0.002);
+        assert_eq!(sim.time_of(5), 10.0 + 5.0 * 0.002);
     }
 
     #[test]

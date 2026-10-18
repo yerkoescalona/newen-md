@@ -1,0 +1,20 @@
+# Auto-generated for aladip vacuum steepest descent minimization
+# gromosXX v1.6.0, double precision, 12 atoms
+
+[system]
+name = "aladip_vacuum_em_ntw5"
+description = "aladip_vacuum_em with NTWX = NTWF = NTWE = 5"
+level = 1
+natoms = 12
+isolates = "the output schedule of a converged minimisation (step 6): positions of the stopping step only on the NTWX schedule (6: none), the repeated force and energy frame of the step before on the NTWF/NTWE schedule (5: written)"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum_em/aladip_vacuum_em.conf"
+parameters = "aladip_vacuum_em_ntw5.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"

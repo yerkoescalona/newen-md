@@ -594,6 +594,46 @@ fn run_reference(system: &str) {
     }
     report_mismatches(system, &mismatches);
 
+    // Every frame's TIMESTEP (step and time, t = T + step·DT) in each file gromosXX wrote: the
+    // energies, dH/dλ, forces, positions and the final configuration — the frame count of each
+    // with it.
+    for (file, ours) in [
+        ("expected/energies.tre".to_string(), tre.clone()),
+        ("expected/forces.trf".to_string(), trf.clone()),
+        (
+            "expected/trajectory.trc".to_string(),
+            out.join("trajectory.trc"),
+        ),
+        ("expected/final.conf".to_string(), out.join("final.conf")),
+    ]
+    .into_iter()
+    .chain(toml_str_opt(&toml, "free_energy").map(|fe| (fe, trg.clone())))
+    {
+        let theirs = sys_dir.join(&file);
+        if !theirs.exists() {
+            continue;
+        }
+        let expected = parse_timesteps(&theirs);
+        let actual = if ours.exists() {
+            parse_timesteps(&ours)
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{system}: {file}: {} TIMESTEP blocks, gromosXX wrote {}",
+            actual.len(),
+            expected.len()
+        );
+        for (i, (&(es, et), &(a_s, at))) in expected.iter().zip(&actual).enumerate() {
+            assert!(
+                es == a_s && (et - at).abs() <= 1e-9,
+                "{system}: {file} frame {i}: TIMESTEP {a_s} {at} vs gromosXX {es} {et}"
+            );
+        }
+    }
+
     // Compare forces if reference .trf exists: the free forces, and the constraint forces
     // gromosXX writes when SHAKE runs
     let expected_trf = sys_dir.join("expected/forces.trf");
@@ -611,7 +651,14 @@ fn run_reference(system: &str) {
             );
         }
 
-        let n_compare = exp_forces.len().min(act_forces.len());
+        // a converged minimisation repeats its last frame (`out_configuration.cc:624-630`)
+        assert_eq!(
+            act_forces.len(),
+            exp_forces.len(),
+            "{system}: {block} frame count differs from gromosXX (expected {}, got {})",
+            exp_forces.len(),
+            act_forces.len()
+        );
         for (frame_idx, (ef, af)) in exp_forces.iter().zip(&act_forces).enumerate() {
             assert_eq!(
                 ef.len(),
@@ -637,12 +684,6 @@ fn run_reference(system: &str) {
                     &format!("{system}[{frame_idx}] {block} atom {atom_idx} fz"),
                 );
             }
-        }
-        if n_compare == 0 && !exp_forces.is_empty() {
-            panic!(
-                "{system}: expected {} {block} frames but got none",
-                exp_forces.len()
-            );
         }
     }
 
@@ -798,6 +839,27 @@ fn run_reference(system: &str) {
     }
 
     let _ = fs::remove_dir_all(&out);
+}
+
+/// The (step, time) of every `TIMESTEP` block of a file, in file order.
+fn parse_timesteps(path: &Path) -> Vec<(u64, f64)> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let mut lines = text.lines().map(str::trim);
+    let mut out = Vec::new();
+    while let Some(l) = lines.next() {
+        if l != "TIMESTEP" {
+            continue;
+        }
+        let row = lines
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or_else(|| panic!("{}: empty TIMESTEP block", path.display()));
+        let mut v = row.split_whitespace();
+        let bad = format!("{}: bad TIMESTEP line {row:?}", path.display());
+        let step: u64 = v.next().and_then(|x| x.parse().ok()).expect(&bad);
+        let time: f64 = v.next().and_then(|x| x.parse().ok()).expect(&bad);
+        out.push((step, time));
+    }
+    out
 }
 
 /// Every number of a `.cnf` block (empty if the block is absent).
@@ -1129,6 +1191,11 @@ ref_test!(
     aladip_vacuum_fep_slowgrowth_cont,
     "aladip_vacuum_fep_slowgrowth_cont"
 );
+// Started at STEP T = 10 ps: every TIMESTEP time is T + step·DT, the physics unchanged.
+ref_test!(
+    aladip_vacuum_fep_slowgrowth_t10,
+    "aladip_vacuum_fep_slowgrowth_t10"
+);
 // In solvent: soft-core pairs at a moving λ in a periodic box with solvent SHAKE.
 ref_test!(ch4_water_fep_slowgrowth, "ch4_water_fep_slowgrowth");
 // Slow growth under steepest descent: λ moves on every step but the one the minimiser stops at.
@@ -1211,8 +1278,11 @@ ref_test!(
 );
 
 // ── Energy minimization ──────────────────────────────────────────────────────
-// gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.
+// gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34,
+// the forces too since 0.0.68. With output every 5 steps: the repeat only on the schedule of the
+// step before, the stopping step's positions only on their own.
 ref_test!(aladip_vacuum_em, "aladip_vacuum_em");
+ref_test!(aladip_vacuum_em_ntw5, "aladip_vacuum_em_ntw5");
 ref_test!(aladip_vacuum_em_shake, "aladip_vacuum_em_shake");
 ref_test!(aladip_solvated_em_noshake, "aladip_solvated_em_noshake");
 ref_test!(aladip_solvated_em_shake, "aladip_solvated_em_shake");

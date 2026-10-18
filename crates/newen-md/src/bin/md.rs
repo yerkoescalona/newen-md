@@ -311,6 +311,31 @@ fn thermostat_scales(seq: &mut newen::algorithm::AlgorithmSequence) -> Vec<f64> 
         .unwrap_or_default()
 }
 
+/// One force frame of the state the step's energies describe (`conf.old()`): the free forces and,
+/// when SHAKE runs, the constraint forces. gromosXX `_print_forcered` rotates them back into the
+/// cube frame of a truncated octahedron (`truncoct_triclinic_rotmat(false)`; without ROTTRANS
+/// `rmat(phi, theta, psi)` is the identity).
+fn write_forces(
+    fw: &mut ForceWriter,
+    conf: &newen::configuration::Configuration,
+    shake_forces: bool,
+    step: usize,
+    time: f64,
+) -> Result<(), String> {
+    let forces = &conf.old().force;
+    let constraint_forces = shake_forces.then(|| conf.old().constraint_force.as_slice());
+    let result = if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
+        let rot = truncoct_triclinic_rotmat(false);
+        let rotated_forces: Vec<Vec3> = forces.iter().map(|f| rot * *f).collect();
+        let rotated_constraints: Option<Vec<Vec3>> =
+            constraint_forces.map(|cf| cf.iter().map(|f| rot * *f).collect());
+        fw.write_frame(step, time, &rotated_forces, rotated_constraints.as_deref())
+    } else {
+        fw.write_frame(step, time, forces, constraint_forces)
+    };
+    result.map_err(|e| e.to_string())
+}
+
 fn main() {
     let t_total = Instant::now();
     let args: Vec<String> = env::args().collect();
@@ -731,7 +756,7 @@ fn main() {
     println!();
 
     // `init()` and step 0 run through `newen_run::start` at the top of the main loop.
-    let mut sim_state = SimulationState::new(dt, n_steps);
+    let mut sim_state = SimulationState::new(dt, n_steps).with_start_time(recipe.control.t0);
 
     if let Some(t) = &summary.thermostat {
         println!("Setting up thermostat: {}", t.label);
@@ -994,7 +1019,7 @@ fn main() {
         }
     }
     for step in 0..n_steps {
-        let time = step as f64 * dt;
+        let time = sim_state.time_of(step);
 
         log::debug!("Step {}: time = {:.6} ps", step, time);
 
@@ -1138,31 +1163,35 @@ fn main() {
             );
             println!("    E_pot = {:.10e} kJ/mol", state.energies.potential_total);
             println!();
-            // Write final frames before breaking. gromosXX writes the converged energies
-            // once more, labelled with the previous step (its frame count is NSTEPS + 1).
-            if let Some(tw) = traj_writer.as_mut() {
+            // Write final frames before breaking: the positions of this step on the NTWX
+            // schedule (gromosXX writes them before the step that stops). gromosXX writes the
+            // converged forces, energies and dH/dλ once more, labelled with the previous step
+            // and on its schedule (`out_configuration.cc:624-641`), so those frame counts are
+            // NSTEPS + 1.
+            if let (true, Some(tw)) = (due(step, nstxout), traj_writer.as_mut()) {
                 if let Err(e) = tw.write_frame(step, time, &conf) {
                     eprintln!("Error writing final trajectory frame: {}", e);
                 }
             }
-            if let Some(ew) = ene_writer.as_mut() {
-                let last = step.saturating_sub(1);
+            let last = step.saturating_sub(1);
+            let last_time = sim_state.time_of(last);
+            if let (true, Some(fw)) = (due(last, imd.ntwf), force_writer.as_mut()) {
+                if let Err(e) = write_forces(fw, &conf, shake_forces, last, last_time) {
+                    eprintln!("Error writing final force frame: {}", e);
+                }
+            }
+            if let (true, Some(ew)) = (due(last, nstener), ene_writer.as_mut()) {
                 let scales = thermostat_scales(&mut md_sequence);
                 let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
-                let e = ew.write_energy(last, last as f64 * dt, &conf.old().energies, &vp);
+                let e = ew.write_energy(last, last_time, &conf.old().energies, &vp);
                 if let Err(e) = e {
                     eprintln!("Error writing final energy frame: {}", e);
                 }
             }
-            // and the converged dH/dλ, on the NTWG schedule of the previous step
-            // (`out_configuration.cc:638-641`)
-            if let Some(fw) = free_energy_writer.as_mut() {
-                let last = step.saturating_sub(1);
-                if due(last, imd.ntwg) {
-                    let d = &conf.old().perturbed_energy_derivatives;
-                    if let Err(e) = fw.write_derivatives(last, last as f64 * dt, old_lambda, d) {
-                        eprintln!("Error writing final free-energy frame: {}", e);
-                    }
+            if let (true, Some(fw)) = (due(last, imd.ntwg), free_energy_writer.as_mut()) {
+                let d = &conf.old().perturbed_energy_derivatives;
+                if let Err(e) = fw.write_derivatives(last, last_time, old_lambda, d) {
+                    eprintln!("Error writing final free-energy frame: {}", e);
                 }
             }
             break;
@@ -1254,34 +1283,10 @@ fn main() {
             }
         }
 
-        // Write forces (same frequency as trajectory)
-        if let Some(ref mut fw) = force_writer {
-            if due(step, nstxout) {
-                let forces = &conf.old().force;
-                let constraint_forces = if shake_forces {
-                    Some(conf.old().constraint_force.as_slice())
-                } else {
-                    None
-                };
-
-                // GROMOS out_configuration.cc::_print_forcered rotates
-                // FREEFORCERED/CONSFORCERED back into the original (cube)
-                // frame via truncoct_triclinic_rotmat(false) when
-                // boundary_type==truncoct (no ROTTRANS block here, so
-                // rmat(phi,theta,psi)=identity). P1.4.
-                if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
-                    let rot = truncoct_triclinic_rotmat(false);
-                    let rotated_forces: Vec<Vec3> = forces.iter().map(|f| rot * *f).collect();
-                    let rotated_constraints: Option<Vec<Vec3>> =
-                        constraint_forces.map(|cf| cf.iter().map(|f| rot * *f).collect());
-                    if let Err(e) =
-                        fw.write_frame(step, time, &rotated_forces, rotated_constraints.as_deref())
-                    {
-                        eprintln!("Error writing forces: {}", e);
-                    }
-                } else if let Err(e) = fw.write_frame(step, time, forces, constraint_forces) {
-                    eprintln!("Error writing forces: {}", e);
-                }
+        // Write forces (NTWF)
+        if let (true, Some(fw)) = (due(step, imd.ntwf), force_writer.as_mut()) {
+            if let Err(e) = write_forces(fw, &conf, shake_forces, step, time) {
+                eprintln!("Error writing forces: {}", e);
             }
         }
 
@@ -1398,7 +1403,16 @@ fn main() {
             None
         };
         let box_opt = if box_vec.x > 0.0 { Some(box_vec) } else { None };
-        let title = format!("Final configuration after {} steps", actual_steps);
+        // gromosXX `final_configuration` + `_print_title`: the run title, then the file's name
+        let title = format!("\t{}\n\n\tfinal configuration", imd.title);
+        // gromosXX `_print_timestep` (`out_configuration.cc:519`): the step counter and time
+        // after the loop — NSTLIM, or the step the minimiser stopped at
+        let final_step = if minimization_converged {
+            actual_steps
+        } else {
+            n_steps
+        };
+        let final_time = sim_state.time_of(final_step);
         // gromosXX `out_configuration.cc:540-546`: a perturbed run (NTG=1) adds PERTDATA, the λ
         // a run with NRDGL=1 continues from; time-averaged distance restraints (NTDIR < 0) add
         // their ⟨r⁻³⟩ (DISRESEXPAVE).
@@ -1419,6 +1433,7 @@ fn main() {
         let write = || -> Result<(), String> {
             let mut w = newen::io::g96::G96Writer::new(fin_path)?;
             w.write_title(&title)?;
+            w.write_timestep(final_step, final_time)?;
             w.write_positions(positions, Some(&topo))?;
             if let Some(v) = vels {
                 w.write_velocities(v)?;

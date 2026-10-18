@@ -27,6 +27,11 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **gromosXX's refusals (0.0.68):** `check_start_time` (STEP T outside ">=0", and T = −1, the
+  time from the TIMESTEP block, which newen does not read), `check_pairlist` (grid pairlist with
+  NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a
+  TORSDIHEDRALTYPE phase other than 0°/180°, `in_topology.cc:960-962`) in `plan.rs`, run by
+  `build_plan` and `build_sequence_from_plan`. No reference input trips them.
 - **Lattice sum refused (1.8, 0.0.65):** `check_electrostatics` (`plan.rs`, called by
   `build_plan` and `build_sequence_from_plan`) refuses NLRELE 2/3 for every run, perturbed or
   not: nothing calls newen-forces' `electrostatics.rs`/`pme.rs`, and the reaction field would

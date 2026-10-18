@@ -763,7 +763,10 @@ pub fn build_sequence_from_plan(
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
+    crate::plan::check_start_time(recipe)?;
     crate::plan::check_electrostatics(recipe)?;
+    crate::plan::check_pairlist(recipe)?;
+    crate::plan::check_dihedral_phases(recipe, &prepared.topology)?;
     crate::plan::check_perturbation(recipe)?;
     crate::plan::check_eds(recipe)?;
     crate::plan::check_plan_against_recipe(recipe, &plan)?;
@@ -1254,6 +1257,118 @@ mod tests {
                 "NLRELE = {nlrele}"
             );
         }
+    }
+
+    /// Both build paths refuse what `refuse` makes of `recipe`, with `message`.
+    fn assert_refused_both_ways(
+        recipe: &RunRecipe,
+        prepare: &dyn Fn() -> Prepared,
+        refuse: &dyn Fn(&mut RunRecipe, &mut Prepared),
+        message: &str,
+    ) {
+        let prepared = prepare();
+        let plan = build_plan(recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        let (mut r, mut p) = (recipe.clone(), prepare());
+        refuse(&mut r, &mut p);
+        let err = build_plan(&r, &p.topology, &p.physical_constants).expect_err("refused");
+        assert!(err.to_string().contains(message), "{err}");
+        let err = build_sequence_from_plan(&r, plan, &p)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains(message), "{err}");
+    }
+
+    #[test]
+    fn grid_pairlist_is_refused_in_a_truncated_octahedron() {
+        // gromosXX FeatureChecker: `pbc_t` is never unlocked against `pairlist_grid`
+        let dir = refs().join("aladip_trunc_oct");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_eq!(
+            recipe.boundary.kind,
+            crate::recipe::BoundaryKind::TruncatedOctahedron
+        );
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::Grid,
+            "truncated octahedral PBC does not work with grid-based pairlist algorithm",
+        );
+        let mut cell = recipe.clone();
+        cell.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::GridCell;
+        assert!(
+            crate::plan::check_pairlist(&cell).is_ok(),
+            "grid_cell is unlocked"
+        );
+        let mut rect = recipe.clone();
+        rect.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::Grid;
+        rect.boundary.kind = crate::recipe::BoundaryKind::Rectangular;
+        assert!(crate::plan::check_pairlist(&rect).is_ok());
+    }
+
+    #[test]
+    fn ntbdn_1_refuses_a_dihedral_phase_other_than_0_or_180() {
+        // gromosXX in_topology.cc:960-962
+        let dir = refs().join("butane_vacuum");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        recipe.forcefield.covalent_form.limited_phase_shifts = true;
+        let phase = |p: &mut Prepared, deg: f64| {
+            let d = &mut p.topology.dihedral_parameters[0];
+            d.pd = deg * std::f64::consts::PI / 180.0;
+            d.cospd = d.pd.cos();
+        };
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|_, p| phase(p, 90.0),
+            "dihedral neither 0 nor 180, this is not allowed if NTBDN=1",
+        );
+        let mut p = (loaded.prepare)();
+        for deg in [0.0, 180.0] {
+            phase(&mut p, deg);
+            assert!(
+                crate::plan::check_dihedral_phases(&recipe, &p.topology).is_ok(),
+                "{deg}°"
+            );
+        }
+        phase(&mut p, 90.0);
+        let mut arbitrary = recipe.clone();
+        arbitrary.forcefield.covalent_form.limited_phase_shifts = false;
+        assert!(crate::plan::check_dihedral_phases(&arbitrary, &p.topology).is_ok());
+        let mut off = recipe.clone();
+        off.forcefield.dihedrals = false;
+        assert!(
+            crate::plan::check_dihedral_phases(&off, &p.topology).is_ok(),
+            "gromosXX checks only with the dihedral term on"
+        );
+    }
+
+    #[test]
+    fn step_t_outside_its_range_is_refused() {
+        // gromosXX in_parameter.cc:298: T >= 0, or -1 (time from the TIMESTEP block)
+        let dir = refs().join("aladip_vacuum");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.control.t0 = -1.0,
+            "STEP T = -1 (the start time from the configuration's TIMESTEP block) is not \
+             implemented",
+        );
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.control.t0 = -0.5,
+            "STEP T = -0.5: must be >= 0",
+        );
+        let mut later = recipe.clone();
+        later.control.t0 = 10.0;
+        assert!(crate::plan::check_start_time(&later).is_ok());
     }
 
     #[test]

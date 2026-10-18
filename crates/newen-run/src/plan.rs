@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::dof::{bath_dof, rottrans_dof};
 use crate::recipe::{
-    BoundaryKind, ConstraintAlgorithm, Coupling, SoluteConstraints, ThermostatAlgorithm,
+    BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
+    ThermostatAlgorithm,
 };
 use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
 use crate::{total_dof, ConstraintSelection, RunError};
@@ -1063,6 +1064,70 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
+/// STEP T: gromosXX reads it with the range ">=0" or −1 (`in_parameter.cc:298`); −1 takes the
+/// time from the configuration's TIMESTEP block (`in_configuration.cc:1354-1363`), which newen
+/// does not read. Every build path runs it.
+pub(crate) fn check_start_time(recipe: &RunRecipe) -> Result<(), RunError> {
+    let t0 = recipe.control.t0;
+    if t0 == -1.0 {
+        return Err(RunError::Recipe(
+            "STEP T = -1 (the start time from the configuration's TIMESTEP block) is not \
+             implemented; give the start time in ps"
+                .to_string(),
+        ));
+    }
+    if t0.is_nan() || t0 < 0.0 {
+        return Err(RunError::Recipe(format!(
+            "STEP T = {t0}: must be >= 0 (or -1)"
+        )));
+    }
+    Ok(())
+}
+
+/// The grid-based pairlist (PAIRLIST ALGORITHM 1) in a truncated octahedron: gromosXX's
+/// FeatureChecker never unlocks `pbc_t` against `pairlist_grid` (`check_parameter.cc:383`,
+/// `:416`; the grid-cell pairlist is unlocked, `:3814`) and refuses the run with the message
+/// built at `util/feature.cc:93`. Every build path runs it.
+pub(crate) fn check_pairlist(recipe: &RunRecipe) -> Result<(), RunError> {
+    if recipe.forcefield.pairlist.algorithm == PairlistAlgorithm::Grid
+        && recipe.boundary.kind == BoundaryKind::TruncatedOctahedron
+    {
+        return Err(RunError::Recipe(
+            "PAIRLIST ALGORITHM 1 (grid) with BOUNDCOND NTB = -1: truncated octahedral PBC does \
+             not work with grid-based pairlist algorithm (gromosXX refuses this combination); use \
+             ALGORITHM 0 (standard)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// COVALENTFORM NTBDN = 1 (phase shifts 0° or 180° only) with a dihedral type of another phase:
+/// gromosXX refuses the topology when the dihedral term is on (`in_topology.cc:960-962`,
+/// `if (pdl != 0 && pdl != 180)` over every TORSDIHEDRALTYPE entry). Every build path runs it.
+pub(crate) fn check_dihedral_phases(recipe: &RunRecipe, topo: &Topology) -> Result<(), RunError> {
+    let ff = &recipe.forcefield;
+    if !(ff.dihedrals && ff.covalent_form.limited_phase_shifts) {
+        return Ok(());
+    }
+    // the topology reader's degree → radian conversion, so 180° compares exactly
+    let half_turn = 180.0 * std::f64::consts::PI / 180.0;
+    let bad = topo
+        .dihedral_parameters
+        .iter()
+        .position(|d| d.pd != 0.0 && d.pd != half_turn);
+    if let Some(i) = bad {
+        return Err(RunError::Recipe(format!(
+            "COVALENTFORM NTBDN = 1 with TORSDIHEDRALTYPE {} of phase {}°: TORSDIHEDRALTYPE \
+             block: dihedral neither 0 nor 180, this is not allowed if NTBDN=1 (gromosXX \
+             refuses this topology); use NTBDN = 0",
+            i + 1,
+            topo.dihedral_parameters[i].pd.to_degrees()
+        )));
+    }
+    Ok(())
+}
+
 /// The PERTURBATION settings newen does not implement, refused instead of ignored, and the
 /// features gromosXX refuses together with individual λ (`check_parameter.cc:1581-1644`: slow
 /// growth, lattice sum, the conjugate-gradient minimiser, QM/MM, GaMD and AEDS stay locked
@@ -1332,7 +1397,10 @@ pub fn build_plan(
     } else {
         None
     };
+    check_start_time(recipe)?;
     check_electrostatics(recipe)?;
+    check_pairlist(recipe)?;
+    check_dihedral_phases(recipe, topo)?;
     check_perturbation(recipe)?;
     check_eds(recipe)?;
     let eds = eds_plan(recipe, constants.kB);

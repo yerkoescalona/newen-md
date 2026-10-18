@@ -54,6 +54,13 @@ impl G96Writer {
         Ok(())
     }
 
+    /// Write the TIMESTEP block (step counter and time, ps) — gromosXX `_print_timestep`
+    /// (out_configuration.cc:879-888): width 15, a space, width 14 with 9 decimals.
+    pub fn write_timestep(&mut self, step: usize, time: f64) -> Result<(), String> {
+        writeln!(self.writer, "TIMESTEP\n{step:15} {time:14.9}\nEND")
+            .map_err(|e| format!("Write error: {}", e))
+    }
+
     /// Write position block
     ///
     /// GROMOS96 position format:

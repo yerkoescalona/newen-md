@@ -12,6 +12,13 @@ All lower crates (newen-core, newen-forces, newen-integrators, newen-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Output times and schedules (0.0.68):** every written time is T + step·DT
+  (`SimulationState::time_of`, STEP T from the recipe); forces follow NTWF; a converged
+  minimisation repeats the previous step's force, energy and dH/dλ frame on that step's
+  NTWF/NTWE/NTWG schedule and writes the stopping step's positions only on the NTWX schedule; the
+  final configuration has gromosXX's TIMESTEP block and title layout. The comparator checks every
+  TIMESTEP block and the force frame count. References `aladip_vacuum_fep_slowgrowth_t10`,
+  `aladip_vacuum_em_ntw5`.
 - **Slow growth (1.8, 0.0.61):** `md` calls `newen_run::advance_lambda` after each step (not on
   the step the minimiser stops at), writes the λ the step ran at into the `.trg` (`old_lambda`)
   and, on a converged minimisation, the repeated `.trg` frame next to the repeated `.tre` one.
@@ -30,7 +37,7 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **120 reference tests registered, 119 passing** in `tests/test_gromosXX_references.rs` (1
+- **123 reference tests registered, 122 passing** in `tests/test_gromosXX_references.rs` (1
   ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
@@ -92,7 +99,7 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 
 ## Reference systems
 
-The per-system status matrix — which of the 120 registered systems pass and what each isolates —
+The per-system status matrix — which of the 123 registered systems pass and what each isolates —
 lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test

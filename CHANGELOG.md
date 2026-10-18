@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.68] (2026-10-18)
+
+**Small newen defects a one-parameter toggle sweep against gromosXX found** (newen's own, not
+gromosXX's, so corrected without a reproduce switch): the start time, the output schedule of a
+converged minimisation, the final configuration's TIMESTEP block, and two inputs gromosXX refuses
+that newen ran.
+
+### Fixed
+
+- **STEP T was parsed and never used**: every written time was step·DT. `.tre`, `.trg`, `.trf`,
+  `.trc`, `.trv` and the final configuration now carry T + step·DT, as gromosXX
+  (`md.cc:241`, `read_input.cc:328`), and so do `Simulation.time` and the time column of
+  `Simulation.run`. `SimulationState` carries `t0` (`with_start_time`, `time_of`). Only time
+  columns move: nothing in the engine depends on t.
+- **Forces were written on the NTWX schedule**, not NTWF (`out_configuration.cc:349`). Every
+  reference has NTWF = NTWX, so no reference output moves.
+- **A converged minimisation's output schedule**: gromosXX writes the forces of the step before
+  the stopping one once more, like the energies (`out_configuration.cc:624-630`); `md` left the
+  force frame out (one `.trf` frame short). The repeated force, energy and dH/dλ frames follow
+  the NTWF/NTWE/NTWG schedule of that step, and the stopping step's positions the NTWX schedule;
+  `md` wrote the positions and energies whatever the schedule.
+- **The final configuration** has gromosXX's TIMESTEP block after the title (step counter and
+  time after the loop: NSTLIM, or the step a minimisation stopped at; `_print_timestep`,
+  `out_configuration.cc:519, 879-888`) and the title layout of the other files (run title, then
+  `final configuration`); it said "Final configuration after N−1 steps". The coordinate reader
+  skips the block, so a continuation from it runs as before.
+
+### Changed
+
+- **Refused, as gromosXX refuses** (`check_start_time`, `check_pairlist`,
+  `check_dihedral_phases` in `plan.rs`, run by `build_plan` and `build_sequence_from_plan`):
+  - PAIRLIST ALGORITHM 1 (grid) with NTB = −1: "truncated octahedral PBC does not work with
+    grid-based pairlist algorithm" (gromosXX FeatureChecker: `pbc_t` is never unlocked against
+    `pairlist_grid`, `check_parameter.cc:383, 416`; message `util/feature.cc:93`). newen ran it
+    with its standard pairlist. The grid-cell pairlist stays allowed (`check_parameter.cc:3814`).
+  - COVALENTFORM NTBDN = 1 with the dihedral term on and a TORSDIHEDRALTYPE phase other than 0°
+    or 180°: "TORSDIHEDRALTYPE block: dihedral neither 0 nor 180, this is not allowed if NTBDN=1"
+    (`in_topology.cc:960-962`, `if (pdl != 0 && pdl != 180)` over every type). newen ran the
+    limited-phase form on it.
+  - STEP T outside gromosXX's range (">=0" or −1, `in_parameter.cc:298`), and T = −1 (the start
+    time from the configuration's TIMESTEP block, `in_configuration.cc:1354-1363`), which newen
+    does not read.
+- **Reference comparator** (`test_gromosXX_references.rs`): it compared the TIMESTEP time of the
+  `.trg` frames only, and force frames pairwise without their count. It now compares the step and
+  time of every TIMESTEP block of the `.tre`, `.trf`, `.trc`, `.trg` and final configuration
+  against gromosXX's (time to 1e-9), and the FREEFORCERED/CONSFORCERED frame counts.
+- References (native gromosXX): `aladip_vacuum_fep_slowgrowth_t10` (`_slowgrowth` from T = 10 ps;
+  gromosXX's output differs from the T = 0 run in the times and the title only) and
+  `aladip_vacuum_em_ntw5` (`aladip_vacuum_em` with NTWX = NTWF = NTWE = 5, converging at step 6:
+  no position frame for step 6, the repeated force and energy frame of step 5).
+
+### Verified
+
+- References: 122 passed, 1 ignored (`aladip_gamd`). Every other reference's output is
+  byte-identical to the previous binary's except the final configuration (its title and the
+  added TIMESTEP block) and, for the two converged minimisations `aladip_vacuum_em` and
+  `aladip_vacuum_em_slowgrowth`, the `.trf` (the repeated frame).
+- A ten-step run continued from its own final configuration ends where a twenty-step run does
+  (to the printed 9 decimals); `aeds_runs`, `fep_null_perturbation`, `test_pairlist_margin` pass.
+- core, io, run: 373 tests green (new: the three refusals through both build paths, the start
+  time); clippy no new warnings; `cargo fmt --check` clean; `pytest` 1339 passed / 89 skipped
+  (new: `test_start_time_stamps_every_row`).
+
 ## [0.0.67] (2026-10-18)
 
 **gromos-rs is now newen.** *Newen* is Mapudungun for force. The project reimplements GROMOS
