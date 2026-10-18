@@ -2,12 +2,15 @@
 
 ## Sources
 
+Paths are relative to the repository root. The checkout was called `gromos-rs` when these were built.
+
 Worktrees (new branches, no commits; the patches live only in the working trees and in the files here):
 
-    git -C /home/yerko/Development/gromos-rs/.local/gromosXX worktree add \
-        /home/yerko/Development/gromos-rs/.local/gromosXX-patched -b divergences-fix 247c95c4
-    git -C /home/yerko/Development/gromos-rs/.local/gromosPlsPls worktree add \
-        /home/yerko/Development/gromos-rs/.local/gromosPlsPls-patched -b divergences-fix 9cd9f6b3
+    git -C .local/gromosXX worktree add ../gromosXX-patched -b divergences-fix 247c95c4
+    git -C .local/gromosPlsPls worktree add ../gromosPlsPls-patched -b divergences-fix 9cd9f6b3
+
+After moving the checkout, `git -C .local/gromosXX worktree repair ../gromosXX-patched` (and the same for
+gromosPlsPls) relinks them; without it they show as prunable and `git status` fails inside them.
 
 The autotools outputs are untracked in the originals (`configure`, `aclocal.m4`, `config.h.in`, `config/`,
 `m4/`, `autom4te.cache/`, every `Makefile.in`). They were copied from the originals with `cp -a` (the list is
@@ -31,10 +34,10 @@ Patches applied to the working trees (each file applies with `git apply` from th
 
 ## Build commands (2026-10-13)
 
-    cd /home/yerko/Development/gromos-rs/.local/gromosXX-patched/md++
+    cd .local/gromosXX-patched/md++
     mkdir BUILD && cd BUILD && ../configure > configure.out 2>&1 && make -j8 > make.out 2>&1
 
-    cd /home/yerko/Development/gromos-rs/.local/gromosPlsPls-patched/gromos++
+    cd .local/gromosPlsPls-patched/gromos++
     mkdir BUILD && cd BUILD && ../configure > configure.out 2>&1 && make -j8 > make.out 2>&1
 
 Both exit 0. Check of sameness: the compiler/flag/library lines (`CXX CXXFLAGS CPPFLAGS LIBS LDFLAGS
@@ -43,17 +46,20 @@ originals'; `config.h` differs only in `MD_DATE` / `GROMOS_DATE` (build time sta
 
 Binaries:
 
-    /home/yerko/Development/gromos-rs/.local/gromosXX-patched/md++/BUILD/program/md
-    /home/yerko/Development/gromos-rs/.local/gromosPlsPls-patched/gromos++/BUILD/programs/{bar,ext_ti_ana,ext_ti_merge}
+    .local/gromosXX-patched/md++/BUILD/program/md
+    .local/gromosPlsPls-patched/gromos++/BUILD/programs/{bar,ext_ti_ana,ext_ti_merge}
 
 md prints `build date : Tue Oct 13 12:10:47 CEST 2026` in its stdout header (the original: Sat Aug 22 11:35:53).
+
+The binaries still run after the checkout move, but the generated `BUILD/Makefile`s hold the old absolute
+path, so a rebuild needs a fresh `BUILD` directory (the `configure` and `make` lines above), not `make` in place.
 
 ## A-EDS patches added (2026-10-16)
 
 D16, D25 and D32 (`algorithm/integration/eds.cc` only) were applied to the same working tree and the
 binary rebuilt in place (only `eds.cc` recompiles):
 
-    cd /home/yerko/Development/gromos-rs/.local/gromosXX-patched
+    cd .local/gromosXX-patched
     git apply <patches>/D16_aeds_energy_columns.patch <patches>/D25_aeds_prevalence_lse.patch \
               <patches>/D32_aeds_target_state.patch
     cd md++/BUILD && make -j8 > make_aeds.out 2>&1
