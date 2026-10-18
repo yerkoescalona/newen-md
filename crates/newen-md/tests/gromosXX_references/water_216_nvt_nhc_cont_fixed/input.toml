@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 + patches/D41_nh_restart.patch (.local/gromosXX-patched/md++/BUILD/program/md), item D41
+[system]
+name = "water_216_nvt_nhc_cont_fixed"
+description = "216 waters, Nose-Hoover chain (3 links): steps 100-199 of a 100 + 100 run, NTINHT 0, from the patched first half's final configuration (NTINHT 1 there), against gromosXX with D41 patched: every variable written and restored, the default nh_restart = intended"
+level = 3
+natoms = 648
+isolates = "the intended NHCVARIABLES restart (D41 corrected): the whole chain of every bath, plain Nose-Hoover included"
+
+[input]
+topology = "../water_216_box/water_216_box.topo"
+configuration = "water_216_nvt_nhc_cont_fixed.conf"
+parameters = "water_216_nvt_nhc_cont_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

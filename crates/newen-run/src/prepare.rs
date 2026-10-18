@@ -42,6 +42,9 @@ pub struct Coordinates {
     /// The data lines of the configuration's `AEDSSEARCH` block, if it has one; an A-EDS search
     /// with NTIAEDSS = 0 continues from it.
     pub aedssearch: Option<Vec<String>>,
+    /// The data lines of the configuration's `NHCVARIABLES` block, if it has one; a
+    /// Nosé–Hoover run with NTINHT = 0 starts from it.
+    pub nhcvariables: Option<Vec<String>>,
 }
 
 impl From<CoordinateData> for Coordinates {
@@ -52,6 +55,7 @@ impl From<CoordinateData> for Coordinates {
             box_dims: c.box_dims,
             pertdata: c.pertdata,
             aedssearch: c.aedssearch,
+            nhcvariables: c.nhcvariables,
         }
     }
 }
@@ -121,6 +125,15 @@ pub enum PrepareNote {
     /// The configuration has an `AEDSSEARCH` block but the A-EDS search starts afresh
     /// (NTIAEDSS = 1): ignored, as gromosXX does with a warning.
     AedsSearchIgnored,
+    /// The configuration has an `NHCVARIABLES` block but the Nosé–Hoover variables start at
+    /// zero (NTINHT = 1): ignored, as gromosXX does with a warning ("Nose-Hoover-Chains
+    /// variables found but not read.", `in_configuration.cc:1166-1169`).
+    NoseHooverVariablesIgnored,
+    /// A Nosé–Hoover run asks for its variables from the configuration (NTINHT = 0) but the
+    /// configuration has no `NHCVARIABLES` block: they start at zero. A warning, not a refusal
+    /// (gromosXX refuses it for a chain and reads nothing for plain Nosé–Hoover); callers report
+    /// it under the intended `nh_restart` only ([`nose_hoover_missing_warning`]).
+    NoseHooverVariablesMissing,
     /// The run starts at a λ outside [0, 1] (a `PERTDATA` λ; RLAM is checked to [0, 1]): every
     /// perturbed term and mass is extrapolated. A warning, not a refusal; gromosXX says nothing
     /// (porting.md, slow growth). Slow growth that leaves [0, 1] during the run is reported by
@@ -258,7 +271,29 @@ pub fn prepare_system(
         box_dims,
         pertdata,
         aedssearch,
+        nhcvariables,
     } = coords;
+    // gromosXX `read_nose_hoover_chains` (`in_configuration.cc:1148-1178`): with NTINHT = 0 the
+    // variables come from the configuration's NHCVARIABLES block. Kept whole here; the
+    // thermostat restores them per `nh_restart` (`restored_zeta`).
+    let nose_hoover_run = imd.temp_bath.first().is_some_and(|b| b.algorithm >= 1);
+    let nose_hoover = match nhcvariables.as_ref().filter(|_| nose_hoover_run) {
+        Some(lines) if imd.ntinht == 0 => Some(
+            newen_io::coordinate::parse_nhcvariables(lines).map_err(|e| {
+                RunError::Inconsistent(format!("configuration NHCVARIABLES block: {e}"))
+            })?,
+        ),
+        Some(_) => {
+            notes.push(PrepareNote::NoseHooverVariablesIgnored);
+            None
+        },
+        None => {
+            if nose_hoover_run && imd.ntinht == 0 {
+                notes.push(PrepareNote::NoseHooverVariablesMissing);
+            }
+            None
+        },
+    };
     // gromosXX `read_aedssearch` (`in_configuration.cc:1399-1455`): a search form (2-6) with
     // NTIAEDSS = 0 continues the configuration's AEDSSEARCH block (it overrides the input's
     // EMAX, EMIN and EIR); with NTIAEDSS = 1 the block is ignored with a warning.
@@ -473,6 +508,7 @@ pub fn prepare_system(
         conf.eds.resize(n, n_atoms);
     }
     conf.aeds = aeds_search;
+    conf.nose_hoover = nose_hoover;
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)
@@ -752,6 +788,21 @@ pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> 
         .then_some((nsnb, ntwg))
 }
 
+/// The warning for [`PrepareNote::NoseHooverVariablesMissing`] (`md` and Python print the
+/// same), or `None` when `recipe` does not ask for it: a thermostat other than Nosé–Hoover, or
+/// gromosXX's restart (`nh_restart = "gromosxx"`), whose plain Nosé–Hoover never reads them.
+pub fn nose_hoover_missing_warning(recipe: &crate::RunRecipe) -> Option<String> {
+    use crate::recipe::{NhRestart, ThermostatAlgorithm};
+    let t = recipe.ensemble.thermostat.as_ref()?;
+    (t.algorithm != ThermostatAlgorithm::Berendsen && t.nh_restart == NhRestart::Intended).then(
+        || {
+            "INITIALISE NTINHT = 0 asks for the Nose-Hoover thermostat variables from the \
+             configuration, but it has no NHCVARIABLES block: they start at zero"
+                .to_string()
+        },
+    )
+}
+
 /// The warning for [`PrepareNote::PrecalclamLongRangeGaps`] (`md` and Python print the same).
 pub fn precalclam_longrange_warning(nsnb: usize, ntwg: usize) -> String {
     format!(
@@ -787,6 +838,54 @@ mod tests {
             ..Default::default()
         };
         prepare_system(imd, topo, constants, coords, &inputs).unwrap()
+    }
+
+    /// NTINHT = 0 without an NHCVARIABLES block is noted (variables start at zero), reported
+    /// under the intended restart only; NTINHT = 1, a block, or no Nosé–Hoover say nothing.
+    #[test]
+    fn missing_nose_hoover_variables_are_noted() {
+        let refs = shared().join("..");
+        let imd = newen_io::imd::read_imd_file(
+            refs.join("water_216_nvt_nosehoover/water_216_nvt_nosehoover.in"),
+        )
+        .unwrap();
+        let run = |imd: &ImdParameters, conf: &str| {
+            let parsed = read_topology_file(refs.join("water_216_box/water_216_box.topo")).unwrap();
+            let constants = parsed.physical_constants;
+            let coords: Coordinates = read_coordinates(refs.join(conf)).unwrap().into();
+            let p = prepare_system(
+                imd,
+                build_topology(parsed),
+                constants,
+                coords,
+                &RunInputs::default(),
+            )
+            .unwrap();
+            p.notes
+                .iter()
+                .any(|n| matches!(n, PrepareNote::NoseHooverVariablesMissing))
+        };
+        let fresh = "water_216_box/water_216_box.conf";
+        assert!(run(&imd, fresh));
+        let mut reset = imd.clone();
+        reset.ntinht = 1;
+        assert!(!run(&reset, fresh));
+        assert!(!run(
+            &imd,
+            "water_216_nvt_nosehoover_cont_fixed/water_216_nvt_nosehoover_cont_fixed.conf"
+        ));
+        let mut weak = imd.clone();
+        weak.temp_bath[0].algorithm = 0;
+        assert!(!run(&weak, fresh));
+
+        let (mut recipe, _) = crate::RunRecipe::from_imd(&imd).unwrap();
+        assert!(nose_hoover_missing_warning(&recipe)
+            .unwrap()
+            .contains("no NHCVARIABLES block: they start at zero"));
+        recipe
+            .set("ensemble.thermostat.nh_restart", "gromosxx")
+            .unwrap();
+        assert!(nose_hoover_missing_warning(&recipe).is_none());
     }
 
     #[test]

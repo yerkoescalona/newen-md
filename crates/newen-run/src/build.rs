@@ -500,6 +500,8 @@ pub fn instantiate(
                 algorithm,
                 baths,
                 ranges,
+                read_variables,
+                nh_restart,
             } => {
                 let first = baths
                     .first()
@@ -535,6 +537,8 @@ pub fn instantiate(
                             n_atoms,
                         );
                         alg.ranges.clone_from(ranges);
+                        alg.read_variables = *read_variables;
+                        alg.restart = *nh_restart;
                         seq.push(Box::new(alg))
                     },
                     ThermostatAlgorithm::NoseHooverChain(n) => {
@@ -546,6 +550,8 @@ pub fn instantiate(
                             (*n).max(2),
                         );
                         alg.ranges.clone_from(ranges);
+                        alg.read_variables = *read_variables;
+                        alg.restart = *nh_restart;
                         seq.push(Box::new(alg))
                     },
                 }
@@ -764,6 +770,7 @@ pub fn build_sequence_from_plan(
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
     crate::plan::check_start_time(recipe)?;
+    crate::plan::check_nh_restart(recipe)?;
     crate::plan::check_electrostatics(recipe)?;
     crate::plan::check_pairlist(recipe)?;
     crate::plan::check_dihedral_phases(recipe, &prepared.topology)?;
@@ -1030,6 +1037,10 @@ mod tests {
             let dt = loaded.imd.dt;
 
             let p_legacy = (loaded.prepare)();
+            // Nor did it restore Nosé–Hoover variables (a continuation's NHCVARIABLES, D41).
+            if p_legacy.configuration.nose_hoover.is_some() {
+                continue;
+            }
             let legacy = legacy_build_sequence(&loaded.imd, &p_legacy, &loaded.inputs, &options)
                 .unwrap_or_else(|e| panic!("{name}: legacy builder: {e}"));
             let legacy_names: Vec<String> = legacy
@@ -1369,6 +1380,30 @@ mod tests {
         let mut later = recipe.clone();
         later.control.t0 = 10.0;
         assert!(crate::plan::check_start_time(&later).is_ok());
+    }
+
+    #[test]
+    fn ntinht_1_without_a_chain_is_refused_under_gromosxx_restart() {
+        // gromosXX check_parameter.cc:92-94 (D41)
+        let dir = refs().join("water_216_nvt_nosehoover");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        recipe.control.ntinht = 1;
+        assert!(crate::plan::check_nh_restart(&recipe).is_ok(), "intended");
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.set("ensemble.thermostat.nh_restart", "gromosxx").unwrap(),
+            "MULTIBATH block: NTINHT must be 0 when not using Nose-Hoover chains",
+        );
+        let mut chain = recipe.clone();
+        chain
+            .set("ensemble.thermostat.nh_restart", "gromosxx")
+            .unwrap();
+        chain.ensemble.thermostat.as_mut().unwrap().algorithm =
+            ThermostatAlgorithm::NoseHooverChain(3);
+        assert!(crate::plan::check_nh_restart(&chain).is_ok(), "chain");
     }
 
     #[test]

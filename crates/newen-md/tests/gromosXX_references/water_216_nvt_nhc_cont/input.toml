@@ -1,0 +1,29 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item D41
+[system]
+name = "water_216_nvt_nhc_cont"
+description = "216 waters, Nose-Hoover chain (3 links): steps 100-199 of a 100 + 100 run, NTINHT 0, from the native first half's final configuration (its NHCVARIABLES block 0.883220231 20.087328305 72.553842985; gromos-divergences sims/e6_nh_restart nhc_first)"
+level = 3
+natoms = 648
+isolates = "the NHCVARIABLES restart of a chain: gromosXX restores the first link only (D41)"
+
+[input]
+topology = "../water_216_box/water_216_box.topo"
+configuration = "water_216_nvt_nhc_cont.conf"
+parameters = "water_216_nvt_nhc_cont.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): reproduce gromosXX 247c95c4, whose defect this native reference
+# pins: links 2 and 3 of the chain restart from 0 (D41).
+[recipe_overrides]
+"ensemble.thermostat.nh_restart" = "gromosxx"

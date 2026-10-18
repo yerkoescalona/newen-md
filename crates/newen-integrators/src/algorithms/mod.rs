@@ -41,7 +41,9 @@ pub use lattice_shift::LatticeShift;
 pub use leap_frog::{LeapFrogPosition, LeapFrogVelocity};
 pub use lincs_algorithm::LincsAlgorithm;
 pub use multibath::{in_bath, BathRange};
-pub use nosehoover_thermostat::{NoseHooverThermostat, NoseHooverThermostatParams};
+pub use nosehoover_thermostat::{
+    restored_zeta, NhRestart, NoseHooverThermostat, NoseHooverThermostatParams,
+};
 pub use pressure_calculation::{PressureCalculation, VirialType};
 pub use remove_com_motion::RemoveCOMMotion;
 pub use rottrans::RottransConstraints;

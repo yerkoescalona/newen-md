@@ -27,6 +27,14 @@ RunError                                                                 -> ever
 ```
 
 ## Status
+- **Nosé–Hoover restart (0.0.69, D41):** `prepare_system` parses the configuration's NHCVARIABLES
+  into `Configuration::nose_hoover` for a Nosé–Hoover run with NTINHT = 0 (with NTINHT = 1:
+  `PrepareNote::NoseHooverVariablesIgnored`); the plan's `Thermostat` carries `read_variables`
+  and `nh_restart` (`Thermostat::nh_restart`, `"intended"` by default, `"gromosxx"` reproduces
+  D41; no `.imd` token, `md @recipe_set ensemble.thermostat.nh_restart=gromosxx` or
+  `Recipe.update`). `check_nh_restart` (`plan.rs`, both build paths) refuses NTINHT = 1 without
+  a chain under `"gromosxx"` (`check_parameter.cc:92`). The legacy-builder parity test skips a
+  run that restores NHCVARIABLES (the frozen builder never did).
 - **gromosXX's refusals (0.0.68):** `check_start_time` (STEP T outside ">=0", and T = −1, the
   time from the TIMESTEP block, which newen does not read), `check_pairlist` (grid pairlist with
   NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a

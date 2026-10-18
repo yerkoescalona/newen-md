@@ -755,6 +755,10 @@ pub struct Configuration {
     /// The A-EDS parameter-search state the run carries from step to step and from job to job
     /// (the configuration's `AEDSSEARCH` block); `None` without A-EDS.
     pub aeds: Option<AedsSearch>,
+    /// The Nosé–Hoover variables ζ, one chain per bath (gromosXX `bath_struct::zeta`, the
+    /// configuration's `NHCVARIABLES` block): before the run, the ones read from the start
+    /// configuration; once the thermostat runs, its current ones. `None` without them.
+    pub nose_hoover: Option<Vec<Vec<f64>>>,
 }
 
 /// The mutable state of an A-EDS run: E_max, E_min and the offsets E_i^R with everything their
@@ -869,6 +873,7 @@ impl Configuration {
             lattice_shifts: vec![[0, 0, 0]; n_atoms],
             eds: EdsEndStates::default(),
             aeds: None,
+            nose_hoover: None,
         }
     }
 

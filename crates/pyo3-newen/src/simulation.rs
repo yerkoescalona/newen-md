@@ -65,6 +65,8 @@ struct Parts {
     pertdata: Option<f64>,
     /// The configuration file's AEDSSEARCH block (NTIAEDSS = 0).
     aedssearch: Option<Vec<String>>,
+    /// The file's NHCVARIABLES block (a Nosé–Hoover run with NTINHT = 0 starts from it).
+    nhcvariables: Option<Vec<String>>,
 }
 
 impl Parts {
@@ -77,6 +79,7 @@ impl Parts {
             box_dims: conf.box_dims,
             pertdata: conf.pertdata,
             aedssearch: conf.aedssearch.clone(),
+            nhcvariables: conf.nhcvariables.clone(),
         }
     }
 
@@ -107,6 +110,7 @@ impl Parts {
             box_dims: coord_data.box_dims,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
+            nhcvariables: coord_data.nhcvariables,
         })
     }
 
@@ -117,6 +121,7 @@ impl Parts {
             box_dims: self.box_dims,
             pertdata: self.pertdata,
             aedssearch: self.aedssearch,
+            nhcvariables: self.nhcvariables,
         };
         (self.topo, self.physical_constants, coords)
     }
@@ -259,6 +264,11 @@ fn build_from_recipe(
                 Python::with_gil(|py| {
                     warn_user(py, &newen_run::precalclam_longrange_warning(*nsnb, *ntwg))
                 })?
+            },
+            newen_run::PrepareNote::NoseHooverVariablesMissing => {
+                if let Some(w) = newen_run::nose_hoover_missing_warning(&recipe) {
+                    Python::with_gil(|py| warn_user(py, &w))?
+                }
             },
             _ => {},
         }

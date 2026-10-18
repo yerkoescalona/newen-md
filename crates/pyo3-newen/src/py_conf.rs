@@ -38,6 +38,8 @@ pub struct PyConfiguration {
     /// The data lines of the file's AEDSSEARCH block (an A-EDS search with NTIAEDSS = 0
     /// continues from it).
     pub(crate) aedssearch: Option<Vec<String>>,
+    /// The file's NHCVARIABLES block (a Nosé–Hoover run with NTINHT = 0 starts from it).
+    pub(crate) nhcvariables: Option<Vec<String>>,
 }
 
 #[pymethods]
@@ -70,6 +72,7 @@ impl PyConfiguration {
             labels,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
+            nhcvariables: coord_data.nhcvariables,
         })
     }
 
@@ -92,6 +95,7 @@ impl PyConfiguration {
             labels,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
+            nhcvariables: coord_data.nhcvariables,
         })
     }
 
@@ -160,6 +164,7 @@ impl PyConfiguration {
             labels: Some(atoms),
             pertdata: None,
             aedssearch: None,
+            nhcvariables: None,
         }
     }
 

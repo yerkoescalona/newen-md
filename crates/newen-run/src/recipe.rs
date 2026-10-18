@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use newen_core::lambdas::InteractionLambda;
 pub use newen_forces::nonbonded::AtomPairKernel;
+pub use newen_integrators::algorithms::NhRestart;
 pub use newen_integrators::eds::{AedsColumns, AedsPrevalence, AedsTarget};
 use newen_io::imd::{
     AedsBlock, EdsBlock, EdsStatePair, ImdParameters, LambdasBlock, LambdasRow, NonbondedExtra,
@@ -459,6 +460,13 @@ pub struct Thermostat {
     /// DOFSET lines: [LAST, COM-BATH, IR-BATH]; empty = one set over all atoms.
     #[serde(default)]
     pub dof_sets: Vec<[usize; 3]>,
+    /// The Nosé–Hoover variables of a continued run (`NHCVARIABLES`, read when NTINHT = 0):
+    /// `"intended"` (default), every variable written and restored, plain Nosé–Hoover included,
+    /// or `"gromosxx"`, gromosXX 247c95c4's: none for plain Nosé–Hoover, only a chain's first
+    /// link restored (`out_configuration.cc:606`, `in_configuration.cc:1156, 3444`; D41).
+    /// No `.imd` block.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub nh_restart: NhRestart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1083,6 +1091,7 @@ impl RunRecipe {
                     algorithm,
                     baths,
                     dof_sets: b.dof_sets.clone(),
+                    nh_restart: NhRestart::default(),
                 })
             },
         };

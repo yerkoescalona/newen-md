@@ -48,8 +48,10 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 3   | water_216_box_com| 648   | bulk NVE + COM removal (NTICOM=1, NSCM=10) | **PASS** |
 | 3   | water_216_box_com_rot | 648 | COM translation+rotation removal (NTICOM=2, NSCM=-10) | **PASS** |
 | 3   | water_216_nvt    | 648   | Berendsen thermostat                 | **PASS** |
-| 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC) | **PASS** |
+| 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC); run with `nh_restart = "gromosxx"`, whose final configuration has no NHCVARIABLES block, as gromosXX's (D41) | **PASS** |
 | 3   | water_216_nvt_nhc_chain | 648 | Nosé-Hoover-Chain (3 chains)        | **PASS** |
+| 3   | water_216_nvt_nosehoover_cont / water_216_nvt_nhc_cont | 648 | steps 100-199 of a 100 + 100 run (NTINHT 0) from the native first half's final configuration, run with `ensemble.thermostat.nh_restart = "gromosxx"`: plain Nosé–Hoover restarts from ζ = 0 (no NHCVARIABLES block written or read), the chain from its first link only (D41) | **PASS** |
+| 3   | water_216_nvt_nosehoover_cont_fixed / water_216_nvt_nhc_cont_fixed | 648 | the same continuations from the patched first half, expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: every variable of every bath restored, newen's default (D41) | **PASS** |
 | 3   | water_216_npt    | 648   | Berendsen barostat                   | **PASS** |
 | 4   | aladip_vacuum_lincs | 12 | LINCS (solute, NTC=2)               | **PASS** |
 | 4   | aladip_solvated  | 72    | SHAKE + solute-solvent               | **PASS** |
@@ -122,7 +124,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 4   | aladip_vacuum_aeds_f6_ovf | 12 | A-EDS FORM 6 with EIR 0 6000 0, 100 steps: e^{−β(V_2 − E_2^R)} overflows every step, the released gromosXX's prevalences are NaN and its offsets stay at the step-0 centring (−2000, 4000, −2000); run with the reproducing overrides (1.8 D25) | **PASS** |
 | 4   | aladip_vacuum_aeds_f2_fixed / _f4_fixed / _f5_fixed / _f6_fixed / _f6_ovf_fixed / _sigma0_fixed / _cont1_fixed / _cont2_fixed | 12 | the same runs, expected output from native 247c95c4 + `patches/D16_aeds_energy_columns.patch`, `D25_aeds_prevalence_lse.patch`, `D32_aeds_target_state.patch`: E_max, E_min and the offsets of a frame are the ones its V_R* used, log-sum-exp prevalences (the offsets of `_f6_ovf_fixed` move), a sampled state as the E_min target (`_sigma0_fixed`: G and σ_G of state 2, not the never-visited state 1's 0); newen's defaults (1.8, 0.0.63) | **PASS** |
 
-**122 of 123 registered tests pass** (2026-10-18; `aladip_gamd` ignored). Besides the
+**126 of 127 registered tests pass** (2026-10-18; `aladip_gamd` ignored). Besides the
 energies, forces, trajectory and final configuration, every TIMESTEP block (step and time) of the
 `.tre`, `.trf`, `.trc`, `.trg` and final configuration is compared, and the force frame count. Plus gromosXX's own regression oracle,
 ported: `tests/gromos_check_suite.rs` evaluates the `check/{aladip,aladip_unperturbed,

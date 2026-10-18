@@ -48,10 +48,12 @@ from newen import (
 )
 
 # the slow-growth references that take λ past 1 warn, and so does
-# ch4_water_fep_precalc_twinrange (see test_gromosXX_references.py)
+# ch4_water_fep_precalc_twinrange (see test_gromosXX_references.py); the plain Nose-Hoover
+# references run here without their `nh_restart` override, so NTINHT 0 finds no NHCVARIABLES
 pytestmark = [
     pytest.mark.filterwarnings(r"ignore:slow growth takes lambda out of \[0, 1\]"),
     pytest.mark.filterwarnings(r"ignore:PRECALCLAM with a twin-range pairlist"),
+    pytest.mark.filterwarnings(r"ignore:INITIALISE NTINHT = 0 asks for the Nose-Hoover"),
 ]
 
 

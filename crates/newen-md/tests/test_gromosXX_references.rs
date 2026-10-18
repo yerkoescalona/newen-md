@@ -819,6 +819,24 @@ fn run_reference(system: &str) {
                 i + 1
             );
         }
+        // A Nosé–Hoover run: the ζ of every bath a continuation starts from (NHCVARIABLES, 9
+        // decimals, `out_configuration.cc:3426-3443`); gromosXX writes it for chains only (D41).
+        let ours = parse_block_values(&out.join("final.conf"), "NHCVARIABLES");
+        let theirs = parse_block_values(&expected_fin, "NHCVARIABLES");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration NHCVARIABLES has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-8 * b.abs().max(1.0),
+                "{system}: NHCVARIABLES value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
         // Time-averaged distance restraints (NTDIR < 0): the ⟨r⁻³⟩ a continuation starts from.
         let ours = parse_block_values(&out.join("final.conf"), "DISRESEXPAVE");
         let theirs = parse_block_values(&expected_fin, "DISRESEXPAVE");
@@ -1044,8 +1062,25 @@ ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
 
 // ── Level 3: thermostats / barostats ────────────────────────────────────────
 ref_test!(water_216_nvt, "water_216_nvt");
+// The final configuration's NHCVARIABLES block: written for a chain, for plain Nosé–Hoover only
+// under the intended `nh_restart`, so `_nosehoover` runs with gromosXX's (D41).
 ref_test!(water_216_nvt_nosehoover, "water_216_nvt_nosehoover");
 ref_test!(water_216_nvt_nhc_chain, "water_216_nvt_nhc_chain");
+// Steps 100-199 of a 100 + 100 run, continued from the native first half (NTINHT 0) with
+// gromosXX's restart (D41): plain Nosé–Hoover from ζ = 0, the chain from its first link only.
+// The intended restart is checked against the single run by `tests/nh_restart.rs`.
+ref_test!(
+    water_216_nvt_nosehoover_cont,
+    "water_216_nvt_nosehoover_cont"
+);
+ref_test!(water_216_nvt_nhc_cont, "water_216_nvt_nhc_cont");
+// The same continuations against gromosXX with D41 patched (`patches/D41_nh_restart.patch`):
+// newen's default, every variable of every bath restored.
+ref_test!(
+    water_216_nvt_nosehoover_cont_fixed,
+    "water_216_nvt_nosehoover_cont_fixed"
+);
+ref_test!(water_216_nvt_nhc_cont_fixed, "water_216_nvt_nhc_cont_fixed");
 ref_test!(water_216_npt, "water_216_npt");
 // Berendsen barostat (VIRIAL 2) with all-bond and solvent SHAKE: the constraint virial enters
 // only the atomic virial (gromosXX `shake.h:380`).

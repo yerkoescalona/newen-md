@@ -298,6 +298,12 @@ REFERENCE_SYSTEMS = [
     "water_216_nvt",
     "water_216_nvt_nosehoover",
     "water_216_nvt_nhc_chain",
+    # Nosé–Hoover continued from a first half (NHCVARIABLES, NTINHT 0): gromosXX's restart (the
+    # nh_restart override) against the released binary, the intended one against the D41 patch
+    "water_216_nvt_nosehoover_cont",
+    "water_216_nvt_nhc_cont",
+    "water_216_nvt_nosehoover_cont_fixed",
+    "water_216_nvt_nhc_cont_fixed",
     "water_216_npt",
     # Level 4: Full system
     "aladip_solvated",

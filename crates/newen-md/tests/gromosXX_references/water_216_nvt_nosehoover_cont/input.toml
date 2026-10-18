@@ -1,0 +1,29 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item D41
+[system]
+name = "water_216_nvt_nosehoover_cont"
+description = "216 waters, plain Nose-Hoover: steps 100-199 of a 100 + 100 run, NTINHT 0, from the native first half's final configuration (which has no NHCVARIABLES block; gromos-divergences sims/e6_nh_restart nh_first)"
+level = 3
+natoms = 648
+isolates = "the restart of plain Nose-Hoover: gromosXX neither writes nor reads its zeta (D41)"
+
+[input]
+topology = "../water_216_box/water_216_box.topo"
+configuration = "water_216_nvt_nosehoover_cont.conf"
+parameters = "water_216_nvt_nosehoover_cont.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): reproduce gromosXX 247c95c4, whose defect this native reference
+# pins: no NHCVARIABLES block written or read for plain Nose-Hoover (D41).
+[recipe_overrides]
+"ensemble.thermostat.nh_restart" = "gromosxx"

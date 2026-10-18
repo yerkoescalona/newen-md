@@ -30,3 +30,9 @@ energy_sigfigs = 10
 force_abs = 1e-6
 energy_rel = 1e-8
 position_abs = 1e-9
+
+# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
+# Recipe.update in Python): gromosXX 247c95c4 writes no NHCVARIABLES block for plain
+# Nose-Hoover (D41); the intended mode would add one. The run itself is the same in both.
+[recipe_overrides]
+"ensemble.thermostat.nh_restart" = "gromosxx"

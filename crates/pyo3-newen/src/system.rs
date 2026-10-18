@@ -59,6 +59,7 @@ impl PySystem {
                 box_dims: conf_ref.box_dims,
                 pertdata: conf_ref.pertdata,
                 aedssearch: conf_ref.aedssearch.clone(),
+                nhcvariables: conf_ref.nhcvariables.clone(),
             },
             None,
         )
@@ -141,6 +142,7 @@ impl PySystem {
             box_dims: self.configuration.box_dims,
             pertdata: self.configuration.pertdata,
             aedssearch: self.configuration.aedssearch.clone(),
+            nhcvariables: self.configuration.nhcvariables.clone(),
         }
     }
 

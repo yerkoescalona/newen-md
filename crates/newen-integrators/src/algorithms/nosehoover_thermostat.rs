@@ -49,18 +49,88 @@ pub struct NoseHooverThermostatParams {
     pub nhc: usize,
 }
 
+/// How a run continues the Nosé–Hoover variables of the run before it (item D41).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+pub enum NhRestart {
+    /// Every variable of every bath is written to the final configuration's `NHCVARIABLES`
+    /// block and restored from the start configuration's, plain Nosé–Hoover included.
+    #[default]
+    Intended,
+    /// gromosXX 247c95c4: plain Nosé–Hoover (ALGORITHM 1) neither writes nor reads the block
+    /// (`out_configuration.cc:606`, `in_configuration.cc:1156`), so it restarts from ζ = 0; a
+    /// chain writes every link but restores only the first, the others start at 0 (the reader
+    /// takes `zeta.size()` = 1 value per bath, `in_configuration.cc:3444`, before
+    /// `nosehoover_thermostat.cc:69` sizes the chain).
+    Gromosxx,
+}
+
+impl NhRestart {
+    /// Whether the final configuration carries an `NHCVARIABLES` block for a chain of `nhc`.
+    pub fn writes(self, nhc: usize) -> bool {
+        self == Self::Intended || nhc >= 2
+    }
+}
+
+/// The ζ a run starts from, given the start configuration's `NHCVARIABLES` rows (`saved`, one
+/// per bath) for `n_baths` baths with chains of `nhc`, under `mode`.
+pub fn restored_zeta(
+    saved: &[Vec<f64>],
+    n_baths: usize,
+    nhc: usize,
+    mode: NhRestart,
+) -> Result<Vec<Vec<f64>>, String> {
+    let mut zeta = vec![vec![0.0; nhc]; n_baths];
+    if mode == NhRestart::Gromosxx && nhc < 2 {
+        return Ok(zeta);
+    }
+    // gromosXX `_read_nose_hoover_chain_variables` (`in_configuration.cc:3433-3472`)
+    if saved.len() != n_baths {
+        return Err(format!(
+            "NHCVARIABLES block has {} line(s), the run has {n_baths} temperature bath(s)",
+            saved.len()
+        ));
+    }
+    for (b, (row, z)) in saved.iter().zip(&mut zeta).enumerate() {
+        match mode {
+            NhRestart::Intended if row.len() != nhc => {
+                return Err(format!(
+                    "NHCVARIABLES line {} has {} value(s), the chain has {nhc}",
+                    b + 1,
+                    row.len()
+                ))
+            },
+            NhRestart::Intended => z.copy_from_slice(row),
+            NhRestart::Gromosxx => {
+                z[0] = *row.first().ok_or_else(|| {
+                    "Could not read Nose-Hoover-Chains from configuration file".to_string()
+                })?;
+            },
+        }
+    }
+    Ok(zeta)
+}
+
 /// Nosé-Hoover (chain) thermostat.
 ///
 /// GROMOS sequence position: after Leap_Frog_Velocity, before Leap_Frog_Position.
 ///
-/// The ζ chain state is persisted across steps in `zeta`. On construction all
-/// ζ values are initialised to zero (GROMOS convention: see `init()` in the
-/// C++ source).
+/// The ζ chain state is persisted across steps in `zeta` and mirrored into
+/// `Configuration::nose_hoover`. It starts at zero (gromosXX `init`), or, with
+/// `read_variables`, from the start configuration's `NHCVARIABLES` per `restart`.
 #[derive(Debug, Clone)]
 pub struct NoseHooverThermostat {
     pub params: Vec<NoseHooverThermostatParams>,
     /// The DOFSET ranges that map atoms to `params` (gromosXX `bath_index`), in file order.
     pub ranges: Vec<BathRange>,
+    /// NTINHT = 0: start from the configuration's variables (`Configuration::nose_hoover`).
+    pub read_variables: bool,
+    /// How they are restored.
+    pub restart: NhRestart,
     /// Scaling factor per bath of the current step.
     scale: Vec<f64>,
     /// Per-bath ζ chain state — length = nhc per bath
@@ -71,6 +141,11 @@ impl NoseHooverThermostat {
     /// The scaling factor of every bath at the last step (gromosXX `bath_struct::scale`).
     pub fn scales(&self) -> &[f64] {
         &self.scale
+    }
+
+    /// The ζ chain of every bath.
+    pub fn zeta(&self) -> &[Vec<f64>] {
+        &self.zeta
     }
 
     /// Create a single-bath Nosé-Hoover thermostat with chain length 1.
@@ -85,6 +160,8 @@ impl NoseHooverThermostat {
                 nhc: 1,
             }],
             ranges: whole_system(n_atoms),
+            read_variables: false,
+            restart: NhRestart::Intended,
             scale: vec![1.0],
             zeta: vec![vec![0.0; 1]],
         }
@@ -117,6 +194,8 @@ impl NoseHooverThermostat {
                 nhc,
             }],
             ranges: whole_system(n_atoms),
+            read_variables: false,
+            restart: NhRestart::Intended,
             scale: vec![1.0],
             zeta: vec![vec![0.0; nhc]],
         }
@@ -124,6 +203,30 @@ impl NoseHooverThermostat {
 }
 
 impl Algorithm for NoseHooverThermostat {
+    fn init(
+        &mut self,
+        _topo: &Topology,
+        conf: &mut Configuration,
+        _sim: &SimulationState,
+    ) -> Result<(), String> {
+        let nhc = self.params.first().map_or(1, |p| p.nhc);
+        if self.read_variables {
+            match conf.nose_hoover.as_deref() {
+                Some(saved) => {
+                    self.zeta = restored_zeta(saved, self.params.len(), nhc, self.restart)?;
+                },
+                // gromosXX `read_nose_hoover_chains` (`in_configuration.cc:1171-1175`); plain
+                // NH reads nothing there, and the intended mode starts from zero without one
+                None if self.restart == NhRestart::Gromosxx && nhc >= 2 => {
+                    return Err("no NHCVARIABLES block in configuration.".to_string());
+                },
+                None => {},
+            }
+        }
+        conf.nose_hoover = Some(self.zeta.clone());
+        Ok(())
+    }
+
     fn apply(
         &mut self,
         _topo: &Topology,
@@ -248,6 +351,10 @@ impl Algorithm for NoseHooverThermostat {
             first = r.last_atom + 1;
         }
 
+        match conf.nose_hoover.as_mut() {
+            Some(z) => z.clone_from(&self.zeta),
+            None => conf.nose_hoover = Some(self.zeta.clone()),
+        }
         Ok(())
     }
 
@@ -391,6 +498,62 @@ mod tests {
         for i in 0..N {
             assert_eq!(conf.current().vel[i].x, 1.0);
         }
+    }
+
+    // ── Restart (NHCVARIABLES) ───────────────────────────────────────────────
+
+    /// The intended restart restores every link; gromosXX's restores a chain's first link only
+    /// and nothing of plain NH (D41).
+    #[test]
+    fn restart_modes_restore_what_they_should() {
+        let saved = vec![vec![0.883220231, 20.087328305, 72.553842985]];
+        let all = restored_zeta(&saved, 1, 3, NhRestart::Intended).unwrap();
+        assert_eq!(all, saved);
+        let first = restored_zeta(&saved, 1, 3, NhRestart::Gromosxx).unwrap();
+        assert_eq!(first, vec![vec![0.883220231, 0.0, 0.0]]);
+        let plain = vec![vec![2.6075]];
+        assert_eq!(
+            restored_zeta(&plain, 1, 1, NhRestart::Intended).unwrap(),
+            plain
+        );
+        assert_eq!(
+            restored_zeta(&plain, 1, 1, NhRestart::Gromosxx).unwrap(),
+            vec![vec![0.0]]
+        );
+        // a chain of another length, a missing bath
+        assert!(restored_zeta(&plain, 1, 3, NhRestart::Intended).is_err());
+        assert!(restored_zeta(&[], 1, 3, NhRestart::Gromosxx).is_err());
+    }
+
+    /// `init` takes the configuration's variables when NTINHT = 0, ignores them otherwise, and
+    /// mirrors the thermostat's ζ into the configuration from then on.
+    #[test]
+    fn init_reads_the_configuration_and_apply_mirrors_zeta() {
+        let (topo, mut conf) = make_conf(2, 1.0);
+        let sim = make_sim(0.002);
+        conf.nose_hoover = Some(vec![vec![0.5, 1.5, 2.5]]);
+        let mut ignore = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        ignore.init(&topo, &mut conf.clone(), &sim).unwrap();
+        assert_eq!(ignore.zeta(), &[vec![0.0; 3]]);
+
+        let mut nh = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        nh.read_variables = true;
+        nh.init(&topo, &mut conf, &sim).unwrap();
+        assert_eq!(nh.zeta(), &[vec![0.5, 1.5, 2.5]]);
+        nh.apply(&topo, &mut conf, &sim).unwrap();
+        assert_eq!(conf.nose_hoover.as_deref(), Some(nh.zeta()));
+        assert_ne!(nh.zeta()[0][0], 0.5);
+
+        // gromosXX: a chain asked to read needs the block
+        let (_, mut bare) = make_conf(2, 1.0);
+        let mut gx = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        gx.read_variables = true;
+        gx.restart = NhRestart::Gromosxx;
+        assert!(gx.init(&topo, &mut bare, &sim).is_err());
+        let mut intended = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        intended.read_variables = true;
+        intended.init(&topo, &mut bare, &sim).unwrap();
+        assert_eq!(intended.zeta(), &[vec![0.0; 3]]);
     }
 
     // ── NHC chain (nhc = 3) ───────────────────────────────────────────────────

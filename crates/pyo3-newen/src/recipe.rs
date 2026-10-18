@@ -760,6 +760,7 @@ impl PyRecipe {
             box_dims: system.configuration.box_dims,
             pertdata: system.configuration.pertdata,
             aedssearch: system.configuration.aedssearch.clone(),
+            nhcvariables: system.configuration.nhcvariables.clone(),
         };
         let prepared = prepare_system(
             &imd,

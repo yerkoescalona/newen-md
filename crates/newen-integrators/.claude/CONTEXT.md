@@ -12,6 +12,10 @@ barostats, energy minimisation.
 Berendsen barostat, COM removal.
 
 ## Status
+- **Nosé–Hoover restart (0.0.69, D41):** `NoseHooverThermostat::init` restores ζ from
+  `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), per `NhRestart`
+  (`restored_zeta`: every link, or gromosXX's first link of a chain and nothing of plain NH);
+  `apply` mirrors ζ back into the configuration for the final NHCVARIABLES block.
 - **MPI seam (2026-08-30):** `Forcefield::pair_partition = Some((rank, size))` keeps the pairs
   whose first atom index ≡ rank (mod size) after every pairlist update (and for the initial list);
   `set_nonbonded_reducer(f)` is called once per step with the pair-term `ForceStorage` (forces,

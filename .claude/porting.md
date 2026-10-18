@@ -266,6 +266,26 @@ Each entry: what gromosXX does, which bucket, what newen does.
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
   printed unrotated while the trace uses the rotated tensor (`out_configuration.cc:3331-3344`);
   the last two in `volume_pressure` (`newen-md/src/bin/md.rs`).
+- **Nosé–Hoover variables of a continued run** (A, D41; corrected in 0.0.69, reproduced by a
+  recipe switch; patched oracle `tests/gromosXX_references/patches/D41_nh_restart.patch`).
+  gromosXX writes and reads `NHCVARIABLES` for chains only (`out_configuration.cc:606`,
+  `in_configuration.cc:1156`) although plain Nosé–Hoover integrates `zeta[0]`
+  (`nosehoover_thermostat.cc:142-143`), and refuses NTINHT = 1 without a chain
+  (`check_parameter.cc:92`), so a continued plain-NH run restarts from ζ = 0; for a chain it reads
+  `zeta.size()` = 1 value per bath before `NoseHoover_Thermostat::init` sizes the chain
+  (`in_configuration.cc:3444`, `md.cc:150, 167`, `nosehoover_thermostat.cc:69`), so links 2..M
+  restart from 0. newen wrote and read nothing until 0.0.69 (NTINHT parsed, unused). Default
+  (`ensemble.thermostat.nh_restart = "intended"`): every variable of every bath written in
+  gromosXX's block format and restored when NTINHT = 0 (`restored_zeta`,
+  `newen-integrators/src/algorithms/nosehoover_thermostat.rs`; `prepare_system` parses the block
+  into `Configuration::nose_hoover`); NTINHT = 1 starts from zero; NTINHT = 0 without a block
+  starts from zero too (gromosXX refuses that for a chain). `"gromosxx"` reproduces: no block for
+  plain NH, a chain's first link only, a chain asked to read without a block and NTINHT = 1
+  without a chain refused (`check_nh_restart`, `plan.rs`). Pinned by `water_216_nvt_nosehoover_cont`
+  / `water_216_nvt_nhc_cont` (native, switch on) and their `_fixed` twins (patched, default);
+  `newen-md/tests/nh_restart.rs` checks that 100 + 100 intended steps follow the 200-step run as
+  closely as weak coupling does. Lean (`gromos-divergences`): `nhScale_restart_eq_iff`,
+  `nhScale_restart_sub`, `nhcReadTranscribed_eq_iff`.
 - **Perturbed RF self term, "Chris: CHECK!"** (false alarm; not a quirk). The comment at
   `perturbed_nonbonded_term.cc:749-751` (`gromosXX-patched`; `:596-598` in the non-ext
   variant) worries that the `selfterm_correction` adds `+A_q·FPEPSI·crf_cut` with no B-state

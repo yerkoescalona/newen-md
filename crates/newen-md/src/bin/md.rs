@@ -558,6 +558,11 @@ fn main() {
                 "  WARNING: Initial settings for A-EDS parameter search simulation found but not \
                  read (NTIAEDSS = 1)"
             ),
+            PrepareNote::NoseHooverVariablesIgnored => {
+                println!("  WARNING: Nose-Hoover-Chains variables found but not read (NTINHT = 1)")
+            },
+            // reported once the recipe is built: it depends on `nh_restart`
+            PrepareNote::NoseHooverVariablesMissing => {},
             PrepareNote::LambdaOutOfRange { lambda } => {
                 log::warn!("{}", newen_run::lambda_warning(None, *lambda))
             },
@@ -675,6 +680,15 @@ fn main() {
     mpi_run.install_reducer(&mut md_sequence);
     for note in &diagnostics.notes {
         println!("  NOTE: {}", note);
+    }
+    if prepared
+        .notes
+        .iter()
+        .any(|n| matches!(n, PrepareNote::NoseHooverVariablesMissing))
+    {
+        if let Some(w) = newen_run::nose_hoover_missing_warning(&recipe) {
+            log::warn!("{w}");
+        }
     }
 
     // @dump: the recipe and the plan as data, nothing else — the Rust-side A/B (3.9).
@@ -1423,6 +1437,21 @@ fn main() {
             .as_ref()
             .filter(|a| a.enabled && a.form != 1)
             .and(conf.aeds.as_ref());
+        // gromosXX `out_configuration.cc:606-607`: the Nosé–Hoover variables (NHCVARIABLES), what
+        // a run with NTINHT = 0 continues from; for plain Nosé–Hoover only under the intended
+        // `nh_restart` (gromosXX writes them for chains only, D41)
+        let nose_hoover = recipe.ensemble.thermostat.as_ref().and_then(|t| {
+            let nhc = match t.algorithm {
+                newen_run::recipe::ThermostatAlgorithm::Berendsen => return None,
+                newen_run::recipe::ThermostatAlgorithm::NoseHoover => 1,
+                newen_run::recipe::ThermostatAlgorithm::NoseHooverChain(n) => n.max(2),
+            };
+            t.nh_restart.writes(nhc).then(|| {
+                conf.nose_hoover
+                    .clone()
+                    .unwrap_or_else(|| vec![vec![0.0; nhc]; t.baths.len().max(1)])
+            })
+        });
         let disres_averages = if imd.ntdir < 0 {
             md_sequence
                 .find_mut::<newen_integrators::algorithms::Forcefield>()
@@ -1446,6 +1475,9 @@ fn main() {
             }
             if let Some(averages) = &disres_averages {
                 w.write_disresexpave(averages)?;
+            }
+            if let Some(zeta) = &nose_hoover {
+                w.write_nhcvariables(zeta)?;
             }
             if let Some(s) = aeds_search {
                 w.write_aedssearch(s)?;

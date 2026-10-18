@@ -12,6 +12,12 @@ All lower crates (newen-core, newen-forces, newen-integrators, newen-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Nosé–Hoover restart (0.0.69, D41):** the final configuration carries NHCVARIABLES (the ζ of
+  every bath, `G96Writer::write_nhcvariables`, from `Configuration::nose_hoover`) for a chain, and
+  for plain Nosé–Hoover unless `ensemble.thermostat.nh_restart = "gromosxx"`. References
+  `water_216_nvt_{nosehoover,nhc}_cont` (native, switch on) and `_cont_fixed` (D41 patch);
+  `water_216_nvt_nosehoover` runs with the switch (gromosXX writes no block there);
+  `tests/nh_restart.rs`: 100 + 100 steps follow 200 as closely as weak coupling does.
 - **Output times and schedules (0.0.68):** every written time is T + step·DT
   (`SimulationState::time_of`, STEP T from the recipe); forces follow NTWF; a converged
   minimisation repeats the previous step's force, energy and dH/dλ frame on that step's
@@ -37,7 +43,7 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **123 reference tests registered, 122 passing** in `tests/test_gromosXX_references.rs` (1
+- **127 reference tests registered, 126 passing** in `tests/test_gromosXX_references.rs` (1
   ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —

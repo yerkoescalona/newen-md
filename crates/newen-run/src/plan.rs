@@ -22,7 +22,7 @@ use crate::recipe::{
     BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
     ThermostatAlgorithm,
 };
-use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
+use crate::recipe::{NhRestart, RunRecipe, TermSpec, Thermostat, VirialKind};
 use crate::{total_dof, ConstraintSelection, RunError};
 use newen_integrators::algorithms::{in_bath, BathRange};
 use newen_integrators::constraints::NtcMode;
@@ -205,6 +205,12 @@ pub enum AlgorithmSpec {
         /// The DOFSET ranges that assign the atoms to `baths` (gromosXX `bath_index`), in file
         /// order; the last one ends at the last atom.
         ranges: Vec<BathRange>,
+        /// Nosé–Hoover with NTINHT = 0: start from the configuration's `NHCVARIABLES`.
+        #[serde(default, skip_serializing_if = "is_default")]
+        read_variables: bool,
+        /// `Thermostat::nh_restart`.
+        #[serde(default, skip_serializing_if = "is_default")]
+        nh_restart: NhRestart,
     },
     LeapFrogPosition,
     Shake {
@@ -400,6 +406,8 @@ impl AlgorithmSpec {
                     com_bath: 0,
                     ir_bath: 0,
                 }],
+                read_variables: false,
+                nh_restart: NhRestart::Intended,
             },
             AlgorithmSpec::LeapFrogPosition,
             AlgorithmSpec::Shake {
@@ -1084,6 +1092,25 @@ pub(crate) fn check_start_time(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
+/// INITIALISE NTINHT = 1 (Nosé–Hoover variables set to zero) without a Nosé–Hoover chain:
+/// gromosXX refuses it (`check_parameter.cc:92-94`), so a plain Nosé–Hoover run must ask to
+/// read variables it never reads (D41). Refused only under `nh_restart = "gromosxx"`; the
+/// intended mode honours NTINHT. Every build path runs it.
+pub(crate) fn check_nh_restart(recipe: &RunRecipe) -> Result<(), RunError> {
+    let Some(t) = &recipe.ensemble.thermostat else {
+        return Ok(());
+    };
+    let chain = matches!(t.algorithm, ThermostatAlgorithm::NoseHooverChain(_));
+    if t.nh_restart == NhRestart::Gromosxx && recipe.control.ntinht == 1 && !chain {
+        return Err(RunError::Recipe(
+            "MULTIBATH block: NTINHT must be 0 when not using Nose-Hoover chains for temperature \
+             coupling (gromosXX; thermostat nh_restart = \"gromosxx\")"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// The grid-based pairlist (PAIRLIST ALGORITHM 1) in a truncated octahedron: gromosXX's
 /// FeatureChecker never unlocks `pbc_t` against `pairlist_grid` (`check_parameter.cc:383`,
 /// `:416`; the grid-cell pairlist is unlocked, `:3814`) and refuses the run with the message
@@ -1398,6 +1425,7 @@ pub fn build_plan(
         None
     };
     check_start_time(recipe)?;
+    check_nh_restart(recipe)?;
     check_electrostatics(recipe)?;
     check_pairlist(recipe)?;
     check_dihedral_phases(recipe, topo)?;
@@ -1552,6 +1580,9 @@ pub fn build_plan(
                     algorithm: t.algorithm,
                     baths,
                     ranges,
+                    read_variables: t.algorithm != ThermostatAlgorithm::Berendsen
+                        && recipe.control.ntinht == 0,
+                    nh_restart: t.nh_restart,
                 });
             }
         }
@@ -2102,6 +2133,7 @@ mod tests {
                 tau: 0.1,
             }],
             dof_sets: Vec::new(),
+            nh_restart: Default::default(),
         });
         r.constraints.solvent_algorithm = Some(ConstraintAlgorithm::Shake);
         r

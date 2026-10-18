@@ -49,12 +49,15 @@ pub struct CoordinateData {
     /// The data lines of an `AEDSSEARCH` block (the A-EDS search state of the run that wrote
     /// the file); parsed by [`parse_aedssearch`] when a run continues the search.
     pub aedssearch: Option<Vec<String>>,
+    /// The data lines of an `NHCVARIABLES` block (the Nosé–Hoover variables of the run that
+    /// wrote the file, one line per bath); parsed by [`parse_nhcvariables`] when a run reads them.
+    pub nhcvariables: Option<Vec<String>>,
 }
 
 /// Read raw coordinate data from a GROMOS coordinate file (.conf/.cnf/.g96).
 ///
-/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, GENBOX, PERTDATA and AEDSSEARCH
-/// blocks.
+/// Handles POSITION, POSITIONRED, VELOCITY, VELOCITYRED, BOX, GENBOX, PERTDATA, AEDSSEARCH and
+/// NHCVARIABLES blocks.
 /// Returns raw data without constructing a Configuration object.
 pub fn read_coordinates<P: AsRef<Path>>(path: P) -> Result<CoordinateData, IoError> {
     let reader = crate::gz::open_text(path.as_ref())
@@ -70,6 +73,7 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
     let mut box_type: i32 = -1; // unknown until parsed
     let mut pertdata: Option<f64> = None;
     let mut aedssearch: Option<Vec<String>> = None;
+    let mut nhcvariables: Option<Vec<String>> = None;
 
     #[derive(PartialEq)]
     enum Section {
@@ -82,6 +86,7 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
         GenBox,
         PertData,
         AedsSearch,
+        NhcVariables,
     }
     let mut section = Section::None;
     let mut genbox_line_num: usize = 0;
@@ -123,6 +128,11 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
             "AEDSSEARCH" => {
                 section = Section::AedsSearch;
                 aedssearch = Some(Vec::new());
+                continue;
+            },
+            "NHCVARIABLES" => {
+                section = Section::NhcVariables;
+                nhcvariables = Some(Vec::new());
                 continue;
             },
             "END" => {
@@ -225,6 +235,11 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
                     lines.push(trimmed.to_string());
                 }
             },
+            Section::NhcVariables => {
+                if let Some(lines) = nhcvariables.as_mut() {
+                    lines.push(trimmed.to_string());
+                }
+            },
             Section::None => {},
         }
     }
@@ -242,7 +257,26 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
         box_type,
         pertdata,
         aedssearch,
+        nhcvariables,
     })
+}
+
+/// The Nosé–Hoover variables of an `NHCVARIABLES` block's data lines: one row per bath, every
+/// value of the line (gromosXX `_print_nose_hoover_chain_variables`,
+/// `out_configuration.cc:3426-3443`, writes the whole chain of each bath on one line).
+pub fn parse_nhcvariables(lines: &[String]) -> Result<Vec<Vec<f64>>, IoError> {
+    lines
+        .iter()
+        .map(|l| {
+            l.split_whitespace()
+                .map(|x| {
+                    x.parse::<f64>().map_err(|_| {
+                        IoError::ParseError(format!("bad value '{x}' in NHCVARIABLES block"))
+                    })
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// The A-EDS search state of an `AEDSSEARCH` block's data lines for `num_states` states

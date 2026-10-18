@@ -5,6 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.69] (2026-10-18)
+
+**Nosé–Hoover state carried over to a continued run** (D41). newen wrote and read no
+NHCVARIABLES block, so every Nosé–Hoover run started from ζ = 0; gromosXX keeps a chain's first
+link only and nothing of plain Nosé–Hoover. newen now restores every variable by default, and a
+recipe switch reproduces gromosXX.
+
+### Fixed
+
+- **newen lost all Nosé–Hoover state between runs.** The final configuration now ends with an
+  NHCVARIABLES block for every Nosé–Hoover run, plain (ALGORITHM 1) included: the ζ chain of each
+  bath on one line, gromosXX's format (`_print_nose_hoover_chain_variables`,
+  `out_configuration.cc:3426-3443`, `%15.9f` without separator; `G96Writer::write_nhcvariables`).
+  With NTINHT = 0 a run restores it (`parse_nhcvariables` → `Configuration::nose_hoover` →
+  `NoseHooverThermostat::init`); NTINHT = 1 starts from zero, and a block it does not read is
+  reported (`PrepareNote::NoseHooverVariablesIgnored`, gromosXX's warning). NTINHT was parsed
+  and stored but never used. NTINHT = 0 without a block starts from zero (gromosXX refuses
+  that for a chain, `in_configuration.cc:1171-1175`) with a warning under the intended restart
+  (`PrepareNote::NoseHooverVariablesMissing`; `md` logs it, Python raises a UserWarning; the
+  education `with_bath` Nosé–Hoover chain now starts with NTINHT 1); a block whose line or
+  value count does not match the baths and the chain is refused. The Python
+  `Configuration`/`System`/`Simulation` carry the block from the file to the run.
+
+### Added
+
+- **`ensemble.thermostat.nh_restart`** (`"intended"` by default; no `.imd` token, set by
+  `md @recipe_set ensemble.thermostat.nh_restart=gromosxx` or `Recipe.update`):
+  `"gromosxx"` reproduces gromosXX 247c95c4's restart (below). The plan's `Thermostat` carries
+  it with `read_variables` (NTINHT = 0); `NhRestart`, `restored_zeta` in newen-integrators.
+- References: `water_216_nvt_nosehoover_cont` and `water_216_nvt_nhc_cont`, steps 100-199 of a
+  100 + 100 run (NTINHT 0, NTISHI 0, T = 0.2 ps) from the native first half's final
+  configuration (`gromos-divergences/sims/e6_nh_restart`), run with the switch: newen's output
+  equals gromosXX's to every printed digit (ENERGY03 and VOLUMEPRESSURE03 max relative
+  difference 0). `water_216_nvt_nosehoover_cont_fixed` and `water_216_nvt_nhc_cont_fixed`: the
+  same from the patched first half, against gromosXX with
+  `patches/D41_nh_restart.patch` (write and read for ALGORITHM ≥ 1, size the chain before
+  reading, NTINHT = 1 allowed for plain NH), with newen's default.
+- `newen-md/tests/nh_restart.rs`: with the default, 100 + 100 steps follow the 200-step run
+  frame by frame for plain NH and the 3-link chain at least as closely as weak coupling (no
+  thermostat state) does — what is left is the 9-decimal restart grown over 100 steps
+  (largest relative differences: ENERGY03 4.1·10⁻⁸, final positions 4.6·10⁻⁸, ζ 1.2·10⁻⁸; weak
+  coupling 4.3·10⁻⁸ and 1.1·10⁻⁷). The reference comparator compares the final NHCVARIABLES block
+  value by value (presence and count included).
+
+### Reproduced gromosXX defects
+
+- **Nosé–Hoover variables not carried over to a continued run** (A, D41), under
+  `nh_restart = "gromosxx"`: plain Nosé–Hoover neither writes nor reads NHCVARIABLES
+  (`out_configuration.cc:606`, `in_configuration.cc:1156`: `algorithm > 1`) and refuses NTINHT = 1
+  (`check_parameter.cc:92`), so a continued run restarts from ζ = 0 (frame 100 of the e6 run:
+  |ΔT| up to 67 K, |ΔE_tot| up to 1104 kJ/mol over the next 100 steps); a chain writes every link
+  but restores only the first (`in_configuration.cc:3444` reads `zeta.size()` = 1 value before
+  `nosehoover_thermostat.cc:69` sizes the chain), a chain asked to read without a block is
+  refused. Pinned by the two `_cont` references. With the default, the continued run follows the
+  single run: |ΔE_tot| ≤ 2.3·10⁻⁵ (plain NH) and 8·10⁻⁶ kJ/mol (chain) against the native
+  200-step run, as gromosXX patched with D41 does.
+
+### Changed
+
+- `water_216_nvt_nosehoover` runs with `nh_restart = "gromosxx"`: gromosXX's final configuration
+  has no NHCVARIABLES block for plain Nosé–Hoover. Its run is the same under both settings.
+
+### Verified
+
+- References: 126 passed, 1 ignored (`aladip_gamd`); the twelve earlier `_fixed` references
+  regenerated with the rebuilt patched binary are byte-identical. `nh_restart` 3 passed;
+  integrators, io, run: 349 tests green (new: restart modes, `init`, NHCVARIABLES write/read, the
+  NTINHT refusal through both build paths, the missing-variables note); clippy no new
+  warnings; `cargo fmt --check` clean; `pytest` 1383 passed / 93 skipped (new: the four NH
+  continuation references).
+
 ## [0.0.68] (2026-10-18)
 
 **Small newen defects a one-parameter toggle sweep against gromosXX found** (newen's own, not

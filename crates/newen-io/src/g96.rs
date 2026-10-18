@@ -190,6 +190,22 @@ impl G96Writer {
         writeln!(w, "END").map_err(err)
     }
 
+    /// Write the NHCVARIABLES block (the Nosé–Hoover variables a continuation run starts from),
+    /// one line per bath with its whole chain — gromosXX `_print_nose_hoover_chain_variables`
+    /// (out_configuration.cc:3426-3443): fixed format, 9 decimals, width 15, no separator.
+    pub fn write_nhcvariables(&mut self, zeta: &[Vec<f64>]) -> Result<(), String> {
+        let err = |e: std::io::Error| format!("Write error: {}", e);
+        let w = &mut self.writer;
+        writeln!(w, "NHCVARIABLES").map_err(err)?;
+        for bath in zeta {
+            for z in bath {
+                write!(w, "{z:15.9}").map_err(err)?;
+            }
+            writeln!(w).map_err(err)?;
+        }
+        writeln!(w, "END").map_err(err)
+    }
+
     /// Write position block with full atom labels (residue number, name, atom name).
     ///
     /// Atoms are renumbered sequentially starting from 1.
@@ -350,6 +366,24 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, "PERTDATA\n      0.2500000\nEND\n");
         std::fs::remove_file(path).ok();
+    }
+
+    /// The block gromosXX wrote after 100 steps of a 3-link chain (`water_216_nvt_nhc_cont`'s
+    /// start configuration), byte for byte, and read back through the coordinate parser.
+    #[test]
+    fn nhcvariables_are_written_as_gromosxx_does_and_read_back() {
+        let block = "NHCVARIABLES\n    0.883220231   20.087328305   72.553842985\nEND\n";
+        let text = format!("POSITION\n    1 SOLV  OW         1    0.1 0.2 0.3\nEND\n{block}");
+        let c = crate::coordinate::parse_coordinates(text.as_bytes()).unwrap();
+        let zeta = crate::coordinate::parse_nhcvariables(c.nhcvariables.as_ref().unwrap()).unwrap();
+        assert_eq!(zeta, vec![vec![0.883220231, 20.087328305, 72.553842985]]);
+        let path = std::env::temp_dir().join(format!("newen_nhc_{}.cnf", std::process::id()));
+        let mut w = G96Writer::new(&path).unwrap();
+        w.write_nhcvariables(&zeta).unwrap();
+        w.close().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), block);
+        std::fs::remove_file(path).ok();
+        assert!(crate::coordinate::parse_nhcvariables(&["0.1 x".to_string()]).is_err());
     }
 
     /// The block gromosXX wrote for a FORM 6 search (aladip, three states), byte for byte, and

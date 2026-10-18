@@ -266,6 +266,7 @@ fn factories_build_the_same_runs_as_the_parameter_factories() {
                 tau: 0.1
             }],
             dof_sets: vec![],
+            nh_restart: Default::default(),
         })
     );
     assert_eq!(nvt.constraints.solute.ntc(), 2);
