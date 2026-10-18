@@ -10,12 +10,14 @@ the discipline itself, not a summary of it.
 The gromosXX reference suite (`crates/newen-md/tests/gromosXX_references/`) is the oracle. For any
 **wired, tested** path:
 
-- Reproducing GROMOS output to full precision is the definition of correct. Tolerances are tight
+- Matching the oracle to full precision is the definition of correct. Tolerances are tight
   (force ~1e-6, energy ~1e-8) by design.
 - A change that alters that output is a **regression until proven otherwise** — never a silent
-  improvement. If gromosXX is genuinely wrong and you want the corrected behavior, that is a
-  *conscious, documented decision* (and a candidate for a `--gromos-compat` vs `--corrected` split),
-  not an undiscussed divergence.
+  improvement.
+- The oracle is gromosXX as released, except where a known defect has been corrected: there it is
+  gromosXX with that defect's patch applied (`tests/gromosXX_references/patches/`). newen is gated
+  on the patched binary and carries no mode that reproduces the defect (see "One behaviour per
+  feature" below).
 
 ## The oracle only covers wired paths
 
@@ -42,12 +44,14 @@ after.** The test is what converts un-audited surface into oracle-covered surfac
    The gromosXX developers annotate their own defects and uncertainties. Two minutes here catches the
    issues they already knew about.
 2. **Classify every suspicious thing you find** into one of three buckets, and treat each differently:
-   - **(A) Genuine bug** → reproduce it first, pinned by a native reference and flagged (CHANGELOG
-     "Reproduced gromosXX defects", an entry below, a code comment with file:line), so the divergence
-     is demonstrated bit-for-bit; correct it in a later, separate commit that keeps the reference as
-     documentation of the bug and gates the correction some other way. Where the defect is
-     mathematical, state it as a theorem in the `math` repository (`OAI.Physics.Gromos.Divergences`).
-     Never port one silently, and never skip straight to the correction.
+   - **(A) Genuine bug** → newen implements the intended behaviour, and only that. Write the
+     smallest patch to gromosXX (or gromos++) that corrects the defect, check that the patched and
+     released binaries differ only in what the defect touches, regenerate the reference with the
+     patched binary (`<system>_fixed`, the patch named in its `input.toml`) and gate newen on it.
+     Record the defect in the dossier in `~/Development/gromos-divergences` (the reproducer against
+     released gromosXX, the patch, a Lean theorem where the defect is mathematical) and add an
+     entry to the list below. Never port one silently, never correct one without a patched oracle,
+     and never add an option that reproduces it.
    - **(B) Intentional GROMOS quirk** → reproduce it *exactly* and **document it as a deliberate
      decision** (in the style of CHANGELOG's "BONDANGLETYPE intentionally unsupported" entries), so it
      is never later mistaken for a porting mistake.
@@ -66,12 +70,24 @@ Free leverage: gromosXX's own `check/*.t.cc` files hard-code per-term reference 
 perturbed/soft-core variants). They are a second source of truth independent of running the md
 binary — use them to validate the very terms you were told not to trust.
 
-## Reproduce-or-correct, made explicit
+## One behaviour per feature
 
-When GROMOS behavior and "physically correct" behavior diverge, you may eventually want both: a
-faithful compatibility mode and a corrected mode. Design so the two can coexist behind a flag rather
-than forcing an irreversible choice. Until then, **faithful is the default** and any deviation is
-named and documented.
+newen has one behaviour for every feature: the intended one. Where gromosXX is right, that is
+gromosXX's behaviour, its conventions and quirks included (bucket B). Where gromosXX is wrong, it is
+the corrected behaviour, gated by a patched oracle (bucket A). There is no compatibility mode, no
+`--gromos-compat` flag and no recipe value that selects a known defect. Each such switch doubles the
+behaviours the code can have, most combinations go untested, and the next reader — person or agent —
+can no longer tell which behaviour is intended, and copies the pattern.
+
+The proof that a defect exists (for the gromosXX maintainers) lives in `gromos-divergences`, which
+runs released gromosXX against the patched one. newen keeps only the patch and the `_fixed`
+reference. A released-binary reference stays in newen only for what the defect does not touch.
+
+Code comments explain the physics. A corrected defect is named by its dossier id (`D41`); the
+gromosXX file:line map belongs in the entry below and in the dossier, not in the code.
+
+Bucket-A entries below still marked "Reproduced" predate this rule: each is open work, to be
+corrected behind a patched oracle.
 
 ### The list
 
@@ -303,5 +319,6 @@ Each entry: what gromosXX does, which bucket, what newen does.
 ## In one line
 
 Tests before wiring; derivation before transcription; grep before porting; document every deliberate
-quirk. Faithfulness and correctness are both required — the discipline above is how you get both
-instead of trading one for the other.
+quirk; one behaviour per feature — a gromosXX defect is corrected in newen and patched in the oracle,
+never kept behind a switch. Faithfulness and correctness are both required — the discipline above is
+how you get both instead of trading one for the other.

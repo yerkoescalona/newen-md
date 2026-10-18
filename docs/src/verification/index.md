@@ -34,13 +34,15 @@ faithfully reproduces the defect. A comparison against gromosXX only proves that
 defects included.
 
 What catches this kind of error is a statement of what the code should do that is independent of
-any code: a specification. The 39 findings are collected, with reproducers and proposed fixes, in
-the divergence dossier of the gromos-divergences repository. Each has a number D1 to D39; this
+any code: a specification. The findings are collected, with reproducers and proposed fixes, in
+the divergence dossier of the gromos-divergences repository. Each has a number (D1, D2, …); this
 chapter uses one of them, D34, as its worked example.
 
-newen keeps reproducing gromosXX where it differs from the equations (so the reference tests
-stay bit-for-bit), warns about it, and corrects it separately. The specification is what tells us
-where those places are.
+Where gromosXX is a defect against the equations, newen computes the equations, and the reference
+it is checked against comes from gromosXX with that defect patched. The defect itself is shown in
+the dossier, not kept as an option in newen. Where the difference is a GROMOS convention rather
+than a defect, newen keeps gromosXX's behaviour and warns when it matters. The specification is
+what tells us where those places are.
 
 ## The idea in one picture
 

@@ -39,6 +39,10 @@ and crate-specific rules that extend the workspace-wide guides.
    GPU become additive, not forks. See `architecture.md`.
 4. **Don't port the bugs, don't diverge by accident.** Tests before wiring; derivation before
    transcription; grep before porting; document every deliberate quirk. See `porting.md`.
+5. **One behaviour per feature.** newen computes the intended physics. Where gromosXX is wrong, the
+   oracle is patched, not newen: no option, flag or recipe value reproduces a known defect, so the
+   code stays self-consistent and its intent unambiguous. See `porting.md`, "One behaviour per
+   feature".
 
 ## Reference sources (read-only)
 
