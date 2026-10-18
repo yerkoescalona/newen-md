@@ -819,6 +819,24 @@ fn run_reference(system: &str) {
                 i + 1
             );
         }
+        // A GaMD search (SEARCH 1/2): the statistics a continuation starts from, printed with 9
+        // decimals (`out_configuration.cc:4013-4034`).
+        let ours = parse_block_values(&out.join("final.conf"), "GAMDSTAT");
+        let theirs = parse_block_values(&expected_fin, "GAMDSTAT");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration GAMDSTAT has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-8 * b.abs().max(1.0),
+                "{system}: GAMDSTAT value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
         // Time-averaged distance restraints (NTDIR < 0): the ⟨r⁻³⟩ a continuation starts from.
         let ours = parse_block_values(&out.join("final.conf"), "DISRESEXPAVE");
         let theirs = parse_block_values(&expected_fin, "DISRESEXPAVE");
@@ -1318,14 +1336,13 @@ ref_test!(
     aladip_harmonic_covalent_groups,
     "aladip_harmonic_covalent_groups"
 );
-// The classical part of this system already matches gromosXX exactly (its potential energy at
-// frame 0 agrees to 1e-9); what differs is the GaMD boost itself. gromosXX accumulates the
-// dihedral and total forces of every acceleration group during the force calculation and scales
-// them by k·(V−E), recording ΔV = k(V−E)²/2 in the special energy — on this system ΔV ≈ 1.23
-// kJ/mol, which our run neither applies the same way nor reports. The reference stays here as the
-// specification for that work (1.9).
-ref_test!(
-    ignore: aladip_gamd,
-    "aladip_gamd",
-    "GaMD boost unvalidated: gromosXX's per-acceleration-group force scaling and its ΔV in the special energy are not reproduced (1.9)"
-);
+// GaMD, fixed parameters (SEARCH 0), one interaction group over all atoms. FORM 3: the dihedral
+// boost, ΔV = kD(V_D − ED)²/2 ≈ 1.23 kJ/mol in the special energy and ENER[51], the proper and
+// improper dihedral forces scaled by 1 + kD(V_D − ED).
+ref_test!(aladip_gamd, "aladip_gamd");
+// FORM 1 with ET above V_T: both boosts act on the forces, and ΔV is the dihedral one only —
+// gromosXX assigns `gamd_DV` twice (`gamd.cc:364, 381`), reproduced.
+ref_test!(aladip_gamd_dual, "aladip_gamd_dual");
+// SEARCH 1, NTIGAMDS 1: a cMD search from scratch, no boost; the statistics end in the final
+// configuration's GAMDSTAT block.
+ref_test!(aladip_gamd_cmd_search, "aladip_gamd_cmd_search");

@@ -37,8 +37,8 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **123 reference tests registered, 122 passing** in `tests/test_gromosXX_references.rs` (1
-  ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
+- **125 reference tests registered, all passing** in `tests/test_gromosXX_references.rs`
+  (GaMD: `aladip_gamd`, `_dual`, `_cmd_search`; the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
   every active reference system uses `standard` except `water_1000_spc_gridcell`.

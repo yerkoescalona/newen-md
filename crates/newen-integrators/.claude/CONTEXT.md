@@ -39,7 +39,11 @@ Berendsen barostat, COM removal.
   by default, each reproduced on request through `AedsParams`: `AedsColumns` (D16, the energy
   columns before the update), `AedsPrevalence` (D25, log-sum-exp prevalences), `AedsTarget` (D32,
   a sampled state as the E_min target)
-- GaMD / REMD: **stubs only, untested**
+- GaMD ✓ (gromosXX's algorithm, `gamd::Gamd`, run at the end of `Forcefield::apply` when
+  `Forcefield::gamd` is set by `md`): FORMS 1-3, SEARCH 0-2, the statistics and `GAMDSTAT`;
+  one accelerated interaction group (plus the group gromosXX books the RF excluded solute pairs
+  to), reference-tested. The older `GamdParameters`/`GamdRunner` serve only the `gamd` binary.
+- REMD: **stubs only, untested**
 
 ## Key files
 ```
