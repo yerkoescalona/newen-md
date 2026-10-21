@@ -34,7 +34,67 @@ use newen_core::configuration::Configuration;
 use newen_core::topology::Topology;
 use newen_core::units::kB;
 
-use super::multibath::BathRange;
+use super::multibath::{BathRange, ZERO_TEMPERATURE};
+
+/// One Nosé–Hoover step of one bath (gromosXX `NoseHoover_Thermostat::calc_scaling` for one
+/// link, `calc_chain_scaling` for more): updates the chain `zeta` in place and returns the
+/// velocity scaling factor `1 − ζ[0]·dt`. `T_free` is Berendsen's (see [`berendsen_scale`]).
+///
+/// ```text
+///   one link:  ζ[0] += dt/(τ·τ) · (T_free/T₀ − 1)
+///   N links:   τ_0 = τ·τ, τ_i = τ·τ/N_df
+///              ζ[N−1] += (τ_{N−2}·ζ[N−2]·ζ[N−2] − 1/N_df) / τ_{N−1} · dt
+///              ζ[i]   += ((τ_{i−1}·ζ[i−1]·ζ[i−1] − 1/N_df) / τ_i − ζ[i]·ζ[i+1]) · dt,  i = N−2 … 1
+///              ζ[0]   += ((T_free/T₀ − 1) / τ_0 − ζ[1]·ζ[0]) · dt
+/// ```
+///
+/// τ < 0 (no coupling) returns 1 and leaves `zeta` alone. `zeta` must not be empty.
+///
+/// [`berendsen_scale`]: super::berendsen_scale
+///
+/// spec: thermostat.nose_hoover_scale
+pub fn nose_hoover_scale(
+    zeta: &mut [f64],
+    ekin: f64,
+    dof: f64,
+    temperature: f64,
+    tau: f64,
+    dt: f64,
+) -> f64 {
+    if tau < 0.0 {
+        return 1.0;
+    }
+    debug_assert!(
+        !zeta.is_empty(),
+        "a Nosé–Hoover chain has at least one link"
+    );
+    let mut free_temp = if dof > 0.0 {
+        2.0 * ekin / (dof * kB)
+    } else {
+        0.0
+    };
+    if free_temp < ZERO_TEMPERATURE {
+        free_temp = temperature;
+    }
+
+    let nhc = zeta.len();
+    if nhc == 1 {
+        zeta[0] += dt / (tau * tau) * (free_temp / temperature - 1.0);
+        return 1.0 - zeta[0] * dt;
+    }
+
+    let tau2 = tau * tau;
+    let tv = |i: usize| if i == 0 { tau2 } else { tau2 / dof };
+    // tail to head: each link reads the new value of the link above, the old one of the link below
+    zeta[nhc - 1] += (tv(nhc - 2) * zeta[nhc - 2] * zeta[nhc - 2] - 1.0 / dof) / tv(nhc - 1) * dt;
+    for i in (1..nhc - 1).rev() {
+        zeta[i] += ((tv(i - 1) * zeta[i - 1] * zeta[i - 1] - 1.0 / dof) / tv(i)
+            - zeta[i] * zeta[i + 1])
+            * dt;
+    }
+    zeta[0] += ((free_temp / temperature - 1.0) / tv(0) - zeta[1] * zeta[0]) * dt;
+    1.0 - zeta[0] * dt
+}
 
 /// Nosé-Hoover thermostat parameters for a single temperature bath.
 #[derive(Debug, Clone)]
@@ -188,20 +248,15 @@ impl Algorithm for NoseHooverThermostat {
 
         self.scale.resize(self.params.len(), 1.0);
         for bath_idx in 0..self.params.len() {
-            self.scale[bath_idx] = 1.0;
-            // Copy all params as plain scalars (f64/usize are Copy) so that
-            // the borrow of self.params is released before we mutate self.zeta.
-            let temperature = self.params[bath_idx].temperature;
-            let tau = self.params[bath_idx].tau;
-            let dof = self.params[bath_idx].dof;
-            let nhc = self.params[bath_idx].nhc;
+            let NoseHooverThermostatParams {
+                temperature,
+                tau,
+                dof,
+                ..
+            } = self.params[bath_idx];
+            let zeta = &mut self.zeta[bath_idx];
 
-            // τ < 0 → no coupling for this bath (GROMOS: bath.tau == -1 check)
-            if tau < 0.0 {
-                continue;
-            }
-
-            if nhc == 0 {
+            if tau >= 0.0 && zeta.is_empty() {
                 return Err(format!("NoseHoover bath {bath_idx}: nhc must be >= 1"));
             }
 
@@ -215,76 +270,15 @@ impl Algorithm for NoseHooverThermostat {
                 .copied()
                 .unwrap_or(conf.current().energies.kinetic_energy_new);
 
-            // T_free = 2·E_kin / (dof·k_B)
-            let mut free_temp = if dof > 0.0 {
-                2.0 * ekin / (dof * kB)
-            } else {
-                0.0
-            };
-
-            // Guard against division-by-zero / zero temperature (GROMOS: epsilon check)
-            if free_temp < f64::EPSILON {
-                free_temp = temperature;
-            }
-
-            let scale = if nhc == 1 {
-                // ── Single NHC ──────────────────────────────────────────────
-                // ζ[0] += dt/τ² · (T_free/T₀ - 1)
-                self.zeta[bath_idx][0] += dt / (tau * tau) * (free_temp / temperature - 1.0);
-                1.0 - self.zeta[bath_idx][0] * dt
-            } else {
-                // ── NHC chain ───────────────────────────────────────────────
-                // τ_vec[0] = τ²,  τ_vec[i>0] = τ²/dof
-                let tau2 = tau * tau;
-                // Inline closure — captures tau2 and dof by value (both Copy).
-                let tv = |i: usize| -> f64 {
-                    if i == 0 {
-                        tau2
-                    } else {
-                        tau2 / dof
-                    }
-                };
-
-                // 1. Tail: ζ[N-1] += (τ_vec[N-2]·ζ[N-2]² - 1/dof) / τ_vec[N-1] · dt
-                {
-                    let z_nm2 = self.zeta[bath_idx][nhc - 2];
-                    let delta = (tv(nhc - 2) * z_nm2 * z_nm2 - 1.0 / dof) / tv(nhc - 1) * dt;
-                    self.zeta[bath_idx][nhc - 1] += delta;
-                }
-
-                // 2. Middle links: i from N-2 down to 1
-                //    ζ[i] += ((τ_vec[i-1]·ζ[i-1]² - 1/dof)/τ_vec[i] - ζ[i]·ζ[i+1]) · dt
-                //    Note: ζ[i+1] is already updated (tail-to-head order, mirrors GROMOS).
-                for i in (1..nhc - 1).rev() {
-                    let z_prev = self.zeta[bath_idx][i - 1]; // old ζ[i-1]
-                    let z_curr = self.zeta[bath_idx][i]; // old ζ[i]
-                    let z_next = self.zeta[bath_idx][i + 1]; // already updated ζ[i+1]
-                    let delta =
-                        ((tv(i - 1) * z_prev * z_prev - 1.0 / dof) / tv(i) - z_curr * z_next) * dt;
-                    self.zeta[bath_idx][i] += delta;
-                }
-
-                // 3. Head: ζ[0] += ((T_free/T₀ - 1)/τ_vec[0] - ζ[1]·ζ[0]) · dt
-                //    Uses freshly updated ζ[1] (mirrors GROMOS).
-                {
-                    let z0 = self.zeta[bath_idx][0]; // old ζ[0]
-                    let z1 = self.zeta[bath_idx][1]; // already updated ζ[1]
-                    let delta = ((free_temp / temperature - 1.0) / tv(0) - z1 * z0) * dt;
-                    self.zeta[bath_idx][0] += delta;
-                }
-
-                1.0 - self.zeta[bath_idx][0] * dt
-            };
+            let scale = nose_hoover_scale(zeta, ekin, dof, temperature, tau, dt);
 
             log::debug!(
-                "  NoseHoover bath {}: E_kin={:.6e}, T_free={:.2}, T0={:.2}, \
-                 scale={:.10}, zeta[0]={:.10}",
+                "  NoseHoover bath {}: E_kin={:.6e}, T0={:.2}, scale={:.10}, zeta={:?}",
                 bath_idx,
                 ekin,
-                free_temp,
                 temperature,
                 scale,
-                self.zeta[bath_idx][0],
+                zeta,
             );
 
             self.scale[bath_idx] = scale;

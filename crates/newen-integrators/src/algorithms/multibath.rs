@@ -6,6 +6,9 @@
 
 pub use newen_logic::thermo::bath::DofRange as BathRange;
 
+/// The temperature (K) below which a bath is treated as having none (gromosXX `math::epsilon`).
+pub const ZERO_TEMPERATURE: f64 = 1e-12;
+
 /// gromosXX `Multibath::in_bath` (`multibath.h:159-171`): the `(com, ir)` baths of `atom`, those
 /// of the first range whose `last_atom` reaches it. Bath 0 when no range does (gromosXX asserts;
 /// plan validation guarantees the last range ends at the last atom).

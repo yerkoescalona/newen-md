@@ -4,7 +4,9 @@ Full explanation (why, how the pieces fit, guarantees, adding a function): [docs
 
 Verified so far: `schedule::output_misses_longrange` (the pilot, explained below),
 `thermo::dof::total_dof`, and the five functions of `thermo::bath` (degrees of freedom per
-temperature bath and the atom-to-bath mapping; see `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
+temperature bath and the atom-to-bath mapping); and two floating-point kernels, the Berendsen and
+Nosé–Hoover thermostat steps of `crates/newen-integrators` (see "Floating-point kernels" below
+and `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
 `crates/newen-logic/src/schedule.rs`. It answers: with a twin-range pairlist updated every
 `nsnb` steps and free-energy output every `ntwg` steps, does some output step reuse long-range
 terms from a pairlist step that was *not* an output step? (Under PRECALCLAM gromosXX then writes
@@ -56,6 +58,30 @@ tag ends in the commit pinned in `lakefile.lean` and unpack it into `~/.local/ae
 bundles the matching `charon`); then `rustup toolchain install <channel in its rust-toolchain>
 --profile minimal -c rustc-dev -c llvm-tools -c rust-src`. `extract.sh` refuses to run if the
 binary and the pinned library differ.
+
+## Floating-point kernels
+
+`berendsen_scale` and `nose_hoover_scale` (`crates/newen-integrators/src/algorithms/`) compute
+with `f64`, so Aeneas does not apply (`kind = "float"` in `SPEC.toml`). Three pieces instead:
+
+| Piece | Claim | Where |
+|---|---|---|
+| ℝ theorems | what the formula means: Berendsen relaxes `T` towards `T₀` by `dt/τ` per step and never overshoots for `dt ≤ τ`; the Nosé–Hoover friction grows exactly when the bath is too hot | `NewenTheory/Dynamics/Thermostats.lean` (imports Mathlib) |
+| Float model | one definition per kernel, polymorphic in the number type and written operation by operation like the Rust; at ℝ it equals the theory (`berendsenModel_real_eq`, `noseHooverModel_real_eq`), at `Float` it is executed | `NewenSpec/Thermostat.lean` |
+| Differential test | the compiled Rust returns the same 64 bits as the `Float` model on every generated input (6 840 Berendsen rows, 3 036 Nosé–Hoover rows, chains iterated over 1–8 steps; the generator makes as many more as a nightly run wants) | `crates/newen-integrators/tests/thermostat_spec.rs`, `vectors/thermostat.json` |
+
+The comparison is exact, not within a tolerance: the kernels use only `+ − × ÷` and `sqrt`, which
+IEEE 754 rounds correctly, in Rust as in Lean's `Float` (C `double`), so the same operations in
+the same order give the same bits. The constants (`k_B`, `ZERO_TEMPERATURE`) and every input are
+written as bits. The one exception is NaN: Lean has a single NaN, so a NaN matches any NaN.
+
+```sh
+cd spec && lake exe spec-vectors                              # rewrite vectors/thermostat.json
+cargo test -p newen-integrators --test thermostat_spec        # Rust = Float model, bit for bit
+```
+
+Not guaranteed: the distance between the ℝ model and the `Float` model (the rounding error is not
+bounded here), and anything outside the generated inputs.
 
 ## Adding a function
 

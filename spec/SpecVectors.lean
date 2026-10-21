@@ -1,13 +1,16 @@
 import NewenSpec.Schedule
 import NewenSpec.Thermo.Dof
 import NewenSpec.Thermo.Bath
+import NewenSpec.Thermostat
 
-/-! `lake exe spec-vectors`: evaluate the Lean models on the grid the Rust tests sweep and write
-them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
+/-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
+thermostat models on random `Float` inputs) and write them to `vectors/`, so `cargo test` can
+compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
 open NewenSpec.Thermo.Bath
+open NewenSpec.Thermostat
 
 /-- Grid bound of the schedule grid, equal to `GRID` in
 `crates/newen-logic/tests/schedule_spec.rs`. -/
@@ -107,6 +110,140 @@ def bathJson : String :=
   "denominator\",\n" ++
   "  \"rows\": [\n" ++ ",\n".intercalate rows ++ "\n  ]\n}\n"
 
+/-! ## Thermostats: random inputs as `Float`, every number written as its 64 bits -/
+
+/-- SplitMix64 (Steele, Lea & Flood 2014): the generator state and one draw. -/
+def splitMix (s : UInt64) : UInt64 × UInt64 :=
+  let s := s + 0x9E3779B97F4A7C15
+  let z := (s ^^^ (s >>> 30)) * 0xBF58476D1CE4E5B9
+  let z := (z ^^^ (z >>> 27)) * 0x94D049BB133111EB
+  (z ^^^ (z >>> 31), s)
+
+abbrev Gen := StateM UInt64
+
+def draw : Gen UInt64 := modifyGet splitMix
+
+/-- Uniform in `[0, 1)`: 52 random mantissa bits under the exponent of 1, minus 1. -/
+def unit : Gen Float := do
+  return Float.ofBits ((0x3FF0000000000000 : UInt64) ||| ((← draw) >>> 12)) - 1
+
+def uniform (a b : Float) : Gen Float := do return a + (b - a) * (← unit)
+
+/-- Log-uniform in `[a, b]` (`exp` and `log` only make inputs; they are written as bits). -/
+def logUniform (a b : Float) : Gen Float := do
+  return Float.exp (Float.log a + (Float.log b - Float.log a) * (← unit))
+
+def below (n : Nat) : Gen Nat := do return ((← draw) % n.toUInt64).toNat
+
+def pick (xs : List Float) : Gen Float := do return xs.getD (← below xs.length) 0
+
+/-- 16 hex digits of the bits of `x`, quoted. -/
+def hexBits (x : Float) : String :=
+  let b := x.toBits
+  let digit (i : Nat) : Char :=
+    "0123456789abcdef".toList.getD ((b >>> (4 * (15 - i)).toUInt64) &&& 15).toNat '0'
+  "\"0x" ++ String.ofList ((List.range 16).map digit) ++ "\""
+
+def hexRow (xs : List Float) : String := "    [" ++ ", ".intercalate (xs.map hexBits) ++ "]"
+
+def thermoDofs : List Float := [1, 2, 3, 5.5, 11.5, 12.76, 100, 6000, 1e5]
+def thermoTemperatures : List Float := [0, 1, 300, 1000]
+def thermoDts : List Float := [1e-4, 5e-4, 2e-3, 1e-2]
+
+/-- A `dof`: one of `thermoDofs`, random in `[1, 1e5]`, or `0`. -/
+def drawDof : Gen Float := do
+  match ← below (thermoDofs.length + 2) with
+  | 0 => return 0
+  | 1 => uniform 1 1e5
+  | i => return thermoDofs.getD (i - 2) 0
+
+def drawTemperature : Gen Float := do
+  match ← below (thermoTemperatures.length + 1) with
+  | 0 => uniform 0 2000
+  | i => return thermoTemperatures.getD (i - 1) 0
+
+/-- A kinetic energy whose bath temperature is log-uniform in `[1e-14, 1e6]` K, or `0`. -/
+def drawEkin (dof : Float) : Gen Float := do
+  if (← below 16) == 0 then return 0
+  let t ← logUniform 1e-14 1e6
+  return t * (if dof > 0 then dof else 1) * kBFloat / 2
+
+def berendsenTaus (dt : Float) : List Float := [-1, 0, dt, 0.1, 1, 10]
+
+def berendsenRow (ekin dof temperature tau dt : Float) : List Float :=
+  [ekin, dof, temperature, tau, dt, berendsenFloat ekin dof temperature tau dt]
+
+/-- Every fixed `(dt, dof, temperature, tau)`, `dof = 0` included, with four kinetic energies
+(the first `0`); then random rows with every parameter drawn from its family or at random. -/
+def berendsenRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for dt in thermoDts do
+    for dof in thermoDofs ++ [0] do
+      for temperature in thermoTemperatures do
+        for tau in berendsenTaus dt do
+          for k in List.range 4 do
+            let ekin ← if k == 0 then pure 0 else drawEkin dof
+            rows := rows.push (berendsenRow ekin dof temperature tau dt)
+  for _ in List.range 3000 do
+    let dt ← pick thermoDts
+    let dof ← drawDof
+    let temperature ← drawTemperature
+    let taus := berendsenTaus dt
+    let tau ← match ← below (taus.length + 1) with
+      | 0 => uniform dt 10
+      | i => pure (taus.getD (i - 1) 0)
+    let ekin ← drawEkin dof
+    rows := rows.push (berendsenRow ekin dof temperature tau dt)
+  return rows.toList
+
+def noseHooverTaus : List Float := [-1, 0.05, 0.1, 1]
+
+/-- One chain run: random parameters and starting `ζ` in `[-50, 50]`, then 1–8 steps, each with
+a new kinetic energy and the `ζ` the previous step left; one row per step. -/
+def noseHooverRun : Gen (List String) := do
+  let nhc := [1, 2, 3, 5].getD (← below 4) 1
+  let dt ← pick thermoDts
+  let dof ← drawDof
+  let temperature ← drawTemperature
+  let tau ← match ← below (noseHooverTaus.length + 1) with
+    | 0 => uniform 0.01 2
+    | i => pure (noseHooverTaus.getD (i - 1) 0)
+  let mut zeta := #[]
+  for _ in List.range nhc do
+    zeta := zeta.push (← uniform (-50) 50)
+  let steps := 1 + (← below 8)
+  let mut rows := #[]
+  for _ in List.range steps do
+    let ekin ← drawEkin dof
+    let (zeta', scale) := noseHooverFloat zeta.toList ekin dof temperature tau dt
+    rows := rows.push ("    [" ++ ", ".intercalate ([ekin, dof, temperature, tau, dt].map hexBits
+      ++ [toString nhc] ++ (zeta.toList ++ zeta' ++ [scale]).map hexBits) ++ "]")
+    zeta := zeta'.toArray
+  return rows.toList
+
+def noseHooverRows : Gen (List String) := do
+  let mut rows := #[]
+  for _ in List.range 700 do
+    rows := rows ++ (← noseHooverRun).toArray
+  return rows.toList
+
+/-- The rows of `vectors/thermostat.json`, from a fixed seed. -/
+def thermostatRows : List (List Float) × List String :=
+  (do return (← berendsenRows, ← noseHooverRows) : Gen _).run' 0x6e6577656e2d6d64
+
+def thermostatJson (berendsen : List (List Float)) (noseHoover : List String) : String :=
+  "{\n" ++
+  "  \"spec\": \"thermostat.berendsen_scale, thermostat.nose_hoover_scale\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Thermostat.berendsenFloat, " ++
+  "noseHooverFloat; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); nhc is a plain integer\",\n" ++
+  "  \"layout_berendsen\": \"ekin, dof, temperature, tau, dt, scale\",\n" ++
+  "  \"layout_nose_hoover\": \"ekin, dof, temperature, tau, dt, nhc, zeta_in[0..nhc), " ++
+  "zeta_out[0..nhc), scale; consecutive rows of one run carry zeta_out into zeta_in\",\n" ++
+  "  \"berendsen\": [\n" ++ ",\n".intercalate (berendsen.map hexRow) ++ "\n  ],\n" ++
+  "  \"nose_hoover\": [\n" ++ ",\n".intercalate noseHoover ++ "\n  ]\n}\n"
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -115,3 +252,11 @@ def main : IO Unit := do
   IO.println s!"wrote vectors/dof.json ({(dofGrid + 1) ^ 3} rows x {ndfmins.length})"
   IO.FS.writeFile "vectors/bath.json" bathJson
   IO.println s!"wrote vectors/bath.json ({bathSystems.length * 6} rows)"
+  -- the literals the models use must be the exact doubles 0, 1, 2
+  unless (0 : Float).toBits == 0 && (1 : Float).toBits == 0x3FF0000000000000 &&
+      (2 : Float).toBits == 0x4000000000000000 do
+    throw (IO.userError "Float literals 0, 1, 2 are not exact")
+  let (berendsen, noseHoover) := thermostatRows
+  IO.FS.writeFile "vectors/thermostat.json" (thermostatJson berendsen noseHoover)
+  IO.println (s!"wrote vectors/thermostat.json ({berendsen.length} Berendsen rows, " ++
+    s!"{noseHoover.length} Nosé–Hoover rows)")

@@ -12,6 +12,12 @@ barostats, energy minimisation.
 Berendsen barostat, COM removal.
 
 ## Status
+- **Thermostat kernels verified (2026-10-22):** `berendsen_scale` and `nose_hoover_scale` are the
+  pure per-bath steps `apply` calls, with one threshold `ZERO_TEMPERATURE = 1e-12` (gromosXX
+  `math::epsilon`; was `1e-10` and `f64::EPSILON`). Lean model in `spec/NewenSpec/Thermostat.lean`
+  (ℝ theorems in `spec/NewenTheory/Dynamics/Thermostats.lean`); `tests/thermostat_spec.rs`
+  compares the Rust with the model's `Float` evaluation bit for bit on `spec/vectors/thermostat.json`.
+  Keep the operation order of both kernels as it is: a reassociation fails that test.
 - **Nosé–Hoover restart (0.0.69, D41):** `NoseHooverThermostat::init` restores ζ from
   `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), every link of every bath,
   plain NH included (`restored_zeta`);
@@ -51,6 +57,10 @@ Berendsen barostat, COM removal.
 ## Key files
 ```
 src/algorithms/       — Forcefield, LeapFrog*, Temperature, Energy
+src/algorithms/berendsen_thermostat.rs, nosehoover_thermostat.rs — the thermostat kernels
+                        (`berendsen_scale`, `nose_hoover_scale`) and their `Algorithm`s
+src/algorithms/multibath.rs — atom → bath mapping, `ZERO_TEMPERATURE`
+tests/thermostat_spec.rs — kernels = Lean `Float` model, bit for bit
 src/constraints.rs    — SHAKE, SETTLE, LINCS
 src/thermostats.rs    — Berendsen, Nosé-Hoover (+ chain NHC)
 src/barostats.rs      — Berendsen, Parrinello-Rahman

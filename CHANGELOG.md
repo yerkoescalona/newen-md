@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.72] (2026-10-22)
+
+### Added
+
+- **Thermostat kernels checked against a Lean model, bit for bit** (the next item of the
+  verification roadmap: floating-point kernels). `berendsen_scale` and `nose_hoover_scale` are
+  pure functions in newen-integrators, called by the thermostats' `apply`. Lean:
+  `NewenTheory/Dynamics/Thermostats.lean` states what they mean over ℝ (`berendsen_relax`: the
+  temperature moves the fraction `dt/τ` towards `T₀`; `berendsen_between`: no overshoot for
+  `dt ≤ τ`; `berendsen_fixed`, `berendsen_contraction`; `nh_feedback`: the Nosé–Hoover friction
+  grows exactly when the bath is hotter than `T₀`; `nh_fixed`, `nh_scale_lt_one_iff`);
+  `NewenSpec/Thermostat.lean` transcribes each kernel once, polymorphic in the number type, proven
+  equal to the meaning at ℝ and executed at `Float` (the LeanLJ pattern). `lake exe spec-vectors`
+  writes `spec/vectors/thermostat.json` (6 840 Berendsen and 3 036 Nosé–Hoover rows, chains of
+  1–5 links iterated over 1–8 steps, inputs and outputs as 64-bit patterns), and
+  `crates/newen-integrators/tests/thermostat_spec.rs` requires the compiled Rust to return the
+  same bits on every row, the Cedar approach; `k_B` and the zero-temperature threshold enter the
+  Lean model as bit patterns the test checks against the Rust constants. Reordering one
+  multiplication in either kernel fails the test.
+
+### Changed
+
+- One zero-temperature threshold, `ZERO_TEMPERATURE = 1e-12` (gromosXX `math::epsilon`), in both
+  thermostats; Berendsen used `1e-10` and Nosé–Hoover `f64::EPSILON`. Every gromosXX reference
+  unchanged.
+
 ## [0.0.71] (2026-10-22)
 
 ### Added

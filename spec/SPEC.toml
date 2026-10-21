@@ -1,5 +1,6 @@
 # Rust functions that carry a Lean specification. One [[function]] per function; the key is the
 # `/// spec:` line of its Rust doc comment. See README.md for what each layer checks.
+# kind = "float": a floating-point kernel; no Aeneas, the Lean model is tested bit for bit instead.
 
 [[function]]
 key = "schedule.output_misses_longrange"
@@ -112,3 +113,31 @@ refinement = "NewenSpec.Refinement.ndfmin_spread_eq"
 # Layer 3, Rust = exact rational by i128 cross-multiplication, and Rust = model (cargo test)
 test = "crates/newen-logic/tests/bath_spec.rs"
 vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermostat.berendsen_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::berendsen_scale"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::BerendsenThermostat::apply"]
+origin = "gromosXX Berendsen_Thermostat::calc_scaling (berendsen_thermostat.cc:95-135); tau = 0 is instantaneous scaling, which gromosXX does only through its `immediate` argument (a tau of 0 there divides by zero)"
+# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out
+theory = "NewenTheory.Dynamics.Thermostats.berendsenScale (berendsen_relax, berendsen_fixed, berendsen_between, berendsen_contraction)"
+model = "NewenSpec.Thermostat.berendsenModel (at Float: berendsenFloat)"
+theorem = "NewenSpec.Thermostat.berendsenModel_real_eq (berendsenModel_real_instant, berendsenModel_uncoupled)"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-integrators/tests/thermostat_spec.rs"
+vectors = "spec/vectors/thermostat.json"
+
+[[function]]
+key = "thermostat.nose_hoover_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/nosehoover_thermostat.rs::nose_hoover_scale"
+used_by = ["crates/newen-integrators/src/algorithms/nosehoover_thermostat.rs::NoseHooverThermostat::apply"]
+origin = "gromosXX NoseHoover_Thermostat::calc_scaling (nosehoover_thermostat.cc:142-143, one link) and calc_chain_scaling (nosehoover_thermostat.cc:180-218, a chain); free_temp and its fallback as in Berendsen"
+# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out
+theory = "NewenTheory.Dynamics.Thermostats.nhStep (nh_fixed, nh_feedback, nh_scale_lt_one_iff), NewenTheory.Dynamics.Thermostats.nhcStep (nhc_single_link)"
+model = "NewenSpec.Thermostat.noseHooverModel (at Float: noseHooverFloat)"
+theorem = "NewenSpec.Thermostat.noseHooverModel_real_eq (one link), noseHooverModel_real_eq_chain, noseHooverModel_uncoupled"
+# Rust = model at Float, bit for bit on the generated rows, chains iterated 1-8 steps (cargo test)
+differential = "crates/newen-integrators/tests/thermostat_spec.rs"
+vectors = "spec/vectors/thermostat.json"

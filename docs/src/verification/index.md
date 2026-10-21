@@ -110,7 +110,7 @@ kernel against the model on many random inputs (differential random testing).
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | planned |
+| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats (below); LJ and reaction field planned |
 
 ## Worked example: `output_misses_longrange`
 
@@ -385,6 +385,119 @@ It does catch bugs. Replace the last line of the Rust function with the simpler-
 listing `(nsnb, ntwg)` pairs such as `(5, 1)`: with output on every step, each pairlist step is an
 output step and nothing is missed, but the simpler check would warn.
 
+## Floating-point kernels: the thermostats
+
+The Berendsen and Nosé–Hoover thermostats compute one scaling factor per temperature bath and
+step. They are `f64` code, so they stay in `crates/newen-integrators` and Aeneas plays no part.
+The three pieces follow LeanLJ (one definition, proven about over ℝ and executed over `Float`)
+and Cedar (the Rust tested against the executable model). We go through Berendsen; Nosé–Hoover
+has the same three pieces.
+
+### The Rust kernel
+
+`crates/newen-integrators/src/algorithms/berendsen_thermostat.rs`, the whole decision that
+`BerendsenThermostat::apply` makes for one bath, in gromosXX's order of operations:
+
+```rust
+pub fn berendsen_scale(ekin: f64, dof: f64, temperature: f64, tau: f64, dt: f64) -> f64 {
+    if tau < 0.0 {
+        return 1.0;
+    }
+    let mut free_temp = if dof > 0.0 {
+        2.0 * ekin / (dof * kB)
+    } else {
+        0.0
+    };
+    if free_temp < ZERO_TEMPERATURE {
+        free_temp = temperature;
+    }
+    if free_temp < ZERO_TEMPERATURE {
+        1.0
+    } else if tau == 0.0 {
+        (temperature / free_temp).sqrt()
+    } else {
+        (1.0 + dt / tau * (temperature / free_temp - 1.0)).sqrt()
+    }
+}
+```
+
+`ZERO_TEMPERATURE = 1e-12` is gromosXX's `math::epsilon`, the one threshold both thermostats use.
+
+### The meaning, over ℝ
+
+`spec/NewenTheory/Dynamics/Thermostats.lean` states what the factor is for. Berendsen et al.
+(1984) let the temperature relax towards `T₀` with time constant `τ`; over one step that is
+`λ² = 1 + dt/τ · (T₀/T − 1)`:
+
+```lean
+noncomputable def berendsenScale (T T₀ dt τ : ℝ) : ℝ :=
+  Real.sqrt (1 + dt / τ * (T₀ / T - 1))
+
+theorem berendsen_relax (hT : 0 < T) (hr : 0 ≤ 1 + dt / τ * (T₀ / T - 1)) :
+    berendsenScale T T₀ dt τ ^ 2 * T = T + dt / τ * (T₀ - T)
+
+theorem berendsen_between (hT : 0 < T) (hT₀ : 0 ≤ T₀) (hdt : 0 < dt) (hdτ : dt ≤ τ) :
+    min T T₀ ≤ berendsenScale T T₀ dt τ ^ 2 * T ∧
+      berendsenScale T T₀ dt τ ^ 2 * T ≤ max T T₀
+```
+
+Read aloud: the new temperature `λ² T` has moved the fraction `dt/τ` of the way to `T₀`, and with
+`dt ≤ τ` it never overshoots. `berendsen_contraction` (the gap shrinks by `1 − dt/τ`) and
+`berendsen_fixed` (a bath at `T₀` is left alone) complete it. For Nosé–Hoover, `nh_feedback`
+says the friction grows exactly when the bath is hotter than `T₀`.
+
+### One model, two number types
+
+`spec/NewenSpec/Thermostat.lean` transcribes the Rust once, for any type with the operations the
+kernel uses, and takes `k_B` and the threshold as parameters:
+
+```lean
+def berendsenModel (kB eps ekin dof temperature tau dt : α) : α :=
+  if tau < 0 then 1
+  else
+    let freeTemp := freeTempModel α kB eps ekin dof temperature
+    if freeTemp < eps then 1
+    else if tau == 0 then Sqrt.sqrt (temperature / freeTemp)
+    else Sqrt.sqrt (1 + dt / tau * (temperature / freeTemp - 1))
+```
+
+At `α = ℝ` it is proven equal to the meaning once the fallbacks are ruled out:
+
+```lean
+theorem berendsenModel_real_eq (hτ : 0 < tau) (hdof : 0 < dof)
+    (hft : eps ≤ 2 * ekin / (dof * kB)) :
+    berendsenModel ℝ kB eps ekin dof temperature tau dt =
+      berendsenScale (2 * ekin / (dof * kB)) temperature dt tau
+```
+
+At `α = Float` the same definition runs. `lake exe spec-vectors` draws random inputs from a
+fixed-seed generator (typical and random degrees of freedom, temperatures, `dt` and `τ`, with
+`τ < 0`, `τ = 0`, `dof = 0` and bath temperatures from `1e-14` to `1e6` K) and writes each input and
+each result as the 16 hex digits of its bits to `spec/vectors/thermostat.json`. Nosé–Hoover chains
+of 1, 2, 3 and 5 links are iterated for 1–8 steps, so the state carried from one step to the next
+is covered.
+
+### The bit-exact test
+
+`crates/newen-integrators/tests/thermostat_spec.rs` runs the compiled kernels on every row and
+compares `to_bits()`: no tolerance. That is possible because IEEE 754 requires `+ − × ÷` and
+`sqrt` to be correctly rounded, the exact result rounded to the nearest double. Rust's `f64` and
+Lean's `Float` (a C `double`) both obey it, so the same operations on the same inputs in the same
+order give the same bits. The model must therefore follow the Rust's order exactly: the test
+fails if the Rust writes `dt * (T₀/T − 1) / τ` instead of `dt / τ * (T₀/T − 1)` (about one
+Berendsen row in thirty then differs, by 1 to several thousand ulp). The constants are written as
+bits too, and the test checks `kB.to_bits()` and `ZERO_TEMPERATURE.to_bits()` against the
+literals in the Lean file, because Lean's decimal parser is not promised to round like Rust's.
+One value has no bits in Lean: its `Float` has a single NaN, so a NaN matches any NaN.
+
+Bit-exact comparison stops working when a kernel calls a function that IEEE 754 does not require
+to be correctly rounded, such as `exp`, `log`, `pow` or `erfc` (Ewald sums need `erfc`):
+Rust's and C's libraries may differ in the last bit. It also stops working when the two sides
+sum in a different order, as a parallel reduction over pairs does. There a tolerance, justified by a rounding analysis, has to replace equality.
+
+What is not guaranteed: how far the `Float` model is from the ℝ model (no rounding bound is
+proved), and inputs outside the generated set.
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -658,9 +771,11 @@ Planned, in the order chosen:
   total, D40) and the atom-to-bath mapping that the thermostats and the temperature calculation
   read.
 - **Floating-point kernels, with a Lean model and a differential test:** the Berendsen and
-  Nosé–Hoover thermostats (see [Thermostats & Barostats](../algorithms/thermostats.md)), and the
+  Nosé–Hoover thermostats (see [Thermostats & Barostats](../algorithms/thermostats.md)) and the
   Lennard-Jones and reaction-field pair term (see
-  [Nonbonded Interactions](../algorithms/nonbonded.md)).
+  [Nonbonded Interactions](../algorithms/nonbonded.md)). Done: the thermostats
+  (`berendsen_scale`, `nose_hoover_scale`; ℝ theorems, a `Float` model, a bit-exact differential
+  test). Planned: the Lennard-Jones and reaction-field pair term.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the
