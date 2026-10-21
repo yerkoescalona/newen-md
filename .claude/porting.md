@@ -298,6 +298,17 @@ Each entry: what gromosXX does, which bucket, what newen does.
   as weak coupling does. The released-binary reproducer lives in `gromos-divergences`. Lean
   (`gromos-divergences`): `nhScale_restart_eq_iff`, `nhScale_restart_sub`,
   `nhcReadTranscribed_eq_iff`.
+- **NDFMIN spread over the baths through an `int` total** (A, D40; corrected; patched oracle
+  `tests/gromosXX_references/patches/D40_ndfmin_total.patch`). gromosXX removes NDFMIN from each
+  bath in proportion `dof/dof_total`, but sums `dof_total` in an `int` (`multibath.cc:145-152`);
+  a DOFSET boundary that cuts an odd number of constraints leaves half-integer baths (each
+  constraint takes ½ from the IR bath of each end, `topology.cc:1105-1106`), the total is
+  truncated and more than NDFMIN is removed (14.5 and 10.5 with NDFMIN 3: 12.69 and 9.19 instead
+  of 12.76 and 9.24). newen sums the total exactly and spreads nothing when it is not positive
+  (`bath_dofs`, `newen-run/src/dof.rs`). Pinned by `aladip_vacuum_multibath_ndfmin3_half_fixed`
+  (patched) next to `aladip_vacuum_multibath_ndfmin3` (integer baths, released binary). The
+  released-binary reproducer lives in `gromos-divergences`. Lean (`gromos-divergences`):
+  `dofTotalTranscribed_le_iff`, `ndfminSpread_removes_more`.
 - **Perturbed RF self term, "Chris: CHECK!"** (false alarm; not a quirk). The comment at
   `perturbed_nonbonded_term.cc:749-751` (`gromosXX-patched`; `:596-598` in the non-ext
   variant) worries that the `selfterm_correction` adds `+A_q·FPEPSI·crf_cut` with no B-state

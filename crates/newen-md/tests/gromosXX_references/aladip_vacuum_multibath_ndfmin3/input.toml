@@ -1,8 +1,8 @@
 # NDFMIN with two temperature baths (gromosXX multibath.cc:141-153). A DOFSET boundary between
 # atoms 6 and 7 cuts the constrained bonds 6-7 and 6-8, each giving 1/2 to both baths, so the
 # bath degrees of freedom stay integers (12 and 13) and gromosXX's int total is exact; with the
-# boundary between 7 and 8 they are half-integers and gromosXX truncates the total (D40, not a
-# reference: newen differs there).
+# boundary between 7 and 8 they are half-integers and gromosXX truncates the total (D40), pinned
+# by `aladip_vacuum_multibath_ndfmin3_half_fixed` against the D40-patched binary.
 # gromosXX v1.6.0, double precision, 12 atoms
 
 [system]
