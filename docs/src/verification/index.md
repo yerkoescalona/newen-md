@@ -110,7 +110,7 @@ kernel against the model on many random inputs (differential random testing).
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats (below); LJ and reaction field planned |
+| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats and the Lennard-Jones and reaction-field pair term (below) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -498,6 +498,75 @@ sum in a different order, as a parallel reduction over pairs does. There a toler
 What is not guaranteed: how far the `Float` model is from the ℝ model (no rounding bound is
 proved), and inputs outside the generated set.
 
+### The Lennard-Jones and reaction-field pair term
+
+The same three pieces cover the pair term of the nonbonded loops in `crates/newen-forces`:
+`CRFParameters::new` (the reaction-field constants of a run), `lj_crf_pair` (one LJ + CRF pair at
+squared distance `r2`; `lj_crf_interaction` is `lj_crf_pair(r.length_squared(), …)`), and
+`rf_excluded_pair` and `rf_self_term` (the reaction-field terms of excluded solute pairs and of each
+solute atom with itself).
+
+**The meaning.** `spec/NewenTheory/Interactions/LennardJones.lean` defines
+`ljEnergy c6 c12 r = c12/r¹² − c6/r⁶` and the scalar force the kernels compute, `ljForce`, which
+multiplies `r_vec` to give the force on atom `i`. The theorem that ties them together reads:
+
+```lean
+theorem lj_force_is_minus_grad (c6 c12 : ℝ) {r : ℝ} (hr : r ≠ 0) :
+    HasDerivAt (ljEnergy c6 c12) (-(ljForce c6 c12 r) * r) r
+```
+
+Read aloud: at every `r ≠ 0` the derivative of the energy is `−ljForce · r`, so `ljForce` is
+`−E'(r)/r`: force = −dE/dr. `lj_zero_at_sigma` (the energy vanishes at `r⁶ = c12/c6`) and
+`lj_minimum` (at `r⁶ = 2 c12/c6` the derivative vanishes and the energy is `−c6²/(4 c12)`) complete
+it. `ReactionField.lean` does the same for the reaction field of Tironi et al. (1995):
+`crfConstant ε ε_rf κ R`, `crfEnergy q crf R r = q (1/r − crf r²/(2R³) − (1 − crf/2)/R)` with
+`crf_force_is_minus_grad`, `crf_energy_zero_at_cutoff` (the energy is zero at `r = R`),
+`crf_eps_rf_eq_eps` (`κ = 0` and `ε_rf = ε`: no reaction field, a Coulomb energy shifted to zero at
+`R`), `crf_conducting_limit` (`C_RF → −1` as `ε_rf → ∞`, which is why GROMOS writes `ε_rf = 0` for a
+conducting boundary and newen sets `C_RF = −1` there), and `rf_excluded_is_crf_minus_coulomb` (an
+excluded pair keeps the pair term without its `q/r` and `q/r³`), with `rf_self_is_half_excluded`
+(the self term is half the excluded term of the atom with itself at `r = 0`).
+
+**One model.** `spec/NewenSpec/Nonbonded.lean` writes the four kernels once over any number type,
+operation by operation like the Rust, with the guard `ZERO_DISTANCE2 = 1e-10` and the `0.5` of the
+self term as parameters given at `Float` by their bits. At ℝ, `ljCrfPairModel_real_eq` proves the
+pair model returns `(ljForce + crfForce, ljEnergy, crfEnergy)` for `r > 0` outside the guard (the
+model takes `sqrt(1/r²)`, which is `1/r` there), `crfParametersModel_real_eq` that its `C_RF` is
+`crfConstant` outside the two sentinels (`R ≤ 0`, `ε_rf = 0`), and `rfExcludedPairModel_real_eq`,
+`rfSelfTermModel_real_eq` the same for the excluded-pair and self terms.
+
+**The bit-exact test.** `lake exe spec-vectors` writes `spec/vectors/nonbonded.json`: 600 rows of
+reaction-field constants, 6 000 pair rows, 1 500 excluded-pair rows and 300 self-term rows, over
+cutoffs `0, 0.8, 0.9, 1.0, 1.4` nm and random ones, `ε_rf ∈ {0, 1, 54, 61, 62, 78.5}` and random,
+`κ ∈ {0, 0.5, 1}` and random, `r²` log-uniform in `[10⁻⁴, 4]` nm² with rows below the guard, at it
+and at exactly `R²`, and GROMOS-sized `C6`, `C12` and charge products, zeros included. Every pair row
+carries the four inputs of `CRFParameters::new`, so the Rust rebuilds the parameters and the pair
+rows test both. `crates/newen-forces/tests/nonbonded_spec.rs` requires the same 64 bits on every
+row, and `ZERO_DISTANCE2.to_bits()` to equal the Lean constant.
+
+The production loops evaluate four pairs at a time in `lj_crf_interaction_x4`, a copy of the
+kernel on `wide::f64x4`. A unit test in `innerloops.rs` runs it on the same pair rows, four at a
+time, and requires every lane to return the scalar `lj_crf_pair`'s bits. It passes with
+`target-cpu=native` and with `target-cpu=generic`, in debug and release builds; moving one
+parenthesis in the SIMD force line makes 4 940 lanes differ.
+
+The model follows newen's Rust, not gromosXX, and the order differs in two places, both within
+the reference tolerances:
+
+- gromosXX computes the LJ force as `(c12/r⁶ + c12/r⁶ − c6) · 6 · r⁻⁶ · r⁻²`
+  (`nonbonded_term.cc:241`), newen as `(12 · c12 · r⁻⁶ − 6 · c6) · r⁻⁶ · r⁻²`, the textbook
+  derivative. Written gromosXX's way, 1 267 of the 6 000 pair rows differ, by 1 or 2 ulp.
+- gromosXX forms `(κR)²` as `κ · R · κ · R`, newen as `(κ · R) · (κ · R)`.
+
+The self term agrees bit for bit outside underflow: gromosXX books `0.5 ·` the excluded-pair
+energy at `r = 0` with charge product `q_i²`, newen `−0.5 · q_i · q_i · (4πε₀)⁻¹ · crf_cut`, and a
+factor 0.5 is exact.
+
+```sh
+cargo test -p newen-forces --test nonbonded_spec    # Rust = Float model, bit for bit
+cargo test -p newen-forces --lib x4_lanes           # SIMD lanes = scalar kernel, bit for bit
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -584,7 +653,10 @@ And at the level of the whole project:
   freedom with the atom-to-bath mapping in `thermo::bath` (`baths_of`, `groups_starting_in`,
   `bath_half_dof`, `bath_half_dofs`, `ndfmin_spread`); those are proven. The rest of newen is
   checked the way it always was, by reference tests and unit tests.
-- **Not covered: floating-point kernels**, until the differential-testing layer for them exists.
+- **Floating-point kernels: covered on generated inputs only.** The thermostat steps and the
+  Lennard-Jones and reaction-field pair term equal their Lean models bit for bit on the rows
+  `lake exe spec-vectors` writes; no rounding bound is proved, and inputs outside those rows are
+  not checked.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
   against published values stay necessary; verification adds to them, it does not replace them.
@@ -774,8 +846,9 @@ Planned, in the order chosen:
   Nosé–Hoover thermostats (see [Thermostats & Barostats](../algorithms/thermostats.md)) and the
   Lennard-Jones and reaction-field pair term (see
   [Nonbonded Interactions](../algorithms/nonbonded.md)). Done: the thermostats
-  (`berendsen_scale`, `nose_hoover_scale`; ℝ theorems, a `Float` model, a bit-exact differential
-  test). Planned: the Lennard-Jones and reaction-field pair term.
+  (`berendsen_scale`, `nose_hoover_scale`) and the pair term (`CRFParameters::new`,
+  `lj_crf_pair`, `rf_excluded_pair`, `rf_self_term`, with the SIMD lanes checked against the scalar
+  kernel); each with ℝ theorems, a `Float` model and a bit-exact differential test.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

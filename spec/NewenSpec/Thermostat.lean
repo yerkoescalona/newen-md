@@ -1,3 +1,4 @@
+import NewenSpec.Float
 import NewenTheory.Dynamics.Thermostats
 
 /-!
@@ -9,7 +10,7 @@ Rust: `crates/newen-integrators/src/algorithms/berendsen_thermostat.rs`, `berend
 Theory: `NewenTheory/Dynamics/Thermostats.lean` (`berendsenScale`, `nhStep`, `nhcStep`).
 
 One definition per kernel, written over any type `α` with the operations the Rust uses
-(`+ − × ÷`, `sqrt`, `<`, `==`, the literals `0 1 2`), decision by decision and operation by
+(`+ − × ÷`, `sqrt` from `NewenSpec/Float.lean`, `<`, `==`, the literals `0 1 2`), decision by decision and operation by
 operation in the Rust order. It is used twice (the pattern of LeanLJ, Ugwuanyi et al. 2025):
 
 1. at `ℝ`, where `berendsenModel_real_eq` and `noseHooverModel_real_eq` prove it equal to the
@@ -27,14 +28,6 @@ Mathlib is used through the theory (`Real.sqrt`).
 namespace NewenSpec.Thermostat
 
 open NewenTheory.Dynamics.Thermostats
-
-/-- The square root a kernel calls: `Float.sqrt` (C `sqrt`, correctly rounded) or `Real.sqrt`. -/
-class Sqrt (α : Type) where
-  sqrt : α → α
-
-instance : Sqrt Float := ⟨Float.sqrt⟩
-
-noncomputable instance : Sqrt ℝ := ⟨Real.sqrt⟩
 
 /-! ## 1. Model (mirrors the Rust functions) -/
 

@@ -19,7 +19,7 @@ Aeneas refinement proofs. -/
 @[default_target] lean_lib NewenSpec
 
 /-- Writes `vectors/schedule.json`, `vectors/dof.json` and `vectors/bath.json` (the Lean models on
-the grids the Rust tests sweep) and `vectors/thermostat.json` (the thermostat models at `Float` on
-random inputs, as bits). -/
+the grids the Rust tests sweep), `vectors/thermostat.json` and `vectors/nonbonded.json` (the
+thermostat and LJ + reaction-field models at `Float` on random inputs, as bits). -/
 lean_exe «spec-vectors» where
   root := `SpecVectors

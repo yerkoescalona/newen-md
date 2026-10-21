@@ -141,3 +141,59 @@ theorem = "NewenSpec.Thermostat.noseHooverModel_real_eq (one link), noseHooverMo
 # Rust = model at Float, bit for bit on the generated rows, chains iterated 1-8 steps (cargo test)
 differential = "crates/newen-integrators/tests/thermostat_spec.rs"
 vectors = "spec/vectors/thermostat.json"
+
+[[function]]
+key = "nonbonded.crf_parameters"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/params.rs::CRFParameters::new"
+used_by = ["crates/newen-run/src/build.rs (epsilon = 1)", "crates/newen-run/src/legacy_builder.rs", "crates/newen-forces/src/energy.rs::single_point_energy", "crates/newen-forces/src/nonbonded/interaction.rs::LjCrfInteraction"]
+origin = "gromosXX Nonbonded_Term::init (nonbonded_term.cc:57-104); gromosXX forms (kappa R)^2 as kappa*R*kappa*R, newen as (kappa*R)*(kappa*R)"
+# Theorems over R: the theory's meaning, and the model at R equal to it outside the two sentinels (R <= 0, eps_rf = 0)
+theory = "NewenTheory.Interactions.ReactionField.crfConstant (crf_eps_rf_eq_eps, crf_conducting_limit)"
+model = "NewenSpec.Nonbonded.crfParametersModel (at Float: crfParametersFloat)"
+theorem = "NewenSpec.Nonbonded.crfParametersModel_real_eq (crfParametersModel_real_conducting, crfDerivedModel_real)"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.lj_crf_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_pair"
+used_by = ["crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_interaction (every scalar pair loop)", "crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_interaction_x4 (four lanes, checked equal to lj_crf_pair bit for bit by its unit test)"]
+origin = "gromosXX Nonbonded_Term::lj_crf_interaction (nonbonded_term.cc:219-248); gromosXX's LJ force is (c12/r^6 + c12/r^6 - c6) * 6 / r^6 / r^2, newen's (12 c12/r^6 - 6 c6) / r^6 / r^2 (last-bit differences); the guard r^2 < 1e-10 is newen's"
+# Theorems over R: the theory's meaning (force = -dE/dr), and the model at R equal to it outside the guard
+theory = "NewenTheory.Interactions.LennardJones.ljEnergy, ljForce (lj_force_is_minus_grad, lj_zero_at_sigma, lj_minimum); NewenTheory.Interactions.ReactionField.crfEnergy, crfForce (crf_force_is_minus_grad, crf_energy_zero_at_cutoff)"
+model = "NewenSpec.Nonbonded.ljCrfPairModel (at Float: ljCrfPairFloat)"
+theorem = "NewenSpec.Nonbonded.ljCrfPairModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.rf_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_pair"
+used_by = ["crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_interactions (solute excluded pairs)"]
+origin = "gromosXX Nonbonded_Term::rf_interaction (nonbonded_term.cc:537-545)"
+# Theorems over R: the excluded-pair term is the CRF pair term without its Coulomb part, and its force is -dE/dr
+theory = "NewenTheory.Interactions.ReactionField.rfExcludedEnergy, rfExcludedForce (rf_excluded_is_crf_minus_coulomb, rf_excluded_force_is_minus_grad)"
+model = "NewenSpec.Nonbonded.rfExcludedPairModel (at Float: rfExcludedPairFloat)"
+theorem = "NewenSpec.Nonbonded.rfExcludedPairModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.rf_self_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/excluded.rs::rf_self_term"
+used_by = ["crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_interactions (solute atoms)"]
+origin = "gromosXX RF_excluded_interaction_innerloop self term (nonbonded_innerloop.cc:1692-1707): 0.5 times rf_interaction at r = 0 with charge product q_i^2; newen writes -0.5 q_i q_i four_pi_eps_i crf_cut, the same bits outside underflow (scaling by 0.5 is exact)"
+# Theorems over R: the self term is half the excluded-pair energy of the atom with itself at r = 0
+theory = "NewenTheory.Interactions.ReactionField.rfSelfEnergy (rf_self_is_half_excluded)"
+model = "NewenSpec.Nonbonded.rfSelfTermModel (at Float: rfSelfTermFloat)"
+theorem = "NewenSpec.Nonbonded.rfSelfTermModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"

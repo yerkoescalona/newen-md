@@ -2,15 +2,17 @@ import NewenSpec.Schedule
 import NewenSpec.Thermo.Dof
 import NewenSpec.Thermo.Bath
 import NewenSpec.Thermostat
+import NewenSpec.Nonbonded
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat models on random `Float` inputs) and write them to `vectors/`, so `cargo test` can
-compare the Rust functions against Lean without Lean. -/
+thermostat and nonbonded models on random `Float` inputs) and write them to `vectors/`, so
+`cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
 open NewenSpec.Thermo.Bath
 open NewenSpec.Thermostat
+open NewenSpec.Nonbonded
 
 /-- Grid bound of the schedule grid, equal to `GRID` in
 `crates/newen-logic/tests/schedule_spec.rs`. -/
@@ -244,6 +246,120 @@ def thermostatJson (berendsen : List (List Float)) (noseHoover : List String) : 
   "  \"berendsen\": [\n" ++ ",\n".intercalate (berendsen.map hexRow) ++ "\n  ],\n" ++
   "  \"nose_hoover\": [\n" ++ ",\n".intercalate noseHoover ++ "\n  ]\n}\n"
 
+/-! ## Nonbonded: the LJ + CRF pair kernels on random `Float` inputs, written as bits -/
+
+def crfCutoffs : List Float := [0, 0.8, 0.9, 1.0, 1.4]
+def crfRfEpsilons : List Float := [0, 1, 54, 61, 62, 78.5]
+def crfKappas : List Float := [0, 0.5, 1]
+
+/-- One of `xs`, or uniform in `[lo, hi)`, each with the same probability. -/
+def drawFrom (xs : List Float) (lo hi : Float) : Gen Float := do
+  match ← below (xs.length + 1) with
+  | 0 => uniform lo hi
+  | i => return xs.getD (i - 1) 0
+
+/-- The four inputs of `CRFParameters::new`: `cutoff`, `epsilon`, `rf_epsilon`, `rf_kappa`. -/
+def drawCrfInputs : Gen (List Float) := do
+  let cutoff ← drawFrom crfCutoffs 0.5 2
+  let epsilon ← drawFrom [1] 1 4
+  let rfEpsilon ← drawFrom crfRfEpsilons 1 100
+  let rfKappa ← drawFrom crfKappas 0 3
+  return [cutoff, epsilon, rfEpsilon, rfKappa]
+
+/-- `CRFParameters::new` of the four inputs. -/
+def crfOf (inputs : List Float) : CrfParams Float :=
+  crfParametersFloat (inputs.getD 0 0) (inputs.getD 1 0) (inputs.getD 2 0) (inputs.getD 3 0)
+
+def crfParametersRow (inputs : List Float) : List Float :=
+  let p := crfOf inputs
+  inputs ++ [p.crfCut, p.crf2Cut3i, p.crfCut3i, p.cutoffSq]
+
+/-- Every fixed `(cutoff, rf_epsilon, rf_kappa)` with `epsilon = 1` and with a random `epsilon`,
+then random rows. -/
+def crfParametersRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for cutoff in crfCutoffs do
+    for rfEpsilon in crfRfEpsilons do
+      for rfKappa in crfKappas do
+        rows := rows.push (crfParametersRow [cutoff, 1, rfEpsilon, rfKappa])
+        rows := rows.push (crfParametersRow [cutoff, ← uniform 1 4, rfEpsilon, rfKappa])
+  for _ in List.range 420 do
+    rows := rows.push (crfParametersRow (← drawCrfInputs))
+  return rows.toList
+
+/-- `0` one time in eight, else `draw`. -/
+def orZero (draw : Gen Float) : Gen Float := do
+  if (← below 8) == 0 then return 0 else draw
+
+/-- A squared distance: log-uniform in `[1e-4, 4]` nm², or below the guard (`0` or log-uniform in
+`[1e-16, 9e-11]`), exactly the guard, or exactly `cutoff²`. -/
+def drawR2 (cutoff : Float) : Gen Float := do
+  match ← below 80 with
+  | 0 => return 0
+  | 1 | 2 => logUniform 1e-16 9e-11
+  | 3 => return zeroDistance2Float
+  | 4 | 5 | 6 => return cutoff * cutoff
+  | _ => logUniform 1e-4 4
+
+def ljCrfPairRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 6000 do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let c6 ← orZero (logUniform 1e-5 1e-2)
+    let c12 ← orZero (logUniform 1e-8 1e-5)
+    let q ← orZero (uniform (-150) 150)
+    let (f, eLj, eCrf) := ljCrfPairFloat r2 c6 c12 q (crfOf inputs)
+    rows := rows.push ([r2, c6, c12, q] ++ inputs ++ [f, eLj, eCrf])
+  return rows.toList
+
+def rfExcludedPairRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1500 do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let q ← orZero (uniform (-150) 150)
+    let (f, e) := rfExcludedPairFloat r2 q (crfOf inputs)
+    rows := rows.push ([r2, q] ++ inputs ++ [f, e])
+  return rows.toList
+
+/-- A charge in `[-2, 2]` e and `four_pi_eps_i` (138.9354, 1, or uniform in `[1, 200]`). -/
+def rfSelfTermRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let inputs ← drawCrfInputs
+    let q ← orZero (uniform (-2) 2)
+    let fpe ← drawFrom [138.9354, 1] 1 200
+    rows := rows.push ([q, fpe] ++ inputs ++ [rfSelfTermFloat q fpe (crfOf inputs)])
+  return rows.toList
+
+/-- The four row sets of `vectors/nonbonded.json`, from a fixed seed. -/
+def nonbondedRows : List (List Float) × List (List Float) × List (List Float) ×
+    List (List Float) :=
+  (do return (← crfParametersRows, ← ljCrfPairRows, ← rfExcludedPairRows, ← rfSelfTermRows) :
+    Gen _).run' 0x6e6577656e2d6e62
+
+def nonbondedJson (crf lj excl selfRows : List (List Float)) : String :=
+  let part (name : String) (rows : List (List Float)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"nonbonded.crf_parameters, nonbonded.lj_crf_pair, nonbonded.rf_excluded_pair, " ++
+  "nonbonded.rf_self_term\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Nonbonded.crfParametersFloat, " ++
+  "ljCrfPairFloat, rfExcludedPairFloat, rfSelfTermFloat; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits)\",\n" ++
+  "  \"layout_crf_parameters\": \"cutoff, epsilon, rf_epsilon, rf_kappa, crf_cut, crf_2cut3i, " ++
+  "crf_cut3i, cutoff_sq\",\n" ++
+  "  \"layout_lj_crf_pair\": \"r2, c6, c12, q_prod, cutoff, epsilon, rf_epsilon, rf_kappa, " ++
+  "f_mag, e_lj, e_crf; the kernel reads CRFParameters::new(cutoff, epsilon, rf_epsilon, " ++
+  "rf_kappa)\",\n" ++
+  "  \"layout_rf_excluded_pair\": \"r2, q_prod, cutoff, epsilon, rf_epsilon, rf_kappa, f_mag, " ++
+  "e\",\n" ++
+  "  \"layout_rf_self_term\": \"q, four_pi_eps_i, cutoff, epsilon, rf_epsilon, rf_kappa, e\",\n" ++
+  part "crf_parameters" crf ++ ",\n" ++ part "lj_crf_pair" lj ++ ",\n" ++
+  part "rf_excluded_pair" excl ++ ",\n" ++ part "rf_self_term" selfRows ++ "\n}\n"
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -252,11 +368,16 @@ def main : IO Unit := do
   IO.println s!"wrote vectors/dof.json ({(dofGrid + 1) ^ 3} rows x {ndfmins.length})"
   IO.FS.writeFile "vectors/bath.json" bathJson
   IO.println s!"wrote vectors/bath.json ({bathSystems.length * 6} rows)"
-  -- the literals the models use must be the exact doubles 0, 1, 2
+  -- the literals the models use must be the exact doubles 0, 1, 2, 6, 12 (and 0.5)
   unless (0 : Float).toBits == 0 && (1 : Float).toBits == 0x3FF0000000000000 &&
-      (2 : Float).toBits == 0x4000000000000000 do
-    throw (IO.userError "Float literals 0, 1, 2 are not exact")
+      (2 : Float).toBits == 0x4000000000000000 && (6 : Float).toBits == 0x4018000000000000 &&
+      (12 : Float).toBits == 0x4028000000000000 && halfFloat == 1 / 2 do
+    throw (IO.userError "Float literals 0, 1, 2, 6, 12 are not exact")
   let (berendsen, noseHoover) := thermostatRows
   IO.FS.writeFile "vectors/thermostat.json" (thermostatJson berendsen noseHoover)
   IO.println (s!"wrote vectors/thermostat.json ({berendsen.length} Berendsen rows, " ++
     s!"{noseHoover.length} Nosé–Hoover rows)")
+  let (crf, lj, excl, selfRows) := nonbondedRows
+  IO.FS.writeFile "vectors/nonbonded.json" (nonbondedJson crf lj excl selfRows)
+  IO.println (s!"wrote vectors/nonbonded.json ({crf.length} crf_parameters, {lj.length} " ++
+    s!"lj_crf_pair, {excl.length} rf_excluded_pair, {selfRows.length} rf_self_term rows)")

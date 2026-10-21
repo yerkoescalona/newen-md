@@ -80,6 +80,8 @@ impl CRFParameters {
     /// * `rf_kappa` - Debye-Hückel screening parameter in nm⁻¹
     ///
     /// RCRF = 0 switches the reaction field off: every constant is zero (plain Coulomb).
+    ///
+    /// spec: nonbonded.crf_parameters
     pub fn new(cutoff: f64, epsilon: f64, rf_epsilon: f64, rf_kappa: f64) -> Self {
         if cutoff <= 0.0 {
             return Self {

@@ -1,6 +1,8 @@
 import NewenTheory.Dynamics.DegreesOfFreedom
 import NewenTheory.Dynamics.Schedule
 import NewenTheory.Dynamics.Thermostats
+import NewenTheory.Interactions.LennardJones
+import NewenTheory.Interactions.ReactionField
 
 /-!
 # NewenTheory

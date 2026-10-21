@@ -12,6 +12,13 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
 `PotentialProvider` trait + implementors (QM/MM/ML seam, 2.6-P2.8).
 
 ## Status
+- **Pair kernels verified (2026-10-22):** `lj_crf_pair` (one LJ + CRF pair at `r²`; `lj_crf_interaction`
+  wraps it), `rf_excluded_pair`, `rf_self_term` and `CRFParameters::new` carry `/// spec:` keys.
+  Lean model in `spec/NewenSpec/Nonbonded.lean` (ℝ theorems in
+  `spec/NewenTheory/Interactions/`); `tests/nonbonded_spec.rs` compares the Rust with the model's
+  `Float` evaluation bit for bit on `spec/vectors/nonbonded.json`, and a unit test in
+  `innerloops.rs` checks every lane of `lj_crf_interaction_x4` against `lj_crf_pair`. Keep the
+  operation order of these kernels as it is: a reassociation fails those tests.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
@@ -81,6 +88,9 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
 ```
 src/bonded/          — bonded force calculations (split from bonded.rs)
 src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbonded.rs)
+  innerloops.rs        — `lj_crf_pair` (scalar pair kernel), `lj_crf_interaction_x4` (4 lanes), the loops
+  excluded.rs          — `rf_excluded_pair`, `rf_self_term`, RF excluded and 1-4 loops
+  params.rs            — `CRFParameters::new`
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
   schnet.rs            — SchNetInteraction (feature `ml`)
@@ -90,6 +100,7 @@ src/orchestrator.rs    — ProviderOrchestrator: sums Vec<Box<dyn PotentialProvi
 src/zones.rs          — Zone, ZonePartition, PairOwner (QM/MM/BuRNN double-counting contract)
 src/energy.rs         — single_point_energy() entry point for analysis
 src/restraints.rs     — position + distance restraints
+tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```

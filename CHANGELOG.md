@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.73] (2026-10-22)
+
+### Added
+
+- **The Lennard-Jones and reaction-field pair term checked against a Lean model, bit for bit**,
+  which closes the "floating-point kernels" item of the verification roadmap. Pure kernels
+  `lj_crf_pair` (the scalar pair term, `lj_crf_interaction` now a wrapper over `r²`),
+  `rf_excluded_pair`, `rf_self_term` and `CRFParameters::new`. Lean:
+  `NewenTheory/Interactions/LennardJones.lean` and `ReactionField.lean` prove that the kernels'
+  force is minus the energy gradient (`lj_force_is_minus_grad`, `crf_force_is_minus_grad`,
+  `rf_excluded_force_is_minus_grad`), the Lennard-Jones zero at σ and minimum
+  (`−C6²/(4·C12)` at `r⁶ = 2·C12/C6`), the reaction-field energy vanishing at the cutoff,
+  `ε_rf = ε` giving a shifted Coulomb, the excluded-pair term being the reaction-field energy minus
+  bare Coulomb, the self term half of it, and the conducting-boundary sentinel `C_RF = −1` being the
+  `ε_rf → ∞` limit (`crf_conducting_limit`); `NewenSpec/Nonbonded.lean` transcribes each kernel
+  once, polymorphic in the number type, proven equal to the theory at ℝ and executed at `Float`.
+  `spec/vectors/nonbonded.json` (600 reaction-field constant rows, 6 000 pair rows, 1 500
+  excluded-pair rows, 300 self-term rows) and `crates/newen-forces/tests/nonbonded_spec.rs`
+  require the compiled Rust to return the same bits, in dev, release and `target-cpu=generic`
+  builds; a unit test requires every lane of the 4-wide SIMD kernel to return the scalar kernel's
+  bits (its claim of lane-wise identity was never tested before). Moving one parenthesis in either
+  kernel fails the test.
+- **Several temperature baths under Nosé–Hoover coupling.** Plan validation refused a MULTIBATH
+  block with Nosé–Hoover coupling and more than one bath; now every bath keeps its own ζ chain as
+  gromosXX does (`NoseHooverThermostat::new`). References `aladip_multibath_nosehoover` and
+  `aladip_multibath_nhc` (two baths at 300 K / 0.1 ps and 350 K / 0.2 ps, D41-patched oracle).
+  121 references, none ignored.
+
+### Fixed
+
+- The test-only legacy builder passed RCUTL where RCRF belongs when building the reaction-field
+  constants; every compared input had the two equal.
+
+### Documented
+
+- Thermostat edge inputs where newen and gromosXX differ (`.claude/porting.md`): gromosXX couples
+  whenever `tau != -1`, newen for `tau >= 0`; gromosXX divides by a zero dof, newen falls back to
+  `T₀`. Both are in the Lean models; no reference reaches either.
+
 ## [0.0.72] (2026-10-22)
 
 ### Added
