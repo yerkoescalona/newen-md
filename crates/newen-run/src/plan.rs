@@ -633,13 +633,6 @@ fn thermostat_baths(
         };
         return Ok((baths, vec![whole]));
     }
-    if t.algorithm != ThermostatAlgorithm::Berendsen {
-        return Err(RunError::Recipe(format!(
-            "{n_baths} temperature baths with {:?} coupling: only weak coupling (Berendsen) is \
-             implemented for more than one bath",
-            t.algorithm
-        )));
-    }
     if t.dof_sets.is_empty() {
         return Err(RunError::Recipe(format!(
             "{n_baths} temperature baths but no DOFSET lines: gromosXX needs one range per bath"

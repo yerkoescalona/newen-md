@@ -168,22 +168,32 @@ impl NoseHooverThermostat {
         &self.zeta
     }
 
+    /// Create a Nosé–Hoover thermostat from resolved baths and the DOFSET ranges that assign the
+    /// atoms to them. Every bath keeps its own ζ chain of `nhc` links, starting at zero, as
+    /// gromosXX keeps `bath_struct::zeta` per bath (`nosehoover_thermostat.cc`).
+    pub fn new(params: Vec<NoseHooverThermostatParams>, ranges: Vec<BathRange>) -> Self {
+        Self {
+            scale: vec![1.0; params.len()],
+            zeta: params.iter().map(|p| vec![0.0; p.nhc]).collect(),
+            params,
+            ranges,
+            read_variables: false,
+        }
+    }
+
     /// Create a single-bath Nosé-Hoover thermostat with chain length 1.
     ///
     /// The bath covers all atoms `[0, n_atoms)`.
     pub fn new_single_bath(temperature: f64, tau: f64, dof: f64, n_atoms: usize) -> Self {
-        Self {
-            params: vec![NoseHooverThermostatParams {
+        Self::new(
+            vec![NoseHooverThermostatParams {
                 temperature,
                 tau,
                 dof,
                 nhc: 1,
             }],
-            ranges: whole_system(n_atoms),
-            read_variables: false,
-            scale: vec![1.0],
-            zeta: vec![vec![0.0; 1]],
-        }
+            whole_system(n_atoms),
+        )
     }
 
     /// Create a single-bath Nosé-Hoover chain thermostat with chain length `nhc ≥ 2`.
@@ -205,18 +215,15 @@ impl NoseHooverThermostat {
             nhc >= 2,
             "new_chain_bath requires nhc >= 2; use new_single_bath for nhc=1"
         );
-        Self {
-            params: vec![NoseHooverThermostatParams {
+        Self::new(
+            vec![NoseHooverThermostatParams {
                 temperature,
                 tau,
                 dof,
                 nhc,
             }],
-            ranges: whole_system(n_atoms),
-            read_variables: false,
-            scale: vec![1.0],
-            zeta: vec![vec![0.0; nhc]],
-        }
+            whole_system(n_atoms),
+        )
     }
 }
 
@@ -443,6 +450,51 @@ mod tests {
         for i in 0..N {
             assert_eq!(conf.current().vel[i].x, 1.0);
         }
+    }
+
+    // ── Several baths ────────────────────────────────────────────────────────
+
+    /// Each bath keeps its own chain and is driven by its own kinetic energy, T₀ and τ; each
+    /// DOFSET range is scaled by its bath.
+    #[test]
+    fn every_bath_has_its_own_chain() {
+        const DT: f64 = 0.002;
+        let bath = |temperature, tau| NoseHooverThermostatParams {
+            temperature,
+            tau,
+            dof: 3.0,
+            nhc: 3,
+        };
+        let ranges = vec![
+            BathRange {
+                last_atom: 0,
+                com_bath: 0,
+                ir_bath: 0,
+            },
+            BathRange {
+                last_atom: 1,
+                com_bath: 1,
+                ir_bath: 1,
+            },
+        ];
+        let mut nh = NoseHooverThermostat::new(vec![bath(300.0, 0.1), bath(350.0, 0.2)], ranges);
+        assert_eq!(nh.zeta(), &[vec![0.0; 3], vec![0.0; 3]]);
+
+        let (topo, mut conf) = make_conf(2, 0.0);
+        // bath 0 at 2·T₀, bath 1 at T₀
+        conf.current_mut().energies.kinetic_energy_new_bath =
+            vec![600.0 * 3.0 * kB / 2.0, 350.0 * 3.0 * kB / 2.0];
+        nh.apply(&topo, &mut conf, &make_sim(DT)).unwrap();
+
+        let (mut one, mut two) = (vec![0.0; 3], vec![0.0; 3]);
+        let s0 = nose_hoover_scale(&mut one, 600.0 * 3.0 * kB / 2.0, 3.0, 300.0, 0.1, DT);
+        let s1 = nose_hoover_scale(&mut two, 350.0 * 3.0 * kB / 2.0, 3.0, 350.0, 0.2, DT);
+        assert_eq!(nh.zeta(), &[one, two]);
+        assert_eq!(nh.scales(), &[s0, s1]);
+        assert_ne!(s0, s1);
+        assert_eq!(conf.current().vel[0].x, s0);
+        assert_eq!(conf.current().vel[1].x, s1);
+        assert_eq!(conf.nose_hoover.as_deref(), Some(nh.zeta()));
     }
 
     // ── Restart (NHCVARIABLES) ───────────────────────────────────────────────

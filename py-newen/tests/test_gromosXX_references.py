@@ -340,6 +340,9 @@ REFERENCE_SYSTEMS = [
     # Barostat with SHAKE (constraint virial) and ROTTRANS degrees of freedom (1.8)
     "aladip_solvated_npt_shake",
     "aladip_multibath_rottrans",
+    # Two Nose-Hoover baths, plain and chain, with different TEMP0 and TAU
+    "aladip_multibath_nosehoover",
+    "aladip_multibath_nhc",
     # NDFMIN over two baths with integer degrees of freedom, and half-integer ones (D40 patched)
     "aladip_vacuum_multibath_ndfmin3",
     "aladip_vacuum_multibath_ndfmin3_half_fixed",

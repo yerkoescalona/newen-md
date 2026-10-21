@@ -30,8 +30,8 @@ use newen_integrators::{
     algorithms::{
         BathRange, BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat,
         BerendsenThermostatParams, EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition,
-        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, PressureCalculation,
-        RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
+        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, NoseHooverThermostatParams,
+        PressureCalculation, RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
         SteepestDescentAlgorithm, TemperatureCalculation, VirialType,
     },
     constraints::ShakeParameters,
@@ -498,9 +498,9 @@ pub fn instantiate(
                 ranges,
                 read_variables,
             } => {
-                let first = baths
-                    .first()
-                    .ok_or_else(|| RunError::Recipe("thermostat without a bath".to_string()))?;
+                if baths.is_empty() {
+                    return Err(RunError::Recipe("thermostat without a bath".to_string()));
+                }
                 if ranges.last().map(|r| r.last_atom + 1) != Some(n_atoms)
                     || ranges
                         .iter()
@@ -524,26 +524,22 @@ pub fn instantiate(
                             .collect();
                         seq.push(Box::new(BerendsenThermostat::new(params, ranges.clone())))
                     },
-                    ThermostatAlgorithm::NoseHoover => {
-                        let mut alg = NoseHooverThermostat::new_single_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                        );
-                        alg.ranges.clone_from(ranges);
-                        alg.read_variables = *read_variables;
-                        seq.push(Box::new(alg))
-                    },
-                    ThermostatAlgorithm::NoseHooverChain(n) => {
-                        let mut alg = NoseHooverThermostat::new_chain_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                            (*n).max(2),
-                        );
-                        alg.ranges.clone_from(ranges);
+                    ThermostatAlgorithm::NoseHoover | ThermostatAlgorithm::NoseHooverChain(_) => {
+                        // one chain length for every bath, as gromosXX's MULTIBATH ALGORITHM
+                        let nhc = match algorithm {
+                            ThermostatAlgorithm::NoseHooverChain(n) => (*n).max(2),
+                            _ => 1,
+                        };
+                        let params = baths
+                            .iter()
+                            .map(|b| NoseHooverThermostatParams {
+                                temperature: b.temperature,
+                                tau: b.tau,
+                                dof: b.dof,
+                                nhc,
+                            })
+                            .collect();
+                        let mut alg = NoseHooverThermostat::new(params, ranges.clone());
                         alg.read_variables = *read_variables;
                         seq.push(Box::new(alg))
                     },

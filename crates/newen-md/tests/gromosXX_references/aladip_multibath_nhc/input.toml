@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 + patches/D41_nh_restart.patch (.local/gromosXX-patched/md++/BUILD/program/md), multi-bath Nose-Hoover
+[system]
+name = "aladip_multibath_nhc"
+description = "Aladip + 20 SPC, two Nose-Hoover-chain baths of length 3 (300 K / tau 0.1 solute, 350 K / tau 0.2 water), fresh start (NTINHT 1), 50 steps; expected output from native 247c95c4 + the D41 patch"
+level = 4
+natoms = 72
+isolates = "one Nose-Hoover chain per bath (nosehoover_thermostat.cc:120-230), each bath with its own TEMP0 and TAU"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_multibath_nhc.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

@@ -34,7 +34,9 @@ Berendsen barostat, COM removal.
 - LINCS ✓ (wired, reference-tested for solvent + solute)
 - COM removal ✓: translational (NTICOM + NSCM) + rotational; uses min-image wrapped positions (gromosXX convention); periodic COM rotation suppressed in PBC
 - Berendsen thermostat ✓ (MULTIBATH)
-- Nosé-Hoover ✓: single NHC (algorithm=1) + chain NHC (algorithm=N≥2); both reference-tested
+- Nosé-Hoover ✓: single NHC (algorithm=1) + chain NHC (algorithm=N≥2); both reference-tested;
+  `NoseHooverThermostat::new(params, ranges)` keeps one ζ chain per bath (MULTIBATH), as gromosXX
+  (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`)
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
 - **Perturbed nonbonded** ✓: soft-core LJ+CRF correction (`perturbed_pairlist_correction`), self-energy, excluded-pair, and 1-4 corrections; wired via `Forcefield`; `ch4_water_fep` reference test passes.

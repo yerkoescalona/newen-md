@@ -1333,6 +1333,10 @@ ref_test!(aladip_multibath_swapped, "aladip_multibath_swapped");
 // ROTTRANS on the solute of the two-bath system: 3 COM and 3 internal-rotational degrees of
 // freedom leave the solute's baths (gromosXX `topology.cc:1370-1402`).
 ref_test!(aladip_multibath_rottrans, "aladip_multibath_rottrans");
+// Two Nosé–Hoover baths (plain and chain) with different TEMP0 and TAU: one ζ or chain per bath
+// (gromosXX `nosehoover_thermostat.cc:120-230`).
+ref_test!(aladip_multibath_nosehoover, "aladip_multibath_nosehoover");
+ref_test!(aladip_multibath_nhc, "aladip_multibath_nhc");
 // NDFMIN 3 over two baths whose degrees of freedom are integers (12, 13): gromosXX spreads it
 // through an `int` total (`multibath.cc:145-152`), exact here. The half-integer case (14.5, 10.5)
 // is `_half_fixed`, generated with D40 patched (the total summed exactly).

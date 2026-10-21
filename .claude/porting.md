@@ -281,6 +281,12 @@ Each entry: what gromosXX does, which bucket, what newen does.
   decouples at setup, `topology.cc:1405-1411`, not ported); newen's kernels take `T_free = 0`
   there and fall back to `T₀`. Both are in the Lean models (`spec/NewenSpec/Thermostat.lean`); no
   reference reaches either input.
+- **Multi-bath Nosé–Hoover** (C, ours, reconciled). newen built the thermostat from the first
+  bath only (`NoseHooverThermostat::new_single_bath`/`new_chain_bath` with bath 0's T₀, τ and
+  dof) and refused several Nosé–Hoover baths at plan validation; with the refusal lifted it
+  indexed a scale it never had for the second bath. Now one ζ chain per bath as gromosXX
+  (`nosehoover_thermostat.cc:120-230`); pinned by `aladip_multibath_nosehoover`,
+  `aladip_multibath_nhc`.
 - **Thermostat output quirks** (B), reproduced: `NDFMIN` not subtracted from the COM/IR dof
   (`multibath.cc:139-149`; `bath_dofs`, `newen-run/src/dof.rs`); a bath's `scale` printed 0
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
