@@ -274,6 +274,13 @@ Each entry: what gromosXX does, which bucket, what newen does.
     plain pairs gated (`nonbonded_set.cc:428-430`);
   - SETTLE gated on the atomic virial with no vacuum split (`settle.cc:397`); LINCS adds no
     constraint virial.
+- **Thermostat coupling edge inputs** (C, ours, documented). gromosXX couples a bath whenever
+  `tau != -1` (`berendsen_thermostat.cc:99`, `nosehoover_thermostat.cc:123,179`), so any other
+  negative τ is coupled with a negative time constant; newen treats every `tau < 0` as uncoupled.
+  gromosXX has no guard on `dof` (`2·ekin/(dof·k_B)` is inf or NaN for a 0-dof bath, which it
+  decouples at setup, `topology.cc:1405-1411`, not ported); newen's kernels take `T_free = 0`
+  there and fall back to `T₀`. Both are in the Lean models (`spec/NewenSpec/Thermostat.lean`); no
+  reference reaches either input.
 - **Thermostat output quirks** (B), reproduced: `NDFMIN` not subtracted from the COM/IR dof
   (`multibath.cc:139-149`; `bath_dofs`, `newen-run/src/dof.rs`); a bath's `scale` printed 0
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
