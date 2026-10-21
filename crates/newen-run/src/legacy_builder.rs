@@ -268,7 +268,7 @@ pub(crate) fn legacy_build_sequence(
     let n_atoms = topo.num_atoms();
 
     // Nonbonded interactions: CRF interior dielectric is always 1 in GROMOS.
-    let crf_params = CRFParameters::new(imd.rcutl, 1.0, imd.epsrf, imd.appak);
+    let crf_params = CRFParameters::new(imd.rcrf, 1.0, imd.epsrf, imd.appak);
     let lj_params = Forcefield::convert_lj_parameters(topo);
 
     // Pairlist. PAIRLIST block SIZE; 0.0 means "auto" and is resolved by the cell-list
