@@ -11,7 +11,8 @@
 use newen_core::Topology;
 use newen_integrators::constraints::{NtcMode, ShakeBuffers};
 
-use newen_integrators::algorithms::{in_bath, BathRange};
+use newen_integrators::algorithms::BathRange;
+use newen_logic::thermo::bath::{bath_half_dofs, ndfmin_spread, Constraint};
 
 use crate::ConstraintSelection;
 
@@ -31,13 +32,15 @@ pub struct BathDof {
 ///
 /// * every DOFSET range contributes `3 × (number of temperature groups starting in it)` to the
 ///   COM bath and the remaining `3 × (atoms in the range)` minus that to the IR bath;
-/// * constraints are subtracted from the bath that owns their atoms;
+/// * every constraint end takes ½ from the IR bath of its atom (`topology.cc:1076-1215`);
 /// * roto-translational constraints (`rottrans`) take 3 from the COM and 3 from the IR degrees
 ///   of freedom of atom 1's baths (`topology.cc:1370-1402`);
 /// * NDFMIN is spread over the baths in proportion to their degrees of freedom, from `dof`
 ///   only (`multibath.cc:139-149`).
 ///
-/// With one bath over the whole system `dof` is exactly [`total_dof`] less [`rottrans_dof`].
+/// The counting is [`newen_logic::thermo::bath`] (in half degrees of freedom, with a Lean proof);
+/// this adapter collects the group first atoms and the constraints the run imposes. With one
+/// bath over the whole system `dof` is exactly [`total_dof`] less [`rottrans_dof`].
 pub fn bath_dofs(
     topo: &Topology,
     sel: &ConstraintSelection,
@@ -47,64 +50,54 @@ pub fn bath_dofs(
     ranges: &[BathRange],
     rottrans: bool,
 ) -> Vec<BathDof> {
-    let n_atoms = topo.num_atoms();
-    let mut com = vec![0.0; n_baths];
-    let mut ir = vec![0.0; n_baths];
-    let mut last: i64 = -1;
-    for r in ranges {
-        let group_starts = topo
-            .temperature_groups
-            .iter()
-            .filter_map(|g| g.first().copied())
-            .filter(|&first| first as i64 > last && first <= r.last_atom)
-            .count();
-        let atoms_in_range = r.last_atom as i64 - last;
-        com[r.com_bath] += 3.0 * group_starts as f64;
-        ir[r.ir_bath] += 3.0 * atoms_in_range as f64 - 3.0 * group_starts as f64;
-        last = r.last_atom as i64;
-    }
-    // constraints go to the IR bath of their atoms, half to each end
-    // (gromosXX Topology::calculate_constraint_dof, topology.cc:1076-1110)
-    let ir_bath = |atom: usize| in_bath(ranges, atom).1;
+    let group_firsts: Vec<usize> = topo
+        .temperature_groups
+        .iter()
+        .filter_map(|g| g.first().copied())
+        .collect();
+    let mut constraints = Vec::new();
     if sel.solute_constrained() {
         for (i, j) in ShakeBuffers::new(topo, ntc, false).solute_constraint_pairs() {
-            ir[ir_bath(i)] -= 0.5;
-            ir[ir_bath(j)] -= 0.5;
+            constraints.push(Constraint { i, j });
         }
     }
     if sel.solvent_constrained() {
-        let per_molecule = topo.solvent_constraint_template.len();
+        let n_atoms = topo.num_atoms();
         let n_solute = topo.num_solute_atoms();
         let atoms_per_molecule = topo.solvent_atom_template.len().max(1);
         for m in 0..topo.num_solvent_molecules() {
             let first = n_solute + m * atoms_per_molecule;
-            if first < n_atoms {
-                ir[ir_bath(first)] -= per_molecule as f64;
+            if first >= n_atoms {
+                continue;
+            }
+            for c in &topo.solvent_constraint_template {
+                constraints.push(Constraint {
+                    i: first + c.i,
+                    j: first + c.j,
+                });
             }
         }
     }
-    if rottrans && topo.num_solute_atoms() > 0 {
-        let (com_bath, ir_bath) = in_bath(ranges, 0);
-        com[com_bath] -= 3.0;
-        ir[ir_bath] -= 3.0;
-    }
-    let mut baths: Vec<BathDof> = com
+    let solute_rottrans = rottrans && topo.num_solute_atoms() > 0;
+    let halves = bath_half_dofs(
+        n_baths,
+        ranges,
+        &group_firsts,
+        &constraints,
+        solute_rottrans,
+    );
+    let totals: Vec<i64> = halves.iter().map(|h| h.com + h.ir).collect();
+    // exact rationals: gromosXX sums the total in an `int`, truncating half-integer baths (D40)
+    let spread = ndfmin_spread(&totals, i64::from(ndfmin));
+    halves
         .iter()
-        .zip(&ir)
-        .map(|(&com, &ir)| BathDof {
-            dof: com + ir,
-            com,
-            ir,
+        .zip(&spread.numerators)
+        .map(|(h, &num)| BathDof {
+            dof: num as f64 / spread.denominator as f64,
+            com: h.com as f64 / 2.0,
+            ir: h.ir as f64 / 2.0,
         })
-        .collect();
-    // NDFMIN in proportion to each bath's degrees of freedom (gromosXX's "Martin Stroet edit")
-    let total: f64 = baths.iter().map(|b| b.dof).sum();
-    if ndfmin != 0 && total > 0.0 {
-        for b in baths.iter_mut() {
-            b.dof -= ndfmin as f64 * (b.dof / total);
-        }
-    }
-    baths
+        .collect()
 }
 
 /// [`bath_dofs`]' total degrees of freedom per bath.

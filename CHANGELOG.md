@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.71] (2026-10-22)
+
+### Added
+
+- **Per-bath degrees of freedom and the atom-to-bath mapping, verified against the theory**
+  (`newen-logic::thermo::bath`: `baths_of`, `groups_starting_in`, `bath_half_dof`,
+  `bath_half_dofs`, `ndfmin_spread`; the next item of the roadmap in
+  `docs/src/verification/index.md`). The counts are in half degrees of freedom, so a constraint
+  shared between two baths (½ to each) stays an integer, and NDFMIN is spread as an exact rational
+  (numerators over one denominator). Lean: the meaning atom by atom (`BathSystem`, `comHalf`,
+  `irHalf`), the partition theorem (the baths share out `3N − C`), the single-bath corollary tied
+  to `total_dof`, and that the spread removes exactly NDFMIN; the range-by-range model equals the
+  meaning whenever the DOFSET ranges cover the atoms (`Covers`); Aeneas proofs that the Rust
+  computes the model; 1722 Lean vectors and an atom-by-atom brute force in `tests/bath_spec.rs`.
+  `newen-run::bath_dofs` and newen-integrators' `in_bath` call these; `BathRange` is now
+  `newen_logic::thermo::bath::DofRange`.
+- **Reference `aladip_vacuum_multibath_ndfmin3_half_fixed`** (D40): NDFMIN 3 over two baths with
+  half-integer degrees of freedom (14.5 and 10.5), expected output from gromosXX 247c95c4 +
+  `patches/D40_ndfmin_total.patch` (the NDFMIN total summed in a `double`, no spread when it is
+  not positive): 12.76 and 9.24 instead of the released binary's 12.6875 and 9.1875. The integer
+  case stays `aladip_vacuum_multibath_ndfmin3` on the released binary. 119 references, none
+  ignored.
+
+### Changed
+
+- Solvent constraints take ½ from the IR bath of each end atom, as gromosXX does
+  (`topology.cc:1154-1155`); before, all of a molecule's constraints came off its first atom's
+  bath. Identical unless a solvent molecule straddles two baths.
+- A bath's `dof` is `numerator / denominator` of the exact spread instead of
+  `dof − NDFMIN·dof/total`: last-bit differences at most, every reference unchanged.
+- `newen-logic` has an optional `serde` feature (off in the build Charon translates) so the run
+  plan's JSON carries `BathRange` as before.
+
 ## [0.0.70] (2026-10-18)
 
 ### Changed: one behaviour per feature

@@ -32,3 +32,83 @@ refinement = "NewenSpec.Refinement.total_dof_eq"
 # Layer 3, Rust = molecule-by-molecule count and Rust = model on 0 <= counts <= 10, -3 <= ndfmin <= 6 (cargo test)
 test = "crates/newen-logic/tests/dof_spec.rs"
 vectors = "spec/vectors/dof.json"
+
+[[function]]
+key = "thermo.bath.baths_of"
+rust = "crates/newen-logic/src/thermo/bath.rs::baths_of"
+used_by = ["crates/newen-integrators/src/algorithms/multibath.rs::in_bath", "crates/newen-logic/src/thermo/bath.rs::bath_half_dof"]
+origin = "gromosXX Multibath::in_bath (multibath.h:159-171): the first DOFSET range whose last atom reaches the atom; None where gromosXX asserts"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.BathSystem"
+model = "NewenSpec.Thermo.Bath.bathsOfModel"
+theorem = "NewenSpec.Thermo.Bath.bathsOf_some_iff"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.baths_of"
+refinement = "NewenSpec.Refinement.baths_of_eq"
+# Layer 3, Rust = atom scan on n <= 6 atoms, 1-3 ranges (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.groups_starting_in"
+rust = "crates/newen-logic/src/thermo/bath.rs::groups_starting_in"
+used_by = ["crates/newen-logic/src/thermo/bath.rs::bath_half_dof"]
+origin = "gromosXX Multibath::calculate_degrees_of_freedom (multibath.cc:106-121): temperature groups starting in a DOFSET range"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf"
+model = "NewenSpec.Thermo.Bath.groupsStartingInModel"
+theorem = "NewenSpec.Thermo.Bath.groupsStartingIn_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.groups_starting_in"
+refinement = "NewenSpec.Refinement.groups_starting_in_eq"
+# Layer 3, through bath_half_dofs on n <= 6 atoms (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.bath_half_dof"
+rust = "crates/newen-logic/src/thermo/bath.rs::bath_half_dof"
+used_by = ["crates/newen-logic/src/thermo/bath.rs::bath_half_dofs"]
+origin = "gromosXX multibath.cc:84-136 (per range: 3 per group to the COM bath, the rest to the IR bath), topology.cc:1053-1215 (1/2 per constraint end to the IR bath; solute, solvent, perturbed), topology.cc:1380-1402 (rottrans: 3 from each bath of atom 0); in half degrees of freedom"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf, NewenTheory.Dynamics.DegreesOfFreedom.irHalf (bathHalf_partition, bathHalf_single)"
+model = "NewenSpec.Thermo.Bath.bathHalfDofModel"
+theorem = "NewenSpec.Thermo.Bath.bathHalfDofModel_eq_of_wellFormed"
+# Layer 2, Rust = model (Aeneas), for BathHalfDofInRange: 6·Σ_r(n_r + 2·g_r) + 2·C + 12 <= i64::MAX, no last_atom = usize::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.bath_half_dof"
+refinement = "NewenSpec.Refinement.bath_half_dof_eq"
+# Layer 3, through bath_half_dofs (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.bath_half_dofs"
+rust = "crates/newen-logic/src/thermo/bath.rs::bath_half_dofs"
+used_by = ["crates/newen-run/src/dof.rs::bath_dofs"]
+origin = "gromosXX Multibath::calculate_degrees_of_freedom (multibath.cc:84-136) with Topology::calculate_constraint_dof (topology.cc:1053-1416), every bath"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf, NewenTheory.Dynamics.DegreesOfFreedom.irHalf"
+model = "NewenSpec.Thermo.Bath.bathHalfDofsModel"
+theorem = "NewenSpec.Thermo.Bath.bathHalfDofsModel_eq"
+# Layer 2, Rust = model (Aeneas), for BathHalfDofInRange
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.bath_half_dofs"
+refinement = "NewenSpec.Refinement.bath_half_dofs_eq"
+# Layer 3, Rust = atom-by-atom count on n <= 6 atoms, 1-3 ranges and baths, <= 3 groups, <= 2 constraints; Rust = model on 1722 vector rows (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.ndfmin_spread"
+rust = "crates/newen-logic/src/thermo/bath.rs::ndfmin_spread"
+used_by = ["crates/newen-run/src/dof.rs::bath_dofs"]
+origin = "D40: gromosXX multibath.cc:141-153 spreads NDFMIN in proportion to each bath's dof but sums the total in an int, truncating half-integer baths; here the exact rational"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.spreadNumerators (spread_sum, spread_zero, spread_total_nonpos)"
+model = "NewenSpec.Thermo.Bath.ndfminSpreadModel"
+theorem = "NewenSpec.Thermo.Bath.ndfminSpreadModel_eq"
+# Layer 2, Rust = model (Aeneas), for SpreadInRange: (Σ|h_b| + 2·|ndfmin| + 2)^2 <= i64::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.ndfmin_spread"
+refinement = "NewenSpec.Refinement.ndfmin_spread_eq"
+# Layer 3, Rust = exact rational by i128 cross-multiplication, and Rust = model (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"

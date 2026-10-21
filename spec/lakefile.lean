@@ -18,7 +18,7 @@ package «newen-spec»
 Aeneas refinement proofs. -/
 @[default_target] lean_lib NewenSpec
 
-/-- Writes `vectors/schedule.json` and `vectors/dof.json`: the Lean models on the grids the Rust
-tests sweep. -/
+/-- Writes `vectors/schedule.json`, `vectors/dof.json` and `vectors/bath.json`: the Lean models on
+the grids the Rust tests sweep. -/
 lean_exe «spec-vectors» where
   root := `SpecVectors
