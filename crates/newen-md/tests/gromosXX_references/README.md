@@ -33,6 +33,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 1   | water_single_genvel | 3  | NTIVEL=1 Maxwell-Boltzmann velocity generation | **PASS** |
 | 1   | benzene_vacuum   | 12    | aromatic ring + improper + torsion   | **PASS** |
 | 1   | nacl_pair_box    | 2     | Coulomb + LJ in PBC with RF (no solvent) | **PASS** |
+| 1   | nacl_pair_box_ewald | 2  | direct Ewald sum (NLRELE 2): k space, real space, self and A terms (cubic A2), Gaussian a = 0.4 nm, atomic cutoff, NK 10, KCUT 900 nm⁻²; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
 | 1   | butane_vacuum    | 4     | dihedral + 1-4 LJ interaction        | **PASS** |
 | 1   | butane_vacuum_ntbdn1 | 4 | `butane_vacuum` with `COVALENTFORM 0 0 1`: the Chebyshev-polynomial dihedral K(1 + cos δ cos mφ) (NTBDN = 1, δ = 0) | **PASS** |
 | 1   | aladip_vacuum    | 12    | all bonded + exclusions + 1-4        | **PASS** |
@@ -50,6 +51,8 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 3   | water_216_nve_nobath | 648 | absent MULTIBATH block ⇒ no bath (IMD parser defaults, 3.9 A18) | **PASS** |
 | 3   | water_216_box_com| 648   | bulk NVE + COM removal (NTICOM=1, NSCM=10) | **PASS** |
 | 3   | water_216_box_com_rot | 648 | COM translation+rotation removal (NTICOM=2, NSCM=-10) | **PASS** |
+| 3   | water_216_box_ewald | 648 | direct Ewald sum in bulk water: excluded pairs, twin-range LJ-only shell, cubic A2, EPSLS 0; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
+| 3   | water_216_box_ewald_epsls | 648 | `water_216_box_ewald` with EPSLS 61: the surface term of the box dipole; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
 | 3   | water_216_nvt    | 648   | Berendsen thermostat                 | **PASS** |
 | 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC), fresh start (NTINHT 1); expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: the final configuration carries plain Nosé–Hoover's NHCVARIABLES block (D41) | **PASS** |
 | 3   | water_216_nvt_nhc_chain | 648 | Nosé-Hoover-Chain (3 chains)        | **PASS** |

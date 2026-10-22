@@ -17,6 +17,10 @@ use newen_forces::bonded::{
     calculate_bonded_forces_ntf, calculate_perturbed_bonded_forces, BondedGroupEnergies,
     BondedPrecalc, TermLambda,
 };
+use newen_forces::nonbonded::ewald::{EwaldSum, LsEnergies};
+use newen_forces::nonbonded::ls_real_space::{
+    lj_ls_pairs, lj_only_pairs, ls_excluded_pairs, one_four_ls_pairs, ShapeWidth,
+};
 use newen_forces::nonbonded::{
     eds_one_four_interactions, eds_pair_interactions, eds_rf_excluded_interactions,
     eds_ti_one_four_interactions, eds_ti_pair_interactions, eds_ti_rf_excluded_interactions,
@@ -192,6 +196,12 @@ pub struct Forcefield {
     /// GaMD: the exclusion lists with only the solute's, and with none (built once), to take
     /// the reaction-field excluded solute pairs apart.
     gamd_exclusions: Option<[Vec<Vec<usize>>; 2]>,
+    /// Lattice-sum electrostatics (NLRELE 2, Ewald) in place of the reaction field; `None` for a
+    /// reaction-field or cutoff run.
+    pub lattice_sum: Option<EwaldSum>,
+    /// The lattice-sum energies of this step but the real-space one (which is the pair
+    /// storage's electrostatic energy).
+    ls_energies: LsEnergies,
 }
 
 /// The EDS part of the force field: the atoms with end states, their pairlist pairs and the
@@ -332,6 +342,8 @@ impl Forcefield {
             eds_virial_correction: Vec::new(),
             gamd: None,
             gamd_exclusions: None,
+            lattice_sum: None,
+            ls_energies: LsEnergies::default(),
         }
     }
 
@@ -433,6 +445,133 @@ impl Forcefield {
             self.nonbonded_storage.precalc = pc.clone();
             self.local_storage.precalc = pc;
         }
+    }
+
+    /// Every term of a lattice-sum run in gromosXX's order (`nonbonded_set.cc:121-260`): the
+    /// LJ + real-space pairs of the short-range pairlist, the real-space term of the excluded
+    /// pairs, the k-space, self, A and surface terms, the 1-4 pairs; and LJ alone for the
+    /// long-range pairlist (recomputed on pairlist steps of a twin-range run, as the reaction
+    /// field's). The pair terms go to the pair storage, the others to the local one; the
+    /// real-space energies to their `e_crf`. Returns the energies of the other terms.
+    fn lattice_sum_terms(
+        &mut self,
+        ls: &mut EwaldSum,
+        topo: &Topology,
+        conf: &Configuration,
+        pairlist_updated: bool,
+        need_virial: bool,
+    ) -> Result<LsEnergies, String> {
+        use newen_core::configuration::BoxType;
+        if !(self.pairlist.solvent_short.is_empty() && self.pairlist.solvent_long.is_empty()) {
+            return Err(
+                "lattice sum: the solvent pairlists are not empty; lattice-sum \
+                 electrostatics need the atomic pairlist (PAIRLIST TYPE atomic)"
+                    .to_string(),
+            );
+        }
+        let n_atoms = topo.inverse_mass.len();
+        let sw = ShapeWidth {
+            shape: ls.params.shape,
+            inv_width: 1.0 / ls.params.width,
+        };
+        let pos = &conf.current().pos;
+        lj_ls_pairs(
+            &self.pairlist.solute_short,
+            pos,
+            &self.charges,
+            &self.iac_u32,
+            &self.lj_params,
+            sw,
+            &self.periodicity,
+            self.four_pi_eps_i,
+            &mut self.nonbonded_storage,
+            need_virial,
+        );
+        ls_excluded_pairs(
+            &topo.exclusions,
+            pos,
+            &self.charges,
+            sw,
+            &self.periodicity,
+            self.four_pi_eps_i,
+            &mut self.local_storage,
+            need_virial,
+        );
+        let box_cfg = &conf.current().box_config;
+        let v = box_cfg.vectors;
+        let edges = [
+            v.x_axis.to_array(),
+            v.y_axis.to_array(),
+            v.z_axis.to_array(),
+        ];
+        let energies = ls.evaluate(
+            pos,
+            &self.charges,
+            edges,
+            box_cfg.box_type == BoxType::Rectangular,
+            &self.periodicity,
+            &mut self.local_storage,
+            need_virial,
+        )?;
+        one_four_ls_pairs(
+            &topo.one_four_pairs,
+            pos,
+            &self.charges,
+            &self.iac_u32,
+            &self.lj_params,
+            sw,
+            &self.periodicity,
+            self.four_pi_eps_i,
+            &mut self.local_storage,
+            need_virial,
+        );
+        if self.twin_range_active {
+            if pairlist_updated || !self.longrange_computed {
+                let mut lr = ForceStorage::new(n_atoms);
+                lj_only_pairs(
+                    &self.pairlist.solute_long,
+                    pos,
+                    &self.iac_u32,
+                    &self.lj_params,
+                    sw,
+                    &self.periodicity,
+                    &mut lr,
+                    need_virial,
+                );
+                self.longrange_forces.clear();
+                self.longrange_forces.extend_from_slice(&lr.forces);
+                self.longrange_e_lj = lr.e_lj;
+                self.longrange_e_crf = 0.0;
+                self.longrange_virial = lr.virial;
+                self.longrange_computed = true;
+            }
+            for (f, lr) in self
+                .nonbonded_storage
+                .forces
+                .iter_mut()
+                .zip(&self.longrange_forces)
+            {
+                *f += *lr;
+            }
+            self.nonbonded_storage.e_lj += self.longrange_e_lj;
+            add_virial(
+                &mut self.nonbonded_storage.virial,
+                &self.longrange_virial,
+                1.0,
+            );
+        } else {
+            lj_only_pairs(
+                &self.pairlist.solute_long,
+                pos,
+                &self.iac_u32,
+                &self.lj_params,
+                sw,
+                &self.periodicity,
+                &mut self.nonbonded_storage,
+                need_virial,
+            );
+        }
+        Ok(energies)
     }
 
     /// Install the cross-rank sum of the pair terms (MPI). See [`Self::pair_partition`].
@@ -692,7 +831,12 @@ impl Algorithm for Forcefield {
 
         // Short-range solute interactions
         let t_solute = self.timing_enabled.then(std::time::Instant::now);
-        if self.use_cg_grouped_solute {
+        if let Some(mut ls) = self.lattice_sum.take() {
+            // every lattice-sum term (no reaction field): see `lattice_sum_terms`
+            let result = self.lattice_sum_terms(&mut ls, topo, conf, pairlist_updated, need_virial);
+            self.lattice_sum = Some(ls);
+            self.ls_energies = result?;
+        } else if self.use_cg_grouped_solute {
             // CG-grouped: compute nearest_image once per CG pair (fast path for large boxes)
             if self.parallel_nonbonded {
                 let result = if need_virial {
@@ -826,7 +970,7 @@ impl Algorithm for Forcefield {
 
         // Short-range solvent-solvent interactions (shared PBC shift)
         let t_solvent = self.timing_enabled.then(std::time::Instant::now);
-        if !self.pairlist.solvent_short.is_empty() {
+        if self.lattice_sum.is_none() && !self.pairlist.solvent_short.is_empty() {
             if self.parallel_nonbonded {
                 let result = if need_virial {
                     solvent_innerloop_parallel(
@@ -901,7 +1045,9 @@ impl Algorithm for Forcefield {
         let t_lr = self.timing_enabled.then(std::time::Instant::now);
         let longrange_recomputed =
             self.twin_range_active && (pairlist_updated || !self.longrange_computed);
-        if self.twin_range_active {
+        if self.lattice_sum.is_some() {
+            // done in `lattice_sum_terms`
+        } else if self.twin_range_active {
             // Recalculate long-range if pairlist was updated OR first step
             if longrange_recomputed {
                 // Recalculate long-range forces and cache them. Virial variants only when
@@ -1250,7 +1396,7 @@ impl Algorithm for Forcefield {
         }
 
         // RF self-energy and excluded-pair Coulomb (energy + forces) — NSLFEXCL
-        if self.rf_excluded {
+        if self.rf_excluded && self.lattice_sum.is_none() {
             let t_rf = self.timing_enabled.then(std::time::Instant::now);
             rf_excluded_interactions(
                 &self.charges,
@@ -1270,7 +1416,7 @@ impl Algorithm for Forcefield {
 
         // 1-4 interactions: LJ with cs6/cs12 + CRF with coulomb scaling
         // GROMOS: computed separately from pairlist, no cutoff
-        if !topo.one_four_pairs.is_empty() {
+        if self.lattice_sum.is_none() && !topo.one_four_pairs.is_empty() {
             one_four_interaction_loop(
                 &topo.one_four_pairs,
                 &conf.current().pos,
@@ -1760,7 +1906,24 @@ impl Algorithm for Forcefield {
                 .as_ref()
                 .map_or(0.0, |p| p.lambda_derivative);
             state.energies.lj_total = self.nonbonded_storage.e_lj;
-            state.energies.crf_total = self.nonbonded_storage.e_crf;
+            // With a lattice sum the electrostatic slot of the pair storage holds the real-space
+            // energy, and there is no reaction-field energy (gromosXX `energy.cc:582-588`).
+            let mut ls = LsEnergies::default();
+            if self.lattice_sum.is_some() {
+                ls = self.ls_energies;
+                ls.realspace = self.nonbonded_storage.e_crf;
+                state.energies.crf_total = 0.0;
+            } else {
+                state.energies.crf_total = self.nonbonded_storage.e_crf;
+            }
+            let e = &mut state.energies;
+            e.ls_realspace_total = ls.realspace;
+            e.ls_kspace_total = ls.kspace;
+            e.ls_a_term_total = ls.a_term;
+            e.ls_self_total = ls.self_term;
+            e.ls_surface_total = ls.surface;
+            e.ls_pair_total = ls.pair();
+            e.ls_total = ls.total();
             state.energies.update_potential_total();
             // dH/dλ per term, as gromosXX books it (soft terms count as their kind)
             let d = &mut state.perturbed_energy_derivatives;

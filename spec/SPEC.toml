@@ -838,7 +838,7 @@ vectors = "spec/vectors/perturbed_bonded.json"
 key = "lattice_sum.shape_switch"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_switch"
-used_by = ["crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair", "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair (no run calls them yet: NLRELE 2/3 are refused)"]
+used_by = ["crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair", "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair"]
 origin = "gromosXX Lattice_Sum::charge_shape_switch (latticesum.h:86-252); GROMOS Vol. 2 eta_function_def, tables ls_switch_function and ls_switch_prime; erfc is C erfc"
 # Theorems over R: eta' is the derivative of eta for every shape and xi (across the support edge too), compact support, eta(0) = 1, eta'' = 4 xi pi gamma (the eta and gamma tables agree), unit charge
 theory = "NewenTheory.Interactions.LatticeSum.eta, etaDeriv (eta_hasDerivAt, eta_compact_support, eta_zero_eq_one, etaPoly_derivative_two, chargeShape_normalized; erfc defined by its integral, erfc_hasDerivAt)"
@@ -852,7 +852,7 @@ vectors = "spec/vectors/lattice_sum.json"
 key = "lattice_sum.shape_fourier"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_fourier"
-used_by = []
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::k_vectors", "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_shells"]
 origin = "gromosXX Lattice_Sum::charge_shape_fourier (latticesum.h:309-467, the corrected lines after the three 'wrong!!!' comments); GROMOS Vol. 2 latsum_gamma_ft, tables ls_fcoef and ls_fcoef_prime; kappa = 0 divides by zero for the polynomial shapes (Vol. 2 sets gamma_hat(0) = 1)"
 # Theorems over R: the tabulated gamma_hat' is the derivative of the tabulated gamma_hat at every kappa != 0, gamma_hat(0) = 1
 theory = "NewenTheory.Interactions.LatticeSum.gammaHat, gammaHatDeriv (gammaHat_hasDerivAt, gammaHat_zero_eq_one, fourierForm_hasDerivAt)"
@@ -866,7 +866,7 @@ vectors = "spec/vectors/lattice_sum.json"
 key = "lattice_sum.lj_ls_pair"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair"
-used_by = []
+used_by = ["crates/newen-forces/src/nonbonded/ls_real_space.rs::lj_ls_pairs", "crates/newen-forces/src/nonbonded/ls_real_space.rs::one_four_ls_pairs", "crates/newen-forces/src/nonbonded/ls_real_space.rs::lj_only_pairs (no charge: the LJ of the long-range shell)"]
 origin = "gromosXX Nonbonded_Term::lj_ls_interaction (nonbonded_term.cc:361-388), its LJ force (c12/r^6 + c12/r^6 - c6) * 6 / r^6 / r^2 included; no zero-distance guard (gromosXX asserts r^2 != 0); GROMOS Vol. 2 e_eta_approx, e_eta_approx_force"
 # Theorems over R: the real-space force is -dE/dr; the model at R equals the theory for r > 0, a != 0
 theory = "NewenTheory.Interactions.LatticeSum.realSpacePair, realSpacePairForce (realSpacePair_force_is_minus_grad); NewenTheory.Interactions.LennardJones.ljEnergy, ljForce"
@@ -880,7 +880,7 @@ vectors = "spec/vectors/lattice_sum.json"
 key = "lattice_sum.ls_excluded_pair"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair"
-used_by = []
+used_by = ["crates/newen-forces/src/nonbonded/ls_real_space.rs::ls_excluded_pairs"]
 origin = "gromosXX Nonbonded_Term::ls_excluded_interaction (nonbonded_term.cc:393-411); GROMOS Vol. 2 e_eta_approx (second sum)"
 # Theorems over R: the excluded-pair force is -dE/dr; the model at R equals the theory for r > 0, a != 0
 theory = "NewenTheory.Interactions.LatticeSum.realSpaceExcluded, realSpaceExcludedForce (realSpaceExcluded_force_is_minus_grad)"
@@ -894,7 +894,7 @@ vectors = "spec/vectors/lattice_sum.json"
 key = "lattice_sum.self_constants"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::self_constants"
-used_by = []
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms)"]
 origin = "gromosXX Nonbonded_Outerloop::ls_self_outerloop (nonbonded_outerloop.cc:2291-2353: the A1, A3 table, a1 *= -pi a^2 / V, a3 *= -1/a); GROMOS Vol. 2 latsum_a1_def, latsum_a3_def, table ls_acst; the cubic Wigner constant -2.83729748 (outerloop.cc:2379; Vol. 2 prints -2.83792748) is NewenTheory.Interactions.LatticeSum.wignerCube"
 # Theorems over R: the model equals A1 = -pi a^2 Ã1 / V, A3 = -Ã3 / a; Ã3 = -eta'(0) for every shape
 theory = "NewenTheory.Interactions.LatticeSum.a1, a3, a1Tilde, a3Tilde (a3Tilde_eq_neg_etaDeriv_zero), selfTerm, aTerm"
@@ -903,3 +903,101 @@ theorem = "NewenSpec.LatticeSum.selfConstantsModel_real_eq"
 # Rust = model at Float, bit for bit; Ã1 = 4 ∫ xi eta(xi) dxi and Ã3 = -eta'(0) against the Rust switch function (cargo test)
 differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
 vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.reciprocal_box"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::reciprocal_box"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms)", "crates/newen-forces/src/nonbonded/lattice_sum.rs::lattice_vector (the wave vector of l in this basis)"]
+origin = "gromosXX math::volume (math/volume.cc:33-52) and configuration::KSpace_Utils::l_to_k_matrix (kspace.cc:128-136); gromosXX then multiplies l by the transpose of this basis (kspace.cc:88, nonbonded_outerloop.cc:2449), which is the same vector only in a rectangular box; newen's lattice_vector takes l_x b1 + l_y b2 + l_z b3"
+# Theorems over R: the model equals V = (a x b) . c and 2 pi / V (b x c, c x a, a x b); for diag(Lx, Ly, Lz) the rectangular |a||b||c| is (a x b) . c; the reciprocal basis is dual to the box (k . a = 2 pi l_x, ...), so one atom moved by a lattice vector leaves C(k)^2 + S(k)^2 unchanged
+theory = "NewenTheory.Interactions.LatticeSum.boxVolume, reciprocal, latticeVector (latticeVector_reciprocal_dot, structureFactorSq_lattice_shift)"
+model = "NewenSpec.LatticeSum.reciprocalBoxModel, latticeVectorModel (at Float: reciprocalBoxFloat)"
+theorem = "NewenSpec.LatticeSum.reciprocalBoxModel_real_eq, reciprocalBoxModel_rectangular_volume, latticeVectorModel_real_eq"
+# Rust = model at Float, bit for bit; k . edge_j = 2 pi l_j in a triclinic box (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "ewald.k_vectors"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/ewald.rs::k_vectors"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: at the first step and whenever the box changes)"]
+origin = "gromosXX configuration::calculate_k_space (kspace.cc:48-126): l in [-NKX, NKX] x [-NKY, NKY] x [-NKZ, NKZ], k != 0 and |k|^2 <= KCUT (gromosXX compares |k|^2 with KCUT, kspace.cc:72, 90; Vol. 2 cuts at |k| <= k_c); an empty set is an error (kspace.cc:122-125)"
+# Theorems over R: the model's set of k is kSet (the theory's filter on the box of triples); every cached field is consistent (k2 = |k|^2 != 0, gamma_hat(sqrt(k2) a), ...); the set is symmetric under k -> -k
+theory = "NewenTheory.Interactions.LatticeSum.kSet, lBox (kSet_symmetric)"
+model = "NewenSpec.LatticeSum.kVectorsModel (at Float: kVectorsFloat)"
+theorem = "NewenSpec.LatticeSum.kVectorsModel_real_toFinset, kVectorsModel_real_wf"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "ewald.kspace"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/ewald.rs::ewald_kspace"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate (every step of an NLRELE 2 run)"]
+origin = "gromosXX Nonbonded_Outerloop::_ls_ewald_kspace_outerloop (nonbonded_outerloop.cc:1946-2059), positions put into the box first; GROMOS Vol. 2 e_gamma_ewald, ewald_reci_force, vir_ew, a_2_tilde_ew"
+# Theorems over R: energy = (2 eps0 V)^-1 sum gamma_hat/k^2 (C^2 + S^2) and forces = kSpaceForce over the cached wave vectors (kSpace over their set when no k repeats), A2~ = 4 pi / V sum gamma_hat/k^2; force = -grad E over kSet; C^2 + S^2 is even in k, so the (2 eps0 V)^-1 over a symmetric set is (eps0 V)^-1 over half of it; translation invariance
+theory = "NewenTheory.Interactions.LatticeSum.kSpace, kSpaceForce (ewald_total_force_is_minus_grad, kSpace_force_is_minus_grad, structureFactorSq_neg, kSpace_half_space, kSpace_translation_invariant)"
+model = "NewenSpec.LatticeSum.ewaldKspaceModel (at Float: ewaldKspaceFloat)"
+theorem = "NewenSpec.LatticeSum.ewaldKspaceModel_real_energy, ewaldKspaceModel_real_eq_kSpace, ewaldKspaceModel_real_forces, ewaldKspaceModel_real_a2Tilde"
+# Rust = model at Float, bit for bit; forces against central differences of the energy; the virial against the derivative of the energy under a deformation of box and positions; the energy unchanged by a common translation and, in a triclinic box, by moving one atom by a lattice vector (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.a2_cubic"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_cubic"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: NA2CLC 2, 3 in a cube)"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2370-2385): a rectangular box with equal edges, wigner = -2.83729748 (Vol. 2 prints -2.83792748)"
+# Theorems over R: the model equals a2Cube; A1 + A2 + A3 = wigner / L
+theory = "NewenTheory.Interactions.LatticeSum.a2Cube, wignerCube (a1_add_a2Cube_add_a3)"
+model = "NewenSpec.LatticeSum.a2CubicModel (at Float: a2CubicFloat)"
+theorem = "NewenSpec.LatticeSum.a2CubicModel_real_eq"
+# Rust = model at Float, bit for bit; agrees with the shell sum to 1e-7 for the Gaussian (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.a2_shells"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_shells"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: NA2CLC 2, 3 in a box that is not a cube)"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2387-2537): half shells of growing l_max, doubled, until |term / A2| <= TOLA2 (unbounded in gromosXX; here at most max_shells, A2_MAX_SHELLS = 300 in a run); GROMOS Vol. 2 latsum_a2_calc"
+# Theorems over R: one half shell of the model is the sum over the theory's face (gromosXX's enumeration, each triple once); A2 over the shells the model ran is a2Shells; the shells partition the cube without 0 and a shell is a face and its mirror image, so a2Shells = 4 pi / V sum over the cube without 0
+theory = "NewenTheory.Interactions.LatticeSum.a2Shells, a2Term, cube, shell, face (a2Shells_eq_cube, sum_cube_erase_zero, shell_eq_face_union_neg)"
+model = "NewenSpec.LatticeSum.a2ShellsModel, a2ShellsLoop, a2ShellModel, faceTriples (at Float: a2ShellsFloat)"
+theorem = "NewenSpec.LatticeSum.a2ShellsModel_real_eq (width != 0, no triple l != 0 sent to k = 0), a2ShellModel_real_eq, faceTriples_toFinset"
+# Rust = model at Float, bit for bit, runs that converge and runs stopped by max_shells (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.self_and_a_terms"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::self_and_a_terms"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2588, 2605), Topology::squared_sum_charges and sum_squared_charges (topology.cc:1572-1586); the virials (self_and_a_virials, nonbonded_outerloop.cc:2357-2366, 2384, 2519, 2555-2607) are in the model and the vectors, without a theorem; GROMOS Vol. 2 e_slf, e_a_def"
+# Theorems over R: the model equals selfTerm and aTerm with eps0 = 1/eps0_inv; charge_sums is (sum q, sum q^2)
+theory = "NewenTheory.Interactions.LatticeSum.selfTerm, aTerm"
+model = "NewenSpec.LatticeSum.selfATermsModel, chargeSumsModel, selfAVirialsModel (at Float: selfATermsFloat, chargeSumsFloat, selfAVirialsFloat)"
+theorem = "NewenSpec.LatticeSum.selfATermsModel_real_eq, chargeSumsModel_real_eq"
+# Rust = model at Float, bit for bit (charge_sums, self_and_a_terms, self_and_a_virials) (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.surface_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::surface_term"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate (unwrapped positions, centre a/2 + b/2 + c/2)"]
+origin = "gromosXX _ls_surface_outerloop (nonbonded_outerloop.cc:2652-2688); gromosXX adds only the diagonal of the virial and without the factor -2 of every other lattice-sum term (newen: the whole tensor, -2 Xi); GROMOS Vol. 2 e_srf, e_srf_forces"
+# Theorems over R: zero for EPSLS = 0; otherwise the theory's surface and surfaceForce with eps0 = 1/eps0_inv; force = -grad E
+theory = "NewenTheory.Interactions.LatticeSum.surface, surfaceForce, dipole (surface_force_is_minus_grad)"
+model = "NewenSpec.LatticeSum.surfaceModel, dipoleModel (at Float: surfaceFloat)"
+theorem = "NewenSpec.LatticeSum.surfaceModel_real_eq (EPSLS != 0), surfaceModel_real_zero"
+# Rust = model at Float, bit for bit; forces against central differences, the virial against the deformation derivative (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"

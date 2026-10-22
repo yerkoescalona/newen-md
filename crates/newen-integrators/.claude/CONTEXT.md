@@ -49,6 +49,15 @@ Berendsen barostat, COM removal.
   (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`)
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
+- **Ewald (NLRELE 2)** ✓ (2026-10-22): `Forcefield::lattice_sum: Option<EwaldSum>` (built by
+  newen-run); with it, `apply` replaces every reaction-field pair term by
+  `Forcefield::lattice_sum_terms` (LJ + real-space pairs into the pair storage; excluded pairs,
+  k space, self, A, surface, 1-4 into the local storage; LJ-only long-range shell cached on
+  pairlist steps of a twin-range run) and books `ls_realspace` (the storages' `e_crf`),
+  `ls_kspace`, `ls_a_term`, `ls_self`, `ls_surface`, `ls_pair`, `ls_total` with `crf_total = 0`
+  (gromosXX `energy.cc:582-588`). Every `ls_*` field is assigned every step (zero without a
+  lattice sum). Needs the atomic pairlist: non-empty solvent lists are an error. The
+  reaction-field path is untouched: the 122 RF references give byte-identical outputs.
 - **Perturbed nonbonded** ✓: soft-core LJ+CRF correction (`perturbed_pairlist_correction`), self-energy, excluded-pair, and 1-4 corrections; wired via `Forcefield`; `ch4_water_fep` reference test passes.
 - EDS ✓ (1.8): `eds::Eds`, the reference Hamiltonian after the force field (FORMS 1-3,
   reference-tested), with perturbed atoms (TI-EDS, 0.0.58) Σ p_i ∂V_i/∂λ into the derivative

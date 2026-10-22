@@ -51,6 +51,8 @@ use crate::recipe::{
     ConstraintAlgorithm, Diagnostics, RunRecipe, TermSpec, ThermostatAlgorithm, VirialKind,
 };
 use crate::{total_dof, ConstraintSelection, Prepared, RunError, RunInputs, RunOptions};
+use newen_forces::nonbonded::ewald::{EwaldSum, LatticeSumParams};
+use newen_forces::nonbonded::lattice_sum::ChargeShape;
 
 /// What the thermostat was built as — for the binary's report and the Python getters.
 #[derive(Debug, Clone, PartialEq)]
@@ -268,6 +270,28 @@ fn instantiate_forcefield(
     forcefield.parallel_nonbonded = ff.parallel;
     forcefield.atoms_per_solvent = ff.atoms_per_solvent;
     forcefield.virial_type = virial_type(ff.virial);
+    if let Some(ls) = &ff.lattice_sum {
+        let shape = ChargeShape::from_nshape(ls.nshape).ok_or_else(|| {
+            RunError::Recipe(format!(
+                "NONBONDED block: NSHAPE parameter is {}, should be: >=-1 && <=10",
+                ls.nshape
+            ))
+        })?;
+        let nk = ls.nk.map(|n| n as i64);
+        forcefield.lattice_sum = Some(EwaldSum::new(LatticeSumParams {
+            shape,
+            width: ls.ashape,
+            nk,
+            kcut: ls.kcut,
+            na2clc: ls.na2clc,
+            tola2: ls.tola2,
+            eps_ls: ls.epsls,
+            // gromosXX sets `eps0_i = four_pi_eps0_i * 4.0 * Pi` from the topology's
+            // PHYSICALCONSTANTS (`in_topology.cc:1405-1409`)
+            eps0_inv: ff.four_pi_eps_i * 4.0 * std::f64::consts::PI,
+            four_pi_eps_i: ff.four_pi_eps_i,
+        }));
+    }
 
     let mut position_restraints = 0;
     if let Some(plan) = &ff.position_restraints {
@@ -1023,6 +1047,10 @@ mod tests {
                 );
                 continue;
             }
+            if loaded.imd.nlrele == 2 {
+                println!("{name}: skipped, the legacy builder does not model the Ewald sum");
+                continue;
+            }
             let steps = loaded.imd.nstlim.min(10);
             let dt = loaded.imd.dt;
 
@@ -1226,30 +1254,54 @@ mod tests {
     }
 
     #[test]
-    fn lattice_sum_electrostatics_are_refused_for_an_unperturbed_run() {
+    fn ewald_runs_with_an_atomic_pairlist_and_p3m_is_refused() {
         let dir = refs().join("nacl_water_box");
         let loaded = load(&dir).expect("reference");
         let prepared = (loaded.prepare)();
         let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
         recipe.inputs = loaded.inputs.clone();
         assert_eq!(recipe.perturbation.enabled, 0);
-        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
-        for nlrele in [2, 3] {
-            let mut ls = recipe.clone();
-            ls.forcefield.electrostatics.electrostatics = nlrele;
-            let err = build_plan(&ls, &prepared.topology, &prepared.physical_constants)
+        let rf_plan =
+            build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        let refused = |r: &RunRecipe, message: &str| {
+            let err = build_plan(r, &prepared.topology, &prepared.physical_constants)
                 .expect_err("refused");
-            assert!(
-                err.to_string()
-                    .contains(&format!("NLRELE = {nlrele}: lattice-sum")),
-                "{err}"
-            );
-            // a plan made from the reaction-field recipe does not get past it either
-            let err = build_sequence_from_plan(&ls, plan.clone(), &prepared)
+            assert!(err.to_string().contains(message), "{err}");
+            let err = build_sequence_from_plan(r, rf_plan.clone(), &prepared)
                 .err()
                 .expect("refused");
-            assert!(err.to_string().contains("lattice-sum"), "{err}");
-        }
+            assert!(err.to_string().contains(message), "{err}");
+        };
+        // P3M is not implemented
+        let mut p3m = recipe.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        refused(&p3m, "NLRELE = 3: P3M");
+        // Ewald needs the atomic cutoff (gromosXX FeatureChecker)
+        let mut ewald = recipe.clone();
+        ewald.forcefield.electrostatics.electrostatics = 2;
+        refused(&ewald, "chargegroup based cutoff does not work with Ewald");
+        ewald.forcefield.pairlist.kind = crate::recipe::PairlistKind::Atomic;
+        refused(&ewald, "multiple energy groups does not work with Ewald");
+
+        // the Ewald reference builds; a plan made from its reaction-field variant does not run
+        // the reaction field in its place
+        let loaded = load(&refs().join("nacl_pair_box_ewald")).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut ewald, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        ewald.inputs = loaded.inputs.clone();
+        let plan = build_plan(&ewald, &prepared.topology, &prepared.physical_constants).unwrap();
+        let mut rf = ewald.clone();
+        rf.forcefield.electrostatics.electrostatics = 1;
+        let rf_plan = build_plan(&rf, &prepared.topology, &prepared.physical_constants).unwrap();
+        let err = build_sequence_from_plan(&ewald, rf_plan, &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("lattice-sum"), "{err}");
+        let err = build_sequence_from_plan(&rf, plan.clone(), &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("lattice-sum"), "{err}");
+        assert!(build_sequence_from_plan(&ewald, plan, &prepared).is_ok());
         for nlrele in [-1, 0, 1] {
             let mut rf = recipe.clone();
             rf.forcefield.electrostatics.electrostatics = nlrele;

@@ -6,6 +6,7 @@ public import Mathlib.Analysis.SpecialFunctions.ExpDeriv
 public import Mathlib.Analysis.SpecialFunctions.Sqrt
 public import Mathlib.MeasureTheory.Integral.IntervalIntegral.FundThmCalculus
 public import Mathlib.Data.Matrix.Mul
+public import Mathlib.LinearAlgebra.CrossProduct
 import Mathlib.Tactic.FieldSimp
 import Mathlib.Tactic.LinearCombination
 import Mathlib.Tactic.Ring
@@ -39,7 +40,15 @@ compact support (`eta_compact_support`), `η(0) = 1` (`eta_zero_eq_one`), that t
 truncated-polynomial shapes carry unit charge (`chargeShape_normalized`, whence `γ̂(0) = 1`),
 that the tabulated `γ̂'` is the derivative of the tabulated `γ̂` (`gammaHat_hasDerivAt`), that
 `A3` is `−η'(0)/a` (`a3Tilde_eq_neg_etaDeriv_zero`), and that the forces of the real-space,
-reciprocal-space and surface terms are minus the gradients of their energies.
+reciprocal-space and surface terms are minus the gradients of their energies. For the Ewald sum:
+the reciprocal basis is dual to the box (`latticeVector_reciprocal_dot`), so moving an atom by a
+lattice vector changes no `C(k)² + S(k)²` (`structureFactorSq_lattice_shift`); the set of wave
+vectors `kSet` is symmetric (`kSet_symmetric`) and `C² + S²` even in `k`
+(`structureFactorSq_neg`), which is the ½ of the reciprocal-space energy (`kSpace_half_space`);
+the k-space force is minus the gradient over `kSet` (`ewald_total_force_is_minus_grad`); and the
+shells of the integer lattice partition the cube, each the union of gromosXX's half shell and its
+mirror image, so `A2` summed by doubled half shells is the lattice sum (`sum_cube_erase_zero`,
+`shell_eq_face_union_neg`, `a2Shells_eq_cube`).
 
 Every energy here is in units where the charges carry no `1/(4πε₀)`; `ε0` is the permittivity
 of vacuum (gromosXX `four_pi_eps_i = 1/(4πε₀)`, `eps0_i = 1/ε₀`), and the relative permittivity
@@ -434,6 +443,85 @@ theorem realSpaceExcluded_force_is_minus_grad (q : ℝ) {a : ℝ} (s : Shape) {r
   field_simp
   ring
 
+/-! ## The wave vectors of a box -/
+
+/-- The volume of the box with edges `a, b, c`, `(a × b) · c` (positive for GROMOS's
+right-handed boxes). -/
+noncomputable def boxVolume (a b c : Vec3) : ℝ := crossProduct a b ⬝ᵥ c
+
+/-- The reciprocal basis of the box (Vol. 2 after `e_gamma_ewald`; gromosXX
+`KSpace_Utils::l_to_k_matrix`): `2π/V · (b × c, c × a, a × b)`. -/
+noncomputable def reciprocal (a b c : Vec3) : Fin 3 → Vec3 :=
+  ![(2 * π / boxVolume a b c) • crossProduct b c, (2 * π / boxVolume a b c) • crossProduct c a,
+    (2 * π / boxVolume a b c) • crossProduct a b]
+
+/-- The vector of the integer triple `l` in the basis `B`: `l₀ B₀ + l₁ B₁ + l₂ B₂`. With
+`B = reciprocal a b c` it is the wave vector of `l`; with `B = ![a, b, c]`, a lattice vector of
+the box. -/
+noncomputable def latticeVector (B : Fin 3 → Vec3) (l : Fin 3 → ℤ) : Vec3 := ∑ j, (l j : ℝ) • B j
+
+theorem latticeVector_neg (B : Fin 3 → Vec3) (l : Fin 3 → ℤ) :
+    latticeVector B (-l) = -latticeVector B l := by
+  simp [latticeVector, Finset.sum_neg_distrib]
+
+/-- **The reciprocal basis is dual to the box**: the wave vector `k` of `l` has `k · a = 2π l₀`,
+`k · b = 2π l₁`, `k · c = 2π l₂`. So `exp(i k · r)` has the period of the box, and an atom moved
+by a lattice vector leaves the reciprocal-space sum unchanged
+(`structureFactorSq_lattice_shift`). -/
+theorem latticeVector_reciprocal_dot {a b c : Vec3} (hV : boxVolume a b c ≠ 0)
+    (l : Fin 3 → ℤ) :
+    latticeVector (reciprocal a b c) l ⬝ᵥ a = 2 * π * l 0 ∧
+      latticeVector (reciprocal a b c) l ⬝ᵥ b = 2 * π * l 1 ∧
+      latticeVector (reciprocal a b c) l ⬝ᵥ c = 2 * π * l 2 := by
+  set V := boxVolume a b c with hVdef
+  have hk : ∀ w : Vec3, latticeVector (reciprocal a b c) l ⬝ᵥ w =
+      (l 0 : ℝ) * (2 * π / V) * (crossProduct b c ⬝ᵥ w) +
+        (l 1 : ℝ) * (2 * π / V) * (crossProduct c a ⬝ᵥ w) +
+        (l 2 : ℝ) * (2 * π / V) * (crossProduct a b ⬝ᵥ w) := by
+    intro w
+    simp only [latticeVector, reciprocal, Fin.sum_univ_three, add_dotProduct, smul_dotProduct,
+      smul_eq_mul, Matrix.cons_val_zero, Matrix.cons_val_one, Matrix.cons_val_two,
+      Matrix.head_cons, Matrix.tail_cons, ← hVdef]
+    ring
+  have triple : ∀ u v w : Vec3, crossProduct u v ⬝ᵥ w =
+      (u 1 * v 2 - u 2 * v 1) * w 0 + (u 2 * v 0 - u 0 * v 2) * w 1 +
+        (u 0 * v 1 - u 1 * v 0) * w 2 := fun u v w => by
+    simp [cross_apply, dotProduct, Fin.sum_univ_three]
+  have hVe : V = crossProduct a b ⬝ᵥ c := rfl
+  refine ⟨?_, ?_, ?_⟩ <;> rw [hk] <;> simp only [triple] at hVe ⊢ <;> field_simp <;>
+    rw [hVe] <;> ring
+
+/-- The integer triples of the Ewald sum, `|l_j| ≤ NK_j` (NONBONDED NKX, NKY, NKZ). -/
+def lBox (nk : Fin 3 → ℕ) : Finset (Fin 3 → ℤ) :=
+  Fintype.piFinset fun j => Finset.Icc (-(nk j : ℤ)) (nk j)
+
+theorem mem_lBox {nk : Fin 3 → ℕ} {l : Fin 3 → ℤ} :
+    l ∈ lBox nk ↔ ∀ j, -(nk j : ℤ) ≤ l j ∧ l j ≤ nk j := by
+  simp [lBox, Fintype.mem_piFinset]
+
+theorem neg_mem_lBox {nk : Fin 3 → ℕ} {l : Fin 3 → ℤ} : -l ∈ lBox nk ↔ l ∈ lBox nk := by
+  simp only [mem_lBox, Pi.neg_apply]
+  exact forall_congr' fun j => by omega
+
+open Classical in
+/-- The wave vectors of the Ewald sum (gromosXX `configuration::calculate_k_space`,
+`kspace.cc:48-126`): `k = latticeVector B l` for `l` in `lBox nk` with `k ≠ 0` and `|k|² ≤ KCUT`.
+gromosXX compares `|k|²`, not `|k|`, with KCUT; Vol. 2 cuts at `|k| ≤ k_c`. -/
+noncomputable def kSet (nk : Fin 3 → ℕ) (kcut : ℝ) (B : Fin 3 → Vec3) : Finset Vec3 :=
+  ((lBox nk).filter fun l => latticeVector B l ⬝ᵥ latticeVector B l ≤ kcut ∧
+    latticeVector B l ⬝ᵥ latticeVector B l ≠ 0).image (latticeVector B)
+
+/-- **The set of wave vectors is symmetric**: `k` is in it exactly when `−k` is. -/
+theorem kSet_symmetric (nk : Fin 3 → ℕ) (kcut : ℝ) (B : Fin 3 → Vec3) (k : Vec3) :
+    k ∈ kSet nk kcut B ↔ -k ∈ kSet nk kcut B := by
+  have one : ∀ k, k ∈ kSet nk kcut B → -k ∈ kSet nk kcut B := by
+    intro k hk
+    simp only [kSet, Finset.mem_image, Finset.mem_filter] at hk ⊢
+    obtain ⟨l, ⟨hl, hc, h0⟩, rfl⟩ := hk
+    exact ⟨-l, ⟨neg_mem_lBox.mpr hl, by simpa [latticeVector_neg] using hc,
+      by simpa [latticeVector_neg] using h0⟩, latticeVector_neg B l⟩
+  exact ⟨one k, fun h => by simpa using one (-k) h⟩
+
 section Reciprocal
 
 variable {ι : Type*} [Fintype ι] [DecidableEq ι]
@@ -557,6 +645,91 @@ theorem kSpace_translation_invariant (q : ι → ℝ) (x : ι → Vec3) (k d : V
   simp only [structureFactorSq, hc, hs]
   linear_combination (cosSum q x k ^ 2 + sinSum q x k ^ 2) * sin_sq_add_cos_sq (k ⬝ᵥ d)
 
+omit [DecidableEq ι] in
+theorem cosSum_neg (q : ι → ℝ) (x : ι → Vec3) (k : Vec3) : cosSum q x (-k) = cosSum q x k := by
+  simp [cosSum, neg_dotProduct, Real.cos_neg]
+
+omit [DecidableEq ι] in
+theorem sinSum_neg (q : ι → ℝ) (x : ι → Vec3) (k : Vec3) : sinSum q x (-k) = -sinSum q x k := by
+  simp [sinSum, neg_dotProduct, Real.sin_neg, Finset.sum_neg_distrib]
+
+omit [DecidableEq ι] in
+/-- **`C(k)² + S(k)²` is even in `k`**: `C(−k) = C(k)`, `S(−k) = −S(k)`. -/
+theorem structureFactorSq_neg (q : ι → ℝ) (x : ι → Vec3) (k : Vec3) :
+    structureFactorSq q x (-k) = structureFactorSq q x k := by
+  simp [structureFactorSq, cosSum_neg, sinSum_neg]
+
+open Pointwise in
+/-- A sum over a set and its mirror image of an even function is twice the sum over the set. -/
+theorem sum_union_neg_eq_two_mul {β : Type*} [AddCommGroup β] [DecidableEq β] {H : Finset β}
+    (hd : Disjoint H (-H)) (f : β → ℝ) (hf : ∀ x, f (-x) = f x) :
+    ∑ x ∈ H ∪ -H, f x = 2 * ∑ x ∈ H, f x := by
+  rw [Finset.sum_union hd, ← Finset.image_neg_eq_neg,
+    Finset.sum_image (fun x _ y _ h => neg_injective h)]
+  simp only [hf]
+  ring
+
+omit [DecidableEq ι] in
+open Pointwise in
+/-- **The ½ of `kSpace`**: over a half `H` of the wave vectors and its mirror image `−H`, the
+reciprocal-space energy is `(ε₀V)⁻¹ Σ_{k ∈ H}`, the half-space sum without the ½. -/
+theorem kSpace_half_space (ε0 V a : ℝ) (s : Shape) {H : Finset Vec3} (hd : Disjoint H (-H))
+    (q : ι → ℝ) (x : ι → Vec3) :
+    kSpace ε0 V a s (H ∪ -H) q x =
+      (ε0 * V)⁻¹ * ∑ k ∈ H, gammaHat s (a * √(k ⬝ᵥ k)) / (k ⬝ᵥ k) * structureFactorSq q x k := by
+  rw [kSpace, sum_union_neg_eq_two_mul hd]
+  · ring
+  · intro k
+    simp [structureFactorSq_neg, neg_dotProduct, dotProduct_neg]
+
+/-- **Force = −∇E for the Ewald sum**: over the wave vectors of `kSet`, moving atom `i` along `e`
+changes the reciprocal-space energy at the rate `−F_i · e`, `F_i` the sum of the per-wave-vector
+forces (`kSpace_force_is_minus_grad`, `structureFactorSq_hasDerivAt`). -/
+theorem ewald_total_force_is_minus_grad (ε0 V a : ℝ) (s : Shape) (nk : Fin 3 → ℕ) (kcut : ℝ)
+    (B : Fin 3 → Vec3) (q : ι → ℝ) (x : ι → Vec3) (i : ι) (e : Vec3) :
+    HasDerivAt (fun t => kSpace ε0 V a s (kSet nk kcut B) q (displace x i e t))
+      (-(kSpaceForce ε0 V a s (kSet nk kcut B) q x i ⬝ᵥ e)) 0 :=
+  kSpace_force_is_minus_grad ε0 V a s _ q x i e
+
+/-- **Periodicity**: moving one atom by a lattice vector `n₀ a + n₁ b + n₂ c` of the box leaves
+`C(k)² + S(k)²` unchanged at every wave vector `k` of the reciprocal lattice
+(`latticeVector_reciprocal_dot`). gromosXX's wave vectors in a triclinic box are not of this
+form (it multiplies `l` by the transpose of the reciprocal basis, `kspace.cc:88`). -/
+theorem structureFactorSq_lattice_shift {a b c : Vec3} (hV : boxVolume a b c ≠ 0)
+    (l n : Fin 3 → ℤ) (q : ι → ℝ) (x : ι → Vec3) (i : ι) :
+    structureFactorSq q (Function.update x i (x i + latticeVector ![a, b, c] n))
+        (latticeVector (reciprocal a b c) l) =
+      structureFactorSq q x (latticeVector (reciprocal a b c) l) := by
+  set k := latticeVector (reciprocal a b c) l
+  obtain ⟨ha, hb, hc⟩ := latticeVector_reciprocal_dot hV l
+  have hshift : k ⬝ᵥ latticeVector ![a, b, c] n =
+      ((l 0 * n 0 + l 1 * n 1 + l 2 * n 2 : ℤ) : ℝ) * (2 * π) := by
+    simp only [latticeVector, Fin.sum_univ_three, Matrix.cons_val_zero, Matrix.cons_val_one,
+      Matrix.cons_val_two, Matrix.head_cons, Matrix.tail_cons, dotProduct_add, dotProduct_smul,
+      smul_eq_mul]
+    rw [ha, hb, hc]
+    push_cast
+    ring
+  have hterm : ∀ j, k ⬝ᵥ Function.update x i (x i + latticeVector ![a, b, c] n) j =
+      k ⬝ᵥ x j ∨ k ⬝ᵥ Function.update x i (x i + latticeVector ![a, b, c] n) j =
+        k ⬝ᵥ x j + ((l 0 * n 0 + l 1 * n 1 + l 2 * n 2 : ℤ) : ℝ) * (2 * π) := by
+    intro j
+    by_cases hj : j = i
+    · subst hj
+      right
+      simp [dotProduct_add, hshift]
+    · left
+      simp [Function.update_of_ne hj]
+  have hc' : cosSum q (Function.update x i (x i + latticeVector ![a, b, c] n)) k = cosSum q x k := by
+    refine Finset.sum_congr rfl fun j _ => ?_
+    rcases hterm j with h | h <;> rw [h]
+    rw [Real.cos_add_int_mul_two_pi]
+  have hs' : sinSum q (Function.update x i (x i + latticeVector ![a, b, c] n)) k = sinSum q x k := by
+    refine Finset.sum_congr rfl fun j _ => ?_
+    rcases hterm j with h | h <;> rw [h]
+    rw [Real.sin_add_int_mul_two_pi]
+  simp only [structureFactorSq, hc', hs']
+
 /-! ## Constant terms -/
 
 /-- The box dipole `M = Σ_i q_i (r_i − r_c)`, `r_c` the centre of the box (Vol. 2,
@@ -655,6 +828,118 @@ theorem a3Tilde_eq_neg_etaDeriv_zero (s : Shape) : a3Tilde s = -etaDeriv s 0 := 
 in a cube of edge `L` (gromosXX `nonbonded_outerloop.cc:2379`). Vol. 2 prints `−2.83792748`
 (after `e_slf`), a transposition of two digits. -/
 noncomputable def wignerCube : ℝ := -2.83729748
+
+/-! ## `A2` by shells of the integer lattice -/
+
+/-- The integer triples with `|l_j| ≤ n`. -/
+def cube (n : ℕ) : Finset (Fin 3 → ℤ) := lBox fun _ => n
+
+/-- Shell `n ≥ 1` of the integer lattice: `max_j |l_j| = n`. -/
+def shell (n : ℕ) : Finset (Fin 3 → ℤ) := cube n \ cube (n - 1)
+
+/-- gromosXX's half of shell `n` (`nonbonded_outerloop.cc:2405-2459`): the face `l₀ = n`, the
+face `l₁ = n` without the edges on `l₀ = ±n`, the face `l₂ = n` without those on `l₀ = ±n` or
+`l₁ = ±n`. -/
+def face (n : ℕ) : Finset (Fin 3 → ℤ) :=
+  (cube n).filter fun l => l 0 = n ∨ (l 1 = n ∧ -(n : ℤ) < l 0 ∧ l 0 < n) ∨
+    (l 2 = n ∧ -(n : ℤ) < l 0 ∧ l 0 < n ∧ -(n : ℤ) < l 1 ∧ l 1 < n)
+
+theorem mem_cube {n : ℕ} {l : Fin 3 → ℤ} : l ∈ cube n ↔ ∀ j, -(n : ℤ) ≤ l j ∧ l j ≤ n :=
+  mem_lBox
+
+theorem cube_mono {m n : ℕ} (h : m ≤ n) : cube m ⊆ cube n := fun l hl => by
+  rw [mem_cube] at hl ⊢
+  exact fun j => ⟨by have := (hl j).1; omega, by have := (hl j).2; omega⟩
+
+/-- **The shells partition the lattice**: a sum over the cube `|l_j| ≤ N` without `l = 0` is the
+sum over shells `1 … N`. -/
+theorem sum_cube_erase_zero (f : (Fin 3 → ℤ) → ℝ) (N : ℕ) :
+    ∑ l ∈ (cube N).erase 0, f l = ∑ n ∈ Finset.Icc 1 N, ∑ l ∈ shell n, f l := by
+  induction N with
+  | zero =>
+    have : (cube 0).erase 0 = ∅ := by
+      ext l
+      simp only [Finset.mem_erase, mem_cube, Finset.notMem_empty, iff_false, not_and]
+      intro hne h
+      apply hne
+      funext j
+      have := h j
+      simp only [Pi.zero_apply]
+      omega
+    simp [this]
+  | succ N ih =>
+    have hsub : (cube N).erase 0 ⊆ (cube (N + 1)).erase 0 :=
+      Finset.erase_subset_erase 0 (cube_mono (Nat.le_succ N))
+    have h0 : (0 : Fin 3 → ℤ) ∈ cube N := by
+      rw [mem_cube]
+      intro j
+      simp
+    have hdiff : (cube (N + 1)).erase 0 \ (cube N).erase 0 = shell (N + 1) := by
+      ext l
+      simp only [Finset.mem_sdiff, Finset.mem_erase, shell, Nat.add_sub_cancel]
+      constructor
+      · rintro ⟨⟨hne, h1⟩, h2⟩
+        exact ⟨h1, fun h => h2 ⟨hne, h⟩⟩
+      · rintro ⟨h1, h2⟩
+        refine ⟨⟨?_, h1⟩, fun h => h2 h.2⟩
+        rintro rfl
+        exact h2 h0
+    rw [← Finset.sum_sdiff hsub, hdiff, ih, Finset.sum_Icc_succ_top (by omega), add_comm]
+
+open Pointwise in
+/-- **A shell is gromosXX's half shell and its mirror image**, which do not overlap. -/
+theorem shell_eq_face_union_neg {n : ℕ} (hn : 1 ≤ n) :
+    shell n = face n ∪ -face n ∧ Disjoint (face n) (-face n) := by
+  have hmemneg : ∀ l, l ∈ -face n ↔ -l ∈ face n := fun l => by
+    rw [Finset.mem_neg]
+    constructor
+    · rintro ⟨m, hm, rfl⟩
+      simpa using hm
+    · intro h
+      exact ⟨-l, h, neg_neg l⟩
+  have three : ∀ (P : Fin 3 → Prop), (∀ j, P j) ↔ P 0 ∧ P 1 ∧ P 2 := fun P =>
+    ⟨fun h => ⟨h 0, h 1, h 2⟩, fun ⟨h0, h1, h2⟩ j => by fin_cases j <;> assumption⟩
+  refine ⟨?_, ?_⟩
+  · ext l
+    rw [Finset.mem_union, hmemneg]
+    simp only [shell, face, Finset.mem_sdiff, Finset.mem_filter, mem_cube, three, Pi.neg_apply,
+      Nat.cast_sub hn, Nat.cast_one]
+    omega
+  · rw [Finset.disjoint_left]
+    intro l h1 h2
+    rw [hmemneg] at h2
+    simp only [face, Finset.mem_filter, mem_cube, three, Pi.neg_apply] at h1 h2
+    omega
+
+/-- The term of `l` in `A2`: `γ̂(a|k|)/k²`, `k = latticeVector B l`. -/
+noncomputable def a2Term (s : Shape) (a : ℝ) (B : Fin 3 → Vec3) (l : Fin 3 → ℤ) : ℝ :=
+  gammaHat s (a * √(latticeVector B l ⬝ᵥ latticeVector B l)) /
+    (latticeVector B l ⬝ᵥ latticeVector B l)
+
+/-- `A2` over the shells `1 … N` as gromosXX sums it (`nonbonded_outerloop.cc:2387-2522`): twice
+the half shell, `4π/V` at the end (Vol. 2, `latsum_a2_calc`). -/
+noncomputable def a2Shells (s : Shape) (a : ℝ) (B : Fin 3 → Vec3) (V : ℝ) (N : ℕ) : ℝ :=
+  4 * π / V * ∑ n ∈ Finset.Icc 1 N, 2 * ∑ l ∈ face n, a2Term s a B l
+
+/-- **gromosXX's shells are the lattice sum**: `A2` over `N` shells is `4π/V Σ γ̂/k²` over every
+`l ≠ 0` with `|l_j| ≤ N`. -/
+theorem a2Shells_eq_cube (s : Shape) (a : ℝ) (B : Fin 3 → Vec3) (V : ℝ) (N : ℕ) :
+    a2Shells s a B V N = 4 * π / V * ∑ l ∈ (cube N).erase 0, a2Term s a B l := by
+  rw [a2Shells, sum_cube_erase_zero]
+  congr 1
+  refine Finset.sum_congr rfl fun n hn => ?_
+  obtain ⟨hshell, hd⟩ := shell_eq_face_union_neg (Finset.mem_Icc.mp hn).1
+  rw [hshell, sum_union_neg_eq_two_mul hd]
+  intro l
+  simp [a2Term, latticeVector_neg]
+
+/-- `A2` in a cube of edge `L` from the Wigner constant (gromosXX
+`nonbonded_outerloop.cc:2376-2385`): `A1 + A2 + A3 = ξ_EW / L`. -/
+noncomputable def a2Cube (W L A1 A3 : ℝ) : ℝ := W / L - A1 - A3
+
+theorem a1_add_a2Cube_add_a3 (W L A1 A3 : ℝ) : A1 + a2Cube W L A1 A3 + A3 = W / L := by
+  simp only [a2Cube]
+  ring
 
 end NewenTheory.Interactions.LatticeSum
 

@@ -106,11 +106,11 @@ kernel against the model on many random inputs (differential random testing).
 
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
-| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, soft-core and perturbed terms, lattice-sum charge shapes and pair terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
+| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, soft-core and perturbed terms, lattice-sum charge shapes and pair terms, the Ewald sum, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (eighteen functions: the pilot below, the run schedule, the degrees of freedom and bath mapping, the topology bookkeeping) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, the soft-core and perturbed free-energy terms, and the lattice-sum kernels Ewald and P3M share (below; not yet called by a run) |
+| Status | working (eighteen functions: the pilot below, the run schedule, the degrees of freedom and bath mapping, the topology bookkeeping) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, the soft-core and perturbed free-energy terms, the lattice-sum kernels Ewald and P3M share and the direct Ewald sum (below; NLRELE = 2 runs) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -1017,9 +1017,9 @@ cargo test -p newen-forces --test perturbed_bonded_spec    # perturbed bonded ke
 ### Lattice-sum electrostatics, phase 1
 
 GROMOS has two lattice-sum methods for the electrostatics of a periodic box, Ewald (NONBONDED
-NLRELE = 2) and P3M (NLRELE = 3). newen refuses both for now. Before either is wired into a run,
-the pieces they share get the same three layers as the kernels above: the charge-shaping
-functions, the real-space pair terms and the self-term constants. Nothing calls them yet.
+NLRELE = 2) and P3M (NLRELE = 3). Before either was wired into a run (phase 2 wires Ewald; P3M is
+still refused), the pieces they share got the same three layers as the kernels above: the
+charge-shaping functions, the real-space pair terms and the self-term constants.
 
 **The kernels.** `crates/newen-forces/src/nonbonded/lattice_sum.rs`, ported from gromosXX in its
 operation order: `shape_switch` (the switch function `η(ξ)`, `ξ = r/a`, and `η'(ξ)` of the twelve
@@ -1092,6 +1092,123 @@ divide by `κ^(N+3)`: `κ = 0` gives NaN, which is harmless because the `k = 0` 
 
 ```sh
 cargo test -p newen-forces --test lattice_sum_spec    # Rust = Float model, bit for bit; η', γ̂', forces by FD; γ̂, A1, A3 by quadrature
+```
+
+### Lattice-sum electrostatics, phase 2: the direct Ewald sum
+
+An NLRELE = 2 run now computes the Ewald sum instead of being refused. The pieces follow
+gromosXX's `Nonbonded_Set::calculate_interactions` (`nonbonded_set.cc:121-260`) for
+`lj_ls_func`: LJ plus the real-space term `q η(r/a)/r` for the short-range pairlist
+(`lj_ls_pair`), the real-space term `q (η(r/a) − 1)/r` for every excluded pair, solute exclusions
+and pairs inside a solvent molecule alike (`ls_excluded_pair`), LJ with CS6/CS12 plus the
+real-space term with the full charge product for the 1-4 pairs, LJ alone for the long-range shell
+of a twin-range run (recomputed on pairlist steps), then the reciprocal-space sum, the self and A
+terms and the surface term. No reaction-field term is left: the excluded and self terms of the
+reaction field are off, as gromosXX turns them off for NLRELE 2 and 3 (`in_parameter.cc:4654-4667`).
+`crates/newen-forces/src/nonbonded/ls_real_space.rs` holds the real-space loops,
+`ewald.rs::EwaldSum` the rest; the force field (`Forcefield::lattice_sum_terms`) calls both and
+books the energies as gromosXX does (`energy.cc:582-588`): `ls_pair = real + k space + A`,
+`ls_total = ls_pair + self + surface`, the seven of them in `ENERGY03` rows 13–19, all of them in
+`nonbonded_total`, and `crf_total = 0`. The wave vectors, `A1`, `A2`, `A3` are rebuilt whenever
+the box changes; gromosXX rebuilds them at step 0 and every step under pressure scaling and
+reuses the step-0 self and A terms in an NVT run (`nonbonded_set.cc:168-171, 207-210`,
+`energy.cc:576-580`), which gives the same numbers.
+
+**The kernels.** `lattice_sum.rs`: `reciprocal_box` (the volume and `2π/V · (b × c, c × a,
+a × b)`, `math::volume`, `KSpace_Utils::l_to_k_matrix`), `a2_cubic` (`A2 = ξ_EW/L − A1 − A3` in a
+cube), `a2_shells` (`A2` over half shells of growing `l_max`, doubled, until the shell changes the
+sum by at most TOLA2 relative, `nonbonded_outerloop.cc:2387-2537`; gromosXX loops without bound,
+newen stops after 300 shells and refuses the run), `charge_sums`, `self_and_a_terms`
+(`ls_self = (A1 + A2 + A3) S̃²/(8πε₀)`, `ls_a = (A1 S² − (A1 + Ã2) S̃²)/(8πε₀)`),
+`self_and_a_virials`, `surface_term` (the box dipole `M = Σ q (r − c)` with unwrapped positions,
+`E = |M|²/(2(2ε_LS + 1)ε₀V)`). `ewald.rs`: `k_vectors` (every `l` with `|l_j| ≤ NK_j`, `k ≠ 0`,
+`|k|² ≤ KCUT`, with `γ̂(a|k|)/k²` and `a|k|γ̂'` cached, `kspace.cc:48-126`) and `ewald_kspace`
+(per wave vector `C(k)`, `S(k)`, the forces, the energy, `Ã2` and the virial, in gromosXX's loop
+order, `nonbonded_outerloop.cc:1946-2059`, positions put into the box first). `1/ε₀` is the
+topology's `FPEPSI · 4 · π`, as gromosXX sets it when it reads `PHYSICALCONSTANTS`
+(`in_topology.cc:1405-1409`); the literal `eps0_i = 1745.9137` of phase 1 holds only without
+that block.
+
+**The meaning.** `NewenTheory/Interactions/LatticeSum.lean` adds the wave vectors of a box:
+`reciprocal`, `latticeVector` and `kSet` (the theory's version of `k_vectors`). Proved: the
+reciprocal basis is dual to the box, `k · a = 2π l_x`, `k · b = 2π l_y`, `k · c = 2π l_z`
+(`latticeVector_reciprocal_dot`), so moving one atom by a lattice vector leaves every
+`C(k)² + S(k)²` unchanged (`structureFactorSq_lattice_shift`); `kSet` is symmetric under
+`k → −k` (`kSet_symmetric`) and `C² + S²` is even in `k` (`structureFactorSq_neg`), which is where
+the ½ of the reciprocal-space energy comes from (`kSpace_half_space`: over a half `H` and its
+mirror image the energy is `(ε₀V)⁻¹ Σ_{k∈H}`); the k-space force is minus the gradient of the
+energy over `kSet` (`ewald_total_force_is_minus_grad`, phase 1's per-wave-vector theorem summed);
+and the shells of the integer lattice partition the cube `|l_j| ≤ N` without `0`
+(`sum_cube_erase_zero`), each shell being gromosXX's half shell and its mirror image, disjoint
+(`shell_eq_face_union_neg`), so `A2` summed by doubled half shells is the lattice sum
+`4π/V Σ_{l≠0} γ̂/k²` over the cube (`a2Shells_eq_cube`).
+
+**One model.** `NewenSpec/LatticeSum.lean`, section 4, writes the seven kernels over any number
+type; loops are folds from the left in the Rust order, `A2`'s shell loop is bounded by
+`max_shells` as the Rust is. At ℝ: `reciprocalBoxModel_real_eq` (and the rectangular volume
+`|a||b||c|` is `(a × b) · c` for a diagonal box); `kVectorsModel_real_toFinset`, the model's wave
+vectors are exactly `kSet`, and `kVectorsModel_real_wf`, every cached quantity is the theory's
+(`a ≠ 0`); `ewaldKspaceModel_real_eq_kSpace`, `ewaldKspaceModel_real_forces`,
+`ewaldKspaceModel_real_a2Tilde`, the energy, forces and `Ã2` are the theory's with `ε₀ = 1/eps0_inv`
+(over a list without repeated `k`); `a2ShellsModel_real_eq`, the model's `A2` is `a2Shells` over the
+shells it summed (`faceTriples_toFinset`: gromosXX's enumeration of a half shell is the theory's
+`face`, each triple once; needs `a ≠ 0` and a basis that sends no `l ≠ 0` to `k = 0`);
+`selfATermsModel_real_eq`, `chargeSumsModel_real_eq`, `surfaceModel_real_eq` (zero for EPSLS = 0,
+the conducting boundary), `a2CubicModel_real_eq`. The virials have a model and vectors but no
+ℝ theorem: the theory has no virial yet.
+
+**The tests.** `spec/vectors/ewald.json` (1.3 MB): 120 reciprocal bases, 24 sets of wave vectors
+(about 2 500 vectors), 160 k-space sums over 2–12 atoms, neutral or charged, in cubic, rectangular
+and triclinic boxes, NK up to 3, KCUT that cuts and that does not, the twelve shapes, widths
+0.4–1.4, `1/ε₀` as gromosXX's literal and as `4π · 138.9354`; 200 cubic and 48 shell `A2` rows
+(converged, and stopped by `max_shells`), 100 charge sums, 300 self/A-term rows, 200 virial rows,
+160 surface-term rows with EPSLS 0, 1, 61 and 78.5. `crates/newen-forces/tests/ewald_spec.rs`
+requires the same 64 bits on every row in debug, release and `target-cpu=generic` builds, and
+checks without Lean: the k-space and surface forces against central differences of their
+energies, their virials against the derivative of the energy under a deformation of box and
+positions (`Ξ = ½ ∂E/∂ε`, off-diagonal elements included), the k-space energy under a common
+translation and, in a triclinic box, under moving one atom by a lattice vector (both within
+`10⁻¹⁰`), `k · a = 2π l_x` in a triclinic box, and the cubic `A2` against the shell sum.
+
+Three gromosXX references run the Ewald sum: `nacl_pair_box_ewald`, `water_216_box_ewald` and
+`water_216_box_ewald_epsls` (the existing inputs with NLRELE 2, the atomic cutoff, the Gaussian
+of width 0.4 nm, NA2CLC 2, TOLA2 10⁻¹⁰, NK 10, KCUT 900 nm⁻², EPSLS 0 and 61, 10 steps; the
+expected output from the released binary with `@develop`, since gromosXX marks Ewald as under
+development). Every value of every `ENERGY03` block agrees to the ten printed digits, rows 13–19
+and the totals included, and the forces to the last printed digit (`10⁻⁹`). The 122
+reaction-field references give byte-identical output files before and after the change.
+
+What newen does differently from gromosXX, each reported as found:
+
+- **Triclinic wave vectors.** gromosXX builds `k` as `math::product(l_to_k, l)`, which for a
+  `Matrix` multiplies with the transpose (`gmath.h:925-932`: `k_x = m(0,0) l_x + m(1,0) l_y +
+  m(2,0) l_z`) of a matrix built column-wise from `b × c`, `c × a`, `a × b` (`kspace.cc:128-135`):
+  `k_x = (b × c)·l` instead of `l_x (b × c)_x + l_y (c × a)_x + l_z (a × b)_x`, and the same in the
+  `A2` shells (`nonbonded_outerloop.cc:2449`). In a rectangular box the reciprocal matrix is
+  diagonal and both are the same; in a triclinic box gromosXX's vectors are not reciprocal-lattice
+  vectors (`k · a / 2π = −0.47` for `l = (0, 1, 0)` in a 2.0/2.2/2.4 nm box with angles 75°, 80°,
+  65°), so its k-space energy changes when an atom crosses the box (127.3 → 237.7 kJ/mol for a
+  Na⁺Cl⁻ pair moved by a lattice vector). newen takes `l_x b₁ + l_y b₂ + l_z b₃`
+  (`lattice_vector`, `latticeVector_reciprocal_dot`).
+- **The surface virial.** gromosXX adds `½ p M_i² − ¼ p |M|²` to the diagonal of its virial
+  storage as it is (`nonbonded_outerloop.cc:2676-2685`), where every other lattice-sum term adds
+  `−2 Ξ` ("multiply by −2 because of multiplication with −0.5 in pressure calculation"): the
+  surface virial enters the pressure with the wrong sign and half its size, and without its
+  off-diagonal elements. newen stores `−2 Ξ` with `Ξ_ab = ½ p M_a M_b − ¼ p |M|² δ_ab`, which the
+  deformation test confirms. In `water_216_box_ewald` under Berendsen pressure scaling (10 steps,
+  not a registered reference) newen and gromosXX agree to the printed digits with EPSLS 0 and
+  differ by up to 10⁻⁴ relative with EPSLS 61; storing gromosXX's surface virial instead makes
+  the EPSLS 61 run agree to the printed digits too.
+- **The self and A virials in NVT with a virial.** gromosXX evaluates them only on the steps it
+  computes the self terms (step 0 and energy-output steps), so on the other steps the virial lacks
+  them; newen adds them every step.
+- **KCUT** is compared with `|k|²` in both (`kspace.cc:72, 90`, where the variable is called
+  `k_cut2` and commented "k cutoff squared for faster comparison"); Vol. 2 cuts at `|k| ≤ k_c`.
+  newen follows the code; the references choose KCUT accordingly.
+
+```sh
+cargo test -p newen-forces --test ewald_spec                       # Rust = Float model, bit for bit; forces, virials by FD
+cargo test -p newen-md --test test_gromosXX_references ewald       # the three Ewald references
 ```
 
 ## Where each mistake is caught
@@ -1427,9 +1544,10 @@ Planned, in the order chosen:
   Lean theory of the GROMOS lattice sum and the kernels both methods share (charge shapes, their
   Fourier coefficients, the real-space pair and excluded-pair terms, the self constants), with
   their models and bit-exact tests (see
-  [Lattice-sum electrostatics, phase 1](#lattice-sum-electrostatics-phase-1)). Phase 2: the direct
-  Ewald sum over wave vectors (`C(k)`, `S(k)`, the reciprocal-space energy and forces, `A2`), wired
-  in for NLRELE = 2 and checked against gromosXX references. Phase 3: P3M (NLRELE = 3), charge
+  [Lattice-sum electrostatics, phase 1](#lattice-sum-electrostatics-phase-1)). Phase 2, done: the
+  direct Ewald sum over wave vectors, wired in for NLRELE = 2, with its Lean theory, model and
+  bit-exact tests and three gromosXX references (see
+  [phase 2](#lattice-sum-electrostatics-phase-2-the-direct-ewald-sum)). Phase 3: P3M (NLRELE = 3), charge
   assignment to a grid, the optimal influence function and the FFT with `rustfft`. Phase 4: the
   refusals that remain (the combinations gromosXX itself refuses, and those newen does not
   support), and the removal of the unwired smooth-PME code in `crates/newen-forces`

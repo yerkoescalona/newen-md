@@ -44,18 +44,31 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   2026-10-22 `perturbed_lj_crf_pair` has no distance guard and takes `C12/C6` for any `C6 ≠ 0`,
   as gromosXX and the ext kernel (overlapping soft-core atoms are finite; a state with `C6 = 0`
   has no soft-core length there and diverges at `r = 0`, as in gromosXX).
-- **Lattice-sum kernels verified, not wired (2026-10-22):** `nonbonded/lattice_sum.rs` holds the
+- **Lattice-sum kernels verified (2026-10-22):** `nonbonded/lattice_sum.rs` holds the
   pieces Ewald (NLRELE 2) and P3M (NLRELE 3) share, ported from gromosXX in its operation order:
   `ChargeShape` (NSHAPE −1 Gaussian, 0..=10 truncated polynomials), `shape_switch` (`η`, `η'`),
   `shape_fourier` (`γ̂`, `γ̂'`), `lj_ls_pair` (LJ + real-space pair, gromosXX's LJ force form),
-  `ls_excluded_pair`, `self_constants` (`A1`, `A3`), with `/// spec:` keys. C `erfc` is declared
-  `extern "C"` there (Rust's std has none). Lean model `spec/NewenSpec/LatticeSum.lean`, theory
-  `spec/NewenTheory/Interactions/LatticeSum.lean`; `tests/lattice_sum_spec.rs` compares them bit
-  for bit on `spec/vectors/lattice_sum.json`, checks `η'`, `γ̂'` and the pair forces by finite
-  differences and `γ̂`, `A1`, `A3` against Vol. 2's shape table by quadrature. No run calls them:
-  NLRELE 2/3 are refused in `newen-run`. `newen_core::units::EPS0_INV` is gromosXX's literal
-  `eps0_i = 1745.9137` for the reciprocal-space terms (`units::eps0_i`, `4π · 138.9354`, is a
-  different double). Keep the operation order.
+  `ls_excluded_pair`, `self_constants` (`A1`, `A3`), `reciprocal_box`, `lattice_vector`,
+  `a2_cubic`, `a2_shells` (bounded by `max_shells`), `charge_sums`, `self_and_a_terms`,
+  `self_and_a_virials`, `surface_term`, with `/// spec:` keys. C `erfc` is declared `extern "C"`
+  there (Rust's std has none). Lean model `spec/NewenSpec/LatticeSum.lean`, theory
+  `spec/NewenTheory/Interactions/LatticeSum.lean`; `tests/lattice_sum_spec.rs` compares the phase-1
+  kernels bit for bit on `spec/vectors/lattice_sum.json`, checks `η'`, `γ̂'` and the pair forces by
+  finite differences and `γ̂`, `A1`, `A3` against Vol. 2's shape table by quadrature. Keep the
+  operation order.
+- **Direct Ewald sum (NLRELE 2), wired (2026-10-22):** `nonbonded/ewald.rs`: `k_vectors` (`|l_j| ≤
+  NK_j`, `k ≠ 0`, `|k|² ≤ KCUT` as gromosXX compares), `ewald_kspace` (energy, forces, `Ã2`,
+  virial `Ξ`), and `EwaldSum` (the per-run state: rebuilds the wave vectors and `A1`, `A2`, `A3`
+  when the box changes, then adds the k-space, self, A and surface terms to a `ForceStorage`, the
+  virial as `−2 Ξ`). `nonbonded/ls_real_space.rs`: the real-space loops (pairlist pairs, excluded
+  pairs, 1-4 pairs, LJ-only long-range shell), energies to the storage's `e_crf`. `ewald_spec.rs`
+  compares the kernels with the Lean model bit for bit on `spec/vectors/ewald.json` and checks
+  the forces and virials by finite differences, translation invariance, and the triclinic
+  periodicity. Differences from gromosXX (see `docs/src/verification/index.md`, phase 2): the
+  triclinic wave vectors (gromosXX multiplies by the transpose of the reciprocal basis), the
+  surface virial (gromosXX adds `+Ξ`'s diagonal, not `−2 Ξ`). `1/ε₀` is a parameter: a run passes
+  `FPEPSI · 4 · π` (gromosXX `in_topology.cc:1408`); `newen_core::units::EPS0_INV` is gromosXX's
+  literal `eps0_i = 1745.9137`, used only without a PHYSICALCONSTANTS block.
 - **Unwired PME code, not GROMOS P3M:** `electrostatics.rs`, `pme.rs` and `pme_mpi.rs` implement a
   PME/Ewald of their own that nothing outside them calls and that does not follow GROMOS (no
   charge shapes, no `A`-terms, an Abramowitz–Stegun `erfc`; not gromosXX's P3M). Do not build on
@@ -132,7 +145,9 @@ src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbond
   innerloops.rs        — `lj_crf_pair` (scalar pair kernel), `lj_crf_interaction_x4` (4 lanes), the loops
   excluded.rs          — `rf_excluded_pair`, `rf_self_term`, RF excluded and 1-4 loops
   params.rs            — `CRFParameters::new`
-  lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants` (not wired)
+  lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants`, `A2`, self/A/surface terms
+  ewald.rs             — `k_vectors`, `ewald_kspace`, `EwaldSum` (NLRELE 2)
+  ls_real_space.rs     — the real-space loops of a lattice-sum run
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
   schnet.rs            — SchNetInteraction (feature `ml`)
@@ -144,6 +159,7 @@ src/energy.rs         — single_point_energy() entry point for analysis
 src/restraints.rs     — position + distance restraints
 tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
 tests/lattice_sum_spec.rs — lattice-sum kernels = Lean `Float` model, bit for bit; FD, quadrature
+tests/ewald_spec.rs   — Ewald kernels = Lean `Float` model, bit for bit; forces and virials by FD
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```

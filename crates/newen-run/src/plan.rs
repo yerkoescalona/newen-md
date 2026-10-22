@@ -148,6 +148,29 @@ pub struct ForcefieldPlan {
     pub position_restraints: Option<PositionRestraintsPlan>,
     pub distance_restraints: Option<DistanceRestraintsPlan>,
     pub perturbation: Option<PerturbationPlan>,
+    /// Ewald electrostatics (NLRELE 2) in place of the reaction field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lattice_sum: Option<LatticeSumPlan>,
+}
+
+/// The NONBONDED lattice-sum settings of an Ewald run (GROMOS Vol. 4).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatticeSumPlan {
+    /// NSHAPE: −1 Gaussian, 0..=10 truncated polynomial
+    pub nshape: i32,
+    /// ASHAPE (nm)
+    pub ashape: f64,
+    /// NKX, NKY, NKZ
+    pub nk: [usize; 3],
+    /// KCUT (compared with |k|², as gromosXX does)
+    pub kcut: f64,
+    /// NA2CLC
+    pub na2clc: i32,
+    /// TOLA2
+    pub tola2: f64,
+    /// EPSLS
+    pub epsls: f64,
 }
 
 /// One algorithm of the MD step, fully resolved. One spec = one `Algorithm`.
@@ -364,6 +387,7 @@ impl AlgorithmSpec {
                 position_restraints: None,
                 distance_restraints: None,
                 perturbation: None,
+                lattice_sum: None,
             }),
             AlgorithmSpec::Orchestrator { terms: Vec::new() },
             AlgorithmSpec::Eds(EdsPlan {
@@ -1076,18 +1100,131 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
     })
 }
 
-/// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) for every run, perturbed or not: nothing
-/// in the build path calls newen-forces' `electrostatics.rs`/`pme.rs`, and the force field
-/// would run the reaction field in their place. Every build path runs it.
+/// NONBONDED electrostatics, every build path runs it:
+///
+/// * the lattice-sum parameters' ranges, which gromosXX checks for every NLRELE when it reads
+///   the block (`in_parameter.cc:4602-4613, 4693-4723`), with its messages;
+/// * NLRELE 3 (P3M) is not implemented yet;
+/// * NLRELE 2 (Ewald) with the features gromosXX's FeatureChecker keeps locked against `ewald`
+///   (`check_parameter.cc:2726-2795`) and a recipe can express: the charge-group cutoff (Ewald
+///   needs PAIRLIST TYPE atomic), the grid-cell pairlist, vacuum, the truncated octahedron, more
+///   than one energy group, perturbation, EDS, A-EDS, GaMD, QM/ML terms, the conjugate-gradient
+///   minimiser, LINCS and SETTLE for the solvent.
 pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
-    let nlrele = recipe.forcefield.electrostatics.electrostatics;
-    if matches!(nlrele, 2 | 3) {
-        return Err(RunError::Recipe(format!(
-            "NONBONDED NLRELE = {nlrele}: lattice-sum electrostatics (NLRELE 2/3) are not \
-             implemented (the reaction field would run in their place); use NLRELE 1"
-        )));
+    let nb = &recipe.forcefield.electrostatics;
+    let ls = &nb.lattice_sum;
+    let nlrele = nb.electrostatics;
+    let err = |m: String| Err(RunError::Recipe(m));
+    let range = |name: &str, value: String, should: &str| {
+        err(format!(
+            "NONBONDED block: {name} parameter is {value}, should be: {should}"
+        ))
+    };
+    if !(-1..=10).contains(&ls.nshape) {
+        return range("NSHAPE", ls.nshape.to_string(), ">=-1 && <=10");
+    }
+    if ls.ashape.is_nan() || ls.ashape <= 0.0 {
+        return range("ASHAPE", ls.ashape.to_string(), ">0");
+    }
+    if !(0..=4).contains(&ls.na2clc) {
+        return range("NA2CLC", ls.na2clc.to_string(), "one of: 0,1,2,3,4");
+    }
+    if ls.tola2.is_nan() || ls.tola2 <= 0.0 {
+        return range("TOLA2", ls.tola2.to_string(), ">0.0");
+    }
+    if !(ls.epsls >= 1.0 || ls.epsls == 0.0) {
+        return range("EPSLS", ls.epsls.to_string(), ">=1.0 or one of: 0.0");
+    }
+    for (name, n) in ["NKX", "NKY", "NKZ"].iter().zip(ls.nk) {
+        if n == 0 {
+            return range(name, n.to_string(), ">0");
+        }
+    }
+    if ls.nk2.is_nan() || ls.nk2 <= 0.0 {
+        return range("KCUT", ls.nk2.to_string(), ">0.0");
+    }
+    if ls.na2clc == 1 && nlrele != 2 {
+        return err("NONBONDED block: exact A2~ calculation needs Ewald.".to_string());
+    }
+    if ls.na2clc == 4 && nlrele != 3 {
+        return err("NONBONDED block: averaged A2~ calculation needs P3M.".to_string());
+    }
+    if nlrele == 3 {
+        return err(
+            "NONBONDED NLRELE = 3: P3M lattice-sum electrostatics are not implemented yet; use \
+             NLRELE 1 (reaction field) or 2 (Ewald)"
+                .to_string(),
+        );
+    }
+    if nlrele != 2 {
+        return Ok(());
+    }
+    let refuse = |what: &str| {
+        err(format!(
+            "NONBONDED NLRELE = 2: {what} does not work with Ewald sum electrostatics \
+             (gromosXX refuses this combination)"
+        ))
+    };
+    let ff = &recipe.forcefield;
+    if ff.pairlist.kind == crate::recipe::PairlistKind::ChargeGroup {
+        return err(
+            "NONBONDED NLRELE = 2: chargegroup based cutoff does not work with Ewald sum \
+             electrostatics (gromosXX refuses this combination); use PAIRLIST TYPE atomic"
+                .to_string(),
+        );
+    }
+    if ff.pairlist.algorithm == PairlistAlgorithm::GridCell {
+        return refuse("grid-cell-based pairlist algorithm");
+    }
+    match recipe.boundary.kind {
+        BoundaryKind::Vacuum => return refuse("vacuum simulation"),
+        BoundaryKind::TruncatedOctahedron => return refuse("truncated octahedral PBC"),
+        BoundaryKind::Rectangular | BoundaryKind::Triclinic => {},
+    }
+    if ff.energy_groups.count > 1 {
+        return refuse("multiple energy groups");
+    }
+    if recipe.perturbation.enabled != 0 {
+        return refuse("free energy perturbation");
+    }
+    if eds_on(recipe) {
+        return refuse("Enveloping distribution sampling");
+    }
+    if recipe.aeds.as_ref().is_some_and(|a| a.enabled) {
+        return refuse("Accelerated enveloping distribution sampling");
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return refuse("gaussian accelerated MD");
+    }
+    if !ff.terms.is_empty() {
+        return refuse("QMMM multiscale simulation (QM/ML terms)");
+    }
+    if matches!(recipe.minimisation.method, 2 | 3) {
+        return refuse("Fletcher-Reeves or Polak-Ribiere conjugate gradient energy minimisation");
+    }
+    match recipe.constraints.solvent_algorithm {
+        Some(ConstraintAlgorithm::Lincs) => return refuse("LINCS for solvent"),
+        Some(ConstraintAlgorithm::Settle) => return refuse("SETTLE for solvent"),
+        _ => {},
     }
     Ok(())
+}
+
+/// The lattice-sum part of the force field (NLRELE 2): `None` for every other NLRELE.
+fn lattice_sum_plan(recipe: &RunRecipe) -> Option<LatticeSumPlan> {
+    let nb = &recipe.forcefield.electrostatics;
+    (nb.electrostatics == 2).then(|| {
+        let ls = &nb.lattice_sum;
+        LatticeSumPlan {
+            nshape: ls.nshape,
+            ashape: ls.ashape,
+            nk: ls.nk,
+            kcut: ls.nk2,
+            na2clc: ls.na2clc,
+            tola2: ls.tola2,
+            epsls: ls.epsls,
+        }
+    })
 }
 
 /// STEP T: gromosXX reads it with the range ">=0" or −1 (`in_parameter.cc:298`); −1 takes the
@@ -1374,6 +1511,24 @@ pub(crate) fn check_plan_against_recipe(
     let has_terms = plan
         .iter()
         .any(|a| matches!(a, AlgorithmSpec::Orchestrator { terms } if !terms.is_empty()));
+    // a plan built from another recipe must not run the reaction field in place of Ewald
+    let wants_ewald = recipe.forcefield.electrostatics.electrostatics == 2;
+    for a in plan {
+        if let AlgorithmSpec::Forcefield(ff) = a {
+            if ff.lattice_sum.is_some() != wants_ewald {
+                return Err(RunError::Recipe(format!(
+                    "the plan's force field {} lattice-sum electrostatics but the recipe has \
+                     NONBONDED NLRELE = {}",
+                    if ff.lattice_sum.is_some() {
+                        "has"
+                    } else {
+                        "has no"
+                    },
+                    recipe.forcefield.electrostatics.electrostatics
+                )));
+            }
+        }
+    }
     if ntil_on(recipe) && has_terms {
         return Err(RunError::Recipe(
             "LAMBDAS on (individual λ) together with QM/ML terms: gromosXX refuses this \
@@ -1493,7 +1648,10 @@ pub fn build_plan(
         rf_cutoff: ff.electrostatics.rf_cutoff,
         epsilon_rf: ff.electrostatics.epsilon_rf,
         kappa: ff.electrostatics.kappa,
-        rf_excluded: ff.electrostatics.self_exclusion != 0,
+        // gromosXX: NLRELE 2, 3 turn the reaction-field excluded and self terms off
+        // (`in_parameter.cc:4654-4667`)
+        rf_excluded: ff.electrostatics.self_exclusion != 0
+            && !matches!(ff.electrostatics.electrostatics, 2 | 3),
         four_pi_eps_i,
         bonds: ff.bonds,
         covalent_form: (
@@ -1518,6 +1676,7 @@ pub fn build_plan(
         position_restraints,
         distance_restraints,
         perturbation,
+        lattice_sum: lattice_sum_plan(recipe),
     });
 
     let mut plan = Vec::new();
@@ -1943,6 +2102,119 @@ mod tests {
 
     fn refusal(r: &RunRecipe) -> String {
         check_perturbation(r).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn nonbonded_lattice_sum_ranges_and_the_ewald_feature_matrix() {
+        let refused = |r: &RunRecipe, message: &str| {
+            let err = check_electrostatics(r).expect_err(message).to_string();
+            assert!(err.contains(message), "{err}");
+        };
+        let rf = RunRecipe::default();
+        assert!(check_electrostatics(&rf).is_ok());
+        // gromosXX's read ranges hold whatever NLRELE is (`in_parameter.cc:4602-4613`)
+        let cases: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nshape = 11,
+                "NSHAPE parameter is 11, should be: >=-1 && <=10",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ashape = 0.0,
+                "ASHAPE parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 5,
+                "NA2CLC parameter is 5",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.tola2 = 0.0,
+                "TOLA2 parameter is 0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.epsls = 0.5,
+                "EPSLS parameter is 0.5",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nk[1] = 0,
+                "NKY parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nk2 = -1.0,
+                "KCUT parameter is -1",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 1,
+                "exact A2~ calculation needs Ewald",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 4,
+                "averaged A2~ calculation needs P3M",
+            ),
+        ];
+        for (edit, message) in cases {
+            let mut r = rf.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+        let mut ewald = rf.clone();
+        ewald.forcefield.electrostatics.electrostatics = 2;
+        refused(&ewald, "chargegroup based cutoff does not work with Ewald");
+        ewald.forcefield.pairlist.kind = crate::recipe::PairlistKind::Atomic;
+        assert!(check_electrostatics(&ewald).is_ok());
+        let mut r = ewald.clone();
+        r.forcefield.electrostatics.lattice_sum.na2clc = 1;
+        assert!(check_electrostatics(&r).is_ok(), "NA2CLC 1 with Ewald");
+        let locked: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.boundary.kind = BoundaryKind::Vacuum,
+                "vacuum simulation",
+            ),
+            (
+                &|r| r.boundary.kind = BoundaryKind::TruncatedOctahedron,
+                "truncated octahedral",
+            ),
+            (
+                &|r| r.forcefield.pairlist.algorithm = PairlistAlgorithm::GridCell,
+                "grid-cell",
+            ),
+            (
+                &|r| r.forcefield.energy_groups.count = 2,
+                "multiple energy groups",
+            ),
+            (&|r| r.perturbation.enabled = 1, "free energy perturbation"),
+            (
+                &|r| r.eds = Some(eds_recipe(1, 2)),
+                "Enveloping distribution sampling",
+            ),
+            (
+                &|r| {
+                    r.passthrough.insert("GAMD".into(), vec![]);
+                },
+                "gaussian accelerated MD",
+            ),
+            (&|r| r.minimisation.method = 2, "conjugate gradient"),
+            (
+                &|r| r.constraints.solvent_algorithm = Some(ConstraintAlgorithm::Settle),
+                "SETTLE for solvent",
+            ),
+        ];
+        for (edit, message) in locked {
+            let mut r = ewald.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+        let mut r = ewald.clone();
+        r.boundary.kind = BoundaryKind::Triclinic;
+        assert!(
+            check_electrostatics(&r).is_ok(),
+            "triclinic PBC is unlocked"
+        );
+        let mut p3m = ewald.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        refused(
+            &p3m,
+            "P3M lattice-sum electrostatics are not implemented yet",
+        );
     }
 
     #[test]

@@ -323,13 +323,23 @@ pub fn write_energyred_body<W: Write>(
     totals[6] = e.improper_total;
     totals[7] = e.dihedral_total;
     totals[8] = e.cross_dihedral_total;
-    totals[9] = e.lj_total + e.crf_total + e.ls_realspace_total + e.ls_kspace_total;
+    // gromosXX `nonbonded_total` (energy.cc:586-588)
+    totals[9] = e.lj_total
+        + e.crf_total
+        + e.ls_realspace_total
+        + e.ls_kspace_total
+        + e.ls_self_total
+        + e.ls_surface_total
+        + e.ls_a_term_total;
     totals[10] = e.lj_total;
     totals[11] = e.crf_total;
     totals[12] = e.ls_total;
-    totals[13] = e.ls_realspace_total + e.ls_kspace_total;
+    totals[13] = e.ls_pair_total;
     totals[14] = e.ls_realspace_total;
     totals[15] = e.ls_kspace_total;
+    totals[16] = e.ls_a_term_total;
+    totals[17] = e.ls_self_total;
+    totals[18] = e.ls_surface_total;
     totals[20] = e.special_total + e.distanceres_total;
     totals[21] = e.sasa_total;
     totals[23] = e.constraint_total;

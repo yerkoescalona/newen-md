@@ -5,9 +5,12 @@
 //! sum, and constant self and surface terms (GROMOS Vol. 2, `chg_fe_all`). The functions here are
 //! the pieces that do not depend on the reciprocal-space method: the switch function `η(ξ)`,
 //! `ξ = r/a`, of each charge shape and its derivative, the Fourier coefficients `γ̂(κ)` of the
-//! shape, the real-space pair terms and the self-term constants `A1`, `A3`. They follow
-//! gromosXX operation by operation and are checked bit for bit against their Lean model
-//! (`spec/NewenSpec/LatticeSum.lean`).
+//! shape, the real-space pair terms, the self-term constants `A1`, `A2`, `A3`, the reciprocal
+//! lattice of the box, the self and `A` terms and the surface term. They follow gromosXX
+//! operation by operation and are checked bit for bit against their Lean model
+//! (`spec/NewenSpec/LatticeSum.lean`). The Ewald sum over wave vectors is in `ewald.rs`.
+
+use newen_core::math::Vec3;
 
 /// C `erfc` from the platform's libm (glibc on Linux), the function gromosXX calls; Rust's
 /// standard library has none.
@@ -468,4 +471,356 @@ pub fn self_constants(shape: ChargeShape, width: f64, volume: f64) -> (f64, f64)
         a1 * (-std::f64::consts::PI * width * width / volume),
         a3 * (-1.0 / width),
     )
+}
+
+/// A symmetric 3×3 tensor as gromosXX's `math::SymmetricMatrix` stores it: `[xx, xy, xz, yy, yz,
+/// zz]`.
+pub type Sym3 = [f64; 6];
+
+/// `v1 ⊗ v2` for the upper triangle, gromosXX `math::symmetric_tensor_product`.
+#[inline]
+pub fn sym_tensor(v1: [f64; 3], v2: [f64; 3]) -> Sym3 {
+    [
+        v1[0] * v2[0],
+        v1[0] * v2[1],
+        v1[0] * v2[2],
+        v1[1] * v2[1],
+        v1[1] * v2[2],
+        v1[2] * v2[2],
+    ]
+}
+
+#[inline]
+fn sym_add(m: &mut Sym3, t: &Sym3) {
+    for (a, b) in m.iter_mut().zip(t) {
+        *a += b;
+    }
+}
+
+#[inline]
+fn add_to_diagonal(m: &mut Sym3, d: f64) {
+    m[0] += d;
+    m[3] += d;
+    m[5] += d;
+}
+
+/// The full matrix of a symmetric tensor, `[a][b]`.
+pub fn sym_to_matrix(m: &Sym3) -> [[f64; 3]; 3] {
+    [[m[0], m[1], m[2]], [m[1], m[3], m[4]], [m[2], m[4], m[5]]]
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// The volume `V` of the box with edge vectors `a, b, c` and the vectors `2π/V · (b×c, c×a,
+/// a×b)` of its reciprocal lattice, gromosXX `math::volume` (`math/volume.cc:33-52`) and
+/// `KSpace_Utils::l_to_k_matrix` (`kspace.cc:128-136`) in their operation order:
+///
+/// ```text
+/// rectangular:  V = |a| · |b| · |c|          (|v| = sqrt(v_x² + v_y² + v_z²))
+/// triclinic:    V = (a × b) · c
+/// s = 2π / V,   reciprocal = ((b × c)·s, (c × a)·s, (a × b)·s)
+/// ```
+///
+/// The wave vector of the integer triple `l` is `l_x b₁ + l_y b₂ + l_z b₃`
+/// ([`lattice_vector`]), so that `k · a = 2π l_x`. GROMOS Vol. 2 after `e_gamma_ewald`
+/// (`k = 2π l` in the reciprocal basis).
+///
+/// spec: lattice_sum.reciprocal_box
+pub fn reciprocal_box(edges: &[[f64; 3]; 3], rectangular: bool) -> (f64, [[f64; 3]; 3]) {
+    let [a, b, c] = *edges;
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let volume = if rectangular {
+        norm(a) * norm(b) * norm(c)
+    } else {
+        let ab = cross(a, b);
+        ab[0] * c[0] + ab[1] * c[1] + ab[2] * c[2]
+    };
+    let s = 2.0 * std::f64::consts::PI / volume;
+    let scale = |v: [f64; 3]| [v[0] * s, v[1] * s, v[2] * s];
+    (
+        volume,
+        [scale(cross(b, c)), scale(cross(c, a)), scale(cross(a, b))],
+    )
+}
+
+/// `k = l_x b₁ + l_y b₂ + l_z b₃` for the reciprocal vectors `b₁, b₂, b₃` of [`reciprocal_box`],
+/// component by component as `(b₁ l_x + b₂ l_y) + b₃ l_z`.
+///
+/// gromosXX (`kspace.cc:88`, `nonbonded_outerloop.cc:2449`) multiplies with the transpose
+/// (`k_x = b₁·l`), the same vector for a rectangular box, where the reciprocal matrix is
+/// diagonal, and not a reciprocal-lattice vector for a triclinic one.
+#[inline]
+pub fn lattice_vector(recip: &[[f64; 3]; 3], l: [i64; 3]) -> [f64; 3] {
+    let [u, v, w] = recip;
+    let (x, y, z) = (l[0] as f64, l[1] as f64, l[2] as f64);
+    [
+        u[0] * x + v[0] * y + w[0] * z,
+        u[1] * x + v[1] * y + w[1] * z,
+        u[2] * x + v[2] * y + w[2] * z,
+    ]
+}
+
+/// The Wigner constant of the simple cubic lattice, gromosXX `nonbonded_outerloop.cc:2379`
+/// (GROMOS Vol. 2 prints `−2.83792748`, two digits transposed).
+pub const WIGNER_CUBE: f64 = -2.83729748;
+
+/// `A2` in a cube of edge `L`, and its derivative (the isotropic diagonal of `∂A2/∂ε`), gromosXX
+/// `ls_self_outerloop` (`nonbonded_outerloop.cc:2376-2385`):
+///
+/// ```text
+/// A2 = wigner / L − A1 − A3,     dA2 = wigner / (3 L) − A1
+/// ```
+///
+/// GROMOS Vol. 2: `A1 + A2 + A3 = ξ_EW / L` for a cube (after `e_slf`).
+///
+/// spec: lattice_sum.a2_cubic
+pub fn a2_cubic(wigner: f64, edge: f64, a1: f64, a3: f64) -> (f64, f64) {
+    (wigner / edge - a1 - a3, wigner / (3.0 * edge) - a1)
+}
+
+/// The result of [`a2_shells`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct A2Shells {
+    /// `A2 = 4π/V · Σ_{l ≠ 0} γ̂(a|k|)/k²`.
+    pub a2: f64,
+    /// The number of shells summed.
+    pub shells: u32,
+    /// Whether the last shell changed the sum by at most `tola2` relative.
+    pub converged: bool,
+    /// `4π/V · Σ (2 (a|k| γ̂' − 2γ̂)/k⁴ k⊗k + γ̂/k² 1)`, the derivative gromosXX's virial uses.
+    pub derivative: Sym3,
+}
+
+/// `A2` summed over cubic shells of growing `l_max` in the integer lattice, gromosXX
+/// `ls_self_outerloop` (`nonbonded_outerloop.cc:2387-2537`) in its loop order. Shell `n` holds
+/// the triples with `max |l_i| = n`, enumerated as three faces: `l_x = n` with
+/// `|l_y|, |l_z| ≤ n`; `l_y = n` with `|l_x| ≤ n − 1`, `|l_z| ≤ n`; `l_z = n` with
+/// `|l_x|, |l_y| ≤ n − 1`. Those are half the shell; `−l` gives the same term, so the face sum is
+/// doubled:
+///
+/// ```text
+/// per l:      k = lattice_vector(l),  k2 = |k|²,  ak = sqrt(k2) · a
+///             term += γ̂(ak) / k2
+///             S += (2 (ak γ̂'(ak) − 2 γ̂(ak)) / (k2 k2)) k ⊗ k
+/// per shell:  term ·= 2;  A2 += term;  S += term 1;  stop when |term / A2| ≤ tola2
+/// A2 ·= 4π / V,   derivative = S · 4π / V
+/// ```
+///
+/// gromosXX loops until the tolerance is met; here at most `max_shells` shells are summed and
+/// `converged` says whether it was met. GROMOS Vol. 2: `latsum_a2_calc`.
+///
+/// spec: lattice_sum.a2_shells
+pub fn a2_shells(
+    shape: ChargeShape,
+    width: f64,
+    recip: &[[f64; 3]; 3],
+    volume: f64,
+    tola2: f64,
+    max_shells: u32,
+) -> A2Shells {
+    let mut sum_gammahat: Sym3 = [0.0; 6];
+    let mut l_max: i64 = 0;
+    let mut a2 = 0.0;
+    let converged = loop {
+        l_max += 1;
+        let mut term = 0.0;
+        for coord in 0..3 {
+            let (coord_a, coord_b, bound_a, bound_b) = match coord {
+                0 => (1, 2, l_max, l_max),
+                1 => (0, 2, l_max - 1, l_max),
+                _ => (0, 1, l_max - 1, l_max - 1),
+            };
+            for l_a in -bound_a..=bound_a {
+                let mut l = [0i64; 3];
+                l[coord] = l_max;
+                l[coord_a] = l_a;
+                for l_b in -bound_b..=bound_b {
+                    l[coord_b] = l_b;
+                    let k = lattice_vector(recip, l);
+                    let k2 = k[0] * k[0] + k[1] * k[1] + k[2] * k[2];
+                    let ak = k2.sqrt() * width;
+                    let (gamma_hat, gamma_hat_prime) = shape_fourier(shape, ak);
+                    term += gamma_hat / k2;
+                    let iso = 2.0 * (ak * gamma_hat_prime - 2.0 * gamma_hat) / (k2 * k2);
+                    sym_add(
+                        &mut sum_gammahat,
+                        &sym_tensor([iso * k[0], iso * k[1], iso * k[2]], k),
+                    );
+                }
+            }
+        }
+        term *= 2.0;
+        a2 += term;
+        add_to_diagonal(&mut sum_gammahat, term);
+        let tolerance = (term / a2).abs();
+        // gromosXX `while (tolerance > required_precision)`: a NaN tolerance stops too
+        let another_shell = tolerance > tola2;
+        if !another_shell {
+            break true;
+        }
+        if l_max >= i64::from(max_shells) {
+            break false;
+        }
+    };
+    let s = 4.0 * std::f64::consts::PI / volume;
+    A2Shells {
+        a2: a2 * s,
+        shells: l_max as u32,
+        converged,
+        derivative: sum_gammahat.map(|x| x * s),
+    }
+}
+
+/// `(Σ q_i, Σ q_i²)` in atom order, gromosXX `Topology::squared_sum_charges` (before its final
+/// square) and `sum_squared_charges` (`topology.cc:1572-1586`).
+pub fn charge_sums(charges: &[f64]) -> (f64, f64) {
+    let mut sum = 0.0;
+    let mut sum_sq = 0.0;
+    for &q in charges {
+        sum += q;
+        sum_sq += q * q;
+    }
+    (sum, sum_sq)
+}
+
+/// The self term and the `A` term of the lattice sum, gromosXX `ls_self_outerloop`
+/// (`nonbonded_outerloop.cc:2588, 2605`) in its operation order, with `S = Σ q_i` (`sum_q`),
+/// `S̃² = Σ q_i²` (`sum_q2`) and `eps0_inv = 1/ε₀`:
+///
+/// ```text
+/// ls_self   = (A1 + A2 + A3) · S̃² · eps0_inv / (8π)
+/// ls_a_term = (A1 · S·S − (A1 + Ã2) · S̃²) · eps0_inv / (8π)
+/// ```
+///
+/// GROMOS Vol. 2: `e_slf`, `e_a_def`.
+///
+/// spec: lattice_sum.self_and_a_terms
+pub fn self_and_a_terms(
+    a1: f64,
+    a2: f64,
+    a3: f64,
+    a2_tilde: f64,
+    sum_q: f64,
+    sum_q2: f64,
+    eps0_inv: f64,
+) -> (f64, f64) {
+    let s2 = sum_q * sum_q;
+    let eight_pi = 8.0 * std::f64::consts::PI;
+    (
+        (a1 + a2 + a3) * sum_q2 * eps0_inv / eight_pi,
+        (a1 * s2 - (a1 + a2_tilde) * sum_q2) * eps0_inv / eight_pi,
+    )
+}
+
+/// The virials (gromosXX's `Ξ`, before the storage factor −2) of the self term and of the `A`
+/// term, gromosXX `ls_self_outerloop` (`nonbonded_outerloop.cc:2357-2366, 2384, 2519, 2555-2607`):
+///
+/// ```text
+/// self     = −¼ fpe A1 S̃² 1 + (−¼ S̃² fpe) dA2
+/// constant = −¼ fpe A1 (S² − S̃²) 1 − (−¼ S̃² fpe) dÃ2
+/// ```
+///
+/// with `fpe = 1/(4πε₀)` and `dA2`, `dÃ2` the derivatives of `A2` and `Ã2` (the NA2CLC choice is
+/// the caller's).
+pub fn self_and_a_virials(
+    a1: f64,
+    sum_q: f64,
+    sum_q2: f64,
+    d_a2: &Sym3,
+    d_a2_tilde: &Sym3,
+    four_pi_eps_i: f64,
+) -> (Sym3, Sym3) {
+    let s2 = sum_q * sum_q;
+    let mut self_virial: Sym3 = [0.0; 6];
+    add_to_diagonal(&mut self_virial, -0.25 * four_pi_eps_i * a1 * sum_q2);
+    let mut constant_virial: Sym3 = [0.0; 6];
+    add_to_diagonal(
+        &mut constant_virial,
+        -0.25 * four_pi_eps_i * a1 * (s2 - sum_q2),
+    );
+    let f = -0.25 * sum_q2 * four_pi_eps_i;
+    for i in 0..6 {
+        self_virial[i] += f * d_a2[i];
+        constant_virial[i] -= f * d_a2_tilde[i];
+    }
+    (self_virial, constant_virial)
+}
+
+/// The result of [`surface_term`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Surface {
+    pub energy: f64,
+    pub forces: Vec<Vec3>,
+    /// `Ξ = ½ p M ⊗ M − ¼ p |M|² 1`, the virial of the term (GROMOS sign, before the storage
+    /// factor −2).
+    pub virial: Sym3,
+}
+
+/// The surface term of the box dipole, gromosXX `_ls_surface_outerloop`
+/// (`nonbonded_outerloop.cc:2652-2688`) in its operation order, with the unwrapped positions,
+/// the box centre `c` and `eps0_inv = 1/ε₀`:
+///
+/// ```text
+/// EPSLS = 0 (conducting boundary):  nothing
+/// M   = Σ_i q_i (r_i − c)
+/// p   = eps0_inv / ((EPSLS · 2 + 1) · V)
+/// E   = ½ |M|² p,     F_i = −p q_i M
+/// Ξ_ab = ½ p M_a M_b + δ_ab (−¼ p |M|²)
+/// ```
+///
+/// gromosXX computes the diagonal of `Ξ` only and adds it to its virial storage as it is, where
+/// every other lattice-sum term adds `−2 Ξ`; this returns the whole tensor and the caller stores
+/// `−2 Ξ`. GROMOS Vol. 2: `e_srf`, `e_srf_forces`.
+///
+/// spec: lattice_sum.surface_term
+pub fn surface_term(
+    positions: &[Vec3],
+    charges: &[f64],
+    centre: Vec3,
+    eps_ls: f64,
+    volume: f64,
+    eps0_inv: f64,
+) -> Surface {
+    let n = positions.len();
+    if eps_ls == 0.0 {
+        return Surface {
+            energy: 0.0,
+            forces: vec![Vec3::ZERO; n],
+            virial: [0.0; 6],
+        };
+    }
+    let mut m = [0.0f64; 3];
+    for (r, &q) in positions.iter().zip(charges) {
+        m[0] += q * (r.x - centre.x);
+        m[1] += q * (r.y - centre.y);
+        m[2] += q * (r.z - centre.z);
+    }
+    let prefactor = eps0_inv / ((eps_ls * 2.0 + 1.0) * volume);
+    let abs2 = m[0] * m[0] + m[1] * m[1] + m[2] * m[2];
+    let energy = 0.5 * abs2 * prefactor;
+    let forces = charges
+        .iter()
+        .map(|&q| {
+            let s = -prefactor * q;
+            Vec3::new(s * m[0], s * m[1], s * m[2])
+        })
+        .collect();
+    let isotropic = -0.25 * prefactor * abs2;
+    let half_p = 0.5 * prefactor;
+    let mut virial = sym_tensor([half_p * m[0], half_p * m[1], half_p * m[2]], m);
+    // gromosXX's diagonal: isotropic + ½ p M_i M_i
+    virial[0] += isotropic;
+    virial[3] += isotropic;
+    virial[5] += isotropic;
+    Surface {
+        energy,
+        forces,
+        virial,
+    }
 }

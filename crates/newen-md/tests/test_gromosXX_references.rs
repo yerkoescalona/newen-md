@@ -1049,6 +1049,9 @@ ref_test!(water_single, "water_single");
 ref_test!(water_single_genvel, "water_single_genvel");
 ref_test!(benzene_vacuum, "benzene_vacuum");
 ref_test!(nacl_pair_box, "nacl_pair_box");
+// The direct Ewald sum (NLRELE 2, atomic cutoff, Gaussian a = 0.4 nm, cubic A2); expected
+// output from the released binary run with @develop (see its input.toml).
+ref_test!(nacl_pair_box_ewald, "nacl_pair_box_ewald");
 ref_test!(butane_vacuum, "butane_vacuum");
 // COVALENTFORM 0 0 1: the Chebyshev-polynomial dihedral (NTBDN = 1).
 ref_test!(butane_vacuum_ntbdn1, "butane_vacuum_ntbdn1");
@@ -1079,6 +1082,10 @@ ref_test!(water_216_box, "water_216_box");
 ref_test!(water_216_nve_nobath, "water_216_nve_nobath");
 ref_test!(water_216_box_com, "water_216_box_com");
 ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
+// The direct Ewald sum in bulk water: excluded pairs, the twin-range LJ-only shell; and with the
+// surface term of a dielectric boundary (EPSLS = 61). Expected output from @develop.
+ref_test!(water_216_box_ewald, "water_216_box_ewald");
+ref_test!(water_216_box_ewald_epsls, "water_216_box_ewald_epsls");
 
 // ── Level 3: thermostats / barostats ────────────────────────────────────────
 ref_test!(water_216_nvt, "water_216_nvt");

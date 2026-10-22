@@ -128,12 +128,21 @@ pub struct Energy {
     pub lj_total: f64,
     /// Total Coulomb reaction-field electrostatic energy.
     pub crf_total: f64,
-    /// Total lattice-sum (Ewald / P3M / PME) electrostatic energy.
+    /// Total lattice-sum (Ewald / P3M) electrostatic energy: `ls_pair_total + ls_self_total +
+    /// ls_surface_total` (gromosXX `energy.cc:584`).
     pub ls_total: f64,
+    /// The pair part of the lattice-sum energy: real space + k space + A term (`energy.cc:582`).
+    pub ls_pair_total: f64,
     /// Real-space contribution to the lattice-sum energy.
     pub ls_realspace_total: f64,
     /// k-space contribution to the lattice-sum energy.
     pub ls_kspace_total: f64,
+    /// The A term of the lattice sum (GROMOS Vol. 2 `e_a_def`).
+    pub ls_a_term_total: f64,
+    /// The self term of the lattice sum (Vol. 2 `e_slf`).
+    pub ls_self_total: f64,
+    /// The surface term of the lattice sum (Vol. 2 `e_srf`).
+    pub ls_surface_total: f64,
 
     /// Sum of special interaction energies (position restraints, etc.).
     pub special_total: f64,
@@ -420,8 +429,12 @@ impl Energy {
             lj_total: 0.0,
             crf_total: 0.0,
             ls_total: 0.0,
+            ls_pair_total: 0.0,
             ls_realspace_total: 0.0,
             ls_kspace_total: 0.0,
+            ls_a_term_total: 0.0,
+            ls_self_total: 0.0,
+            ls_surface_total: 0.0,
             special_total: 0.0,
             term_energies: Vec::new(),
             posrest_total: 0.0,
@@ -578,8 +591,12 @@ impl Energy {
         self.lj_total = 0.0;
         self.crf_total = 0.0;
         self.ls_total = 0.0;
+        self.ls_pair_total = 0.0;
         self.ls_realspace_total = 0.0;
         self.ls_kspace_total = 0.0;
+        self.ls_a_term_total = 0.0;
+        self.ls_self_total = 0.0;
+        self.ls_surface_total = 0.0;
         self.special_total = 0.0;
         self.term_energies.clear();
         self.posrest_total = 0.0;

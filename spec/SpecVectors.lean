@@ -13,8 +13,8 @@ import NewenSpec.PerturbedBonded
 import NewenSpec.LatticeSum
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat, nonbonded, bonded, dynamics, periodicity, soft-core, perturbed bonded and lattice-sum
-models on random `Float` inputs) and write them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
+thermostat, nonbonded, bonded, dynamics, periodicity, soft-core, perturbed bonded, lattice-sum and
+Ewald models on random `Float` inputs) and write them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
@@ -1744,6 +1744,266 @@ def lsLiterals : List Nat :=
 
 end LatticeSumRows
 
+/-! ## Ewald: the wave vectors, the k-space sum, `A2`, the self, A and surface terms
+
+`vectors/ewald.json`: random small systems (2 to 12 atoms, neutral or charged) in cubic,
+rectangular and triclinic boxes (GROMOS's lower-triangular form, angles 60°–120°), `NK` up to 3,
+KCUT that cuts the cube of integer triples and KCUT that does not, the twelve shapes, widths
+0.4–1.4, `EPSLS` 0 and 61, and `1/ε₀` both as gromosXX's literal and as `4π · 138.9354`. Every row
+holds its inputs and the model's outputs; lists of variable length carry their length. -/
+
+section EwaldRows
+
+open NewenTheory.Interactions.LatticeSum (Shape TPOrder)
+open NewenSpec.LatticeSum
+
+def v3List (v : NewenSpec.LatticeSum.V3 Float) : List Float := [v.x, v.y, v.z]
+
+def symList (m : Sym Float) : List Float := [m.xx, m.xy, m.xz, m.yy, m.yz, m.zz]
+
+/-- `1/ε₀`: gromosXX's literal `eps0_i = 1745.9137` or, with a topology, `4π · 138.9354` as
+gromosXX computes it (`138.9354 * 4.0 * π`). -/
+def eps0Invs : List Float := [1745.9137, 138.9354 * 4 * NewenSpec.LatticeSum.piFloat]
+
+/-- A box: `(rectangular, a, b, c)`; cubic, rectangular or triclinic. -/
+def drawBox : Gen (Bool × NewenSpec.LatticeSum.V3 Float × NewenSpec.LatticeSum.V3 Float × NewenSpec.LatticeSum.V3 Float) := do
+  let la ← uniform 1.2 3
+  match ← below 3 with
+  | 0 => return (true, ⟨la, 0, 0⟩, ⟨0, la, 0⟩, ⟨0, 0, la⟩)
+  | 1 => return (true, ⟨la, 0, 0⟩, ⟨0, ← uniform 1.2 3, 0⟩, ⟨0, 0, ← uniform 1.2 3⟩)
+  | _ =>
+    let lb ← uniform 1.2 3
+    let lc ← uniform 1.2 3
+    let deg := NewenSpec.LatticeSum.piFloat / 180
+    let al := (← uniform 60 120) * deg
+    let be := (← uniform 60 120) * deg
+    let ga := (← uniform 60 120) * deg
+    let cx := lc * Float.cos be
+    let cy := lc * (Float.cos al - Float.cos be * Float.cos ga) / Float.sin ga
+    let cz := Float.sqrt (lc * lc - cx * cx - cy * cy)
+    return (false, ⟨la, 0, 0⟩, ⟨lb * Float.cos ga, lb * Float.sin ga, 0⟩, ⟨cx, cy, cz⟩)
+
+def drawShape : Gen Shape := do return lsShapes.getD (← below lsShapes.length) .gaussian
+
+def drawNk : Gen (ℕ × ℕ × ℕ) := do
+  return ((← below 3) + 1, (← below 3) + 1, (← below 3) + 1)
+
+/-- KCUT that cuts (`|k|² ≤ KCUT` inside the cube of triples) or that does not. -/
+def drawKcut : Gen Float := do
+  match ← below 3 with
+  | 0 => return 1e6
+  | _ => uniform 5 200
+
+/-- `n` atoms in the box (and a little outside it), with charges summing to zero or not. -/
+def drawAtoms (a b c : NewenSpec.LatticeSum.V3 Float) : Gen (List (NewenSpec.LatticeSum.V3 Float × Float)) := do
+  let n := (← below 11) + 2
+  let neutral := (← below 2) == 0
+  let mut atoms : Array (NewenSpec.LatticeSum.V3 Float × Float) := #[]
+  for _ in List.range n do
+    let fa ← uniform (-0.1) 1.1
+    let fb ← uniform (-0.1) 1.1
+    let fc ← uniform (-0.1) 1.1
+    let r : NewenSpec.LatticeSum.V3 Float := ⟨fa * a.x + fb * b.x + fc * c.x, fa * a.y + fb * b.y + fc * c.y,
+      fa * a.z + fb * b.z + fc * c.z⟩
+    atoms := atoms.push (r, ← uniform (-1) 1)
+  if neutral then
+    let total := (atoms.toList.take (n - 1)).foldl (fun s a => s + a.2) 0
+    atoms := atoms.modify (n - 1) fun a => (a.1, -total)
+  return atoms.toList
+
+def kvecList (kv : KVec Float) : List Float :=
+  v3List kv.k ++ [kv.k2, kv.k2i, kv.ak, kv.gammaHat, kv.k2iGammaHat, kv.akGammaHatPrime]
+
+def natF (n : ℕ) : Float := Float.ofNat n
+
+def reciprocalBoxRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 120 do
+    let (rect, a, b, c) ← drawBox
+    let (v, u, w, x) := reciprocalBoxFloat a b c rect
+    rows := rows.push ([if rect then 1 else 0] ++ v3List a ++ v3List b ++ v3List c ++ [v] ++
+      v3List u ++ v3List w ++ v3List x)
+  return rows.toList
+
+/-- One case of the sum over wave vectors: the box, its reciprocal basis and the k-space
+parameters. -/
+structure KCase where
+  rect : Bool
+  a : NewenSpec.LatticeSum.V3 Float
+  b : NewenSpec.LatticeSum.V3 Float
+  c : NewenSpec.LatticeSum.V3 Float
+  volume : Float
+  u : NewenSpec.LatticeSum.V3 Float
+  v : NewenSpec.LatticeSum.V3 Float
+  w : NewenSpec.LatticeSum.V3 Float
+  nk : ℕ × ℕ × ℕ
+  kcut : Float
+  shape : Shape
+  width : Float
+
+def drawKCase : Gen KCase := do
+  let (rect, a, b, c) ← drawBox
+  let (volume, u, v, w) := reciprocalBoxFloat a b c rect
+  return ⟨rect, a, b, c, volume, u, v, w, ← drawNk, ← drawKcut, ← drawShape,
+    ← uniform 0.4 1.4⟩
+
+def kCaseList (k : KCase) : List Float :=
+  [natF k.nk.1, natF k.nk.2.1, natF k.nk.2.2, k.kcut, nshapeFloat k.shape, k.width] ++
+    v3List k.u ++ v3List k.v ++ v3List k.w
+
+def kVectorRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 24 do
+    let k ← drawKCase
+    let ks := kVectorsFloat k.nk k.kcut k.u k.v k.w k.shape k.width
+    rows := rows.push (kCaseList k ++ [natF ks.length] ++ ks.flatMap kvecList)
+  return rows.toList
+
+def kspaceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 160 do
+    let k ← drawKCase
+    let eps0Inv ← pick eps0Invs
+    let atoms ← drawAtoms k.a k.b k.c
+    let ks := kVectorsFloat k.nk k.kcut k.u k.v k.w k.shape k.width
+    let (e, forces, a2t, vir, da2t) := ewaldKspaceFloat atoms ks k.volume eps0Inv
+    rows := rows.push (kCaseList k ++ [k.volume, eps0Inv, natF atoms.length] ++
+      atoms.flatMap (fun a => v3List a.1 ++ [a.2]) ++ [e, a2t] ++ symList vir ++ symList da2t ++
+      forces.flatMap v3List)
+  return rows.toList
+
+def a2CubicRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 200 do
+    let s ← drawShape
+    let edge ← uniform 1.2 6
+    let width ← uniform 0.4 1.4
+    let (a1, a3) := selfConstantsFloat s width (edge * edge * edge)
+    let (a2, d) := a2CubicFloat (-2.83729748) edge a1 a3
+    rows := rows.push [-2.83729748, edge, a1, a3, a2, d]
+  return rows.toList
+
+def a2ShellsRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 48 do
+    let k ← drawKCase
+    let tola2 ← pick [1e-4, 1e-6, 1e-8, 1e-10]
+    let maxShells := (← below 12) + 1
+    let (a2, shells, conv, d) := a2ShellsFloat k.shape k.width k.u k.v k.w k.volume tola2 maxShells
+    rows := rows.push ([nshapeFloat k.shape, k.width] ++ v3List k.u ++ v3List k.v ++ v3List k.w ++
+      [k.volume, tola2, natF maxShells, a2, natF shells, if conv then 1 else 0] ++ symList d)
+  return rows.toList
+
+def chargeSumRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 100 do
+    let n := (← below 12) + 1
+    let mut qs := #[]
+    for _ in List.range n do
+      qs := qs.push (← uniform (-2) 2)
+    let (sq, sq2) := chargeSumsFloat qs.toList
+    rows := rows.push ([natF n] ++ qs.toList ++ [sq, sq2])
+  return rows.toList
+
+def selfATermsRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let a1 ← uniform (-1) 0
+    let a2 ← uniform (-3) 3
+    let a3 ← uniform (-8) 0
+    let a2t ← uniform (-3) 3
+    let sumQ ← orZero (uniform (-5) 5)
+    let sumQ2 ← uniform 0 50
+    let eps0Inv ← pick eps0Invs
+    let (e1, e2) := selfATermsFloat a1 a2 a3 a2t sumQ sumQ2 eps0Inv
+    rows := rows.push [a1, a2, a3, a2t, sumQ, sumQ2, eps0Inv, e1, e2]
+  return rows.toList
+
+def drawSym : Gen (Sym Float) := do
+  return ⟨← uniform (-5) 5, ← uniform (-5) 5, ← uniform (-5) 5, ← uniform (-5) 5,
+    ← uniform (-5) 5, ← uniform (-5) 5⟩
+
+def selfAVirialRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 200 do
+    let a1 ← uniform (-1) 0
+    let sumQ ← orZero (uniform (-5) 5)
+    let sumQ2 ← uniform 0 50
+    let d ← drawSym
+    let dt ← drawSym
+    let fpe ← pick [138.9354, 138.935458]
+    let (sv, cv) := selfAVirialsFloat a1 sumQ sumQ2 d dt fpe
+    rows := rows.push ([a1, sumQ, sumQ2] ++ symList d ++ symList dt ++ [fpe] ++ symList sv ++
+      symList cv)
+  return rows.toList
+
+def surfaceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 160 do
+    let (rect, a, b, c) ← drawBox
+    let (volume, _, _, _) := reciprocalBoxFloat a b c rect
+    let atoms ← drawAtoms a b c
+    let centre : NewenSpec.LatticeSum.V3 Float := ⟨a.x / 2 + b.x / 2 + c.x / 2, a.y / 2 + b.y / 2 + c.y / 2,
+      a.z / 2 + b.z / 2 + c.z / 2⟩
+    let epsLs ← pick [0, 61, 1, 78.5]
+    let eps0Inv ← pick eps0Invs
+    let (e, forces, vir) := surfaceFloat atoms centre epsLs volume eps0Inv
+    rows := rows.push (v3List centre ++ [epsLs, volume, eps0Inv, natF atoms.length] ++
+      atoms.flatMap (fun at_ => v3List at_.1 ++ [at_.2]) ++ [e] ++ symList vir ++
+      forces.flatMap v3List)
+  return rows.toList
+
+structure EwaldRows where
+  reciprocal : List (List Float)
+  kvectors : List (List Float)
+  kspace : List (List Float)
+  a2Cubic : List (List Float)
+  a2Shells : List (List Float)
+  chargeSums : List (List Float)
+  selfA : List (List Float)
+  selfAVirial : List (List Float)
+  surface : List (List Float)
+
+def ewaldRows : EwaldRows :=
+  (do return ⟨← reciprocalBoxRows, ← kVectorRows, ← kspaceRows, ← a2CubicRows, ← a2ShellsRows,
+      ← chargeSumRows, ← selfATermsRows, ← selfAVirialRows, ← surfaceRows⟩ : Gen _).run'
+    0x6e6577656e2d6577
+
+def ewaldJson (r : EwaldRows) : String :=
+  let part (name : String) (rows : List (List Float)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"lattice_sum.reciprocal_box, ewald.k_vectors, ewald.kspace, lattice_sum.a2_cubic, " ++
+  "lattice_sum.a2_shells, lattice_sum.self_and_a_terms, lattice_sum.surface_term\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.LatticeSum.reciprocalBoxFloat, " ++
+  "kVectorsFloat, ewaldKspaceFloat, a2CubicFloat, a2ShellsFloat, chargeSumsFloat, " ++
+  "selfATermsFloat, selfAVirialsFloat, surfaceFloat; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits; counts, flags " ++
+  "and nshape are floats; a vector is x, y, z; a symmetric tensor xx, xy, xz, yy, yz, zz\",\n" ++
+  "  \"layout_reciprocal_box\": \"rectangular, a, b, c, volume, b1, b2, b3\",\n" ++
+  "  \"layout_k_vectors\": \"nkx, nky, nkz, kcut, nshape, width, b1, b2, b3, count, then per " ++
+  "wave vector k, k2, k2i, ak, gamma_hat, k2i_gamma_hat, ak_gamma_hat_prime\",\n" ++
+  "  \"layout_kspace\": \"nkx, nky, nkz, kcut, nshape, width, b1, b2, b3, volume, eps0_inv, " ++
+  "n_atoms, per atom r, q; energy, a2_tilde, virial, a2_tilde_derivative, per atom force " ++
+  "(the wave vectors are k_vectors of the first fields)\",\n" ++
+  "  \"layout_a2_cubic\": \"wigner, edge, a1, a3, a2, d_a2\",\n" ++
+  "  \"layout_a2_shells\": \"nshape, width, b1, b2, b3, volume, tola2, max_shells, a2, shells, " ++
+  "converged, derivative\",\n" ++
+  "  \"layout_charge_sums\": \"n, the charges, sum_q, sum_q2\",\n" ++
+  "  \"layout_self_and_a_terms\": \"a1, a2, a3, a2_tilde, sum_q, sum_q2, eps0_inv, ls_self, " ++
+  "ls_a_term\",\n" ++
+  "  \"layout_self_and_a_virials\": \"a1, sum_q, sum_q2, d_a2, d_a2_tilde, four_pi_eps_i, " ++
+  "self_virial, constant_virial\",\n" ++
+  "  \"layout_surface_term\": \"centre, eps_ls, volume, eps0_inv, n_atoms, per atom r, q; " ++
+  "energy, virial, per atom force\",\n" ++
+  part "reciprocal_box" r.reciprocal ++ ",\n" ++ part "k_vectors" r.kvectors ++ ",\n" ++
+  part "kspace" r.kspace ++ ",\n" ++ part "a2_cubic" r.a2Cubic ++ ",\n" ++
+  part "a2_shells" r.a2Shells ++ ",\n" ++ part "charge_sums" r.chargeSums ++ ",\n" ++
+  part "self_and_a_terms" r.selfA ++ ",\n" ++ part "self_and_a_virials" r.selfAVirial ++ ",\n" ++
+  part "surface_term" r.surface ++ "\n}\n"
+
+end EwaldRows
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -1820,3 +2080,15 @@ def main : IO Unit := do
   IO.println (s!"wrote vectors/lattice_sum.json ({ls.switch.length} shape_switch, " ++
     s!"{ls.fourier.length} shape_fourier, {ls.pair.length} lj_ls_pair, " ++
     s!"{ls.excluded.length} ls_excluded_pair, {ls.selfConstants.length} self_constants rows)")
+  unless (List.range 41).all (fun i =>
+      let z : Int := (i : Int) - 20
+      (Float.ofInt z).toBits == (if z < 0 then -Float.ofNat z.natAbs else Float.ofNat z.natAbs).toBits &&
+        (Float.ofNat z.natAbs).toUInt64.toNat == z.natAbs) do
+    throw (IO.userError "Float.ofInt is not exact on the integer triples")
+  let ew := ewaldRows
+  IO.FS.writeFile "vectors/ewald.json" (ewaldJson ew)
+  IO.println (s!"wrote vectors/ewald.json ({ew.reciprocal.length} reciprocal_box, " ++
+    s!"{ew.kvectors.length} k_vectors, {ew.kspace.length} kspace, {ew.a2Cubic.length} a2_cubic, " ++
+    s!"{ew.a2Shells.length} a2_shells, {ew.chargeSums.length} charge_sums, " ++
+    s!"{ew.selfA.length} self_and_a_terms, {ew.selfAVirial.length} self_and_a_virials, " ++
+    s!"{ew.surface.length} surface_term rows)")

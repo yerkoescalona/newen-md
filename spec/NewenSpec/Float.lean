@@ -110,6 +110,19 @@ class Erfc (α : Type) where
 
 instance : Erfc Float := ⟨erfcFloat⟩
 
+/-- The absolute value a kernel calls: `Float.abs` (C `fabs`, Rust `f64::abs`; exact, it clears
+the sign bit) or `|x|` over ℝ. -/
+class Fabs (α : Type) where
+  fabs : α → α
+
+instance : Fabs Float := ⟨Float.abs⟩
+
+noncomputable instance : Fabs ℝ := ⟨fun x => |x|⟩
+
+/-- An integer of a kernel as a `Float` (Rust `i as f64`): `Float.ofInt`, exact below `2⁵³`, which
+`lake exe spec-vectors` checks for the integers the models use. -/
+instance : IntCast Float := ⟨Float.ofInt⟩
+
 /-- A natural-number literal of a kernel as a `Float`: `Float.ofNat`, the nearest double, exact
 below `2⁵³`. Lets a model over `α` with `[NatCast α]` write its many integer literals as
 numerals (Mathlib's `instOfNat`); `lake exe spec-vectors` checks the literals are exact. -/
