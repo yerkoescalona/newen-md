@@ -94,7 +94,10 @@ pub struct ImdParameters {
     pub ntbdn: i32,
 
     // NONBONDED block
-    pub nlrele: i32,   // Long-range electrostatics (0=cutoff, 1=RF, 2=Ewald, 3=P3M)
+    /// Long-range electrostatics: −1 reaction field (Vol. 4's "LSERF compatibility mode",
+    /// read by gromosXX exactly as 1), 0 none, 1 reaction field, 2 Ewald, 3 P3M, 4 shifted
+    /// reaction field, 5 SPME (newen only, experimental)
+    pub nlrele: i32,
     pub appak: f64,    // Reaction field κ (nm⁻¹)
     pub rcrf: f64,     // Reaction field cutoff (nm)
     pub epsrf: f64,    // Reaction field permittivity

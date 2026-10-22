@@ -195,7 +195,10 @@ pub struct LatticeSum {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct NonbondedSpec {
-    /// NLRELE: 0 cutoff, 1 reaction field, 2 Ewald, 3 P3M
+    /// NLRELE: −1 reaction field (Vol. 4's "LSERF compatibility mode"; gromosXX reads it
+    /// exactly as 1, `in_parameter.cc:4641-4648`), 0 no electrostatics, 1 reaction field,
+    /// 2 Ewald, 3 P3M, 4 shifted reaction field (gromosXX `in_parameter.cc:4663-4674`),
+    /// 5 SPME (newen only, experimental)
     pub electrostatics: i32,
     /// APPAK — reaction-field inverse Debye length (nm⁻¹)
     pub kappa: f64,

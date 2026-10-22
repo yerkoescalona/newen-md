@@ -13,5 +13,6 @@ import NewenSpec.SoftCore
 import NewenSpec.PerturbedBonded
 import NewenSpec.LatticeSum
 import NewenSpec.P3M
+import NewenSpec.SPME
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement

@@ -10,6 +10,7 @@ import NewenTheory.Interactions.LennardJones
 import NewenTheory.Interactions.PerturbedBonded
 import NewenTheory.Interactions.ReactionField
 import NewenTheory.Interactions.SoftCore
+import NewenTheory.Interactions.SPME
 import NewenTheory.Space.Periodicity
 import NewenTheory.Topology.Groups
 import NewenTheory.Topology.Pairs

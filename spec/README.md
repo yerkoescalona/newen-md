@@ -141,6 +141,7 @@ cargo test -p newen-forces --test perturbed_bonded_spec       # perturbed bonded
 cargo test -p newen-forces --test lattice_sum_spec            # lattice-sum kernels = Float model; η', γ̂', forces by FD
 cargo test -p newen-forces --test ewald_spec                  # Ewald kernels = Float model; forces and virials by FD
 cargo test -p newen-forces --test p3m_spec                    # P3M kernels = Float model; FFT within 1e-12; P3M vs Ewald
+cargo test -p newen-forces --test spme_spec                   # SPME kernels = Float model; forces = −∇E; SPME vs Ewald and P3M
 ```
 
 **P3M and a tolerance layer for the FFT.** The P3M kernels of `src/nonbonded/p3m.rs` (the
@@ -162,6 +163,18 @@ compares PhastFT with it within `10⁻¹²` relative (measured `3·10⁻¹⁵` o
 k-space energy with the Lean pipeline within `10⁻¹¹` (measured `6·10⁻¹⁶`), and `SPEC.toml`
 records the measured maximum in `origin`. The per-point kernels before and after the transform
 stay bit-exact, so a tolerance failure points at the transform alone.
+
+**SPME, the first occupant of the experimental zone.** Smooth PME (NLRELE 5, newen only;
+gromosXX's reader stops at 4, the shifted reaction field) has no gromosXX oracle. Its kernels in
+`src/nonbonded/spme.rs` (the B-spline `M_n` and its derivative, the spline table, the Euler
+factors, the influence function, charge and squared-charge assignment, the forces) are
+`kind = "float"`: `NewenSpec/SPME.lean` models them, `crates/newen-forces/tests/spme_spec.rs`
+requires the same bits on `vectors/spme.json`, and `NewenTheory/Interactions/SPME.lean` proves
+what they mean: `M_n` is a non-negative, compactly supported partition of unity with
+`M_n' = M_{n−1}(u) − M_{n−1}(u − 1)`, P3M's `w_p` is `M_p` shifted by `p/2`, and the SPME force is
+the exact gradient of the mesh energy (`spme_force_is_minus_grad`), of which P3M's k-space energy
+is an instance (`p3mEnergy_eq_meshEnergy`). The transforms are P3M's, compared within a tolerance;
+the physics oracles are the Lean Ewald model and P3M.
 
 Not guaranteed: the distance between the ℝ model and the `Float` model (the rounding error is not
 bounded here), and anything outside the generated inputs.

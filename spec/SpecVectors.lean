@@ -12,6 +12,7 @@ import NewenSpec.SoftCore
 import NewenSpec.PerturbedBonded
 import NewenSpec.LatticeSum
 import NewenSpec.P3M
+import NewenSpec.SPME
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
 thermostat, nonbonded, bonded, dynamics, periodicity, soft-core, perturbed bonded, lattice-sum and
@@ -2428,6 +2429,208 @@ def p3mJson (parts : List (String × List (List Float))) : String :=
 
 end P3MRows
 
+/-! ## SPME: the per-point kernels and the grid kernels, bit for bit
+
+`vectors/spme.json`: `M_n` and `M_n'` by the recursion for `n = 2 … 12` on a grid of `u` (the
+knots and their neighbouring doubles included), the spline table of `spline_weights` for the same
+orders at random and special `u`, the Euler factors of even orders on axes of 4 … 32 points, the
+influence function `(Ĝ, Γ̂)` at single wave vectors (grids 4³ and 8³, orders 4 … 12, four shapes,
+widths 0.4 and 1.4 nm, cubic, rectangular and triclinic boxes) and on whole 4³ and 8³ grids, the
+charge and squared-charge assignment and the forces on random convolution grids, on 4³ grids. All
+of these are compared bit for bit; `spme_energy` (the whole k-space energy on 8³ grids through
+`dftFloat`) within a tolerance. -/
+
+section SPMERows
+
+open NewenTheory.Interactions.LatticeSum (Shape TPOrder)
+open NewenSpec.LatticeSum (Sym reciprocalBoxFloat piFloat)
+
+abbrev SV3 := NewenSpec.LatticeSum.V3
+abbrev SM3 := NewenSpec.P3M.M3
+
+def spmeOrders : List ℕ := [4, 6, 8, 10, 12]
+
+def spmeShapes : List Shape := [.gaussian, .poly .o0, .poly .o3, .poly .o7]
+
+def spmeM3List (m : SM3 Float) : List Float :=
+  v3List m.r0 ++ v3List m.r1 ++ v3List m.r2
+
+def spmeBoxList (rect : Bool) (a b c : SV3 Float) : List Float :=
+  [if rect then 1 else 0] ++ v3List a ++ v3List b ++ v3List c
+
+def spmeIntF (z : ℤ) : Float := Float.ofInt z
+
+/-- The doubles at and on either side of `x`. -/
+def spmeNeighbours (x : Float) : List Float :=
+  if x == 0 then [0, Float.ofBits 1, -Float.ofBits 1]
+  else [x, Float.ofBits (x.toBits - 1), Float.ofBits (x.toBits + 1)]
+
+def bsplineRows : List (List Float) :=
+  (List.range 11).flatMap fun i =>
+    let n := i + 2
+    let grid := (List.range (8 * (n + 2) + 1)).map fun j => j.toFloat / 8 - 1
+    let knots := (List.range (n + 1)).flatMap fun k => spmeNeighbours k.toFloat
+    (grid ++ knots).map fun u =>
+      let d := NewenSpec.SPME.bsplineDerivFloat n u
+      [natF n, u, NewenSpec.SPME.bsplineFloat n u, d.1, d.2]
+
+def splineWeightRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 11 do
+    let n := i + 2
+    let mut us : List Float := [0, 0.5, 1, 3, 31, 31.999999, -0.25, -1, -3.5] ++
+      spmeNeighbours 7 ++ spmeNeighbours 16
+    for _ in List.range 16 do
+      us := us ++ [← uniform 0 32]
+    for _ in List.range 4 do
+      us := us ++ [← uniform (-4) 0]
+    for u in us do
+      let (t, d) := NewenSpec.SPME.splineWeightsFloat n u
+      rows := rows.push ([natF n, u] ++ t ++ d)
+  return rows.toList
+
+def eulerRows : List (List Float) :=
+  spmeOrders.flatMap fun n => [4, 8, 16, 32].flatMap fun k =>
+    (List.range k).map fun i =>
+      let m := NewenSpec.P3M.waveIndex i k
+      [natF n, natF k, spmeIntF m, NewenSpec.SPME.eulerFloat n k m]
+
+/-- One SPME influence case: the grid, the order, the shape, the box. -/
+structure SCase where
+  g : ℕ × ℕ × ℕ
+  n : ℕ
+  shape : Shape
+  width : Float
+  rect : Bool
+  a : SV3 Float
+  b : SV3 Float
+  c : SV3 Float
+
+def SCase.recip (k : SCase) : SM3 Float :=
+  let (_, u, v, w) := reciprocalBoxFloat k.a k.b k.c k.rect
+  ⟨u, v, w⟩
+
+def SCase.list (k : SCase) : List Float :=
+  [natF k.g.1, natF k.g.2.1, natF k.g.2.2, natF k.n, nshapeFloat k.shape, k.width] ++
+    spmeBoxList k.rect k.a k.b k.c
+
+def drawSCase (grids : List ℕ) : Gen SCase := do
+  let g := grids.getD (← below grids.length) 4
+  let (rect, a, b, c) ← drawBox
+  return ⟨(g, g, g), spmeOrders.getD (← below spmeOrders.length) 4,
+    spmeShapes.getD (← below spmeShapes.length) .gaussian, ← pick [0.4, 1.4], rect, a, b, c⟩
+
+def spmeInfluenceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 150 do
+    let k ← drawSCase [4, 8]
+    let l ← drawL k.g
+    let (g, gam) := NewenSpec.SPME.influenceAtFloat l k.g k.n k.shape k.width k.recip
+    rows := rows.push (k.list ++ lList l ++ [g] ++ symList gam)
+  return rows.toList
+
+def spmeInfluenceFunctionRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 6 do
+    let k ← drawSCase [if i < 4 then 4 else 8]
+    let (g, gam) := NewenSpec.SPME.influenceFunctionFloat k.g k.n k.shape k.width k.recip
+    rows := rows.push (k.list ++ g.toList ++ gam.toList.flatMap symList)
+  return rows.toList
+
+def spmeAssignRows (squared : Bool) : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 20 do
+    let g ← drawSmallGrid
+    let n := spmeOrders.getD (← below spmeOrders.length) 4
+    let (rect, a, b, c) ← drawBox
+    let atoms ← drawAtomsIn a b c 6
+    let m := NewenSpec.P3M.meshFloat ⟨a, b, c⟩ g
+    let out := if squared then NewenSpec.SPME.assignSquaredFloat m n atoms
+      else NewenSpec.SPME.assignFloat m n atoms
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2, natF n] ++ spmeBoxList rect a b c ++
+      atomsList atoms ++ out.toList)
+  return rows.toList
+
+def spmeForceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 20 do
+    let g ← drawSmallGrid
+    let n := spmeOrders.getD (← below spmeOrders.length) 4
+    let (rect, a, b, c) ← drawBox
+    let atoms ← drawAtomsIn a b c 6
+    let e0 ← pick eps0Invs
+    let m := NewenSpec.P3M.meshFloat ⟨a, b, c⟩ g
+    let mut conv := #[]
+    for _ in gridPoints g do
+      conv := conv.push (← uniform (-1) 1)
+    let forces := atoms.flatMap fun at_ => v3List (NewenSpec.SPME.forceFloat m n conv e0 at_)
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2, natF n] ++ spmeBoxList rect a b c ++
+      atomsList atoms ++ [e0] ++ conv.toList ++ forces)
+  return rows.toList
+
+/-- The whole k-space energy of SPME on an 8³ grid through the direct transform `dftFloat`
+(compared within a tolerance: the Rust uses PhastFT). -/
+def spmeEnergyRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 6 do
+    let k ← drawSCase [8]
+    let atoms ← drawAtomsIn k.a k.b k.c 12
+    let e0 ← pick eps0Invs
+    let (gh, _) := NewenSpec.SPME.influenceFunctionFloat k.g k.n k.shape k.width k.recip
+    let m := NewenSpec.P3M.meshFloat ⟨k.a, k.b, k.c⟩ k.g
+    let rho := NewenSpec.SPME.assignFloat m k.n atoms
+    let (re, im) := NewenSpec.P3M.dftFloat k.g rho (Array.replicate rho.size 0) (-1)
+    let pts := (List.range rho.size).map fun i =>
+      (gh.getD i 0, (NewenSpec.LatticeSum.Sym.zero : Sym Float), re.getD i 0, im.getD i 0)
+    let (e, _) := NewenSpec.P3M.kspaceEnergyFloat pts false m.cellVolume e0
+    rows := rows.push (k.list ++ [e0] ++ atomsList atoms ++ [e])
+  return rows.toList
+
+structure SPMERows where
+  energy : List (List Float)
+  weights : List (List Float)
+  influence : List (List Float)
+  influenceFunction : List (List Float)
+  assign : List (List Float)
+  assignSquared : List (List Float)
+  forces : List (List Float)
+
+def spmeRows : SPMERows :=
+  (do return ⟨← spmeEnergyRows, ← splineWeightRows, ← spmeInfluenceRows, ← spmeInfluenceFunctionRows,
+      ← spmeAssignRows false, ← spmeAssignRows true, ← spmeForceRows⟩ : Gen _).run'
+    0x6e6577656e2d7370
+
+def spmeParts (r : SPMERows) : List (String × List (List Float)) :=
+  [("bspline", bsplineRows), ("spline_weights", r.weights), ("euler_spline_factor", eulerRows),
+    ("influence_at", r.influence), ("influence_function", r.influenceFunction),
+    ("assign", r.assign), ("assign_squared_charges", r.assignSquared), ("forces", r.forces),
+    ("spme_energy", r.energy)]
+
+def spmeJson (parts : List (String × List (List Float))) : String :=
+  let part (p : String × List (List Float)) : String :=
+    s!"  \"{p.1}\": [\n" ++ ",\n".intercalate (p.2.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"spme.bspline, spme.bspline_and_deriv, spme.spline_weights, " ++
+  "spme.euler_spline_factor, spme.influence_at, spme.assign, spme.assign_squared_charges, " ++
+  "spme.forces (bit for bit); spme.kspace (within a tolerance)\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.SPME, the *Float functions; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits; counts, orders, " ++
+  "nshape and integer coordinates are floats; a vector is x, y, z; a symmetric tensor xx, xy, xz, " ++
+  "yy, yz, zz; a box is rectangular, a, b, c; grids in storage order z + Nz (y + Ny x)\",\n" ++
+  "  \"layout_bspline\": \"n, u, bspline(n, u), bspline_and_deriv(n, u)\",\n" ++
+  "  \"layout_spline_weights\": \"n, u, n weights, n derivatives\",\n" ++
+  "  \"layout_euler_spline_factor\": \"n, K, m, |b(m)|^2\",\n" ++
+  "  \"layout_influence_at\": \"case (nx, ny, nz, n, nshape, width, box), l, ghat, gammahat " ++
+  "(reciprocal basis from reciprocal_box of the box)\",\n" ++
+  "  \"layout_influence_function\": \"case; ghat per point, gammahat per point\",\n" ++
+  "  \"layout_assign\": \"nx, ny, nz, n, box, n_atoms, per atom r, q; grid\",\n" ++
+  "  \"layout_assign_squared_charges\": \"as assign\",\n" ++
+  "  \"layout_forces\": \"nx, ny, nz, n, box, atoms, eps0_inv, convolution grid; per atom force\",\n" ++
+  "  \"layout_spme_energy\": \"case (grid 8^3), eps0_inv, atoms; k-space energy through dftFloat\",\n" ++
+  ",\n".intercalate (parts.map part) ++ "\n}\n"
+
+end SPMERows
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -2524,3 +2727,7 @@ def main : IO Unit := do
   IO.FS.writeFile "vectors/p3m.json" (p3mJson parts)
   IO.println (s!"wrote vectors/p3m.json (" ++
     ", ".intercalate (parts.map fun p => s!"{p.2.length} {p.1}") ++ " rows)")
+  let sparts := spmeParts spmeRows
+  IO.FS.writeFile "vectors/spme.json" (spmeJson sparts)
+  IO.println (s!"wrote vectors/spme.json (" ++
+    ", ".intercalate (sparts.map fun p => s!"{p.2.length} {p.1}") ++ " rows)")

@@ -473,13 +473,14 @@ impl EwaldSum {
     }
 }
 
-/// The reciprocal-space method of a lattice-sum run: the direct Ewald sum (NLRELE 2) or P3M
-/// (NLRELE 3). Both share the real-space loops (`ls_real_space.rs`) and the self, A and surface
-/// terms ([`add_constant_terms`]).
+/// The reciprocal-space method of a lattice-sum run: the direct Ewald sum (NLRELE 2), P3M
+/// (NLRELE 3) or SPME (NLRELE 5, newen only, experimental). All share the real-space loops
+/// (`ls_real_space.rs`) and the self, A and surface terms ([`add_constant_terms`]).
 #[derive(Debug, Clone)]
 pub enum LatticeSum {
     Ewald(Box<EwaldSum>),
     P3m(Box<super::p3m::P3m>),
+    Spme(Box<super::spme::Spme>),
 }
 
 impl LatticeSum {
@@ -487,6 +488,7 @@ impl LatticeSum {
         match self {
             LatticeSum::Ewald(e) => &e.params,
             LatticeSum::P3m(p) => &p.params,
+            LatticeSum::Spme(s) => &s.params,
         }
     }
 
@@ -515,6 +517,15 @@ impl LatticeSum {
             ),
             LatticeSum::P3m(p) => p.evaluate(
                 step,
+                positions,
+                charges,
+                edges,
+                rectangular,
+                periodicity,
+                storage,
+                virial,
+            ),
+            LatticeSum::Spme(s) => s.evaluate(
                 positions,
                 charges,
                 edges,

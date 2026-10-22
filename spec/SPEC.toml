@@ -1252,3 +1252,116 @@ model = "NewenSpec.P3M (assignChargesFloat, influenceFunctionFloat, dftFloat, ks
 # the k-space energy within 1e-11 of the Lean pipeline (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"
 vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "spme.bspline"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::bspline"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::bspline_and_deriv", "crates/newen-forces/src/nonbonded/spme.rs::euler_spline_factor"]
+origin = "Essmann et al., J. Chem. Phys. 103, 8577 (1995), eq. 4.1 and the recursion after it: M_1 = 1 on [0, 1), M_n(u) = (u M_{n-1}(u) + (n - u) M_{n-1}(u - 1)) / (n - 1). Newen only (NLRELE 5, experimental): gromosXX has no SPME"
+# Theorems over R: zero outside [0, n), non-negative, a partition of unity for every n >= 1 (over a window of n grid points and over Z), continuous for n >= 2; P3M's w_p is M_p(x + p/2) for p = 2..5 everywhere and for p = 1 away from x = -1/2
+theory = "NewenTheory.Interactions.SPME.bspline (bspline_support, bspline_nonneg, bspline_partition_of_unity, bspline_tsum_eq_one, bspline_continuous, bspline_eq_p3m_w, bspline_eq_p3m_w_one, p3m_w_one_half)"
+model = "NewenSpec.SPME.bsplineModel (at Float: bsplineFloat)"
+theorem = "NewenSpec.SPME.bsplineModel_real_eq"
+# Rust = model at Float, bit for bit, n = 2..12 on a grid of u in [-1, n + 1] and the doubles at and on either side of every knot (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.bspline_and_deriv"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::bspline_and_deriv"
+used_by = ["crates/newen-forces/tests/spme_spec.rs (the reference the spline table is checked against)"]
+origin = "Essmann et al. after eq. 4.1: M_n'(u) = M_{n-1}(u) - M_{n-1}(u - 1)"
+# Theorems over R: the derivative of M_n is M_{n-1}(u) - M_{n-1}(u - 1) for n >= 3 at every u (the knots included), for n = 2 away from the integers
+theory = "NewenTheory.Interactions.SPME.bsplineDeriv (bspline_deriv, bspline_deriv_two)"
+model = "NewenSpec.SPME.bsplineDerivModel (at Float: bsplineDerivFloat)"
+theorem = "NewenSpec.SPME.bsplineDerivModel_real_eq"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.spline_weights"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spline_weights"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_assign", "crates/newen-forces/src/nonbonded/spme.rs::spme_assign_squared_charges", "crates/newen-forces/src/nonbonded/spme.rs::spme_forces"]
+origin = "The recursion of M_n on the table M_k(w + j), j = 0..k-1, w = u - floor(u), order by order (Essmann's fill of the theta arrays), with the derivatives from the table of order n - 1"
+# Theorem over R: entry j is M_n(fract u + j), derivative j is M_{n-1}(fract u + j) - M_{n-1}(fract u + j - 1), for n >= 2 (tableModel_real_eq: the table after order r + 1 is M_{r+1}(w + j) for j <= r and 0 above)
+theory = "NewenTheory.Interactions.SPME.bspline, bsplineDeriv"
+model = "NewenSpec.SPME.splineWeightsModel (at Float: splineWeightsFloat)"
+theorem = "NewenSpec.SPME.splineWeightsModel_real_eq"
+# Rust = model at Float, bit for bit, n = 2..12 at special and random u in [-4, 32); the weights sum to 1 and the derivatives to 0 within 1e-14, and equal bspline / bspline_and_deriv within 1e-14 / 1e-13 (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.euler_spline_factor"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::euler_spline_factor"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_influence_at", "crates/newen-forces/src/nonbonded/spme.rs::euler_factors"]
+origin = "Essmann et al. eqs. 4.4, 4.7: |b(m)|^2 = 1 / |sum_{j=0}^{n-2} M_n(j+1) e^{2 pi i m j / K}|^2 (the numerator has modulus one); real and imaginary parts summed in j order"
+# Theorems over R: positive where the denominator does not vanish, 1 at m = 0 (the partition of unity at the grid points); the re/im form the code sums (eulerFactor_eq_re_im). Not proved: that the denominator never vanishes for even n
+theory = "NewenTheory.Interactions.SPME.eulerFactor (eulerFactor_pos, eulerFactor_zero, eulerFactor_eq_re_im)"
+model = "NewenSpec.SPME.eulerModel (at Float: eulerFloat)"
+theorem = "NewenSpec.SPME.eulerModel_real_eq"
+# Rust = model at Float, bit for bit, n = 4, 6, 8, 10, 12 on axes of 4, 8, 16, 32 points, every wave index (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.influence_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_influence_at"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_influence_function (the same kernel with the Euler factors of every storage position)"]
+origin = "Essmann et al. eqs. 4.7, 4.8 with GROMOS's charge shapes: G(k_l) = gamma_hat(a|k_l|)/k_l^2 B(l), k_l = l_x b1 + l_y b2 + l_z b3; Gamma_hat = B (a k gamma_hat' - 2 gamma_hat)/k^4 k (x) k, the Ewald virial tensor times B (exact: B depends on the integer l only). For the Gaussian, gamma_hat(a k) = exp(-a^2 k^2 / 4) is Essmann's exp(-pi^2 m^2 / beta^2) with beta = 1/a"
+# Theorem over R: G = gamma_hat(a|k|)/|k|^2 times the theory's Euler factors of the three axes, for k != 0 and a != 0
+theory = "NewenTheory.Interactions.LatticeSum.gammaHat, NewenTheory.Interactions.SPME.eulerFactor"
+model = "NewenSpec.SPME.influenceAtModel (at Float: influenceAtFloat; the whole grid: influenceFunctionFloat)"
+theorem = "NewenSpec.SPME.influenceAtModel_real_eq (influenceFromModel_real_eq)"
+# Rust = model at Float, bit for bit: 150 wave vectors on 4^3 and 8^3 grids (orders 4..12, four shapes, widths 0.4 and 1.4 nm, cubic, rectangular and triclinic boxes), whole 4^3 and 8^3 grids (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.assign"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_assign"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"]
+origin = "Essmann et al. eq. 4.6, divided by the cell volume as P3M's assign_charges: rho(floor(u) - j) += (theta_x theta_y theta_z / V_cell) q"
+# The grid carries the charges: sum rho V_cell = sum q (cargo test); the partition of unity behind it is bspline_partition_of_unity
+model = "NewenSpec.SPME.assignModel (at Float: assignFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.assign_squared_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_assign_squared_charges"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate (NA2CLC 3 and 4)"]
+origin = "The autocorrelation of each charge's weights, around the grid origin, as P3M's assign_squared_charges (latticesum.cc:170-258) with the B-spline overlaps in place of f_p, so that a2_tilde_p3m gives each charge's interaction with itself through the grid: E_gamma of a single charge equals minus the A2~ part of the A term to 1e-12 (cargo test)"
+model = "NewenSpec.SPME.assignSquaredModel (at Float: assignSquaredFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.forces"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_forces"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"]
+origin = "Essmann et al. eq. 4.9: F_i = -(q_i eps0_inv / N) H^-1 g, g_beta = sum over the n^3 points of the spline derivative along beta times the other two splines times the convolution Re backward(G rho_hat)"
+# Theorem over R: the force is minus the derivative of the mesh energy with respect to every coordinate of every charge, for n >= 3, at every configuration, for every symmetric kernel and set of periodic images; P3M's k-space energy is such a mesh energy (p3mEnergy_eq_meshEnergy, p3mKernel_symm). Measured: central differences of the mesh energy (h = 1e-5 nm) agree within 1.2e-9 of the rms force, n = 4..12 (cargo test)
+theory = "NewenTheory.Interactions.SPME.spmeForce (spme_force_is_minus_grad, spme_force_is_minus_grad_grid, p3mEnergy_eq_meshEnergy)"
+model = "NewenSpec.SPME.forceModel (at Float: forceFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.kspace"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"
+used_by = ["crates/newen-integrators/src/algorithms/forcefield.rs::Forcefield::lattice_sum_terms (NLRELE 5)"]
+origin = "P3M's pipeline (positions into the box, A2~, assignment, forward transform, kspace_energy) with the SPME influence function recomputed whenever the box changes and one backward transform for the forces. No gromosXX oracle. Measured maximum relative difference of the k-space energy (spme_assign, fft3, kspace_energy) from the Lean pipeline with dftFloat on 8^3 grids: 1.3e-15; bound 1e-11. Against the direct Ewald sum (16 charges, cubic, rectangular, triclinic boxes, Gaussian a = 0.4 nm), worst relative rms force error: 3.6e-3 (16^3, n 4), 1.2e-4 (16^3, n 6), 8.8e-6 (16^3, n 8), 5.9e-4 (32^3, n 4), 2.9e-6 (32^3, n 6), 2.9e-8 (32^3, n 8). The k-space virial with the SPME Gamma_hat equals half the deformation derivative of the mesh energy within 1.5e-8 relative"
+model = "NewenSpec.SPME (assignFloat, influenceFunctionFloat, NewenSpec.P3M.dftFloat, kspaceEnergyFloat; the spme_energy rows)"
+# the k-space energy within 1e-11 of the Lean pipeline (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"

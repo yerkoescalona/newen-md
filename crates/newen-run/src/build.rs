@@ -54,6 +54,7 @@ use crate::{total_dof, ConstraintSelection, Prepared, RunError, RunInputs, RunOp
 use newen_forces::nonbonded::ewald::{EwaldSum, LatticeSum, LatticeSumParams};
 use newen_forces::nonbonded::lattice_sum::ChargeShape;
 use newen_forces::nonbonded::p3m::{P3m, P3mParams};
+use newen_forces::nonbonded::spme::{Spme, SpmeParams};
 
 /// What the thermostat was built as — for the binary's report and the Python getters.
 #[derive(Debug, Clone, PartialEq)]
@@ -293,9 +294,28 @@ fn instantiate_forcefield(
             eps0_inv: ff.four_pi_eps_i * 4.0 * std::f64::consts::PI,
             four_pi_eps_i: ff.four_pi_eps_i,
         };
-        forcefield.lattice_sum = Some(match &ls.p3m {
-            None => LatticeSum::Ewald(Box::new(EwaldSum::new(params))),
-            Some(m) => {
+        forcefield.lattice_sum = Some(match (&ls.p3m, &ls.spme) {
+            (None, Some(m)) => {
+                let order = m.nspord;
+                if !(order % 2 == 0 && (4..=12).contains(&order))
+                    || !m.grid.iter().all(|n| n.is_power_of_two())
+                {
+                    return Err(RunError::Recipe(format!(
+                        "NONBONDED SPME settings out of range (grid {:?} powers of two, NSPORD \
+                         even in 4..=12): {m:?}",
+                        m.grid
+                    )));
+                }
+                LatticeSum::Spme(Box::new(Spme::new(
+                    params,
+                    SpmeParams {
+                        grid: m.grid,
+                        order: order as usize,
+                    },
+                )))
+            },
+            (None, None) => LatticeSum::Ewald(Box::new(EwaldSum::new(params))),
+            (Some(m), _) => {
                 let order = |name: &str, v: i32, range: std::ops::RangeInclusive<i32>| {
                     if range.contains(&v) {
                         Ok(v as u8)
@@ -1082,7 +1102,7 @@ mod tests {
                 );
                 continue;
             }
-            if matches!(loaded.imd.nlrele, 2 | 3) {
+            if matches!(loaded.imd.nlrele, 2 | 3 | 5) {
                 println!("{name}: skipped, the legacy builder does not model lattice sums");
                 continue;
             }

@@ -1401,6 +1401,123 @@ cargo test -p newen-md --test test_gromosXX_references p3m         # the six P3M
 cargo test -p newen-md --test gromos_check_suite aladip_p3m        # gromosXX's aladip_ls check
 ```
 
+### Lattice-sum electrostatics: smooth PME, experimental
+
+NONBONDED NLRELE = 5 runs smooth particle-mesh Ewald (Essmann, Perera, Berkowitz, Darden, Lee and
+Pedersen, J. Chem. Phys. 103, 8577 (1995)). It is newen's own: gromosXX has no SPME. Its reader
+accepts NLRELE −1 … 4 (`in_parameter.cc:4604`), and 4 is not a mesh method but the shifted
+reaction field (`in_parameter.cc:4663-4674`: `use_shift`, `lj_shifted_crf_corr_func`,
+`m_crf = 4`). Vol. 4 lists
+NLRELE −1 … 3 and calls NSPORD "order of the SPME B-spline function (not available)"; its notes
+"abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers from an older reading. gromosXX's
+enum has `el_spme` (`simulation/parameter.h:480`), which nothing sets, and it reads NSPORD into
+`spme_bspline` (`in_parameter.cc:4624`), which nothing uses. So SPME takes 5, a value gromosXX
+refuses outright: a gromosXX input can never be misread as SPME, and NLRELE 4 keeps its gromosXX
+meaning.
+
+SPME is P3M with three substitutions and shares everything else: the grid (`Mesh`, powers of two),
+the PhastFT transforms, the real-space loops, the self, A and surface terms, the energy formula
+(`kspace_energy`), `Ã2` from a squared-charge grid through `a2_tilde_p3m`, the ENERGY03 rows and
+the lattice-sum locks. The substitutions:
+
+1. **Assignment with cardinal B-splines** `M_n` of even order `n` = NSPORD (4 … 12; odd or other
+   orders are refused): a charge at grid coordinate `u` gives the grid points `⌊u⌋ − j`,
+   `j = 0 … n − 1`, the weights `M_n(u − ⌊u⌋ + j)` (Essmann eq. 4.1, 4.6).
+2. **The influence function** `Ĝ(k) = γ̂(a|k|)/k² · B(m)`, `B = Π_α |b_α(m_α)|²` with the Euler
+   exponential-spline factors (eqs. 4.4, 4.7, 4.8), no alias sums, no differentiation operator.
+   With the Gaussian, GROMOS's `γ̂(κ) = e^{−κ²/4}`, `κ = a|k|`, is Essmann's `e^{−π²m²/β²}` for
+   `β = 1/a`; with the eleven polynomial shapes `γ̂` is the one of phase 1, which generalises SPME
+   to GROMOS's charge shaping. `Γ̂ = B (a|k| γ̂'(a|k|) − 2γ̂)/k⁴ k⊗k` gives the virial exactly (`B`
+   depends on the integers `m` only). `Ĝ` is recomputed whenever the box changes; there is no quality
+   check and no first-order correction.
+3. **Forces from the splines' derivatives** (eq. 4.9): one backward transform of `Ĝ ρ̂` gives the
+   convolution `θ ⋆ Q`, and `F_i = −(q_i ε₀⁻¹/N) H⁻¹ g` with `g_β` the sum of
+   `M_n'(u_β − k_β) Π_{γ≠β} M_n(u_γ − k_γ)` against it, `M_n' = M_{n−1}(u) − M_{n−1}(u − 1)`.
+   P3M needs three backward transforms for the `ik` field.
+
+NSHAPE, ASHAPE, NGX/NGY/NGZ, NA2CLC (3 and 4 read as 3, as for P3M), TOLA2 and EPSLS mean what
+they mean for P3M; NASORD, NFDORD, NALIAS, NQEVAL and FACCUR are read and range-checked as for
+every NLRELE, and not used by SPME. The run prints `SPME is experimental: no gromosXX oracle;
+checked against the Lean Ewald model and P3M` at start, and the plan's lattice-sum settings carry
+`"experimental": true` (`LatticeSumPlan::experimental`, serialised only when set).
+
+**The kernels.** `spme.rs`, each with a `/// spec:` key: `bspline` (the recursion),
+`bspline_and_deriv`, `spline_weights` (the recursion on the whole table, the production path),
+`euler_spline_factor`, `spme_influence_at` (and `spme_influence_function` over the grid),
+`spme_assign`, `spme_assign_squared_charges` (each charge's autocorrelation, so that
+`a2_tilde_p3m` gives its interaction with itself through the grid), `spme_forces`, and the
+`Spme` driver (`LatticeSum::Spme`).
+
+**What is proven.** `NewenTheory/Interactions/SPME.lean`: `M_n` vanishes outside `[0, n)`
+(`bspline_support`), is non-negative (`bspline_nonneg`), and is a partition of unity for every
+`n ≥ 1`, over the window of `n` grid points and over all of `ℤ` (`bspline_partition_of_unity`,
+`bspline_tsum_eq_one`); it is continuous for `n ≥ 2` and `M_n' = M_{n−1}(u) − M_{n−1}(u − 1)` for
+`n ≥ 3` at every `u`, the knots included, and for `n = 2` away from them (`bspline_deriv`,
+`bspline_deriv_two`). P3M's assignment functions are the same family centred on the grid point:
+`w_p(x) = M_p(x + p/2)` for `p = 2 … 5` and every `x`, and for `p = 1` everywhere but at
+`x = −1/2`, where gromosXX's strict `|x| < 1/2` gives weight zero and `M_1(0) = 1`
+(`bspline_eq_p3m_w`, `bspline_eq_p3m_w_one`, `p3m_w_one_half`). The Euler factor is 1 at `m = 0`
+and positive where its denominator does not vanish (`eulerFactor_zero`, `eulerFactor_pos`; that
+it never vanishes for even `n` is not proved). The point of SPME over P3M,
+**`spme_force_is_minus_grad`**: for `n ≥ 3`, every configuration, every symmetric kernel `θ` and
+every set of periodic images, the force of eq. 4.9 is minus the derivative of the mesh energy
+`½ Σ_{g,g'} Q(g) θ(g,g') Q(g')` with respect to every coordinate of every charge; and P3M's
+k-space energy `½ V_G ε₀⁻¹ Σ_l Ĝ_l |ρ̂_l|²/N` is such a mesh energy with a symmetric kernel
+(`p3mEnergy_eq_meshEnergy`, `p3mKernel_symm`). `NewenSpec/SPME.lean` models the kernels over any
+number type; at ℝ `bsplineModel_real_eq`, `bsplineDerivModel_real_eq`,
+`splineWeightsModel_real_eq` (the table is the recursion: entry `j` is `M_n(fract u + j)`),
+`eulerModel_real_eq` and `influenceAtModel_real_eq`. That SPME approximates the Ewald sum is not
+proved; the tests measure it.
+
+**What is measured.** `spec/vectors/spme.json` (0.7 MB): `M_n` and `M_n'` for `n = 2 … 12` on a
+grid of `u` and at and beside every knot, 385 spline tables, 300 Euler factors (even orders, axes
+of 4 … 32 points), 150 influence rows on 4³ and 8³ grids (orders 4 … 12, four shapes, widths 0.4
+and 1.4 nm, cubic, rectangular and triclinic boxes), whole 4³ and 8³ influence functions, 20 + 20
+assignments and 20 force rows on 4³ grids; `crates/newen-forces/tests/spme_spec.rs` requires the
+same bits in debug, release and `target-cpu=generic` builds. Within a tolerance: the whole k-space
+energy against the Lean pipeline through `dftFloat` on 8³ grids, within `10⁻¹¹` (measured
+`1.3·10⁻¹⁵`). Without Lean:
+
+- the forces against central differences of the mesh energy (`h = 10⁻⁵` nm, triclinic box, 12
+  charges, `n` = 4, 6, 8, 12 on 16³ and `n` = 4 on 32³): largest difference `1.2·10⁻⁹` of the rms
+  force, the rounding of the difference quotient: the forces are the gradient;
+- against the direct Ewald sum (the Lean Ewald model's Rust, bit-exact in `ewald_spec.rs`) for 8
+  and 16 charges in a cubic, a rectangular and a triclinic box, Gaussian with `a` = 0.4 nm, the
+  worst over boxes and systems:
+
+  | grid | n | k-space + `Ã2` energy, relative | rms force, relative |
+  |---|---|---|---|
+  | 16³ | 4 | 1.1·10⁻⁴ | 3.6·10⁻³ |
+  | 16³ | 6 | 4.0·10⁻⁶ | 1.2·10⁻⁴ |
+  | 16³ | 8 | 2.5·10⁻⁷ | 8.8·10⁻⁶ |
+  | 32³ | 4 | 3.0·10⁻⁶ | 5.9·10⁻⁴ |
+  | 32³ | 6 | 2.2·10⁻⁸ | 2.9·10⁻⁶ |
+  | 32³ | 8 | 2.3·10⁻¹⁰ | 2.9·10⁻⁸ |
+
+  The force error falls as `(h/a)^{n−1}` (analytical differentiation of an order-`n`
+  interpolation), the test's bound being `0.3 (h/a)^{n−1}`;
+- against P3M of the same order on the same grid (NASORD 4, `ik`, NALIAS 2): the energies agree
+  within the two methods' errors; SPME's forces are less accurate than P3M's (2.6·10⁻³ against
+  9·10⁻⁵ on 16³, 4.4·10⁻⁴ against 5·10⁻⁶ on 32³, relative rms): P3M's influence function is
+  optimised for its forces, SPME's is not, and SPME differentiates analytically;
+- a single charge's k-space energy is its self-interaction through the grid, minus the `Ã2` part
+  of the A term, to `10⁻¹²`;
+- the k-space virial with the SPME `Γ̂` against half the derivative of the mesh energy under a
+  deformation of box and positions together (`n` = 6, 16³, triclinic): within `1.5·10⁻⁸`
+  relative, every element;
+- 200 NVE steps of `water_216_box` (after 1000 equilibration steps; the P3M reference input with
+  NLRELE 5, NSPORD 4, grid 32³, dt 2 fs, SHAKE, twin range): total-energy drift 107.8 kJ mol⁻¹ ps⁻¹
+  with SPME and 102.6 kJ mol⁻¹ ps⁻¹ with P3M (largest deviation 72.3 and 73.1 kJ mol⁻¹), within the
+  test's factor two; the drift is the run's, from the terms both share (the twin-range pairlist
+  and the truncated real-space sum), not the mesh's.
+
+No gromosXX reference exists for SPME, and none is added.
+
+```sh
+cargo test -p newen-forces --test spme_spec -- --nocapture         # kernels = Float model; −∇E; vs Ewald and P3M
+cargo test -p newen-md --test spme_nve -- --nocapture              # 200 NVE steps, SPME vs P3M
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -1650,7 +1767,7 @@ requiring a Lean model and proof before every experiment would stop the experime
 afford model first for every change because its specification, an authorization language, is
 stable. Ours is not, while a method is still being developed.
 
-The agreed design, not yet implemented, has two zones:
+The agreed design has two zones:
 
 - **Experimental zone.** New code sits behind an `experimental` switch, and any output it
   produces is marked as experimental in the run's provenance. It needs only the cheap
@@ -1661,6 +1778,16 @@ The agreed design, not yet implemented, has two zones:
   tutorial. Promotion requires a Lean model, the theorem, and the test described in this chapter.
 
 This keeps the cost of verification where its value is: on code that other people will rely on.
+
+SPME (NLRELE 5) is the first occupant of the experimental zone, and it entered with more than the
+zone asks: a Lean theory and bit-exact kernels (see
+[smooth PME](#lattice-sum-electrostatics-smooth-pme-experimental)). What keeps it out of the core
+is the oracle: gromosXX has no SPME, so nothing checks the whole method against an independent
+implementation, only against the Lean Ewald model and P3M. At run time the label is two things: the
+run prints `SPME is experimental: no gromosXX oracle; checked against the Lean Ewald model and
+P3M` with its header, and the plan of the run (`@dump`, the bundle) carries
+`"experimental": true` in its lattice-sum settings, so any output can be traced to it. Selecting
+NLRELE 5 is the switch.
 
 ## Prior art
 
@@ -1754,6 +1881,12 @@ Planned, in the order chosen:
   references (`nacl_water_box_ewald_na2clc1`, `Ã2` from the k-space sum;
   `nacl_pair_box_ewald_rect`, `A2` over shells in a non-cubic box). Open: the Lennard-Jones
   lattice sum (NLRLJ), implemented in neither engine.
+- **Smooth PME (NLRELE 5), experimental, done:** the B-spline assignment, the SPME influence
+  function and the forces from the splines' derivatives on P3M's grid and transforms, specified
+  first (Lean theory with the exact-gradient theorem, model, bit-exact kernels), compared with the
+  Ewald sum and P3M (see [smooth PME](#lattice-sum-electrostatics-smooth-pme-experimental)). For
+  promotion to the core: an independent oracle (another engine's SPME on the same inputs), and
+  the positivity of the Euler factors for even orders.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

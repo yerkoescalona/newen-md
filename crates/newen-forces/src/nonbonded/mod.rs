@@ -15,6 +15,7 @@ pub mod perturbed;
 mod qm_subprocess;
 #[cfg(feature = "ml")]
 pub mod schnet;
+pub mod spme;
 pub mod xtb;
 
 pub use eds::{

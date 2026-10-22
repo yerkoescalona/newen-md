@@ -95,6 +95,19 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   field, `nacl_water_box_triclinic_p3m_fd_fixed`), LS5 (box correction on a recomputation step,
   `water_216_npt_p3m_fixed`, NQEVAL 2). Open: the Lennard-Jones lattice sum (NLRLJ), in neither
   engine.
+- **SPME (NLRELE 5, newen only, experimental), wired (2026-10-23):** `nonbonded/spme.rs`: P3M's
+  pipeline with B-spline assignment of even order NSPORD 4..=12 (`bspline`, `bspline_and_deriv`,
+  `spline_weights`), the influence function `γ̂/k² · B` with the Euler factors
+  (`euler_spline_factor`, `spme_influence_at`, `spme_influence_function`, with the exact virial
+  tensor `Γ̂`), `spme_assign`, `spme_assign_squared_charges` (for `Ã2` through `a2_tilde_p3m`),
+  `spme_forces` (Essmann eq. 4.9, one backward transform) and the `Spme` driver
+  (`LatticeSum::Spme`; `Ĝ` recomputed exactly on a box change, no quality check). `p3m.rs` is
+  unchanged: SPME reuses `Mesh`, `Fft3`, `kspace_energy`, `a2_tilde_p3m`, `wave_index`, `product`.
+  No gromosXX oracle: `tests/spme_spec.rs` checks the kernels bit for bit against
+  `spec/vectors/spme.json`, the forces against central differences of the mesh energy (the exact
+  gradient, `spme_force_is_minus_grad` in `NewenTheory/Interactions/SPME.lean`), the virial against
+  the deformation derivative, and SPME against the direct Ewald sum and P3M (measured errors in
+  `docs/src/verification/index.md`, "smooth PME, experimental").
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
@@ -170,6 +183,7 @@ src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbond
   lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants`, `A2`, self/A/surface terms
   ewald.rs             — `k_vectors`, `ewald_kspace`, `EwaldSum` (NLRELE 2), the shared constant terms, `LatticeSum`
   p3m.rs               — P3M (NLRELE 3): assignment, influence function, `Fft3` (PhastFT), fields, `P3m`
+  spme.rs              — SPME (NLRELE 5, experimental): B-splines, Euler factors, SPME `Ĝ`, forces, `Spme`
   ls_real_space.rs     — the real-space loops of a lattice-sum run
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
@@ -184,6 +198,7 @@ tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
 tests/lattice_sum_spec.rs — lattice-sum kernels = Lean `Float` model, bit for bit; FD, quadrature
 tests/ewald_spec.rs   — Ewald kernels = Lean `Float` model, bit for bit; forces and virials by FD
 tests/p3m_spec.rs     — P3M kernels = Lean `Float` model, bit for bit; FFT within a tolerance; vs Ewald
+tests/spme_spec.rs    — SPME kernels = Lean `Float` model, bit for bit; forces = −∇E; virial; vs Ewald, P3M
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```

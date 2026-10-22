@@ -148,7 +148,8 @@ pub struct ForcefieldPlan {
     pub position_restraints: Option<PositionRestraintsPlan>,
     pub distance_restraints: Option<DistanceRestraintsPlan>,
     pub perturbation: Option<PerturbationPlan>,
-    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) in place of the reaction field.
+    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M, 5 SPME) in place of the reaction
+    /// field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lattice_sum: Option<LatticeSumPlan>,
 }
@@ -171,7 +172,17 @@ pub struct P3mPlan {
     pub faccur: f64,
 }
 
-/// The NONBONDED lattice-sum settings of an Ewald or P3M run (GROMOS Vol. 4).
+/// The NONBONDED SPME settings (NLRELE 5, newen only: gromosXX has no SPME).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpmePlan {
+    /// NGX, NGY, NGZ (powers of two in newen)
+    pub grid: [usize; 3],
+    /// NSPORD: the B-spline order, even, 4..=12
+    pub nspord: i32,
+}
+
+/// The NONBONDED lattice-sum settings of an Ewald, P3M or SPME run (GROMOS Vol. 4).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LatticeSumPlan {
@@ -192,6 +203,12 @@ pub struct LatticeSumPlan {
     /// The grid of a P3M run (NLRELE 3); `None` for Ewald.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p3m: Option<P3mPlan>,
+    /// The grid of an SPME run (NLRELE 5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spme: Option<SpmePlan>,
+    /// The method has no gromosXX oracle (SPME): recorded for provenance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub experimental: bool,
 }
 
 /// One algorithm of the MD step, fully resolved. One spec = one `Algorithm`.
@@ -929,8 +946,8 @@ pub(crate) fn check_eds(recipe: &RunRecipe) -> Result<(), RunError> {
         );
     }
     match recipe.forcefield.electrostatics.electrostatics {
-        2 | 3 => {
-            return err("lattice-sum electrostatics (NLRELE 2/3) cannot be combined".to_string())
+        2 | 3 | 5 => {
+            return err("lattice-sum electrostatics (NLRELE 2/3/5) cannot be combined".to_string())
         },
         4 => {
             return err(
@@ -1041,8 +1058,8 @@ pub(crate) fn check_aeds(recipe: &RunRecipe) -> Result<(), RunError> {
         );
     }
     match recipe.forcefield.electrostatics.electrostatics {
-        2 | 3 => {
-            return err("lattice-sum electrostatics (NLRELE 2/3) cannot be combined".to_string())
+        2 | 3 | 5 => {
+            return err("lattice-sum electrostatics (NLRELE 2/3/5) cannot be combined".to_string())
         },
         4 => {
             return err(
@@ -1126,9 +1143,10 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
 /// * the lattice-sum parameters' ranges, which gromosXX checks for every NLRELE when it reads
 ///   the block (`in_parameter.cc:4602-4625, 4693-4740`), with its messages: the P3M ones too
 ///   (an odd grid, NRDGRD or NWRGRD = 1 are errors whatever the NLRELE);
-/// * NLRELE 3 (P3M) with a grid dimension that is not a power of two: newen's FFT (PhastFT)
-///   transforms powers of two only, where gromosXX (FFTW) accepts any even size;
-/// * NLRELE 2 (Ewald) and 3 (P3M) with the features gromosXX's FeatureChecker keeps locked
+/// * NLRELE 3 (P3M) and 5 (SPME) with a grid dimension that is not a power of two: newen's FFT
+///   (PhastFT) transforms powers of two only, where gromosXX (FFTW) accepts any even size;
+/// * NLRELE 5 (SPME, newen only) with NSPORD not an even order from 4 to 12;
+/// * NLRELE 2 (Ewald), 3 (P3M) and 5 (SPME, as P3M) with the features gromosXX's FeatureChecker keeps locked
 ///   against `ewald` and `p3m` (`check_parameter.cc:2726-2866`, the same list for both) and a
 ///   recipe can express: the charge-group cutoff (both need PAIRLIST TYPE atomic), the
 ///   grid-cell pairlist, vacuum, the truncated octahedron, more than one energy group,
@@ -1196,7 +1214,7 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     if ls.na2clc == 1 && nlrele != 2 {
         return err("NONBONDED block: exact A2~ calculation needs Ewald.".to_string());
     }
-    if ls.na2clc == 4 && nlrele != 3 {
+    if ls.na2clc == 4 && !matches!(nlrele, 3 | 5) {
         return err("NONBONDED block: averaged A2~ calculation needs P3M.".to_string());
     }
     if ls.ng.iter().any(|n| n % 2 != 0) {
@@ -1209,17 +1227,25 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
                 .to_string(),
         );
     }
-    if nlrele == 3 && !ls.ng.iter().all(|n| n.is_power_of_two()) {
+    if matches!(nlrele, 3 | 5) && !ls.ng.iter().all(|n| n.is_power_of_two()) {
         return err(format!(
-            "NONBONDED NLRELE = 3: the P3M grid NGX, NGY, NGZ = {:?} must be powers of two in \
+            "NONBONDED NLRELE = {nlrele}: the grid NGX, NGY, NGZ = {:?} must be powers of two in \
              newen (its FFT, PhastFT, transforms powers of two only; gromosXX accepts any even \
              size)",
             ls.ng
         ));
     }
+    if nlrele == 5 && !(ls.nspord % 2 == 0 && (4..=12).contains(&ls.nspord)) {
+        return err(format!(
+            "NONBONDED NLRELE = 5: NSPORD = {} must be an even B-spline order from 4 to 12 \
+             for SPME",
+            ls.nspord
+        ));
+    }
     let method = match nlrele {
         2 => "Ewald sum",
         3 => "P3M",
+        5 => "SPME",
         _ => return Ok(()),
     };
     let refuse = |what: &str| {
@@ -1272,10 +1298,10 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
-/// The lattice-sum part of the force field (NLRELE 2, 3): `None` for every other NLRELE.
+/// The lattice-sum part of the force field (NLRELE 2, 3, 5): `None` for every other NLRELE.
 fn lattice_sum_plan(recipe: &RunRecipe) -> Option<LatticeSumPlan> {
     let nb = &recipe.forcefield.electrostatics;
-    matches!(nb.electrostatics, 2 | 3).then(|| {
+    matches!(nb.electrostatics, 2 | 3 | 5).then(|| {
         let ls = &nb.lattice_sum;
         LatticeSumPlan {
             nshape: ls.nshape,
@@ -1294,6 +1320,11 @@ fn lattice_sum_plan(recipe: &RunRecipe) -> Option<LatticeSumPlan> {
                 nqeval: ls.nqeval,
                 faccur: ls.faccur,
             }),
+            spme: (nb.electrostatics == 5).then_some(SpmePlan {
+                grid: ls.ng,
+                nspord: ls.nspord,
+            }),
+            experimental: nb.electrostatics == 5,
         }
     })
 }
@@ -1406,8 +1437,8 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
                  combination"
             )))
         };
-        if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3) {
-            return refuse("lattice-sum electrostatics (NLRELE 2/3)");
+        if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3 | 5) {
+            return refuse("lattice-sum electrostatics (NLRELE 2/3/5)");
         }
         if recipe.minimisation.method >= 2 {
             return refuse("the conjugate-gradient minimiser (NTEM >= 2)");
@@ -1503,7 +1534,7 @@ fn check_slow_growth(recipe: &RunRecipe) -> Result<(), RunError> {
         return refuse("A-EDS");
     }
     match recipe.forcefield.electrostatics.electrostatics {
-        2 | 3 => return refuse("lattice-sum electrostatics (NLRELE 2/3)"),
+        2 | 3 | 5 => return refuse("lattice-sum electrostatics (NLRELE 2/3/5)"),
         4 => return refuse("the shifted reaction field (NLRELE 4)"),
         _ => {},
     }
@@ -1555,8 +1586,8 @@ fn check_precalclam(recipe: &RunRecipe, pc: &crate::recipe::PrecalcLam) -> Resul
             "PRECALCLAM together with {what}: gromosXX refuses this combination"
         ))
     };
-    if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3) {
-        return refuse("lattice-sum electrostatics (NLRELE 2/3)");
+    if matches!(recipe.forcefield.electrostatics.electrostatics, 2 | 3 | 5) {
+        return refuse("lattice-sum electrostatics (NLRELE 2/3/5)");
     }
     if recipe.minimisation.method >= 2 {
         return refuse("the conjugate-gradient minimiser (NTEM >= 2)");
@@ -1590,11 +1621,13 @@ pub(crate) fn check_plan_against_recipe(
             let method = match &ff.lattice_sum {
                 None => "no",
                 Some(ls) if ls.p3m.is_some() => "P3M",
+                Some(ls) if ls.spme.is_some() => "SPME",
                 Some(_) => "Ewald",
             };
             let wanted = match nlrele {
                 2 => "Ewald",
                 3 => "P3M",
+                5 => "SPME",
                 _ => "no",
             };
             if method != wanted {
@@ -1725,9 +1758,9 @@ pub fn build_plan(
         epsilon_rf: ff.electrostatics.epsilon_rf,
         kappa: ff.electrostatics.kappa,
         // gromosXX: NLRELE 2, 3 turn the reaction-field excluded and self terms off
-        // (`in_parameter.cc:4654-4667`)
+        // (`in_parameter.cc:4654-4667`); SPME (5) as P3M
         rf_excluded: ff.electrostatics.self_exclusion != 0
-            && !matches!(ff.electrostatics.electrostatics, 2 | 3),
+            && !matches!(ff.electrostatics.electrostatics, 2 | 3 | 5),
         four_pi_eps_i,
         bonds: ff.bonds,
         covalent_form: (
@@ -2360,6 +2393,43 @@ mod tests {
             Some(([32, 32, 32], 3, 2, 3))
         );
         assert!(lattice_sum_plan(&ewald).expect("lattice sum").p3m.is_none());
+
+        // SPME (NLRELE 5, newen only): P3M's locks and grid, NSPORD an even order 4..=12, and
+        // the plan marked experimental (serialised only when set)
+        let mut spme = ewald.clone();
+        spme.forcefield.electrostatics.electrostatics = 5;
+        assert!(check_electrostatics(&spme).is_ok());
+        let mut r = spme.clone();
+        r.forcefield.electrostatics.lattice_sum.na2clc = 4;
+        assert!(check_electrostatics(&r).is_ok(), "NA2CLC 4 with SPME");
+        assert_eq!(lattice_sum_plan(&r).map(|ls| ls.na2clc), Some(3));
+        for nspord in [3, 5, 2, 14, 0, -4] {
+            let mut r = spme.clone();
+            r.forcefield.electrostatics.lattice_sum.nspord = nspord;
+            refused(&r, "must be an even B-spline order from 4 to 12");
+        }
+        let mut r = spme.clone();
+        r.forcefield.electrostatics.lattice_sum.ng = [32, 48, 32];
+        refused(&r, "must be powers of two in newen");
+        for (edit, message) in locked {
+            let mut r = spme.clone();
+            edit(&mut r);
+            refused(&r, message);
+            let err = check_electrostatics(&r).unwrap_err().to_string();
+            assert!(err.contains("with SPME electrostatics"), "{err}");
+        }
+        let plan = lattice_sum_plan(&spme).expect("lattice sum");
+        assert!(plan.p3m.is_none() && plan.experimental);
+        assert_eq!(
+            plan.spme.map(|m| (m.grid, m.nspord)),
+            Some(([32, 32, 32], 4))
+        );
+        let json = serde_json::to_string(&plan).unwrap();
+        assert!(json.contains("\"experimental\":true"), "{json}");
+        let p3m_json = serde_json::to_string(&lattice_sum_plan(&p3m).unwrap()).unwrap();
+        assert!(!p3m_json.contains("experimental") && !p3m_json.contains("spme"));
+        let back: LatticeSumPlan = serde_json::from_str(&p3m_json).unwrap();
+        assert!(!back.experimental && back.spme.is_none());
     }
 
     #[test]

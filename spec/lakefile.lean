@@ -25,7 +25,8 @@ grids the Rust tests sweep), `vectors/thermostat.json`, `vectors/nonbonded.json`
 `vectors/softcore.json`, `vectors/perturbed_bonded.json`, `vectors/lattice_sum.json` and
 `vectors/ewald.json` (the thermostat, LJ + reaction-field, bonded, leap-frog, kinetic-energy,
 temperature, pressure, barostat, periodic-boundary, soft-core, perturbed bonded, lattice-sum and
-Ewald models at `Float` on grids and random inputs, as bits), and `vectors/p3m.json` (the P3M
-kernels, and the direct discrete Fourier transform the FFT is compared with). -/
+Ewald models at `Float` on grids and random inputs, as bits), `vectors/p3m.json` (the P3M
+kernels, and the direct discrete Fourier transform the FFT is compared with) and
+`vectors/spme.json` (the SPME kernels). -/
 lean_exe «spec-vectors» where
   root := `SpecVectors

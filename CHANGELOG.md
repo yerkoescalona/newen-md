@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.76] (2026-10-23)
+
+### Added
+
+- **Smooth particle-mesh Ewald, experimental** (NLRELE 5, a value gromosXX refuses, since its own
+  NLRELE 4 is the shifted reaction field and its `el_spme` is never set; NSPORD is the B-spline
+  order, even, 4 to 12). Built on the P3M mesh and PhastFT: B-spline assignment by the recursion,
+  the Euler exponential-spline factors, the influence function `γ̂(a|k|)/k²·|b(k)|²` for all
+  twelve charge shapes, and the forces from the spline derivatives with one backward transform.
+  Lean (`NewenTheory/Interactions/SPME.lean`): the B-splines are a partition of unity for every
+  order, their derivative recursion, the GROMOS P3M assignment functions of orders 2 to 5 are these
+  splines, and **the SPME force is the exact gradient of the mesh energy**
+  (`spme_force_is_minus_grad`), which P3M's interpolated field is not; per-point kernels bit-exact,
+  the transform within tolerance. Against the Lean Ewald model: energy within 2.5e-7 and rms force
+  within 8.8e-6 relative at order 8 on a 16³ grid (table in the verification chapter); SPME's
+  forces are 30 to 90 times less accurate than P3M's at the same order and grid. The run prints
+  that the method is experimental and has no gromosXX oracle; the plan records it.
+- **Every lattice-sum path has a reference**: LS4 (the finite-difference field in a triclinic box)
+  and LS5 (the box correction on a recompute step) patched in the oracle, with
+  `nacl_water_box_triclinic_p3m_fd_fixed` and `water_216_npt_p3m_fixed`; Ewald with NA2CLC 1
+  (`nacl_water_box_ewald_na2clc1`) and in a non-cubic box (`nacl_pair_box_ewald_rect`, the A2 shell
+  sum). 135 references, none ignored.
+
+### Fixed
+
+- The Python front-end ran every triclinic configuration with a rectangular box: it hard-coded
+  right angles when building the coordinates. It now passes the GENBOX angles to the same
+  `prepare_system` the binary calls; the three triclinic references join the Python list.
+
 ## [0.0.75] (2026-10-22)
 
 ### Added (lattice-sum electrostatics, specification first)

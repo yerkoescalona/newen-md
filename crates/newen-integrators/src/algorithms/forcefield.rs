@@ -196,8 +196,8 @@ pub struct Forcefield {
     /// GaMD: the exclusion lists with only the solute's, and with none (built once), to take
     /// the reaction-field excluded solute pairs apart.
     gamd_exclusions: Option<[Vec<Vec<usize>>; 2]>,
-    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) in place of the reaction field; `None`
-    /// for a reaction-field or cutoff run.
+    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M, 5 SPME) in place of the reaction field;
+    /// `None` for a reaction-field or cutoff run.
     pub lattice_sum: Option<LatticeSum>,
     /// The lattice-sum energies of this step but the real-space one (which is the pair
     /// storage's electrostatic energy).

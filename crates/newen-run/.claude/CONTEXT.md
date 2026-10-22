@@ -71,6 +71,17 @@ RunError                                                                 -> ever
   `nacl_water_box_triclinic_p3m_fixed` (LS3, triclinic wave vectors, ik differentiation),
   `nacl_water_box_triclinic_p3m_fd_fixed` (LS4, triclinic finite-difference field),
   `water_216_npt_p3m_fixed` (LS5, NPT with NQEVAL 2, the box correction on a recomputation).
+- **SPME runs, experimental (2026-10-23):** NLRELE 5 (newen only; gromosXX's reader stops at 4,
+  the shifted reaction field) is P3M's path with `spme: Option<SpmePlan>` (grid, NSPORD) in place
+  of `p3m`, and `LatticeSumPlan::experimental = true` (serialised only when set, `serde(default)`)
+  for provenance. `check_electrostatics` adds: NSPORD an even order 4..=12, powers-of-two grids,
+  NA2CLC 4 read as 3, P3M's locks ("does not work with SPME electrostatics"); every other
+  `2 | 3` lattice-sum check (EDS, A-EDS, individual λ, PRECALCLAM, the RF excluded/self terms) now
+  includes 5. NASORD, NFDORD, NALIAS, NQEVAL and FACCUR are range-checked as for every NLRELE and
+  unused. `instantiate_forcefield` builds `LatticeSum::Spme`; `md` prints "SPME is experimental:
+  no gromosXX oracle; checked against the Lean Ewald model and P3M" when the plan is
+  experimental. Test: `crates/newen-md/tests/spme_nve.rs` (200 NVE steps of the 216 waters,
+  drift against P3M's).
 - **GENBOX angles and the cell height (2026-10-22):** `Coordinates` carries the GENBOX angles and
   Euler angles; `prepare_system` builds NTB = 2 with an angle ≠ 90° as `SimBox::triclinic`
   (`newen_core::math::genbox_box`, gromosXX `in_configuration.cc:1977-2005`;

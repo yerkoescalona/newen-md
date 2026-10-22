@@ -49,6 +49,15 @@ src/imd.rs         — IMD parameter file parser
 - **PERTURBATION block is multi-line:** splits NTG/NRDGL/RLAM/DLAMT on line 1 and ALPHLJ/ALPHC/NLAM/NSCALE
   on line 2. Always combine `data_lines` before tokenising. Bug: `data_lines.first()` silently dropped line 2.
 - **Energy output:** full f64 scientific notation for exact comparison.
+- **NLRELE values (2026-10-23):** −1 reaction field (Vol. 4's "LSERF compatibility mode"; gromosXX
+  reads it exactly as 1, `in_parameter.cc:4641-4648`), 0 none, 1 reaction field, 2 Ewald, 3 P3M,
+  4 shifted reaction field (`in_parameter.cc:4663-4674`), 5 SPME (newen only, experimental). Why 5
+  for SPME: gromosXX's own 4 is the shifted reaction field, and its reader refuses everything
+  outside −1..4 (`in_parameter.cc:4604`), so a gromosXX input can never be read as SPME. Vol. 4's
+  notes "abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers of an older reading;
+  gromosXX's enum has `el_spme` (`simulation/parameter.h:480`), which nothing sets; NSPORD is read
+  into `spme_bspline` (`in_parameter.cc:4624`) and used nowhere. newen reads NSPORD into
+  `NonbondedExtra::nspord` as before; only NLRELE 5 uses it.
 - **Energy layout lives in code, not in the data file:** `data/ene_ana.md++.lib` is generated from
   `energy_traj::LAYOUTS` and a test keeps the checked-in copy byte-equal. A layout change is a new
   ENEVERSION, never an edit of the 2023-04-15 entry; a library whose `# energy-schema` line no longer

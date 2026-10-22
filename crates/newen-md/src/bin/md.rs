@@ -805,6 +805,16 @@ fn main() {
             },
         }
     }
+    let experimental = plan.iter().any(|a| {
+        matches!(a, newen_run::AlgorithmSpec::Forcefield(ff)
+            if ff.lattice_sum.is_some_and(|ls| ls.experimental))
+    });
+    if experimental {
+        println!(
+            "  SPME is experimental: no gromosXX oracle; checked against the Lean Ewald model \
+             and P3M"
+        );
+    }
     for note in &diagnostics.notes {
         println!("  NOTE: {}", note);
     }
