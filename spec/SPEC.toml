@@ -478,3 +478,101 @@ model = "NewenSpec.Dynamics.berendsenBarostatModel (at Float: berendsenBarostatF
 theorem = "NewenSpec.Dynamics.berendsenBarostatModel_real_eq"
 differential = "crates/newen-integrators/tests/dynamics_spec.rs"
 vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "periodicity.vacuum_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::vacuum_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Vacuum::nearest_image (through Periodicity::Vacuum; Vacuum::put_into_box is the identity, checked on the same rows)"]
+origin = "gromosXX Boundary_Implementation<vacuum>::nearest_image (boundary_implementation.cc:212-219)"
+# Theorem over R: the plain difference (no lattice, so no theory beyond it)
+theory = "none"
+model = "NewenSpec.Periodicity.vacuumNearestImageModel (at Float: vacuumNearestImageFloat)"
+theorem = "NewenSpec.Periodicity.vacuumNearestImageModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_new"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::Rectangular::new"
+used_by = ["crates/newen-run/src/build.rs", "crates/newen-run/src/legacy_builder.rs", "crates/newen-run/src/prepare.rs", "crates/newen-core/src/spatial_index.rs"]
+origin = "gromosXX Boundary_Implementation<rectangular> constructor (boundary_implementation.cc:61-67: half box only); the reciprocal edges are newen's"
+# Theorem over R: half edges and reciprocals; the reciprocals are how the rectangular kernels form x/L
+theory = "NewenTheory.Space.Periodicity.rectImage, rectWrap (through x * (1/L) = x/L)"
+model = "NewenSpec.Periodicity.rectangularNewModel (at Float: rectangularNewFloat)"
+theorem = "NewenSpec.Periodicity.rectangularNewModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; every rectangular row rebuilds the box through it (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::rectangular_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Rectangular::nearest_image (through Periodicity::nearest_image: pairlists, every force kernel, gathering)"]
+origin = "gromosXX Boundary_Implementation<rectangular>::nearest_image (boundary_implementation.cc:224-261): while x > L/2 subtract L, while x < -L/2 add L; newen subtracts L * rint(x * (1/L)) in one step, the same image except at x = ±3L/2, ±7L/2, ... (a box length apart, equally long) and up to rounding"
+# Theorems over R: lattice, in [-L/2, L/2], idempotent, shortest; the model at R is rectImage per component
+theory = "NewenTheory.Space.Periodicity.rectImage, roundEven (rectImage_lattice, rectImage_mem, rectImage_idem, rectImage_shortest, rectImageVec_shortest)"
+model = "NewenSpec.Periodicity.rectangularNearestImageModel (at Float: rectangularNearestImageFloat)"
+theorem = "NewenSpec.Periodicity.rectangularNearestImageModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_put_into_box"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::rectangular_put_into_box"
+used_by = ["crates/newen-core/src/math.rs::Rectangular::put_into_box (through Periodicity::put_into_box: crates/newen-integrators/src/algorithms/lattice_shift.rs)"]
+origin = "newen's [0, L) convention; gromosXX's Periodicity::put_into_box (periodicity.cc:36-41) is the nearest image of the origin, [-L/2, L/2], which newen-core/src/gather.rs computes as nearest_image(v, 0)"
+# Theorems over R: lattice, in [0, L), idempotent; the model at R is rectWrap per component
+theory = "NewenTheory.Space.Periodicity.rectWrap (rectWrap_lattice, rectWrap_mem, rectWrap_idem)"
+model = "NewenSpec.Periodicity.rectangularPutIntoBoxModel (at Float: rectangularPutIntoBoxFloat)"
+theorem = "NewenSpec.Periodicity.rectangularPutIntoBoxModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_new"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::Triclinic::new"
+used_by = ["crates/newen-run/src/build.rs", "crates/newen-run/src/legacy_builder.rs", "crates/newen-run/src/prepare.rs"]
+origin = "glam 0.24 DMat3::inverse (cross products over the determinant, transposed); gromosXX stores the scaled cross products instead (boundary_implementation.cc:72-82)"
+# Theorem over R: the inverse applied to r gives the fractional coordinates of a lower-triangular box
+theory = "NewenTheory.Space.Periodicity.Box.frac"
+model = "NewenSpec.Periodicity.inverseModel (at Float: triclinicNewFloat)"
+theorem = "NewenSpec.Periodicity.mulVec_inverseModel_real"
+# Rust = model at Float, bit for bit on the generated rows, general and singular matrices included (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::triclinic_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Triclinic::nearest_image (through Periodicity::nearest_image; triclinic and truncated-octahedron boxes)"]
+origin = "gromosXX Boundary_Implementation<triclinic>::nearest_image (boundary_implementation.cc:277-318), loop for loop and operation for operation"
+# Theorems over R: lattice, in the centred cell (fractional coordinates in (-1/2, 1/2]), unique, idempotent; not always the shortest image (image_not_shortest)
+theory = "NewenTheory.Space.Periodicity.Box.image (image_lattice, image_inCell, inCell_unique, image_eq_of, image_idem, image_not_shortest)"
+model = "NewenSpec.Periodicity.triclinicNearestImageModel (at Float: triclinicNearestImageFloat, fuel 100000)"
+theorem = "NewenSpec.Periodicity.triclinicNearestImageModel_real_eq (triclinicNearestImageModel_real_idem), for lower-triangular boxes and fuel above every fractional coordinate plus one"
+# Rust = model at Float, bit for bit on the generated rows (rectangular, truncated-octahedron, reduced, skewed and monoclinic boxes) (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_put_into_box"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::triclinic_put_into_box"
+used_by = ["crates/newen-core/src/math.rs::Triclinic::put_into_box (through Periodicity::put_into_box: crates/newen-integrators/src/algorithms/lattice_shift.rs)"]
+origin = "newen's positive cell (fractional coordinates in [0, 1)); gromosXX's put_into_box is the triclinic nearest image of the origin"
+# Theorems over R: lattice, in the positive cell, idempotent; the model at R is Box.wrap
+theory = "NewenTheory.Space.Periodicity.Box.wrap (wrap_lattice, wrap_inPositiveCell, wrap_eq_of, wrap_idem)"
+model = "NewenSpec.Periodicity.triclinicPutIntoBoxModel (at Float: triclinicPutIntoBoxFloat)"
+theorem = "NewenSpec.Periodicity.triclinicPutIntoBoxModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"

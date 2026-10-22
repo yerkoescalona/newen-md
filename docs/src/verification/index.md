@@ -106,11 +106,11 @@ kernel against the model on many random inputs (differential random testing).
 
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
-| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure |
+| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, and the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels (below) |
+| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, and the periodic boundaries (below) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -784,6 +784,123 @@ The model follows newen, not gromosXX, and differs from it in these places:
 cargo test -p newen-integrators --test dynamics_spec    # Rust = Float model, bit for bit
 ```
 
+### Periodic boundaries
+
+Every pair interaction starts from the separation of two atoms in a periodic box, so the
+nearest-image function is called more often than any other kernel in newen. The three pieces
+cover `crates/newen-core/src/math.rs`: `vacuum_nearest_image`, `Rectangular::new` with
+`rectangular_nearest_image` and `rectangular_put_into_box`, and `Triclinic::new` with
+`triclinic_nearest_image` and `triclinic_put_into_box`. The `BoundaryCondition` methods of
+`Vacuum`, `Rectangular` and `Triclinic`, and so `Periodicity`, call these functions. A truncated
+octahedron is read into a triclinic box (`truncoct_triclinic_box`), so it runs the triclinic
+kernels.
+
+**The meaning.** `spec/NewenTheory/Space/Periodicity.lean` describes the lattice of a box.
+Two points are images of each other when they differ by an integer combination of the box
+vectors `a, b, c` (`Box.Lattice`). A **cell** is a region that holds exactly one image of every
+point. In GROMOS's lower-triangular box (`a` along `x`, `b` in the `xy` plane) the fractional
+coordinates of a point follow by back substitution (`Box.frac`). Two cells are used:
+
+- the centred cell, every fractional coordinate in `(−1/2, 1/2]`. The nearest image
+  (`Box.image`) lives there.
+- the positive cell, every coordinate in `[0, 1)`. newen's put-into-box (`Box.wrap`) puts a
+  point there.
+
+For both, the theory proves that the result differs from the input by a lattice vector
+(`image_lattice`), lies in its cell (`image_inCell`), is the only point of the cell that does
+(`inCell_unique`, `image_eq_of`), and so is unchanged when applied again (`image_idem`). The
+same four hold for `wrap`.
+
+The rectangular kernel is stated component by component:
+`rectImage L x = x − L · roundEven(x / L)`, where `roundEven` rounds halves to the even integer as
+IEEE 754 does (Mathlib's `round` sends halves up). It is a lattice translate, lies in
+`[−L/2, L/2]`, is idempotent, and is the **shortest** image:
+
+```lean
+theorem rectImage_shortest {L : ℝ} (hL : 0 < L) (x : ℝ) (n : ℤ) :
+    |rectImage L x| ≤ |x - n * L|
+```
+
+Read aloud: no other image of `x` is closer to the origin. `rectImageVec_shortest` lifts this to
+the squared length of the vector. The triclinic reduction promises less, and the theory says so:
+
+```lean
+theorem image_not_shortest :
+    ∃ (B : Box) (r w : Vec3 ℝ), B.LowerTriangular ∧ B.Lattice w ∧
+      normSq (B.image r - w) < normSq (B.image r)
+```
+
+Read aloud: there is a box and a point whose image in the centred cell can be shortened by a
+lattice vector. In the box `a = (2, 0, 0)`, `b = (1, 1, 0)`, `c = (0, 0, 1)` the point
+`(6/5, 2/5, 0)` is its own image, with squared length `8/5`, while `r − a` has `4/5`. What
+gromosXX's triclinic `nearest_image` guarantees is the centred cell, not the shortest vector.
+
+**One model.** `spec/NewenSpec/Periodicity.lean` writes each kernel over any number type, with
+glam's vector and matrix operations in glam's order: `DMat3 * DVec3` is
+`(x_axis·v.x + y_axis·v.y) + z_axis·v.z`, and `DMat3::inverse` is the cross products of the
+columns over the determinant, transposed. Two operations have no common Lean class, so
+`NewenSpec/Float.lean` adds them:
+
+- `Floor`: `Float.floor` (C `floor`, which is what Rust's `f64::floor` computes) and `⌊x⌋` over ℝ.
+- `Rint`: Rust's `f64::round_ties_even` is C `rint`, halves to even. Lean's `Float.round` is C
+  `round`, halves away from zero, which is Rust's `f64::round` and a different function. So
+  `Float.lean` binds C `rint` itself (`@[extern "rint"] opaque rintFloat`) and models it over ℝ
+  as `roundEven`.
+
+Both roundings are exact, so any correct implementation gives the same bits, the sign of zero
+included.
+
+The triclinic kernel is six `while` loops: subtract `c` while the fractional coordinate along
+`c` is at least `1/2`, add it while it is at most `−1/2`, then the same for `b` and for `a`. A
+Lean function must terminate, so each loop is `whileFuel`, which stops after `fuel` turns.
+`triclinicNearestImageModel_real_eq` proves that over ℝ, with `0.5` as `1/2` and a fuel larger
+than every fractional coordinate plus one, the six loops compute `Box.image`. The proof tracks
+the three fractional coordinates through the loops: each loop moves only its own coordinate, by
+one per turn. The other model theorems are `rectangularNearestImageModel_real_eq` (the model is
+`rectImage` in each component, because `x · (1/L) = x / L` and `rint` is `roundEven`),
+`rectangularPutIntoBoxModel_real_eq`, `mulVec_inverseModel_real` (glam's inverse applied to a
+point gives its fractional coordinates) and `triclinicPutIntoBoxModel_real_eq` (the model is
+`Box.wrap`).
+
+**The bit-exact test.** `lake exe spec-vectors` writes `spec/vectors/periodicity.json`: 4 420
+rows over cubic, anisotropic, truncated-octahedron, reduced triclinic, strongly skewed and
+monoclinic boxes. The separations and positions include:
+
+- values inside the box, a few boxes out and fifty boxes out, and negative values;
+- exact odd multiples of half an edge (the ties of `rint`), and one ulp on either side of half
+  an edge;
+- whole multiples of the edge, and zeros of both signs;
+- separations exactly on the faces of the triclinic cell (half a box vector, and sums of
+  halves);
+- NaN and infinite components. The triclinic nearest image gets NaN only, because an infinite
+  separation never leaves the Rust `while` loops.
+
+Each row carries the box, not its reciprocals or inverse. So the Rust test builds
+`Rectangular::new` or `Triclinic::new` from the box and calls the kernel through `Periodicity`,
+the way the force loops do. The generator runs the triclinic model with 100 000 turns per loop,
+and refuses a row whose bits change at half that. A separate section checks that the truncated
+octahedra among the boxes are the ones `truncoct_triclinic_box` builds. Replacing
+`round_ties_even` by `round` in the rectangular kernel, or `>=` by `>` in the first triclinic
+loop, makes the test fail.
+
+The model follows newen's Rust. Where it differs from gromosXX:
+
+- **Rectangular nearest image.** gromosXX loops: while `x > L/2` subtract `L`, while `x < −L/2`
+  add `L` (`boundary_implementation.cc:224-261`). newen subtracts `L · rint(x · (1/L))` in one
+  step. Over ℝ both end in `[−L/2, L/2]`, but at `x = ±3L/2, ±7L/2, …` they pick images a box
+  length apart (gromosXX keeps `L/2`, newen goes to `−L/2`; both are equally long). In
+  floating point, the reciprocal and the single multiply round differently from gromosXX's
+  repeated subtraction.
+- **Put-into-box.** gromosXX's `Periodicity::put_into_box` is the nearest image of the origin,
+  the centred cell (`periodicity.cc:36-41`). newen's `put_into_box` uses the positive cell,
+  `[0, L)` and fractional `[0, 1)`. `gather.rs` reproduces gromosXX's choice with
+  `nearest_image(v, 0)` where it matters.
+- **Triclinic nearest image.** It is gromosXX's, loop for loop and operation for operation.
+
+```sh
+cargo test -p newen-core --test periodicity_spec    # Rust = Float model, bit for bit
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -875,10 +992,10 @@ And at the level of the whole project:
   the pair-kind theorems assume) are checked by unit tests. The rest of newen is checked the way
   it always was, by reference tests and unit tests.
 - **Floating-point kernels: covered on generated inputs only.** The thermostat steps, the
-  Lennard-Jones and reaction-field pair term, the bonded terms, and the leap-frog, kinetic-energy,
-  temperature, pressure and barostat kernels equal their Lean models bit for bit on the rows
-  `lake exe spec-vectors` writes; no rounding bound is proved, and inputs outside those rows are
-  not checked. The bonded kernels' agreement also assumes the same C `acos`, `cos` and `sin` on
+  Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy,
+  temperature, pressure and barostat kernels, and the periodic boundaries equal their Lean models
+  bit for bit on the rows `lake exe spec-vectors` writes; no rounding bound is proved, and inputs
+  outside those rows are not checked. The bonded kernels' agreement also assumes the same C `acos`, `cos` and `sin` on
   both sides, the barostat's the same C `pow`.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
@@ -1084,6 +1201,12 @@ Planned, in the order chosen:
   constraint algorithms (SHAKE, SETTLE, LINCS), centre-of-mass removal, the anisotropic barostat
   modes gromosXX has, and the older `integrator.rs` and `barostats.rs` implementations, which the
   MD sequence does not use.
+- **Periodic boundaries, the same way** (see [Periodic boundaries](#periodic-boundaries)). Done:
+  the nearest image and the put-into-box of every box type (vacuum, rectangular, triclinic; the
+  truncated octahedron is a triclinic box) and the two box constructors, with the lattice, cell,
+  uniqueness and idempotence theorems, the rectangular image proven shortest, and the triclinic
+  one proven not always shortest. Not covered: image code outside `newen-core`, such as the
+  `[−L/2, L/2]` wrapping in `remove_com_motion.rs`, which uses its own `f64::round` and `x / L`.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

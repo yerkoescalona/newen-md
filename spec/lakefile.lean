@@ -20,8 +20,9 @@ Aeneas refinement proofs. -/
 
 /-- Writes `vectors/schedule.json`, `vectors/dof.json`, `vectors/bath.json` and
 `vectors/topology.json` (the Lean models on the grids the Rust tests sweep),
-`vectors/thermostat.json`, `vectors/nonbonded.json`, `vectors/bonded.json` and
-`vectors/dynamics.json` (the thermostat, LJ + reaction-field, bonded, and leap-frog,
-kinetic-energy, temperature, pressure and barostat models at `Float` on random inputs, as bits). -/
+`vectors/thermostat.json`, `vectors/nonbonded.json`, `vectors/bonded.json`,
+`vectors/dynamics.json` and `vectors/periodicity.json` (the thermostat, LJ + reaction-field,
+bonded, leap-frog, kinetic-energy, temperature, pressure, barostat and periodic-boundary models at
+`Float` on random inputs, as bits). -/
 lean_exe «spec-vectors» where
   root := `SpecVectors

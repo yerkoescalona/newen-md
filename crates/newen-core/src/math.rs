@@ -21,10 +21,18 @@ pub trait BoundaryCondition: Send + Sync {
 #[derive(Debug, Clone, Copy)]
 pub struct Vacuum;
 
+/// Nearest image without periodicity: the plain difference `ri − rj`.
+///
+/// spec: periodicity.vacuum_nearest_image
+#[inline(always)]
+pub fn vacuum_nearest_image(ri: Vec3, rj: Vec3) -> Vec3 {
+    ri - rj
+}
+
 impl BoundaryCondition for Vacuum {
     #[inline(always)]
     fn nearest_image(&self, ri: Vec3, rj: Vec3) -> Vec3 {
-        ri - rj
+        vacuum_nearest_image(ri, rj)
     }
 
     #[inline(always)]
@@ -46,6 +54,8 @@ pub struct Rectangular {
 
 impl Rectangular {
     /// Create from box edge lengths; precomputes half-box and reciprocal lengths.
+    ///
+    /// spec: periodicity.rectangular_new
     pub fn new(box_size: Vec3) -> Self {
         Self {
             box_size,
@@ -55,34 +65,45 @@ impl Rectangular {
     }
 }
 
+/// Minimum image `ri − rj` in a rectangular box of edges `box_size` with reciprocals `inv_box`:
+/// each component minus its nearest multiple of the edge, branchless.
+///
+/// spec: periodicity.rectangular_nearest_image
+#[inline(always)]
+pub fn rectangular_nearest_image(box_size: Vec3, inv_box: Vec3, ri: Vec3, rj: Vec3) -> Vec3 {
+    let r = ri - rj;
+
+    // Ties-to-even, not ties-away-from-zero (`rint`, a single `roundsd` on x86):
+    // `f64::round()` has no native encoding and expands to several extra
+    // instructions per component, which measured as ~47% of the whole nonbonded
+    // kernel on `water_216_box`. The two differ only at exactly half a box length.
+    let k = r * inv_box;
+    let n = Vec3::new(
+        k.x.round_ties_even(),
+        k.y.round_ties_even(),
+        k.z.round_ties_even(),
+    );
+
+    r - box_size * n
+}
+
+/// `pos` moved by whole edges into `[0, L)` per component (rectangular box).
+///
+/// spec: periodicity.rectangular_put_into_box
+#[inline(always)]
+pub fn rectangular_put_into_box(box_size: Vec3, inv_box: Vec3, pos: Vec3) -> Vec3 {
+    pos - box_size * (pos * inv_box).floor()
+}
+
 impl BoundaryCondition for Rectangular {
     #[inline(always)]
     fn nearest_image(&self, ri: Vec3, rj: Vec3) -> Vec3 {
-        let r = ri - rj;
-
-        // Minimum image, branchless.
-        //
-        // Ties-to-even, not ties-away-from-zero: this is `rint`, which is what
-        // gromosXX uses (`boundary_implementation.cc:267`,
-        // `nim(d) -= abs(box(d)) * rint(nim(d)/abs(box(d)))`). The two differ only
-        // when a separation is exactly half a box length, so matching gromosXX
-        // there is the faithful choice — and ties-to-even is the only mode x86
-        // implements natively, as a single `roundsd`. `f64::round()` has no native
-        // encoding and expands to several extra instructions per component, which
-        // measured as ~47% of the whole nonbonded kernel on `water_216_box`.
-        let k = r * self.inv_box;
-        let n = Vec3::new(
-            k.x.round_ties_even(),
-            k.y.round_ties_even(),
-            k.z.round_ties_even(),
-        );
-
-        r - self.box_size * n
+        rectangular_nearest_image(self.box_size, self.inv_box, ri, rj)
     }
 
     #[inline(always)]
     fn put_into_box(&self, pos: Vec3) -> Vec3 {
-        pos - self.box_size * (pos * self.inv_box).floor()
+        rectangular_put_into_box(self.box_size, self.inv_box, pos)
     }
 }
 
@@ -97,6 +118,8 @@ pub struct Triclinic {
 
 impl Triclinic {
     /// Create from a box matrix; precomputes the inverse.
+    ///
+    /// spec: periodicity.triclinic_new
     pub fn new(box_matrix: Mat3) -> Self {
         Self {
             box_matrix,
@@ -105,58 +128,75 @@ impl Triclinic {
     }
 }
 
+/// Iterative z -> y -> x lattice reduction, ported from
+/// `Boundary_Implementation<triclinic>::nearest_image`
+/// (GROMOS `math/boundary_implementation.cc`). Requires the GROMOS
+/// "lower triangular" box vector convention (a=(ax,0,0), b=(bx,by,0),
+/// c=(cx,cy,cz)), as guaranteed by GENBOX / `truncoct_triclinic_box`.
+///
+/// `nim.z / c.z`, `nim_y / b.y` and `nim_x / a.x` are the fractional coordinates
+/// of `nim` along c, b and a; each pair of loops brings one into `(-1/2, 1/2]`.
+/// The result is the image in that parallelepiped, which in a skewed box is not
+/// always the shortest one. Over ℝ, `frac - frac.round()` gives the same image
+/// except at exactly half a box vector, where it takes the opposite face.
+///
+/// spec: periodicity.triclinic_nearest_image
+#[inline(always)]
+pub fn triclinic_nearest_image(box_matrix: Mat3, ri: Vec3, rj: Vec3) -> Vec3 {
+    let a = box_matrix.x_axis;
+    let b = box_matrix.y_axis;
+    let c = box_matrix.z_axis;
+    let mut nim = ri - rj;
+
+    while nim.z >= 0.5 * c.z {
+        nim -= c;
+    }
+    while nim.z <= -0.5 * c.z {
+        nim += c;
+    }
+
+    let mut nim_y = nim.y - (c.y / c.z) * nim.z;
+    while nim_y >= 0.5 * b.y {
+        nim -= b;
+        nim_y = nim.y - (c.y / c.z) * nim.z;
+    }
+    while nim_y <= -0.5 * b.y {
+        nim += b;
+        nim_y = nim.y - (c.y / c.z) * nim.z;
+    }
+
+    let mut nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
+    while nim_x >= 0.5 * a.x {
+        nim -= a;
+        nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
+    }
+    while nim_x <= -0.5 * a.x {
+        nim += a;
+        nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
+    }
+
+    nim
+}
+
+/// `pos` moved by whole box vectors into the cell of fractional coordinates `[0, 1)`.
+///
+/// spec: periodicity.triclinic_put_into_box
+#[inline(always)]
+pub fn triclinic_put_into_box(box_matrix: Mat3, inv_box_matrix: Mat3, pos: Vec3) -> Vec3 {
+    let frac = inv_box_matrix * pos;
+    let frac_wrapped = frac - frac.floor();
+    box_matrix * frac_wrapped
+}
+
 impl BoundaryCondition for Triclinic {
-    /// Iterative z -> y -> x lattice reduction, ported from
-    /// `Boundary_Implementation<triclinic>::nearest_image`
-    /// (GROMOS `math/boundary_implementation.cc`). Requires the GROMOS
-    /// "lower triangular" box vector convention (a=(ax,0,0), b=(bx,by,0),
-    /// c=(cx,cy,cz)), as guaranteed by GENBOX / `truncoct_triclinic_box`.
-    ///
-    /// This is *not* equivalent to the textbook fractional-coordinate
-    /// `frac - frac.round()` reduction for strongly triclinic cells (e.g.
-    /// truncated octahedron) — see the gromosXX audit's finding #1 (`.claude/porting.md`).
     #[inline(always)]
     fn nearest_image(&self, ri: Vec3, rj: Vec3) -> Vec3 {
-        let a = self.box_matrix.x_axis;
-        let b = self.box_matrix.y_axis;
-        let c = self.box_matrix.z_axis;
-        let mut nim = ri - rj;
-
-        while nim.z >= 0.5 * c.z {
-            nim -= c;
-        }
-        while nim.z <= -0.5 * c.z {
-            nim += c;
-        }
-
-        let mut nim_y = nim.y - (c.y / c.z) * nim.z;
-        while nim_y >= 0.5 * b.y {
-            nim -= b;
-            nim_y = nim.y - (c.y / c.z) * nim.z;
-        }
-        while nim_y <= -0.5 * b.y {
-            nim += b;
-            nim_y = nim.y - (c.y / c.z) * nim.z;
-        }
-
-        let mut nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
-        while nim_x >= 0.5 * a.x {
-            nim -= a;
-            nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
-        }
-        while nim_x <= -0.5 * a.x {
-            nim += a;
-            nim_x = nim.x - b.x * (nim.y - c.y * nim.z / c.z) / b.y - c.x * nim.z / c.z;
-        }
-
-        nim
+        triclinic_nearest_image(self.box_matrix, ri, rj)
     }
 
     #[inline(always)]
     fn put_into_box(&self, pos: Vec3) -> Vec3 {
-        let frac = self.inv_box_matrix * pos;
-        let frac_wrapped = frac - frac.floor();
-        self.box_matrix * frac_wrapped
+        triclinic_put_into_box(self.box_matrix, self.inv_box_matrix, pos)
     }
 }
 

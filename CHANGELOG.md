@@ -45,6 +45,14 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   and relaxation. `spec/vectors/dynamics.json` and `crates/newen-integrators/tests/dynamics_spec.rs`,
   bit-exact in dev, release and generic builds (the barostat's `powf` included).
 
+- **Periodic-boundary kernels checked against a Lean model, bit for bit**: the nearest image and
+  put-into-box of the vacuum, rectangular and triclinic boxes and the two box constructors are pure
+  functions in newen-core. Lean (`NewenTheory/Space/Periodicity.lean`): every image is a lattice
+  translate, lies in the cell and is idempotent; the rectangular image is the shortest one; the
+  triclinic image, gromosXX's loop for loop, is not always the shortest (a skewed counter-example
+  is proven). `rint` is bound as the C function on both sides. `spec/vectors/periodicity.json` and
+  `crates/newen-core/tests/periodicity_spec.rs`.
+
 ### Changed
 
 - The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order

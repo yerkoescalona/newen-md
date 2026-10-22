@@ -7,10 +7,11 @@ import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
 import NewenSpec.Bonded
 import NewenSpec.Dynamics
+import NewenSpec.Periodicity
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat, nonbonded, bonded and dynamics models on random `Float` inputs) and write them to
-`vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
+thermostat, nonbonded, bonded, dynamics and periodicity models on random `Float` inputs) and write
+them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
@@ -19,11 +20,12 @@ open NewenSpec.Topology.Pairs
 open NewenSpec.Topology.Groups
 open NewenSpec.Thermostat
 open NewenSpec.Nonbonded
-open NewenSpec.Bonded (Vec3 tinyFloat quarterFloat piFloat quarticBondFloat harmonicBondFloat
+open NewenSpec.Bonded (tinyFloat quarterFloat piFloat quarticBondFloat harmonicBondFloat
   cosineAngleFloat harmonicAngleFloat dihedralChebyshevFloat dihedralNewFloat improperFloat)
 open NewenSpec.Dynamics (V3 M3 Atom leapFrogVelocityFloat leapFrogPositionFloat kineticEnergyFloat
   groupKineticFloat kineticTemperatureFloat pressureTensorFloat scalarPressureFloat
   berendsenBarostatFloat thirdFloat)
+open NewenSpec.Periodicity
 
 /-- Grid bound of the schedule grid, equal to `GRID` in
 `crates/newen-logic/tests/schedule_spec.rs`. -/
@@ -461,6 +463,9 @@ dihedral, improper dihedral). Each set has random rows first, then rows at the e
 guard lengths, collinear and planar geometries, `cos φ = ±1`, `|sin θ| < 1e-10`, a linear bond angle
 inside a dihedral, ζ next to ζ0 ± π. -/
 
+section Bonded
+open NewenSpec.Bonded (Vec3)
+
 def vec (x y z : Float) : Vec3 Float := ⟨x, y, z⟩
 
 def vecBits (v : Vec3 Float) : List Float := [v.x, v.y, v.z]
@@ -633,6 +638,8 @@ def bondedJson (bonds angles dihedrals : List (List Float)) : String :=
   part "bonds" bonds ++ ",\n" ++ part "angles" angles ++ ",\n" ++
   part "dihedrals" dihedrals ++ "\n}\n"
 
+end Bonded
+
 /-! ## Dynamics: leap-frog, kinetic energy, temperature, pressure, barostat -/
 
 def v3 (a : V3 Float) : List Float := [a.x, a.y, a.z]
@@ -782,6 +789,263 @@ def dynamicsJson (leap : List (List Float)) (kin : List String)
   part "temperature" (temp.map hexRow) ++ ",\n" ++ part "pressure" (pres.map hexRow) ++ ",\n" ++
   part "barostat" (baro.map hexRow) ++ "\n}\n"
 
+/-! ## Periodicity: nearest image and put-into-box on random `Float` inputs, written as bits -/
+
+section Periodicity
+open NewenTheory.Space.Periodicity (Vec3)
+
+def vecList (v : Vec3 Float) : List Float := [v.x, v.y, v.z]
+
+def matList (m : Mat3 Float) : List Float := vecList m.xAxis ++ vecList m.yAxis ++ vecList m.zAxis
+
+/-- The neighbours of a positive finite `x` one ulp up and down. -/
+def ulpUp (x : Float) : Float := Float.ofBits (x.toBits + 1)
+def ulpDown (x : Float) : Float := Float.ofBits (x.toBits - 1)
+
+def nanFloat : Float := 0 / 0
+def infFloat : Float := 1 / 0
+
+/-- Box edges: whole, binary-exact and not. -/
+def rectEdges : List Float := [1, 2, 3, 4, 2.5, 3.1, 1.8653, 3.767055681, 6.2]
+
+/-- A rectangular box: cubic from `rectEdges`, cubic random, or each edge random in `[1.5, 8]`. -/
+def drawRectBox : Gen (Vec3 Float) := do
+  match ← below 3 with
+  | 0 => let l ← pick rectEdges; return ⟨l, l, l⟩
+  | 1 => let l ← uniform 1.5 8; return ⟨l, l, l⟩
+  | _ => return ⟨← uniform 1.5 8, ← uniform 1.5 8, ← uniform 1.5 8⟩
+
+/-- One component of a separation along an edge `l`: inside, a few boxes out, fifty boxes out,
+an odd multiple of `l/2` (a tie), one ulp either side of `l/2`, a whole multiple of `l`, or zero
+of either sign. -/
+def drawSep (l : Float) : Gen Float := do
+  let half := pointFiveFloat * l
+  let sign : Float := if (← below 2) == 0 then 1 else -1
+  match ← below 10 with
+  | 0 => uniform (-half) half
+  | 1 => uniform (-l) l
+  | 2 => uniform (-3 * l) (3 * l)
+  | 3 => uniform (-50 * l) (50 * l)
+  | 4 => return sign * half
+  | 5 => return sign * half * [1, 3, 5, 7].getD (← below 4) 1
+  | 6 => return sign * (if (← below 2) == 0 then ulpUp half else ulpDown half)
+  | 7 => return ((← below 7).toFloat - 3) * l
+  | 8 => return if (← below 2) == 0 then 0 else -0.0
+  | _ => uniform (-2 * l) (2 * l)
+
+/-- `ri, rj` with the separation `sep`: `(sep, 0)`, `(0, −sep)`, or `rj` in the box and
+`ri = rj + sep` (rounded). -/
+def splitSep (sep inBox : Vec3 Float) : Gen (Vec3 Float × Vec3 Float) := do
+  match ← below 3 with
+  | 0 => return (sep, ⟨0, 0, 0⟩)
+  | 1 => return (⟨0, 0, 0⟩, ⟨-sep.x, -sep.y, -sep.z⟩)
+  | _ => return (inBox + sep, inBox)
+
+/-- One vector in thirty gets a NaN or an infinite component (`inf = false`: NaN only). -/
+def spoil (inf : Bool) (v : Vec3 Float) : Gen (Vec3 Float) := do
+  if (← below 30) != 0 then return v
+  let bad ← if inf then pick [nanFloat, infFloat, -infFloat] else pure nanFloat
+  match ← below 3 with
+  | 0 => return { v with x := bad }
+  | 1 => return { v with y := bad }
+  | _ => return { v with z := bad }
+
+def vacuumRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 200 do
+    let ri ← spoil true ⟨← drawSep 3, ← drawSep 3, ← drawSep 3⟩
+    let rj ← spoil true ⟨← uniform (-5) 5, ← uniform (-5) 5, ← uniform (-5) 5⟩
+    rows := rows.push (vecList ri ++ vecList rj ++ vecList (vacuumNearestImageFloat ri rj))
+  return rows.toList
+
+def rectangularNewRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for l in rectEdges ++ [0.1, 1e-3, 1e3, 0.7] do
+    let (h, inv) := rectangularNewFloat ⟨l, l, l⟩
+    rows := rows.push ([l, l, l] ++ vecList h ++ vecList inv)
+  for _ in List.range 107 do
+    let b ← drawRectBox
+    let (h, inv) := rectangularNewFloat b
+    rows := rows.push (vecList b ++ vecList h ++ vecList inv)
+  return rows.toList
+
+def rectangularNearestImageRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1200 do
+    let b ← drawRectBox
+    let sep : Vec3 Float := ⟨← drawSep b.x, ← drawSep b.y, ← drawSep b.z⟩
+    let inBox : Vec3 Float := ⟨← uniform 0 b.x, ← uniform 0 b.y, ← uniform 0 b.z⟩
+    let (ri, rj) ← splitSep sep inBox
+    let ri ← spoil true ri
+    rows := rows.push (vecList b ++ vecList ri ++ vecList rj ++
+      vecList (rectangularNearestImageFloat b ri rj))
+  return rows.toList
+
+/-- A position along an edge `l`: inside, around, far, a whole multiple of `l`, one ulp below
+`l`, or zero of either sign. -/
+def drawPos (l : Float) : Gen Float := do
+  match ← below 8 with
+  | 0 => uniform 0 l
+  | 1 => uniform (-l) (2 * l)
+  | 2 => uniform (-50 * l) (50 * l)
+  | 3 => return ((← below 7).toFloat - 3) * l
+  | 4 => return ulpDown l
+  | 5 => return if (← below 2) == 0 then 0 else -0.0
+  | 6 => uniform (-3 * l) 0
+  | _ => uniform (-l) l
+
+def rectangularPutIntoBoxRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 600 do
+    let b ← drawRectBox
+    let pos ← spoil true ⟨← drawPos b.x, ← drawPos b.y, ← drawPos b.z⟩
+    rows := rows.push (vecList b ++ vecList pos ++ vecList (rectangularPutIntoBoxFloat b pos))
+  return rows.toList
+
+/-- `truncoct_triclinic_box(diag(l), true)`, operation by operation: the truncated octahedron of
+cube edge `l` as a lower-triangular triclinic box. -/
+def truncoctBoxFloat (l : Float) : Mat3 Float :=
+  let d := pointFiveFloat * Float.sqrt 3 * l
+  ⟨⟨d, 0, 0⟩, ⟨d / 3, 2 * Float.sqrt 2 / 3 * d, 0⟩,
+    ⟨-d / 3, Float.sqrt 2 / 3 * d, Float.sqrt 6 / 3 * d⟩⟩
+
+def truncoctEdges : List Float := [3.767055681, 4, 5.5, 7.4]
+
+/-- A triclinic box: rectangular, a truncated octahedron, a reduced triclinic box
+(`|bₓ|, |cₓ| ≤ aₓ/2`, `|c_y| ≤ b_y/2`), a strongly skewed one, or a monoclinic one. -/
+def drawTriclinicBox : Gen (Mat3 Float) := do
+  match ← below 5 with
+  | 0 => return ⟨⟨← uniform 2 8, 0, 0⟩, ⟨0, ← uniform 2 8, 0⟩, ⟨0, 0, ← uniform 2 8⟩⟩
+  | 1 => return truncoctBoxFloat (← drawFrom truncoctEdges 3 8)
+  | 2 =>
+    let ax ← uniform 2 8
+    let by_ ← uniform 2 8
+    return ⟨⟨ax, 0, 0⟩, ⟨← uniform (-ax / 2) (ax / 2), by_, 0⟩,
+      ⟨← uniform (-ax / 2) (ax / 2), ← uniform (-by_ / 2) (by_ / 2), ← uniform 2 8⟩⟩
+  | 3 =>
+    let ax ← uniform 2 8
+    let by_ ← uniform 2 8
+    return ⟨⟨ax, 0, 0⟩, ⟨← uniform (-ax) ax, by_, 0⟩,
+      ⟨← uniform (-ax) ax, ← uniform (-by_) by_, ← uniform 2 8⟩⟩
+  | _ => return ⟨⟨← uniform 2 8, 0, 0⟩, ⟨0, ← uniform 2 8, 0⟩, ⟨← uniform (-2) 2, 0, ← uniform 2 8⟩⟩
+
+/-- A fractional coordinate: inside the cell, a few cells out, forty cells out, a half-integer
+(a face of the cell, as far as rounding lets it be), an integer, or zero. -/
+def drawFracCoord : Gen Float := do
+  match ← below 8 with
+  | 0 => uniform (-0.5) 0.5
+  | 1 => uniform (-1.5) 1.5
+  | 2 => uniform (-4) 4
+  | 3 => uniform (-40) 40
+  | 4 => return [1, 3, 5, 9].getD (← below 4) 1 * (if (← below 2) == 0 then 0.5 else -0.5)
+  | 5 => return (← below 7).toFloat - 3
+  | 6 => return 0
+  | _ => uniform (-0.6) 0.6
+
+/-- The point with fractional coordinates `s` in the box `m` (glam's matrix product). -/
+def pointFloat (m : Mat3 Float) (s : Vec3 Float) : Vec3 Float := mulVec Float m s
+
+/-- Half a box vector or a sum of halves, exactly: a separation on a face of the cell. -/
+def drawFace (m : Mat3 Float) : Gen (Vec3 Float) := do
+  let h (v : Vec3 Float) : Vec3 Float := scale Float v pointFiveFloat
+  let n (v : Vec3 Float) : Vec3 Float := ⟨-v.x, -v.y, -v.z⟩
+  let faces := [h m.zAxis, n (h m.zAxis), h m.yAxis, n (h m.yAxis), h m.xAxis, n (h m.xAxis),
+    h m.xAxis + h m.yAxis, h m.xAxis + h m.yAxis + h m.zAxis]
+  return faces.getD (← below faces.length) ⟨0, 0, 0⟩
+
+def triclinicNewRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 180 do
+    let m ← drawTriclinicBox
+    rows := rows.push (matList m ++ matList (triclinicNewFloat m))
+  for _ in List.range 19 do
+    let m : Mat3 Float := ⟨⟨← uniform (-3) 3, ← uniform (-3) 3, ← uniform (-3) 3⟩,
+      ⟨← uniform (-3) 3, ← uniform (-3) 3, ← uniform (-3) 3⟩,
+      ⟨← uniform (-3) 3, ← uniform (-3) 3, ← uniform (-3) 3⟩⟩
+    rows := rows.push (matList m ++ matList (triclinicNewFloat m))
+  let singular : Mat3 Float := ⟨⟨1, 2, 3⟩, ⟨2, 4, 6⟩, ⟨0, 1, 1⟩⟩
+  rows := rows.push (matList singular ++ matList (triclinicNewFloat singular))
+  return rows.toList
+
+/-- The triclinic nearest image at `fuelFloat` turns per loop, refused if half the fuel gives other
+bits, that is if some loop came near its bound. -/
+def triclinicNearestImageChecked (m : Mat3 Float) (ri rj : Vec3 Float) :
+    Except String (Vec3 Float) :=
+  let full := triclinicNearestImageFloat fuelFloat m ri rj
+  let half := triclinicNearestImageFloat (fuelFloat / 2) m ri rj
+  if (vecList full).map Float.toBits == (vecList half).map Float.toBits ||
+      (vecList full).any Float.isNaN then .ok full
+  else .error s!"triclinic loop near its fuel bound at {vecList ri} {vecList rj}"
+
+def triclinicNearestImageRows : Gen (Except String (List (List Float))) := do
+  let mut rows := #[]
+  for _ in List.range 1500 do
+    let m ← drawTriclinicBox
+    let sep ← if (← below 8) == 0 then drawFace m
+      else pure (pointFloat m ⟨← drawFracCoord, ← drawFracCoord, ← drawFracCoord⟩)
+    let inBox := pointFloat m ⟨← unit, ← unit, ← unit⟩
+    let (ri, rj) ← splitSep sep inBox
+    let ri ← spoil false ri
+    match triclinicNearestImageChecked m ri rj with
+    | .ok out => rows := rows.push (matList m ++ vecList ri ++ vecList rj ++ vecList out)
+    | .error e => return .error e
+  return .ok rows.toList
+
+def triclinicPutIntoBoxRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 600 do
+    let m ← drawTriclinicBox
+    let pos ← if (← below 6) == 0 then drawFace m
+      else pure (pointFloat m ⟨← drawFracCoord, ← drawFracCoord, ← drawFracCoord⟩)
+    let pos ← spoil true pos
+    rows := rows.push (matList m ++ vecList pos ++ vecList (triclinicPutIntoBoxFloat m pos))
+  return rows.toList
+
+def truncoctRows : List (List Float) :=
+  (truncoctEdges ++ [3, 6.123, 8]).map fun l => [l] ++ matList (truncoctBoxFloat l)
+
+/-- The row sets of `vectors/periodicity.json`, from a fixed seed. -/
+def periodicityRows : Except String (List (String × List (List Float))) :=
+  (do
+    let vac ← vacuumRows
+    let rnew ← rectangularNewRows
+    let rnim ← rectangularNearestImageRows
+    let rput ← rectangularPutIntoBoxRows
+    let tnew ← triclinicNewRows
+    let tnim ← triclinicNearestImageRows
+    let tput ← triclinicPutIntoBoxRows
+    return tnim.map fun tnim =>
+      [("vacuum_nearest_image", vac), ("rectangular_new", rnew),
+        ("rectangular_nearest_image", rnim), ("rectangular_put_into_box", rput),
+        ("truncoct_box", truncoctRows), ("triclinic_new", tnew),
+        ("triclinic_nearest_image", tnim), ("triclinic_put_into_box", tput)] :
+    Gen _).run' 0x6e6577656e2d7062
+
+def periodicityJson (parts : List (String × List (List Float))) : String :=
+  let part (p : String × List (List Float)) : String :=
+    s!"  \"{p.1}\": [\n" ++ ",\n".intercalate (p.2.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"periodicity.vacuum_nearest_image, periodicity.rectangular_new, " ++
+  "periodicity.rectangular_nearest_image, periodicity.rectangular_put_into_box, " ++
+  "periodicity.triclinic_new, periodicity.triclinic_nearest_image, " ++
+  "periodicity.triclinic_put_into_box\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Periodicity, the *Float definitions; " ++
+  "SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); a vector is x, y, z; a matrix is its columns a, b, c\",\n" ++
+  "  \"layout_vacuum_nearest_image\": \"ri, rj, nearest_image\",\n" ++
+  "  \"layout_rectangular_new\": \"box_size, half_box, inv_box\",\n" ++
+  "  \"layout_rectangular_nearest_image\": \"box_size, ri, rj, nearest_image\",\n" ++
+  "  \"layout_rectangular_put_into_box\": \"box_size, pos, put_into_box\",\n" ++
+  "  \"layout_truncoct_box\": \"cube edge L, truncoct_triclinic_box(diag(L), true): the " ++
+  "truncated octahedra among the triclinic boxes\",\n" ++
+  "  \"layout_triclinic_new\": \"box_matrix, inv_box_matrix\",\n" ++
+  "  \"layout_triclinic_nearest_image\": \"box_matrix, ri, rj, nearest_image\",\n" ++
+  "  \"layout_triclinic_put_into_box\": \"box_matrix, pos, put_into_box\",\n" ++
+  ",\n".intercalate (parts.map part) ++ "\n}\n"
+
+end Periodicity
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -822,3 +1086,11 @@ def main : IO Unit := do
   IO.FS.writeFile "vectors/dynamics.json" (dynamicsJson leap kin temp pres baro)
   IO.println (s!"wrote vectors/dynamics.json ({leap.length} leap_frog, {kin.length} kinetic, " ++
     s!"{temp.length} temperature, {pres.length} pressure, {baro.length} barostat rows)")
+  unless pointFiveFloat == 1 / 2 && (3 : Float).toBits == 0x4008000000000000 do
+    throw (IO.userError "Float literals 0.5, 3 are not exact")
+  match periodicityRows with
+  | .error e => throw (IO.userError e)
+  | .ok parts =>
+    IO.FS.writeFile "vectors/periodicity.json" (periodicityJson parts)
+    IO.println (s!"wrote vectors/periodicity.json (" ++
+      ", ".intercalate (parts.map fun p => s!"{p.2.length} {p.1}") ++ " rows)")

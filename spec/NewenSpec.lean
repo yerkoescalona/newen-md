@@ -8,5 +8,6 @@ import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
 import NewenSpec.Bonded
 import NewenSpec.Dynamics
+import NewenSpec.Periodicity
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement
