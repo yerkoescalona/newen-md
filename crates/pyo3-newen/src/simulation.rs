@@ -61,6 +61,9 @@ struct Parts {
     positions: Vec<Vec3>,
     velocities: Vec<Vec3>,
     box_dims: Vec3,
+    /// GENBOX angles and Euler angles in degrees; `prepare_system` builds the box from them.
+    box_angles: Vec3,
+    box_euler: Vec3,
     /// λ of the configuration file's PERTDATA block (NRDGL=1).
     pertdata: Option<f64>,
     /// The configuration file's AEDSSEARCH block (NTIAEDSS = 0).
@@ -77,6 +80,8 @@ impl Parts {
             positions: conf.pos_data.clone(),
             velocities: conf.vel_data.clone(),
             box_dims: conf.box_dims,
+            box_angles: conf.box_angles,
+            box_euler: conf.box_euler,
             pertdata: conf.pertdata,
             aedssearch: conf.aedssearch.clone(),
             nhcvariables: conf.nhcvariables.clone(),
@@ -108,6 +113,8 @@ impl Parts {
             positions: coord_data.positions,
             velocities: coord_data.velocities,
             box_dims: coord_data.box_dims,
+            box_angles: coord_data.box_angles,
+            box_euler: coord_data.box_euler,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
             nhcvariables: coord_data.nhcvariables,
@@ -119,8 +126,8 @@ impl Parts {
             positions: self.positions,
             velocities: self.velocities,
             box_dims: self.box_dims,
-            box_angles: Vec3::splat(90.0),
-            box_euler: Vec3::ZERO,
+            box_angles: self.box_angles,
+            box_euler: self.box_euler,
             pertdata: self.pertdata,
             aedssearch: self.aedssearch,
             nhcvariables: self.nhcvariables,

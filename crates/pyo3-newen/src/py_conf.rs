@@ -29,6 +29,10 @@ pub struct PyConfiguration {
     pub(crate) pos_data: Vec<Vec3>,
     pub(crate) vel_data: Vec<Vec3>,
     pub(crate) box_dims: Vec3,
+    /// GENBOX angles α, β, γ in degrees (90° each for a rectangular box).
+    pub(crate) box_angles: Vec3,
+    /// GENBOX Euler angles φ, θ, ψ in degrees.
+    pub(crate) box_euler: Vec3,
     /// Residue and atom names, when the source had them. Every coordinate tool needs them
     /// (`sim_box` labels its solvent `SOLV`, `ion` names the ion it places), so a `Configuration`
     /// that came from a `.cnf` or from `newen.tools` carries them along.
@@ -69,6 +73,8 @@ impl PyConfiguration {
             pos_data: coord_data.positions,
             vel_data: coord_data.velocities,
             box_dims: coord_data.box_dims,
+            box_angles: coord_data.box_angles,
+            box_euler: coord_data.box_euler,
             labels,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
@@ -92,6 +98,8 @@ impl PyConfiguration {
             pos_data: coord_data.positions,
             vel_data: coord_data.velocities,
             box_dims: coord_data.box_dims,
+            box_angles: coord_data.box_angles,
+            box_euler: coord_data.box_euler,
             labels,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
@@ -161,6 +169,8 @@ impl PyConfiguration {
             pos_data: atoms.iter().map(|a| a.pos).collect(),
             vel_data: Vec::new(),
             box_dims,
+            box_angles: Vec3::splat(90.0),
+            box_euler: Vec3::ZERO,
             labels: Some(atoms),
             pertdata: None,
             aedssearch: None,

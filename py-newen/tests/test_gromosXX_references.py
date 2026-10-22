@@ -281,6 +281,11 @@ REFERENCE_SYSTEMS = [
     "nacl_water_box",
     "nacl_water_box_shifted",
     "nacl_water_box_ewald_na2clc1",
+    # GENBOX NTB 2 with angles 75/80/65: reaction field (released gromosXX), P3M and its
+    # finite-difference field (patched oracle)
+    "nacl_water_box_triclinic",
+    "nacl_water_box_triclinic_p3m_fixed",
+    "nacl_water_box_triclinic_p3m_fd_fixed",
     # Constraint algorithms
     "nacl_1water_settle",
     "nacl_1water_lincs",
