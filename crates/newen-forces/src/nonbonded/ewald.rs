@@ -237,17 +237,136 @@ impl LsEnergies {
     }
 }
 
+/// What depends on the box only and both methods share: `A1`, `A2`, `A3`.
+#[derive(Debug, Clone)]
+pub(crate) struct SelfConstants {
+    pub(crate) edges: [[f64; 3]; 3],
+    pub(crate) volume: f64,
+    pub(crate) a1: f64,
+    pub(crate) a3: f64,
+    /// The numerical A2 and its derivative (NA2CLC 2, 3, 4), zero otherwise.
+    pub(crate) a2: f64,
+    pub(crate) d_a2: Sym3,
+}
+
+/// `A1`, `A3` and the numerical `A2` of the box `edges` (gromosXX `ls_self_outerloop`): `A2` in
+/// closed form for a cube, by shells of wave vectors otherwise, refused if the shells do not
+/// converge within [`A2_MAX_SHELLS`].
+pub(crate) fn self_constants_of_box(
+    p: &LatticeSumParams,
+    edges: [[f64; 3]; 3],
+    rectangular: bool,
+) -> Result<SelfConstants, String> {
+    use super::lattice_sum::{a2_cubic, a2_shells, reciprocal_box, self_constants, WIGNER_CUBE};
+    let (volume, recip) = reciprocal_box(&edges, rectangular);
+    let (a1, a3) = self_constants(p.shape, p.width, volume);
+    let (mut a2, mut d_a2) = (0.0, [0.0; 6]);
+    if matches!(p.na2clc, 2..=4) {
+        // gromosXX `ls_self_outerloop:2370-2373`: a rectangular box with equal edges
+        let cube = rectangular && edges[0][0] == edges[1][1] && edges[0][0] == edges[2][2];
+        if cube {
+            let (value, d) = a2_cubic(WIGNER_CUBE, edges[0][0], a1, a3);
+            a2 = value;
+            d_a2 = [d, 0.0, 0.0, d, 0.0, d];
+        } else {
+            let s = a2_shells(p.shape, p.width, &recip, volume, p.tola2, A2_MAX_SHELLS);
+            if !s.converged {
+                return Err(format!(
+                    "lattice sum: A2 did not reach the relative tolerance TOLA2 = {} in \
+                     {} shells of wave vectors; increase TOLA2 or use NA2CLC = 1",
+                    p.tola2, s.shells
+                ));
+            }
+            a2 = s.a2;
+            d_a2 = s.derivative;
+        }
+    }
+    Ok(SelfConstants {
+        edges,
+        volume,
+        a1,
+        a3,
+        a2,
+        d_a2,
+    })
+}
+
+/// The self, A and surface terms of a lattice-sum run, added to `storage` after the k-space
+/// term (forces, and the virial as `−2 Ξ`), with the method's own `Ã2` and its derivative
+/// (`a2_tilde`, used by NA2CLC 1, 3 and 4). Returns their energies (`realspace` and `kspace`
+/// zero). `positions` are the configuration's unwrapped positions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn add_constant_terms(
+    p: &LatticeSumParams,
+    terms: &SelfConstants,
+    positions: &[Vec3],
+    charges: &[f64],
+    edges: [[f64; 3]; 3],
+    a2_tilde: (f64, Sym3),
+    storage: &mut super::ForceStorage,
+    virial: bool,
+) -> LsEnergies {
+    use super::lattice_sum::{charge_sums, self_and_a_terms, self_and_a_virials, surface_term};
+    // NA2CLC (gromosXX `ls_self_outerloop:2558-2585`; 4 is read as 3, `in_parameter.cc:4718`)
+    let (a2, a2_tilde, d_a2, d_a2_tilde) = match p.na2clc {
+        0 => (0.0, 0.0, [0.0; 6], [0.0; 6]),
+        1 => (a2_tilde.0, a2_tilde.0, a2_tilde.1, a2_tilde.1),
+        2 => (terms.a2, terms.a2, terms.d_a2, terms.d_a2),
+        _ => (terms.a2, a2_tilde.0, terms.d_a2, a2_tilde.1),
+    };
+    let (sum_q, sum_q2) = charge_sums(charges);
+    let (self_term, a_term) =
+        self_and_a_terms(terms.a1, a2, terms.a3, a2_tilde, sum_q, sum_q2, p.eps0_inv);
+
+    // the surface term: unwrapped positions, centre `a/2 + b/2 + c/2`
+    let [a, b, c] = edges;
+    let centre = Vec3::new(
+        a[0] / 2.0 + b[0] / 2.0 + c[0] / 2.0,
+        a[1] / 2.0 + b[1] / 2.0 + c[1] / 2.0,
+        a[2] / 2.0 + b[2] / 2.0 + c[2] / 2.0,
+    );
+    let srf = surface_term(
+        positions,
+        charges,
+        centre,
+        p.eps_ls,
+        terms.volume,
+        p.eps0_inv,
+    );
+    for (i, f) in storage.forces.iter_mut().enumerate() {
+        *f += srf.forces[i];
+    }
+    if virial {
+        let (self_virial, constant_virial) =
+            self_and_a_virials(terms.a1, sum_q, sum_q2, &d_a2, &d_a2_tilde, p.four_pi_eps_i);
+        for xi in [&self_virial, &constant_virial, &srf.virial] {
+            add_minus_two(storage, xi);
+        }
+    }
+    LsEnergies {
+        realspace: 0.0,
+        kspace: 0.0,
+        a_term,
+        self_term,
+        surface: srf.energy,
+    }
+}
+
+/// `storage.virial += −2 Ξ`.
+pub(crate) fn add_minus_two(storage: &mut super::ForceStorage, xi: &Sym3) {
+    let m = super::lattice_sum::sym_to_matrix(xi);
+    for (row, m_row) in storage.virial.iter_mut().zip(m) {
+        for (v, x) in row.iter_mut().zip(m_row) {
+            *v += -2.0 * x;
+        }
+    }
+}
+
 /// What depends on the box only: the wave vectors and `A1`, `A2`, `A3`.
 #[derive(Debug, Clone)]
 struct BoxTerms {
-    edges: [[f64; 3]; 3],
-    volume: f64,
+    constants: SelfConstants,
     kvecs: Vec<KVector>,
-    a1: f64,
-    a3: f64,
-    /// The numerical A2 and its derivative (NA2CLC 2, 3), zero otherwise.
-    a2: f64,
-    d_a2: Sym3,
 }
 
 /// The reciprocal-space, self, A and surface terms of the direct Ewald sum for one run: the
@@ -273,13 +392,14 @@ impl EwaldSum {
     }
 
     fn box_terms(&mut self, edges: [[f64; 3]; 3], rectangular: bool) -> Result<&BoxTerms, String> {
-        use super::lattice_sum::{
-            a2_cubic, a2_shells, reciprocal_box, self_constants, WIGNER_CUBE,
-        };
-        let stale = self.box_terms.as_ref().is_none_or(|b| b.edges != edges);
+        use super::lattice_sum::reciprocal_box;
+        let stale = self
+            .box_terms
+            .as_ref()
+            .is_none_or(|b| b.constants.edges != edges);
         if stale {
             let p = self.params;
-            let (volume, recip) = reciprocal_box(&edges, rectangular);
+            let (_, recip) = reciprocal_box(&edges, rectangular);
             let kvecs = k_vectors(p.nk, p.kcut, &recip, p.shape, p.width);
             if kvecs.is_empty() {
                 return Err(
@@ -288,37 +408,8 @@ impl EwaldSum {
                         .to_string(),
                 );
             }
-            let (a1, a3) = self_constants(p.shape, p.width, volume);
-            let (mut a2, mut d_a2) = (0.0, [0.0; 6]);
-            if matches!(p.na2clc, 2 | 3) {
-                // gromosXX `ls_self_outerloop:2370-2373`: a rectangular box with equal edges
-                let cube = rectangular && edges[0][0] == edges[1][1] && edges[0][0] == edges[2][2];
-                if cube {
-                    let (value, d) = a2_cubic(WIGNER_CUBE, edges[0][0], a1, a3);
-                    a2 = value;
-                    d_a2 = [d, 0.0, 0.0, d, 0.0, d];
-                } else {
-                    let s = a2_shells(p.shape, p.width, &recip, volume, p.tola2, A2_MAX_SHELLS);
-                    if !s.converged {
-                        return Err(format!(
-                            "lattice sum: A2 did not reach the relative tolerance TOLA2 = {} in \
-                             {} shells of wave vectors; increase TOLA2 or use NA2CLC = 1",
-                            p.tola2, s.shells
-                        ));
-                    }
-                    a2 = s.a2;
-                    d_a2 = s.derivative;
-                }
-            }
-            self.box_terms = Some(BoxTerms {
-                edges,
-                volume,
-                kvecs,
-                a1,
-                a3,
-                a2,
-                d_a2,
-            });
+            let constants = self_constants_of_box(&p, edges, rectangular)?;
+            self.box_terms = Some(BoxTerms { constants, kvecs });
         }
         Ok(self.box_terms.as_ref().expect("set above"))
     }
@@ -340,7 +431,6 @@ impl EwaldSum {
         storage: &mut super::ForceStorage,
         virial: bool,
     ) -> Result<LsEnergies, String> {
-        use super::lattice_sum::{charge_sums, self_and_a_terms, self_and_a_virials, surface_term};
         let p = self.params;
         let terms = self.box_terms(edges, rectangular)?.clone();
 
@@ -355,63 +445,84 @@ impl EwaldSum {
             .iter()
             .map(|&r| periodicity.nearest_image(r, o) + o)
             .collect();
-        let ks = ewald_kspace(&in_box, charges, &terms.kvecs, terms.volume, p.eps0_inv);
-
-        // NA2CLC (gromosXX `ls_self_outerloop:2558-2585`)
-        let (a2, a2_tilde, d_a2, d_a2_tilde) = match p.na2clc {
-            0 => (0.0, 0.0, [0.0; 6], [0.0; 6]),
-            1 => (
-                ks.a2_tilde,
-                ks.a2_tilde,
-                ks.a2_tilde_derivative,
-                ks.a2_tilde_derivative,
-            ),
-            2 => (terms.a2, terms.a2, terms.d_a2, terms.d_a2),
-            _ => (terms.a2, ks.a2_tilde, terms.d_a2, ks.a2_tilde_derivative),
-        };
-        let (sum_q, sum_q2) = charge_sums(charges);
-        let (self_term, a_term) =
-            self_and_a_terms(terms.a1, a2, terms.a3, a2_tilde, sum_q, sum_q2, p.eps0_inv);
-
-        // the surface term: unwrapped positions, centre `a/2 + b/2 + c/2`
-        let centre = Vec3::new(
-            a[0] / 2.0 + b[0] / 2.0 + c[0] / 2.0,
-            a[1] / 2.0 + b[1] / 2.0 + c[1] / 2.0,
-            a[2] / 2.0 + b[2] / 2.0 + c[2] / 2.0,
-        );
-        let srf = surface_term(
-            positions,
+        let ks = ewald_kspace(
+            &in_box,
             charges,
-            centre,
-            p.eps_ls,
-            terms.volume,
+            &terms.kvecs,
+            terms.constants.volume,
             p.eps0_inv,
         );
-
         for (i, f) in storage.forces.iter_mut().enumerate() {
             *f += ks.forces[i];
         }
-        for (i, f) in storage.forces.iter_mut().enumerate() {
-            *f += srf.forces[i];
-        }
         if virial {
-            let (self_virial, constant_virial) =
-                self_and_a_virials(terms.a1, sum_q, sum_q2, &d_a2, &d_a2_tilde, p.four_pi_eps_i);
-            for xi in [&ks.virial, &self_virial, &constant_virial, &srf.virial] {
-                let m = super::lattice_sum::sym_to_matrix(xi);
-                for (row, m_row) in storage.virial.iter_mut().zip(m) {
-                    for (v, x) in row.iter_mut().zip(m_row) {
-                        *v += -2.0 * x;
-                    }
-                }
-            }
+            add_minus_two(storage, &ks.virial);
         }
-        Ok(LsEnergies {
-            realspace: 0.0,
-            kspace: ks.energy,
-            a_term,
-            self_term,
-            surface: srf.energy,
-        })
+        let mut e = add_constant_terms(
+            &p,
+            &terms.constants,
+            positions,
+            charges,
+            edges,
+            (ks.a2_tilde, ks.a2_tilde_derivative),
+            storage,
+            virial,
+        );
+        e.kspace = ks.energy;
+        Ok(e)
+    }
+}
+
+/// The reciprocal-space method of a lattice-sum run: the direct Ewald sum (NLRELE 2) or P3M
+/// (NLRELE 3). Both share the real-space loops (`ls_real_space.rs`) and the self, A and surface
+/// terms ([`add_constant_terms`]).
+#[derive(Debug, Clone)]
+pub enum LatticeSum {
+    Ewald(Box<EwaldSum>),
+    P3m(Box<super::p3m::P3m>),
+}
+
+impl LatticeSum {
+    pub fn params(&self) -> &LatticeSumParams {
+        match self {
+            LatticeSum::Ewald(e) => &e.params,
+            LatticeSum::P3m(p) => &p.params,
+        }
+    }
+
+    /// The method's `evaluate` (`step` is used by P3M's schedule only).
+    #[allow(clippy::too_many_arguments)]
+    pub fn evaluate(
+        &mut self,
+        step: usize,
+        positions: &[Vec3],
+        charges: &[f64],
+        edges: [[f64; 3]; 3],
+        rectangular: bool,
+        periodicity: &newen_core::math::Periodicity,
+        storage: &mut super::ForceStorage,
+        virial: bool,
+    ) -> Result<LsEnergies, String> {
+        match self {
+            LatticeSum::Ewald(e) => e.evaluate(
+                positions,
+                charges,
+                edges,
+                rectangular,
+                periodicity,
+                storage,
+                virial,
+            ),
+            LatticeSum::P3m(p) => p.evaluate(
+                step,
+                positions,
+                charges,
+                edges,
+                rectangular,
+                periodicity,
+                storage,
+                virial,
+            ),
+        }
     }
 }

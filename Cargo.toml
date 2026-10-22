@@ -77,8 +77,14 @@ toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 
 # ============================================================
-# FFT for PME electrostatics
+# FFT
 # ============================================================
+# P3M (NLRELE 3) in newen-forces: PhastFT, pure safe Rust, MIT/Apache. Powers of two only (the
+# P3M grid is refused otherwise; gromosXX/FFTW accept any even size); split real/imaginary
+# arrays; its inverse divides by N, which P3M undoes (exact for a power of two). Default
+# features off: no rayon, the P3M lines are far below its parallel threshold.
+phastft = { version = "0.4.1", default-features = false }
+# rustfft: newen-analysis, and the unwired PME code in newen-forces (pme.rs), to be removed
 rustfft = "6.2"
 fftw = "0.8"
 num-complex = "0.4"

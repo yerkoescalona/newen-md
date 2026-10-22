@@ -49,8 +49,9 @@ Berendsen barostat, COM removal.
   (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`)
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
-- **Ewald (NLRELE 2)** ✓ (2026-10-22): `Forcefield::lattice_sum: Option<EwaldSum>` (built by
-  newen-run); with it, `apply` replaces every reaction-field pair term by
+- **Ewald (NLRELE 2) and P3M (NLRELE 3)** ✓ (2026-10-22): `Forcefield::lattice_sum:
+  Option<LatticeSum>` (`LatticeSum::{Ewald, P3m}`, built by newen-run; P3M's schedule reads the
+  step, `sim.step`); with it, `apply` replaces every reaction-field pair term by
   `Forcefield::lattice_sum_terms` (LJ + real-space pairs into the pair storage; excluded pairs,
   k space, self, A, surface, 1-4 into the local storage; LJ-only long-range shell cached on
   pairlist steps of a twin-range run) and books `ls_realspace` (the storages' `e_crf`),

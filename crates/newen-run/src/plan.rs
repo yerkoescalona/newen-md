@@ -148,12 +148,30 @@ pub struct ForcefieldPlan {
     pub position_restraints: Option<PositionRestraintsPlan>,
     pub distance_restraints: Option<DistanceRestraintsPlan>,
     pub perturbation: Option<PerturbationPlan>,
-    /// Ewald electrostatics (NLRELE 2) in place of the reaction field.
+    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) in place of the reaction field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lattice_sum: Option<LatticeSumPlan>,
 }
 
-/// The NONBONDED lattice-sum settings of an Ewald run (GROMOS Vol. 4).
+/// The NONBONDED P3M settings (NLRELE 3, GROMOS Vol. 4).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct P3mPlan {
+    /// NGX, NGY, NGZ (powers of two in newen)
+    pub grid: [usize; 3],
+    /// NASORD, 1..=5
+    pub nasord: i32,
+    /// NFDORD, 0..=5 (0: ik differentiation)
+    pub nfdord: i32,
+    /// NALIAS
+    pub nalias: i32,
+    /// NQEVAL (0: the force error is checked at step 0 only)
+    pub nqeval: i32,
+    /// FACCUR (kJ mol⁻¹ nm⁻¹)
+    pub faccur: f64,
+}
+
+/// The NONBONDED lattice-sum settings of an Ewald or P3M run (GROMOS Vol. 4).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LatticeSumPlan {
@@ -165,12 +183,15 @@ pub struct LatticeSumPlan {
     pub nk: [usize; 3],
     /// KCUT (compared with |k|², as gromosXX does)
     pub kcut: f64,
-    /// NA2CLC
+    /// NA2CLC (4 is stored as 3, as gromosXX reads it)
     pub na2clc: i32,
     /// TOLA2
     pub tola2: f64,
     /// EPSLS
     pub epsls: f64,
+    /// The grid of a P3M run (NLRELE 3); `None` for Ewald.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p3m: Option<P3mPlan>,
 }
 
 /// One algorithm of the MD step, fully resolved. One spec = one `Algorithm`.
@@ -1103,13 +1124,16 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
 /// NONBONDED electrostatics, every build path runs it:
 ///
 /// * the lattice-sum parameters' ranges, which gromosXX checks for every NLRELE when it reads
-///   the block (`in_parameter.cc:4602-4613, 4693-4723`), with its messages;
-/// * NLRELE 3 (P3M) is not implemented yet;
-/// * NLRELE 2 (Ewald) with the features gromosXX's FeatureChecker keeps locked against `ewald`
-///   (`check_parameter.cc:2726-2795`) and a recipe can express: the charge-group cutoff (Ewald
-///   needs PAIRLIST TYPE atomic), the grid-cell pairlist, vacuum, the truncated octahedron, more
-///   than one energy group, perturbation, EDS, A-EDS, GaMD, QM/ML terms, the conjugate-gradient
-///   minimiser, LINCS and SETTLE for the solvent.
+///   the block (`in_parameter.cc:4602-4625, 4693-4740`), with its messages: the P3M ones too
+///   (an odd grid, NRDGRD or NWRGRD = 1 are errors whatever the NLRELE);
+/// * NLRELE 3 (P3M) with a grid dimension that is not a power of two: newen's FFT (PhastFT)
+///   transforms powers of two only, where gromosXX (FFTW) accepts any even size;
+/// * NLRELE 2 (Ewald) and 3 (P3M) with the features gromosXX's FeatureChecker keeps locked
+///   against `ewald` and `p3m` (`check_parameter.cc:2726-2866`, the same list for both) and a
+///   recipe can express: the charge-group cutoff (both need PAIRLIST TYPE atomic), the
+///   grid-cell pairlist, vacuum, the truncated octahedron, more than one energy group,
+///   perturbation, EDS, A-EDS, GaMD, QM/ML terms, the conjugate-gradient minimiser, LINCS and
+///   SETTLE for the solvent.
 pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     let nb = &recipe.forcefield.electrostatics;
     let ls = &nb.lattice_sum;
@@ -1143,35 +1167,73 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     if ls.nk2.is_nan() || ls.nk2 <= 0.0 {
         return range("KCUT", ls.nk2.to_string(), ">0.0");
     }
+    for (name, n) in ["NGX", "NGY", "NGZ"].iter().zip(ls.ng) {
+        if n == 0 {
+            return range(name, n.to_string(), ">0");
+        }
+    }
+    if !(1..=5).contains(&ls.nasord) {
+        return range("NASORD", ls.nasord.to_string(), "one of: 1,2,3,4,5");
+    }
+    if !(0..=5).contains(&ls.nfdord) {
+        return range("NFDORD", ls.nfdord.to_string(), "one of: 0,1,2,3,4,5");
+    }
+    if ls.nalias <= 0 {
+        return range("NALIAS", ls.nalias.to_string(), ">0");
+    }
+    if ls.nqeval < 0 {
+        return range("NQEVAL", ls.nqeval.to_string(), ">=0");
+    }
+    if ls.faccur.is_nan() || ls.faccur <= 0.0 {
+        return range("FACCUR", ls.faccur.to_string(), ">0.0");
+    }
+    if !(0..=1).contains(&ls.nrdgrd) {
+        return range("NRDGRD", ls.nrdgrd.to_string(), "one of: 0,1");
+    }
+    if !(0..=1).contains(&ls.nwrgdr) {
+        return range("NWRGRD", ls.nwrgdr.to_string(), "one of: 0,1");
+    }
     if ls.na2clc == 1 && nlrele != 2 {
         return err("NONBONDED block: exact A2~ calculation needs Ewald.".to_string());
     }
     if ls.na2clc == 4 && nlrele != 3 {
         return err("NONBONDED block: averaged A2~ calculation needs P3M.".to_string());
     }
-    if nlrele == 3 {
+    if ls.ng.iter().any(|n| n % 2 != 0) {
+        return err("NONBONDED block: Illegal value for NGA, NGB or NGC (even)".to_string());
+    }
+    if ls.nrdgrd != 0 || ls.nwrgdr != 0 {
         return err(
-            "NONBONDED NLRELE = 3: P3M lattice-sum electrostatics are not implemented yet; use \
-             NLRELE 1 (reaction field) or 2 (Ewald)"
+            "NONBONDED block: Influence function IO not implemented. Set NRDGRD and NWRGRD \
+             to 0."
                 .to_string(),
         );
     }
-    if nlrele != 2 {
-        return Ok(());
+    if nlrele == 3 && !ls.ng.iter().all(|n| n.is_power_of_two()) {
+        return err(format!(
+            "NONBONDED NLRELE = 3: the P3M grid NGX, NGY, NGZ = {:?} must be powers of two in \
+             newen (its FFT, PhastFT, transforms powers of two only; gromosXX accepts any even \
+             size)",
+            ls.ng
+        ));
     }
+    let method = match nlrele {
+        2 => "Ewald sum",
+        3 => "P3M",
+        _ => return Ok(()),
+    };
     let refuse = |what: &str| {
         err(format!(
-            "NONBONDED NLRELE = 2: {what} does not work with Ewald sum electrostatics \
+            "NONBONDED NLRELE = {nlrele}: {what} does not work with {method} electrostatics \
              (gromosXX refuses this combination)"
         ))
     };
     let ff = &recipe.forcefield;
     if ff.pairlist.kind == crate::recipe::PairlistKind::ChargeGroup {
-        return err(
-            "NONBONDED NLRELE = 2: chargegroup based cutoff does not work with Ewald sum \
+        return err(format!(
+            "NONBONDED NLRELE = {nlrele}: chargegroup based cutoff does not work with {method} \
              electrostatics (gromosXX refuses this combination); use PAIRLIST TYPE atomic"
-                .to_string(),
-        );
+        ));
     }
     if ff.pairlist.algorithm == PairlistAlgorithm::GridCell {
         return refuse("grid-cell-based pairlist algorithm");
@@ -1210,19 +1272,28 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
-/// The lattice-sum part of the force field (NLRELE 2): `None` for every other NLRELE.
+/// The lattice-sum part of the force field (NLRELE 2, 3): `None` for every other NLRELE.
 fn lattice_sum_plan(recipe: &RunRecipe) -> Option<LatticeSumPlan> {
     let nb = &recipe.forcefield.electrostatics;
-    (nb.electrostatics == 2).then(|| {
+    matches!(nb.electrostatics, 2 | 3).then(|| {
         let ls = &nb.lattice_sum;
         LatticeSumPlan {
             nshape: ls.nshape,
             ashape: ls.ashape,
             nk: ls.nk,
             kcut: ls.nk2,
-            na2clc: ls.na2clc,
+            // gromosXX reads NA2CLC 4 (averaged Ã2) as 3 (`in_parameter.cc:4718`)
+            na2clc: if ls.na2clc == 4 { 3 } else { ls.na2clc },
             tola2: ls.tola2,
             epsls: ls.epsls,
+            p3m: (nb.electrostatics == 3).then_some(P3mPlan {
+                grid: ls.ng,
+                nasord: ls.nasord,
+                nfdord: ls.nfdord,
+                nalias: ls.nalias,
+                nqeval: ls.nqeval,
+                faccur: ls.faccur,
+            }),
         }
     })
 }
@@ -1511,20 +1582,25 @@ pub(crate) fn check_plan_against_recipe(
     let has_terms = plan
         .iter()
         .any(|a| matches!(a, AlgorithmSpec::Orchestrator { terms } if !terms.is_empty()));
-    // a plan built from another recipe must not run the reaction field in place of Ewald
-    let wants_ewald = recipe.forcefield.electrostatics.electrostatics == 2;
+    // a plan built from another recipe must not run the reaction field in place of a lattice
+    // sum, nor one lattice-sum method in place of the other
+    let nlrele = recipe.forcefield.electrostatics.electrostatics;
     for a in plan {
         if let AlgorithmSpec::Forcefield(ff) = a {
-            if ff.lattice_sum.is_some() != wants_ewald {
+            let method = match &ff.lattice_sum {
+                None => "no",
+                Some(ls) if ls.p3m.is_some() => "P3M",
+                Some(_) => "Ewald",
+            };
+            let wanted = match nlrele {
+                2 => "Ewald",
+                3 => "P3M",
+                _ => "no",
+            };
+            if method != wanted {
                 return Err(RunError::Recipe(format!(
-                    "the plan's force field {} lattice-sum electrostatics but the recipe has \
-                     NONBONDED NLRELE = {}",
-                    if ff.lattice_sum.is_some() {
-                        "has"
-                    } else {
-                        "has no"
-                    },
-                    recipe.forcefield.electrostatics.electrostatics
+                    "the plan's force field has {method} lattice-sum electrostatics but the \
+                     recipe has NONBONDED NLRELE = {nlrele}"
                 )));
             }
         }
@@ -2105,7 +2181,7 @@ mod tests {
     }
 
     #[test]
-    fn nonbonded_lattice_sum_ranges_and_the_ewald_feature_matrix() {
+    fn nonbonded_lattice_sum_ranges_and_the_ewald_and_p3m_feature_matrix() {
         let refused = |r: &RunRecipe, message: &str| {
             let err = check_electrostatics(r).expect_err(message).to_string();
             assert!(err.contains(message), "{err}");
@@ -2209,12 +2285,81 @@ mod tests {
             check_electrostatics(&r).is_ok(),
             "triclinic PBC is unlocked"
         );
+
+        // the P3M parameters' ranges, also checked whatever NLRELE is (`in_parameter.cc:4614-4740`)
+        let p3m_ranges: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ng[0] = 0,
+                "NGX parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nasord = 6,
+                "NASORD parameter is 6",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nfdord = 6,
+                "NFDORD parameter is 6",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nalias = 0,
+                "NALIAS parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nqeval = -1,
+                "NQEVAL parameter is -1",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.faccur = 0.0,
+                "FACCUR parameter is 0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ng[2] = 31,
+                "Illegal value for NGA, NGB or NGC (even)",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nrdgrd = 1,
+                "Influence function IO not implemented",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nwrgdr = 1,
+                "Influence function IO not implemented",
+            ),
+        ];
+        for (edit, message) in p3m_ranges {
+            let mut r = rf.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+
+        // P3M: the same locks as Ewald, NA2CLC 4 (read as 3) but not 1, and powers of two
         let mut p3m = ewald.clone();
         p3m.forcefield.electrostatics.electrostatics = 3;
-        refused(
-            &p3m,
-            "P3M lattice-sum electrostatics are not implemented yet",
+        assert!(check_electrostatics(&p3m).is_ok());
+        let mut r = p3m.clone();
+        r.forcefield.electrostatics.lattice_sum.na2clc = 4;
+        assert!(check_electrostatics(&r).is_ok(), "NA2CLC 4 with P3M");
+        assert_eq!(lattice_sum_plan(&r).map(|ls| ls.na2clc), Some(3));
+        r.forcefield.electrostatics.lattice_sum.na2clc = 1;
+        refused(&r, "exact A2~ calculation needs Ewald");
+        let mut r = p3m.clone();
+        r.forcefield.electrostatics.lattice_sum.ng = [32, 48, 32];
+        refused(&r, "must be powers of two in newen");
+        let mut r = p3m.clone();
+        r.forcefield.pairlist.kind = crate::recipe::PairlistKind::ChargeGroup;
+        refused(&r, "chargegroup based cutoff does not work with P3M");
+        for (edit, message) in locked {
+            let mut r = p3m.clone();
+            edit(&mut r);
+            refused(&r, message);
+            let err = check_electrostatics(&r).unwrap_err().to_string();
+            assert!(err.contains("with P3M electrostatics"), "{err}");
+        }
+        let plan = lattice_sum_plan(&p3m).expect("lattice sum");
+        assert_eq!(
+            plan.p3m.map(|m| (m.grid, m.nasord, m.nfdord, m.nalias)),
+            Some(([32, 32, 32], 3, 2, 3))
         );
+        assert!(lattice_sum_plan(&ewald).expect("lattice sum").p3m.is_none());
     }
 
     #[test]

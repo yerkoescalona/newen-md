@@ -1017,8 +1017,8 @@ cargo test -p newen-forces --test perturbed_bonded_spec    # perturbed bonded ke
 ### Lattice-sum electrostatics, phase 1
 
 GROMOS has two lattice-sum methods for the electrostatics of a periodic box, Ewald (NONBONDED
-NLRELE = 2) and P3M (NLRELE = 3). Before either was wired into a run (phase 2 wires Ewald; P3M is
-still refused), the pieces they share got the same three layers as the kernels above: the
+NLRELE = 2) and P3M (NLRELE = 3). Before either was wired into a run (phase 2 wires Ewald, phase 3
+P3M), the pieces they share got the same three layers as the kernels above: the
 charge-shaping functions, the real-space pair terms and the self-term constants.
 
 **The kernels.** `crates/newen-forces/src/nonbonded/lattice_sum.rs`, ported from gromosXX in its
@@ -1209,6 +1209,142 @@ What newen does differently from gromosXX, each reported as found:
 ```sh
 cargo test -p newen-forces --test ewald_spec                       # Rust = Float model, bit for bit; forces, virials by FD
 cargo test -p newen-md --test test_gromosXX_references ewald       # the three Ewald references
+```
+
+### Lattice-sum electrostatics, phase 3: P3M
+
+An NLRELE = 3 run now computes P3M instead of being refused. It shares everything with the Ewald
+sum of phase 2 but the reciprocal-space term: the same real-space loops, self, A and surface terms
+(`ewald.rs::add_constant_terms`), the same force-field branch (`Forcefield::lattice_sum_terms`
+drives a `LatticeSum::{Ewald, P3m}`), the same energy rows and the same feature locks (gromosXX
+locks the same list against `ewald` and `p3m`, `check_parameter.cc:2726-2866`). The k-space term,
+`p3m.rs::P3m::evaluate`, follows `_ls_p3m_kspace_outerloop` (`nonbonded_outerloop.cc:2076-2267`):
+the positions are put into the box; at the first step the optimal influence function `Ĝ` and its
+rms force-error estimate are computed and the run is refused if the estimate exceeds FACCUR;
+every NQEVAL steps the error is evaluated in the current box and `Ĝ` recomputed if it grew too
+large; in a box that differs from the one `Ĝ` was computed in (pressure scaling) `Ĝ` is corrected
+to first order with its derivative tensor `Γ̂` (Vol. 2 `gammahat_upd`); the charges are assigned to
+the grid with `w_p` (NASORD), the grid is transformed, the energy and virial are summed over
+`Ĝ |ρ̂|²`, the potential `ε₀⁻¹ Ĝ ρ̂/√N` gives the field by `ik` (NFDORD 0, three backward
+transforms) or by a finite-difference operator of order NFDORD on the backward-transformed
+potential, and the field is interpolated back to the charges with `w_p`. For NA2CLC 3 (and 4,
+which gromosXX reads as 3, `in_parameter.cc:4718`, so its averaged grid is never used) `Ã2` comes
+from the squared-charge grid of Vol. 2 `f_g_func`. The FFT is PhastFT (pure Rust, MIT/Apache),
+along `z`, `y`, `x` with its planners kept per axis; its inverse divides by `N`, which is
+multiplied back (exact for a power of two), so both directions are FFTW's unnormalised ones.
+PhastFT transforms powers of two only: a grid that is not a power of two in every dimension is
+refused with a message naming the restriction (gromosXX accepts any even size).
+
+**The kernels.** `p3m.rs`, each with a `/// spec:` key: `assignment_1d`, `nearest_grid_point`
+(`rint` for odd orders, truncation for even ones), `assignment_weights`, `Mesh::new` (`H`, `H⁻¹`
+and `V_G` as gromosXX's `math::inverse` and `det` compute them), `assign_charges`,
+`selfterm_fp`, `assign_squared_charges`, `fd_coefficients`, `sinc_power` (C `pow`, declared
+`extern "C"` as `erfc` is), `influence_at` (the alias sums over `m ∈ [−NALIAS, NALIAS]³`, `D̂`,
+`Ĝ`, `Γ̂` and the wave vector's share of `Q`) with `influence_function` over the grid in
+gromosXX's loop order, `quality_at`, `influence_box_correction`, `force_error_estimate`,
+`kspace_energy`, `potential_hat`, `field_ik`, `field_fd`, `interpolate_forces`, `a2_tilde_p3m`,
+and `Fft3`.
+
+**The meaning.** `NewenTheory/Interactions/P3M.lean`: the assignment functions are non-negative,
+zero for `|x| ≥ p/2` and a partition of unity for `p = 2 … 5` (`w_nonneg`, `w_support`,
+`w_partition_of_unity`); for `p = 1` only away from the half-integers, because gromosXX's
+`|x| < 1/2` gives a charge exactly half-way between two grid points weight zero on both
+(`w1_half_integer`); the discrete Fourier transform (Mathlib's `ZMod.dft`, FFTW's sign) inverts
+to `N` times the grid, shifts by a phase and is Hermitian for real data (`dft_inv`, `dft_shift`,
+`dft_neg_eq_conj`); `P̂_p(x) = (sin(x/2)/(x/2))^p` is 1 at 0 and continuous there
+(`sincPow_zero`, `sincPow_tendsto_zero`); the finite-difference operator of order `q` = 1 … 5
+differentiates every polynomial of degree `≤ 2q` exactly, which is what the table encodes
+(`fd_exact_on_polynomials`); the influence function of Vol. 2 `optim_influ` over a set of alias
+vectors, and for one alias with `ik` differentiation `γ̂(a|k|)/(|k|² P̂(k)²)`
+(`influence_single_alias`; with all aliases `Σ_m P̂² = 1` for `p = 1`, which is why gromosXX sets
+that denominator to 1); the k-space energy `½ V_G ε₀⁻¹ Σ_l Ĝ_l |ρ̂_l|²/N`, and the complex sum it
+comes from is real for a real charge density (`p3m_energy_real`). That P3M approximates the Ewald
+sum is not proved; the tests measure it.
+
+**One model.** `NewenSpec/P3M.lean` writes the per-point kernels over any number type, the grids
+as arrays in storage order (a grid point's integer coordinates through a `ToInt` class, Rust
+`as i64`). At ℝ: `assignmentModel_real_eq` (every order, every `x`), `sincPowModel_real_eq`,
+`fdCoefficientsModel_real_eq`, `kspaceEnergyModel_real_eq` and `kspaceEnergyModel_real_p3mEnergy`
+(the fold is the theory's energy given the transform of a real grid), `influenceAtModel_real_single`
+(NALIAS 0, NFDORD 0: the model's `Ĝ` is the theory's influence function over the single alias),
+`forceErrorModel_real_eq`. The FFT is not modelled bit for bit; `dftFloat` evaluates the discrete
+Fourier transform by its definition, `O(N²)`.
+
+**The tests.** `spec/vectors/p3m.json` (1.3 MB): 640 assignment rows (every order, a grid of
+`x ∈ [−3, 3]` and the doubles on either side of every branch point), 460 stencil rows, 300 `f_p`
+rows, the coefficient table, 510 `P̂_p` rows, 60 grid matrices, 250 influence-function rows (grids
+4³ and 8³, every order, NFDORD 0–3, NALIAS 0–2, NSHAPE −1, 0, 3, 7, widths 0.4 and 1.4 nm, cubic,
+rectangular and triclinic boxes, with and without `Γ̂`), six whole 4³ influence functions with `Q`,
+80 quality rows, 100 box corrections, 50 force errors, 30 + 30 assignments, energy, `Ã2`, field and
+interpolation rows on small grids. `crates/newen-forces/tests/p3m_spec.rs` requires the same bits
+on all of them in debug, release and `target-cpu=generic` builds. Within a tolerance: `Fft3`
+against `dftFloat` on 4³, 8³, 8×4×2 and 16³ grids, forward and backward, within `10⁻¹²` relative
+(measured: `3·10⁻¹⁶` on 4³, `6·10⁻¹⁶` on 8³, `3·10⁻¹⁵` on 16³), and the whole k-space energy
+(assignment, PhastFT, energy) against the Lean pipeline through `dftFloat` on 8³ grids within
+`10⁻¹¹` (measured `6·10⁻¹⁶`). Without Lean: P3M against the direct Ewald sum of phase 2 for 16
+charges in a cubic, a rectangular and a triclinic box (Gaussian, `a` = 0.4 nm; grids 16³ and 32³,
+orders 2–5, `ik` and finite differences of orders 2 and 4): the rms force difference stays below
+1.5 times the rms force-error estimate of the influence function (and below 3 times, the test's
+bound), the k-space energy with each method's `Ã2` part of the A term within `10⁻⁴` of the
+k-space energy (`2·10⁻³` for cloud-in-cell); and the P3M forces against central differences of
+the P3M energy (with the `Ã2` part) within 0.5 % of the rms force. That last bound is not the
+force-error estimate: the P3M energy is not translation invariant at the grid scale, so its
+gradient misses the true forces by about its error over a grid cell, more than the forces
+themselves do.
+
+Three gromosXX references run P3M, all expected output from native gromosXX with one patch
+(below): `nacl_pair_box_p3m_fixed` and `water_216_box_p3m_fixed` (NSHAPE 3 with ASHAPE 1.4 nm
+as the check suite's `aladip_ls`, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, NQEVAL 0, FACCUR 1.0,
+NA2CLC 3, EPSLS 0) and `water_216_box_p3m_gauss_fixed` (the Gaussian with ASHAPE 0.4 nm and
+NFDORD 0), 10 steps, every step written. The FFTs differ (PhastFT, FFTW), yet every ENERGY03
+value agrees to the ten printed digits, the forces to the last printed digit (`10⁻⁹`) and the
+positions exactly. gromosXX's own check `aladip_ls.t.cc` (the NonBonded total for NSHAPE −1 … 10,
+δ = 0.01) is ported with one change: its input's charge-group cutoff, which gromosXX's `md` and
+newen both refuse with P3M (the check program builds its simulation without the feature checker),
+is replaced by the atomic one; the twelve totals then agree with the table to its five printed
+digits.
+
+What newen does differently from gromosXX:
+
+- **The A term of an NVT run.** gromosXX keeps the self and A terms of step 0 and reports them
+  every step of a run without pressure scaling (`configuration/energy.cc:576-580`, "is only
+  possible for constant volume simulation"). That is exact for Ewald, whose `Ã2` depends on the
+  box only, but P3M's `Ã2` depends on where each charge sits relative to the grid (Vol. 2 after
+  `u_ga_slf_def_p3m`), so gromosXX's A term, and every total containing it, is stale from step 1
+  on (2.2·10⁻⁷ relative after 8 steps in `nacl_pair_box_p3m_fixed`). newen reports the step's A
+  term. The references come from gromosXX with `patches/p3m_nvt_a_term.patch`, which removes that
+  one line; with the released binary their forces, trajectories and every other energy row are
+  identical. Not yet in the dossier.
+- **`Ã2` every step.** gromosXX computes the P3M `Ã2` at step 0, under pressure scaling and on
+  energy-output steps (`nonbonded_outerloop.cc:2184-2188`), and the self and A terms only on those
+  steps; newen computes them every step. The written numbers are the same.
+- **The finite-difference field in a triclinic box.** gromosXX divides the difference along grid
+  axis `α` by `2j |box(α)/N_α|` and stores it as the Cartesian component `α`
+  (`latticesum.cc:636-641`), the gradient only when the cell edges are orthogonal. newen maps the
+  per-axis differences through `H⁻¹`, the operator whose transform is the `D̂` of the influence
+  function, as gromosXX's influence function itself does. In a rectangular box the two differ in
+  rounding only.
+- **Triclinic wave vectors**, as for the Ewald sum: gromosXX's `k_l` multiplies by the transpose
+  of the reciprocal basis in the influence function and in the `ik` field (`influence_function.cc:164, 424`,
+  `latticesum.cc:566`); newen uses `lattice_vector`.
+- **The Nyquist planes of `ik` differentiation.** gromosXX keeps `l = N/2` in `−i k φ̂`. That is
+  harmless: the field is the real part of the backward transform, which keeps the Hermitian part of
+  `Ê`, and that is `−i k' φ̂` with the Nyquist components of `l` set to zero, the usual treatment.
+  newen does the same.
+- **A recomputation under pressure scaling.** When the influence function is recomputed at an
+  NQEVAL step, gromosXX keeps the box deviation it set before the recomputation, so on that step
+  the new `Ĝ` is corrected by the deviation from the old box; newen measures the deviation from
+  the box the current `Ĝ` was computed in.
+- **NGP at a half-integer.** With NASORD 1 a charge exactly half-way between two grid points gets
+  weight zero on both (`|x| < 1/2`, `latticesum.h:512`), in gromosXX and in newen alike: a set of
+  measure zero, recorded by `w1_half_integer`.
+- **Power-of-two grids** only, as said above, and influence-function file I/O (NRDGRD, NWRGRD)
+  is refused, as gromosXX refuses it.
+
+```sh
+cargo test -p newen-forces --test p3m_spec                         # kernels = Float model; FFT within 1e-12; vs Ewald
+cargo test -p newen-md --test test_gromosXX_references p3m         # the three P3M references
+cargo test -p newen-md --test gromos_check_suite aladip_p3m        # gromosXX's aladip_ls check
 ```
 
 ## Where each mistake is caught
@@ -1547,8 +1683,11 @@ Planned, in the order chosen:
   [Lattice-sum electrostatics, phase 1](#lattice-sum-electrostatics-phase-1)). Phase 2, done: the
   direct Ewald sum over wave vectors, wired in for NLRELE = 2, with its Lean theory, model and
   bit-exact tests and three gromosXX references (see
-  [phase 2](#lattice-sum-electrostatics-phase-2-the-direct-ewald-sum)). Phase 3: P3M (NLRELE = 3), charge
-  assignment to a grid, the optimal influence function and the FFT with `rustfft`. Phase 4: the
+  [phase 2](#lattice-sum-electrostatics-phase-2-the-direct-ewald-sum)). Phase 3, done: P3M
+  (NLRELE = 3), charge assignment to a grid, the optimal influence function and the FFT with
+  PhastFT (powers of two only), its per-point kernels bit-exact against their Lean model and the
+  FFT within a tolerance, three gromosXX references and the check suite's `aladip_ls` (see
+  [phase 3](#lattice-sum-electrostatics-phase-3-p3m)). Phase 4: the
   refusals that remain (the combinations gromosXX itself refuses, and those newen does not
   support), and the removal of the unwired smooth-PME code in `crates/newen-forces`
   (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`), which is not GROMOS's P3M.

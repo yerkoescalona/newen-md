@@ -5,6 +5,7 @@ import NewenTheory.Dynamics.Schedule
 import NewenTheory.Dynamics.Thermostats
 import NewenTheory.Interactions.Bonded
 import NewenTheory.Interactions.LatticeSum
+import NewenTheory.Interactions.P3M
 import NewenTheory.Interactions.LennardJones
 import NewenTheory.Interactions.PerturbedBonded
 import NewenTheory.Interactions.ReactionField

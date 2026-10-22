@@ -140,7 +140,28 @@ cargo test -p newen-forces --test softcore_spec               # soft-core kernel
 cargo test -p newen-forces --test perturbed_bonded_spec       # perturbed bonded kernels = Float model; dV/dλ by FD
 cargo test -p newen-forces --test lattice_sum_spec            # lattice-sum kernels = Float model; η', γ̂', forces by FD
 cargo test -p newen-forces --test ewald_spec                  # Ewald kernels = Float model; forces and virials by FD
+cargo test -p newen-forces --test p3m_spec                    # P3M kernels = Float model; FFT within 1e-12; P3M vs Ewald
 ```
+
+**P3M and a tolerance layer for the FFT.** The P3M kernels of `src/nonbonded/p3m.rs` (the
+assignment functions and their stencil, the grid matrix, charge and squared-charge assignment,
+`f_p`, the finite-difference coefficients, `P̂_p`, the influence function per wave vector and on
+a whole grid with its quality `Q`, its box correction, the force-error estimate, the k-space
+energy and virial, the transformed potential, the `ik` and finite-difference fields, the force
+interpolation and `Ã2`) are `kind = "float"` like the others: `NewenSpec/P3M.lean` models them
+over any number type, `NewenTheory/Interactions/P3M.lean` gives their meaning (the assignment
+functions are non-negative, compactly supported and a partition of unity, the finite-difference
+table differentiates polynomials of degree `≤ 2q` exactly, the discrete Fourier transform
+inverts and is Hermitian for real data, the k-space energy is real, the influence function of a
+single alias is `γ̂/(k² P̂²)`), and `crates/newen-forces/tests/p3m_spec.rs` requires the same bits
+on `vectors/p3m.json`. The FFT cannot be held to that: PhastFT's butterflies are neither FFTW's
+(gromosXX) nor anything a Lean model would write, and their rounding depends on the order of the
+butterflies. So the FFT (`p3m.fft3`) and what depends on it (`p3m.kspace`) are
+`kind = "float-tolerance"`: the model has a direct `O(N²)` transform (`dftFloat`), the test
+compares PhastFT with it within `10⁻¹²` relative (measured `3·10⁻¹⁵` on 16³) and the whole
+k-space energy with the Lean pipeline within `10⁻¹¹` (measured `6·10⁻¹⁶`), and `SPEC.toml`
+records the measured maximum in `origin`. The per-point kernels before and after the transform
+stay bit-exact, so a tolerance failure points at the transform alone.
 
 Not guaranteed: the distance between the ℝ model and the `Float` model (the rounding error is not
 bounded here), and anything outside the generated inputs.

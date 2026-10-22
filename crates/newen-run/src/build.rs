@@ -51,8 +51,9 @@ use crate::recipe::{
     ConstraintAlgorithm, Diagnostics, RunRecipe, TermSpec, ThermostatAlgorithm, VirialKind,
 };
 use crate::{total_dof, ConstraintSelection, Prepared, RunError, RunInputs, RunOptions};
-use newen_forces::nonbonded::ewald::{EwaldSum, LatticeSumParams};
+use newen_forces::nonbonded::ewald::{EwaldSum, LatticeSum, LatticeSumParams};
 use newen_forces::nonbonded::lattice_sum::ChargeShape;
+use newen_forces::nonbonded::p3m::{P3m, P3mParams};
 
 /// What the thermostat was built as — for the binary's report and the Python getters.
 #[derive(Debug, Clone, PartialEq)]
@@ -278,7 +279,7 @@ fn instantiate_forcefield(
             ))
         })?;
         let nk = ls.nk.map(|n| n as i64);
-        forcefield.lattice_sum = Some(EwaldSum::new(LatticeSumParams {
+        let params = LatticeSumParams {
             shape,
             width: ls.ashape,
             nk,
@@ -290,7 +291,40 @@ fn instantiate_forcefield(
             // PHYSICALCONSTANTS (`in_topology.cc:1405-1409`)
             eps0_inv: ff.four_pi_eps_i * 4.0 * std::f64::consts::PI,
             four_pi_eps_i: ff.four_pi_eps_i,
-        }));
+        };
+        forcefield.lattice_sum = Some(match &ls.p3m {
+            None => LatticeSum::Ewald(Box::new(EwaldSum::new(params))),
+            Some(m) => {
+                let order = |name: &str, v: i32, range: std::ops::RangeInclusive<i32>| {
+                    if range.contains(&v) {
+                        Ok(v as u8)
+                    } else {
+                        Err(RunError::Recipe(format!(
+                            "NONBONDED block: {name} parameter is {v}, should be in {range:?}"
+                        )))
+                    }
+                };
+                let positive = m.nalias > 0 && m.nqeval >= 0 && m.faccur > 0.0;
+                if !positive || !m.grid.iter().all(|n| n.is_power_of_two()) {
+                    return Err(RunError::Recipe(format!(
+                        "NONBONDED P3M settings out of range (grid {:?} powers of two, NALIAS > \
+                         0, NQEVAL >= 0, FACCUR > 0): {m:?}",
+                        m.grid
+                    )));
+                }
+                LatticeSum::P3m(Box::new(P3m::new(
+                    params,
+                    P3mParams {
+                        grid: m.grid,
+                        order: order("NASORD", m.nasord, 1..=5)?,
+                        nfdord: order("NFDORD", m.nfdord, 0..=5)?,
+                        nalias: i64::from(m.nalias),
+                        nqeval: m.nqeval as usize,
+                        faccur: m.faccur,
+                    },
+                )))
+            },
+        });
     }
 
     let mut position_restraints = 0;
@@ -1047,8 +1081,8 @@ mod tests {
                 );
                 continue;
             }
-            if loaded.imd.nlrele == 2 {
-                println!("{name}: skipped, the legacy builder does not model the Ewald sum");
+            if matches!(loaded.imd.nlrele, 2 | 3) {
+                println!("{name}: skipped, the legacy builder does not model lattice sums");
                 continue;
             }
             let steps = loaded.imd.nstlim.min(10);
@@ -1254,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn ewald_runs_with_an_atomic_pairlist_and_p3m_is_refused() {
+    fn lattice_sums_run_with_an_atomic_pairlist() {
         let dir = refs().join("nacl_water_box");
         let loaded = load(&dir).expect("reference");
         let prepared = (loaded.prepare)();
@@ -1272,10 +1306,10 @@ mod tests {
                 .expect("refused");
             assert!(err.to_string().contains(message), "{err}");
         };
-        // P3M is not implemented
+        // P3M needs the atomic cutoff too
         let mut p3m = recipe.clone();
         p3m.forcefield.electrostatics.electrostatics = 3;
-        refused(&p3m, "NLRELE = 3: P3M");
+        refused(&p3m, "chargegroup based cutoff does not work with P3M");
         // Ewald needs the atomic cutoff (gromosXX FeatureChecker)
         let mut ewald = recipe.clone();
         ewald.forcefield.electrostatics.electrostatics = 2;
@@ -1302,6 +1336,15 @@ mod tests {
             .expect("refused");
         assert!(err.to_string().contains("lattice-sum"), "{err}");
         assert!(build_sequence_from_plan(&ewald, plan, &prepared).is_ok());
+        // nor one lattice-sum method in place of the other
+        let mut p3m = ewald.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        let p3m_plan = build_plan(&p3m, &prepared.topology, &prepared.physical_constants).unwrap();
+        let err = build_sequence_from_plan(&ewald, p3m_plan.clone(), &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("has P3M lattice-sum"), "{err}");
+        assert!(build_sequence_from_plan(&p3m, p3m_plan, &prepared).is_ok());
         for nlrele in [-1, 0, 1] {
             let mut rf = recipe.clone();
             rf.forcefield.electrostatics.electrostatics = nlrele;

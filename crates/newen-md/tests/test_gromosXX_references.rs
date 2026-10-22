@@ -1052,6 +1052,10 @@ ref_test!(nacl_pair_box, "nacl_pair_box");
 // The direct Ewald sum (NLRELE 2, atomic cutoff, Gaussian a = 0.4 nm, cubic A2); expected
 // output from the released binary run with @develop (see its input.toml).
 ref_test!(nacl_pair_box_ewald, "nacl_pair_box_ewald");
+// P3M (NLRELE 3): NSHAPE 3, ASHAPE 1.4 nm, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, P3M Ã2
+// (NA2CLC 3); expected output from the released binary. The FFTs differ (PhastFT vs FFTW), so
+// the agreement is within the tolerances, not byte for byte.
+ref_test!(nacl_pair_box_p3m_fixed, "nacl_pair_box_p3m_fixed");
 ref_test!(butane_vacuum, "butane_vacuum");
 // COVALENTFORM 0 0 1: the Chebyshev-polynomial dihedral (NTBDN = 1).
 ref_test!(butane_vacuum_ntbdn1, "butane_vacuum_ntbdn1");
@@ -1086,6 +1090,13 @@ ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
 // surface term of a dielectric boundary (EPSLS = 61). Expected output from @develop.
 ref_test!(water_216_box_ewald, "water_216_box_ewald");
 ref_test!(water_216_box_ewald_epsls, "water_216_box_ewald_epsls");
+// P3M in bulk water: the finite-difference field (NFDORD 2) with NSHAPE 3, and the Gaussian
+// (a = 0.4 nm) with ik differentiation (NFDORD 0).
+ref_test!(water_216_box_p3m_fixed, "water_216_box_p3m_fixed");
+ref_test!(
+    water_216_box_p3m_gauss_fixed,
+    "water_216_box_p3m_gauss_fixed"
+);
 
 // ── Level 3: thermostats / barostats ────────────────────────────────────────
 ref_test!(water_216_nvt, "water_216_nvt");

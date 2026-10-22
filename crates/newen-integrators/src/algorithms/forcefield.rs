@@ -17,7 +17,7 @@ use newen_forces::bonded::{
     calculate_bonded_forces_ntf, calculate_perturbed_bonded_forces, BondedGroupEnergies,
     BondedPrecalc, TermLambda,
 };
-use newen_forces::nonbonded::ewald::{EwaldSum, LsEnergies};
+use newen_forces::nonbonded::ewald::{LatticeSum, LsEnergies};
 use newen_forces::nonbonded::ls_real_space::{
     lj_ls_pairs, lj_only_pairs, ls_excluded_pairs, one_four_ls_pairs, ShapeWidth,
 };
@@ -196,9 +196,9 @@ pub struct Forcefield {
     /// GaMD: the exclusion lists with only the solute's, and with none (built once), to take
     /// the reaction-field excluded solute pairs apart.
     gamd_exclusions: Option<[Vec<Vec<usize>>; 2]>,
-    /// Lattice-sum electrostatics (NLRELE 2, Ewald) in place of the reaction field; `None` for a
-    /// reaction-field or cutoff run.
-    pub lattice_sum: Option<EwaldSum>,
+    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) in place of the reaction field; `None`
+    /// for a reaction-field or cutoff run.
+    pub lattice_sum: Option<LatticeSum>,
     /// The lattice-sum energies of this step but the real-space one (which is the pair
     /// storage's electrostatic energy).
     ls_energies: LsEnergies,
@@ -455,7 +455,8 @@ impl Forcefield {
     /// real-space energies to their `e_crf`. Returns the energies of the other terms.
     fn lattice_sum_terms(
         &mut self,
-        ls: &mut EwaldSum,
+        ls: &mut LatticeSum,
+        step: usize,
         topo: &Topology,
         conf: &Configuration,
         pairlist_updated: bool,
@@ -471,8 +472,8 @@ impl Forcefield {
         }
         let n_atoms = topo.inverse_mass.len();
         let sw = ShapeWidth {
-            shape: ls.params.shape,
-            inv_width: 1.0 / ls.params.width,
+            shape: ls.params().shape,
+            inv_width: 1.0 / ls.params().width,
         };
         let pos = &conf.current().pos;
         lj_ls_pairs(
@@ -505,6 +506,7 @@ impl Forcefield {
             v.z_axis.to_array(),
         ];
         let energies = ls.evaluate(
+            step,
             pos,
             &self.charges,
             edges,
@@ -833,7 +835,14 @@ impl Algorithm for Forcefield {
         let t_solute = self.timing_enabled.then(std::time::Instant::now);
         if let Some(mut ls) = self.lattice_sum.take() {
             // every lattice-sum term (no reaction field): see `lattice_sum_terms`
-            let result = self.lattice_sum_terms(&mut ls, topo, conf, pairlist_updated, need_virial);
+            let result = self.lattice_sum_terms(
+                &mut ls,
+                sim.step,
+                topo,
+                conf,
+                pairlist_updated,
+                need_virial,
+            );
             self.lattice_sum = Some(ls);
             self.ls_energies = result?;
         } else if self.use_cg_grouped_solute {

@@ -1,6 +1,8 @@
 # Rust functions that carry a Lean specification. One [[function]] per function; the key is the
 # `/// spec:` line of its Rust doc comment. See README.md for what each layer checks.
 # kind = "float": a floating-point kernel; no Aeneas, the Lean model is tested bit for bit instead.
+# kind = "float-tolerance": floating-point code whose operations differ from the model's (the FFT); the
+# Rust is compared with the model within a stated bound, and `origin` gives the measured maximum.
 
 [[function]]
 key = "schedule.output_misses_longrange"
@@ -1001,3 +1003,252 @@ theorem = "NewenSpec.LatticeSum.surfaceModel_real_eq (EPSLS != 0), surfaceModel_
 # Rust = model at Float, bit for bit; forces against central differences, the virial against the deformation derivative (cargo test)
 differential = "crates/newen-forces/tests/ewald_spec.rs"
 vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "p3m.assignment_1d"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assignment_1d"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_charges", "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces", "crates/newen-forces/src/nonbonded/p3m.rs::assignment_weights"]
+origin = "gromosXX Lattice_Sum::charge_assignment_1d (latticesum.h:508-565); GROMOS Vol. 2 assign_p3m, table of the weights. Every branch reads |x| or x^2, so w(-x) has the bits of w(x) (gromosXX assigns with u - n and interpolates with n - u). The strict |x| < 1/2 of order 1 gives a charge exactly half-way between two grid points weight zero on both (w1_half_integer)"
+# Theorems over R: w_p >= 0, zero for |x| >= p/2, and a partition of unity: the grid points around a charge carry weights adding up to one for p = 2..5, and for p = 1 away from the half-integers
+theory = "NewenTheory.Interactions.P3M.w (w_nonneg, w_support, w_partition_of_unity, w1_partition_of_unity, w1_half_integer)"
+model = "NewenSpec.P3M.assignmentModel (at Float: assignmentFloat)"
+theorem = "NewenSpec.P3M.assignmentModel_real_eq"
+# Rust = model at Float, bit for bit, p = 1..5 on a grid of x in [-3, 3] and the doubles on either side of the branch points (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.nearest_grid_point"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::nearest_grid_point"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_charges", "crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges", "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces"]
+origin = "gromosXX latticesum.cc:96-106: rint for odd orders, truncation (C int()) for even orders"
+model = "NewenSpec.P3M.nearestModel, nearestIntModel (at Float: nearestIntFloat)"
+# Rust = model at Float, bit for bit (as integers), with the stencil weights (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assignment_weights"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assignment_weights"
+used_by = ["crates/newen-forces/tests/p3m_spec.rs"]
+origin = "gromosXX latticesum.cc:108-128: the stencil -(p-1)/2 ..= p/2 around the nearest grid point"
+model = "NewenSpec.P3M.weightsModel (at Float: weightsFloat)"
+# Rust = model at Float, bit for bit, u on a grid of [-1, 1], half-integers and random u in [0, 32); the weights of an in-box u add up to one within 1e-14 (but at the half-integers of p = 1) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.mesh"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::Mesh::new"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate", "crates/newen-forces/src/nonbonded/p3m.rs::influence_function"]
+origin = "gromosXX latticesum.cc:57-64: H = Matrix(box(0)/Nx, box(1)/Ny, box(2)/Nz) (rows), H_inv = math::inverse (gmath.h:1211-1223, adjugate times 1/det), cell volume det(transpose(H)) (gmath.h:1197-1205); grid coordinates math::product(H_inv, r) = H_inv^T r"
+model = "NewenSpec.P3M.meshModel, M3.inv, M3.det, M3.tmulVec (at Float: meshFloat)"
+# Rust = model at Float, bit for bit, on random cubic, rectangular and triclinic boxes and grids 2..32 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assign_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assign_charges"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_charge_density (latticesum.cc:46-139), atoms in order, stencil x slowest, rho += (w_x w_y w_z / V_cell) q; GROMOS Vol. 2 assign_p3m"
+model = "NewenSpec.P3M.assignChargesModel (at Float: assignChargesFloat)"
+# Rust = model at Float, bit for bit, on 4x4x4, 8x4x2 and 2x4x8 grids in random boxes; the grid carries the total charge (sum rho V_cell = sum q within 1e-12) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.selfterm_fp"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::selfterm_fp"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges"]
+origin = "gromosXX Lattice_Sum::p3m_selfterm_fp (latticesum.h:672-769); GROMOS Vol. 2 f_g_x and table f_p_func. gromosXX's doc comment lists order 4 as n = 0, 2, 3, 4; the code and Vol. 2 have n = 0, 1, 2, 3"
+model = "NewenSpec.P3M.selftermFpModel (at Float: selftermFpFloat)"
+# Rust = model at Float, bit for bit, every order and |n|, both signs of n, s on a grid of [-1/2, 1/2] (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assign_squared_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_squared_charge_grid (latticesum.cc:170-258): around the grid origin, s = u - n0 (odd p) or u - n0 - 1/2 (even p), stencil -(p-1)..p-1, R += f_x f_y f_z (1/V_cell) q^2; GROMOS Vol. 2 f_g_func. Only for NA2CLC 3 (and 4, which gromosXX reads as 3, in_parameter.cc:4718; the averaged grid of NA2CLC 4 is never used by gromosXX)"
+model = "NewenSpec.P3M.assignSquaredModel (at Float: assignSquaredFloat)"
+# Rust = model at Float, bit for bit, as assign_charges (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.fd_coefficients"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::fd_coefficients"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::d_hat", "crates/newen-forces/src/nonbonded/p3m.rs::field_fd"]
+origin = "gromosXX Lattice_Sum::finite_difference_constants (latticesum.h:598-633); GROMOS Vol. 2 tab:fd_coef"
+# Theorem over R: the operator of order q = 1..5 differentiates every polynomial of degree <= 2q exactly
+theory = "NewenTheory.Interactions.P3M.fdCoeff, fdDeriv (fd_exact_on_polynomials, fd_exact_1 .. fd_exact_5)"
+model = "NewenSpec.P3M.fdCoefficientsModel (at Float: fdCoefficientsFloat)"
+theorem = "NewenSpec.P3M.fdCoefficientsModel_real_eq"
+# Rust = model at Float, bit for bit, q = 0..5 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.sinc_power"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::sinc_power"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::alias_sums"]
+origin = "gromosXX Lattice_Sum::fourier_charge_assignment_1d (latticesum.h:583-589): 1 at x = 0, else pow(2/x sin(x/2), p) with C pow (declared extern C in p3m.rs, as Lean's Float.pow); GROMOS Vol. 2 wei_product"
+# Theorems over R: sincPow 0 = 1 and sincPow is continuous at 0 (the code's value is the limit); sincPow x p = sinc(x/2)^p
+theory = "NewenTheory.Interactions.P3M.sincPow (sincPow_zero, sincPow_tendsto_zero, sincPow_eq_sinc)"
+model = "NewenSpec.P3M.sincPowModel (at Float: sincPowFloat)"
+theorem = "NewenSpec.P3M.sincPowModel_real_eq"
+# Rust = model at Float, bit for bit, p = 1..5 on a grid of [-12, 12] (0 included) and random x in [-40, 40] (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.influence_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_at"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::influence_function"]
+origin = "gromosXX Influence_Function::calculate (influence_function.cc:91-344) for one l: D_hat (ik or finite differences, :156-171), the alias sums over m in [-NALIAS, NALIAS]^3 (:173-224), the denominator 1 for p = 1, G_hat = 0 below |D|^2 < 1e-12 (math::epsilon), the derivative tensor (:237-249), q (:276); GROMOS Vol. 2 optim_influ, alias_def, big_gammahat_def, q_calc_2. k_l = l_x b1 + l_y b2 + l_z b3 (phase 2's lattice_vector); gromosXX multiplies by the transpose of the reciprocal basis, the same vector in a rectangular box"
+# Theorems over R: the optimal influence function over a set of alias vectors (Vol. 2 optim_influ); for one alias with ik differentiation it is gamma_hat(a|k|)/(|k|^2 P_hat(k)^2)
+theory = "NewenTheory.Interactions.P3M.influence (influence_single_alias)"
+model = "NewenSpec.P3M.influenceAtModel, aliasSumsModel, dHatModel (at Float: influenceAtFloat; the whole grid influenceFunctionFloat)"
+theorem = "NewenSpec.P3M.influenceAtModel_real_single"
+# Rust = model at Float, bit for bit: 250 wave vectors (grids 4^3 and 8^3, every order, NFDORD 0-3, NALIAS 0-2, NSHAPE -1, 0, 3, 7, widths 0.4 and 1.4, cubic, rectangular and triclinic boxes, with and without the tensor) and six whole 4^3 grids with Q (influence_function, the planes summed in gromosXX's order) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.quality_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::quality_at"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::influence_quality"]
+origin = "gromosXX Influence_Function::evaluate_quality (influence_function.cc:355-526) for one l: the two terms added to Q in turn; no epsilon test for ik differentiation; GROMOS Vol. 2 q_calc_2"
+model = "NewenSpec.P3M.qualityAtModel (at Float: qualityAtFloat)"
+# Rust = model at Float, bit for bit, 80 wave vectors (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.influence_box_correction"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_box_correction"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (a box that differs from the one the influence function was computed in)"]
+origin = "gromosXX Influence_Function::operator() (influence_function.h:140-148): G - tr(Gamma tL0^-1 (tL - tL0)), the matrix products summed from zero; GROMOS Vol. 2 gammahat_upd. gromosXX computes the deviation in setBox before a recomputation at an NQEVAL step and does not reset it after, so on that step the new function is corrected by the deviation from the old box; newen takes the deviation from the box of the last computation"
+model = "NewenSpec.P3M.boxCorrectionModel (at Float: boxCorrectionFloat)"
+# Rust = model at Float, bit for bit, 100 random rows (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.force_error"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::force_error_estimate"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"]
+origin = "gromosXX influence_function.cc:311: four_pi_eps_i S~^2 sqrt(Q/(V N_atoms)); GROMOS Vol. 2 deserno"
+model = "NewenSpec.P3M.forceErrorModel (at Float: forceErrorFloat)"
+theorem = "NewenSpec.P3M.forceErrorModel_real_eq"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.kspace_energy"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::kspace_energy"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_potential_and_energy (latticesum.cc:384-422): |rho_hat|^2/N, E += G |rho_hat|^2/N, virial (Gamma + G 1)|rho_hat|^2/N, E = 0.5 E V_cell eps0_inv, virial scaled -0.25 eps0_inv V_cell and stored -2x; GROMOS Vol. 2 e_gamma_p3m, reci_space_virial"
+# Theorems over R: the k-space energy 1/2 V_cell eps0^-1 sum G |rho_hat|^2/N, and the complex sum it is written from is real for a real charge density; the model's energy is the theory's p3mEnergy given the transform of a real grid
+theory = "NewenTheory.Interactions.P3M.p3mEnergy (p3m_energy_real, dft_neg_eq_conj)"
+model = "NewenSpec.P3M.kspaceEnergyModel (at Float: kspaceEnergyFloat)"
+theorem = "NewenSpec.P3M.kspaceEnergyModel_real_eq, kspaceEnergyModel_real_p3mEnergy"
+# Rust = model at Float, bit for bit, 64-point grids with and without the virial (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.potential_hat"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::potential_hat"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX latticesum.cc:392: phi_hat = eps0_i G rho_hat / sqrt(N)"
+model = "NewenSpec.P3M.potentialHatModel (at Float: potentialHatFloat)"
+# Rust = model at Float, bit for bit, on the kspace_energy rows (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.field_ik"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::field_ik"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NFDORD 0"]
+origin = "gromosXX Lattice_Sum::calculate_electric_field, ik branch (latticesum.cc:544-580): E_hat = k_l (-i phi_hat / sqrt(N)), the Nyquist planes l = N/2 kept, then three backward transforms whose real parts are the field. Keeping the Nyquist planes is harmless: the real part keeps the Hermitian part of E_hat, which has the Nyquist components of l set to zero. k_l as in influence_at"
+model = "NewenSpec.P3M.fieldIkModel (at Float: fieldIkFloat)"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.field_fd"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::field_fd"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NFDORD 1-5"]
+origin = "gromosXX Lattice_Sum::calculate_electric_field, finite differences (latticesum.cc:581-640), after the backward transform of phi_hat. gromosXX divides the difference along grid axis a by 2 j |box(a)/N_a| and stores it as Cartesian component a, which is not the gradient in a triclinic box; newen sums g_a = sum_j (c_j/sqrt(N)) (phi(n - j e_a) - phi(n + j e_a))/(2j) and maps it through H^-1 (E = sum_a g_a h*_a), the operator whose transform is the D_hat of the influence function; in a rectangular box the two differ only in rounding"
+model = "NewenSpec.P3M.fieldFdModel (at Float: fieldFdFloat)"
+# Rust = model at Float, bit for bit, q = 1..5 on small grids in random (triclinic included) boxes (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.interpolate_forces"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_force (latticesum.cc:690-778): E_i = sum w(n - u) E(n), F_i = q_i E_i; GROMOS Vol. 2 force_from_field_p3m, force_interpol"
+model = "NewenSpec.P3M.interpolateModel (at Float: interpolateFloat)"
+# Rust = model at Float, bit for bit; P3M forces against the direct Ewald sum within the rms force-error estimate and against central differences of the P3M energy (with the A term's Ã2 part) within 0.5 % of the rms force (cargo test) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.a2_tilde"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::a2_tilde_p3m"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NA2CLC 3 and 4"]
+origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges: newen reports the A term of the step (the P3M references use gromosXX + patches/p3m_nvt_a_term.patch)"
+model = "NewenSpec.P3M.a2TildeModel (at Float: a2TildeFloat)"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.fft3"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::Fft3::forward"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"]
+origin = "FFTW's unnormalised complex 3-D transforms (configuration/mesh.cc:62-68, 142-147), here by one-dimensional PhastFT transforms along z, y, x; PhastFT's inverse divides by N, which is multiplied back (exact for a power of two). Not bit-exact: the butterflies are neither FFTW's nor the model's. Measured maximum relative difference (max |a - b| / max |b|) from the direct transform dftFloat: 3.1e-16 (4^3), 5.9e-16 (8^3), 3.6e-16 (8x4x2), 3.0e-15 (16^3); bound 1e-12"
+# Theorems over R: the backward transform of the forward one is N times the grid, a shift multiplies the transform by a phase, a real grid has a Hermitian transform
+theory = "NewenTheory.Interactions.P3M.dftBackward over Mathlib's ZMod.dft (dft_inv, dft_shift, dft_neg_eq_conj)"
+model = "NewenSpec.P3M.dftFloat (the direct O(N^2) transform, Float only)"
+# Rust within 1e-12 of the direct transform on 4^3, 8^3, 8x4x2 and 16^3 grids, forward and backward; backward(forward) = N times the grid within 1e-14 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.kspace"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"
+used_by = ["crates/newen-integrators/src/algorithms/forcefield.rs::Forcefield::lattice_sum_terms (NLRELE 3)"]
+origin = "gromosXX Nonbonded_Outerloop::_ls_p3m_kspace_outerloop (nonbonded_outerloop.cc:2076-2267): positions put into the box, the influence function at step 0 (refused above FACCUR) and every NQEVAL steps, Ã2, charge assignment, forward transform, energy, potential, field, forces. Measured maximum relative difference of the k-space energy (assign_charges, fft3, kspace_energy) from the Lean pipeline with dftFloat on 8^3 grids: 6.3e-16; bound 1e-11. Against gromosXX (FFTW) on the three P3M references: every ENERGY03 value to the printed digits, forces to the last printed digit (1e-9), positions identical"
+model = "NewenSpec.P3M (assignChargesFloat, influenceFunctionFloat, dftFloat, kspaceEnergyFloat; the p3m_energy rows)"
+# the k-space energy within 1e-11 of the Lean pipeline (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"

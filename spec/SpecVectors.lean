@@ -11,6 +11,7 @@ import NewenSpec.Periodicity
 import NewenSpec.SoftCore
 import NewenSpec.PerturbedBonded
 import NewenSpec.LatticeSum
+import NewenSpec.P3M
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
 thermostat, nonbonded, bonded, dynamics, periodicity, soft-core, perturbed bonded, lattice-sum and
@@ -2004,6 +2005,429 @@ def ewaldJson (r : EwaldRows) : String :=
 
 end EwaldRows
 
+/-! ## P3M: the per-point kernels, and the transforms within a tolerance
+
+`vectors/p3m.json`: the assignment functions, the stencil weights and centres, `f_p`, the
+finite-difference coefficients and `P̂_p` on grids of their arguments; grid matrices of random
+boxes; the influence function at single wave vectors (grids 4³ and 8³, every order, NFDORD 0–3,
+NALIAS 0–2, four shapes, widths 0.4 and 1.4 nm, cubic, rectangular and triclinic boxes) and on
+whole 4³ grids, its quality, its box correction, the force error; charge and squared-charge
+assignment, the energy, potential, fields, `Ã2` and the interpolated forces on small grids. All
+of these are compared bit for bit. Two sections are compared within a tolerance: `dft` (the
+direct transform `dftFloat` of grids whose entries are `sin(0.37 i + seed)` and
+`cos(0.91 i + 2 seed)`, so only the outputs are stored) and `p3m_energy` (the whole k-space
+energy on an 8³ grid through `dftFloat`). -/
+
+section P3MRows
+
+open NewenTheory.Interactions.LatticeSum (Shape TPOrder)
+open NewenSpec.LatticeSum (Sym reciprocalBoxFloat piFloat)
+open NewenSpec.P3M
+
+abbrev LV3 := NewenSpec.LatticeSum.V3
+abbrev PM3 := NewenSpec.P3M.M3
+
+def m3List (m : PM3 Float) : List Float := v3List m.r0 ++ v3List m.r1 ++ v3List m.r2
+
+def intF (z : ℤ) : Float := Float.ofInt z
+
+def p3mShapes : List Shape := [.gaussian, .poly .o0, .poly .o3, .poly .o7]
+
+/-- The doubles on either side of a positive `x`. -/
+def p3mNeighbours (x : Float) : List Float :=
+  [x, Float.ofBits (x.toBits - 1), Float.ofBits (x.toBits + 1)]
+
+def p3mSpecials : List Float :=
+  let pos := [0.5, 1, 1.5, 2, 2.5].flatMap p3mNeighbours
+  [0] ++ pos ++ pos.map (fun x => -x)
+
+def assignmentRows : List (List Float) :=
+  (List.range 5).flatMap fun i =>
+    let p := i + 1
+    let xs := (List.range 97).map (fun j => j.toFloat / 16 - 3) ++ p3mSpecials
+    xs.map fun x => [natF p, x, assignmentFloat p x]
+
+def padFive (xs : List Float) : List Float := (xs ++ [0, 0, 0, 0, 0]).take 5
+
+def weightsRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 5 do
+    let p := i + 1
+    let mut us := (List.range 65).map (fun j => j.toFloat / 32 - 1) ++
+      [0.5, 1.5, 2.5, 31.5, -0.5, 3, 31]
+    for _ in List.range 20 do
+      us := us ++ [← uniform 0 32]
+    for u in us do
+      rows := rows.push ([natF p, u, intF (nearestIntFloat p u)] ++ padFive (weightsFloat p u))
+  return rows.toList
+
+def selftermRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 5 do
+    let p := i + 1
+    for n in List.range p do
+      let mut ss := (List.range 17).map (fun j => j.toFloat / 16 - 0.5)
+      for _ in List.range 3 do
+        ss := ss ++ [← uniform (-0.5) 0.5]
+      for sv in ss do
+        rows := rows.push [natF p, natF n, sv, selftermFpFloat p n sv]
+  return rows.toList
+
+def fdRows : List (List Float) :=
+  (List.range 6).map fun q => [natF q] ++ fdCoefficientsFloat q
+
+def sincRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 5 do
+    let p := i + 1
+    let mut xs := (List.range 97).map (fun j => j.toFloat / 4 - 12)
+    for _ in List.range 5 do
+      xs := xs ++ [← uniform (-40) 40]
+    for x in xs do
+      rows := rows.push [natF p, x, sincPowFloat x p]
+  return rows.toList
+
+def drawGridSize : Gen ℕ := do return [2, 4, 8, 16, 32].getD (← below 5) 4
+
+def boxM3 (a b c : LV3 Float) : PM3 Float := ⟨a, b, c⟩
+
+def boxList (rect : Bool) (a b c : LV3 Float) : List Float :=
+  [if rect then 1 else 0] ++ v3List a ++ v3List b ++ v3List c
+
+def meshRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 60 do
+    let (rect, a, b, c) ← drawBox
+    let g := (← drawGridSize, ← drawGridSize, ← drawGridSize)
+    let m := meshFloat (boxM3 a b c) g
+    rows := rows.push (boxList rect a b c ++ [natF g.1, natF g.2.1, natF g.2.2] ++ m3List m.h ++
+      m3List m.hInv ++ [m.cellVolume])
+  return rows.toList
+
+/-- The inputs of the influence function for a box and a grid, and the box volume. -/
+def mkInputs (order nfdord nalias : ℕ) (sh : Shape) (width : Float) (rect : Bool)
+    (a b c : LV3 Float) (g : ℕ × ℕ × ℕ) : Inputs Float × Float :=
+  let (vol, u, v, w) := reciprocalBoxFloat a b c rect
+  (⟨order, nfdord, nalias, sh, width, meshFloat (boxM3 a b c) g, ⟨u, v, w⟩⟩, vol)
+
+/-- One influence case: the grid, the orders, the shape, the box. -/
+structure ICase where
+  g : ℕ × ℕ × ℕ
+  order : ℕ
+  nfdord : ℕ
+  nalias : ℕ
+  shape : Shape
+  width : Float
+  rect : Bool
+  a : LV3 Float
+  b : LV3 Float
+  c : LV3 Float
+
+def ICase.inputs (k : ICase) : Inputs Float × Float :=
+  mkInputs k.order k.nfdord k.nalias k.shape k.width k.rect k.a k.b k.c k.g
+
+def ICase.list (k : ICase) : List Float :=
+  [natF k.g.1, natF k.g.2.1, natF k.g.2.2, natF k.order, natF k.nfdord, natF k.nalias,
+    nshapeFloat k.shape, k.width] ++ boxList k.rect k.a k.b k.c
+
+def drawICase (grids : List ℕ) (maxAlias : ℕ) : Gen ICase := do
+  let n := grids.getD (← below grids.length) 4
+  let (rect, a, b, c) ← drawBox
+  return ⟨(n, n, n), (← below 5) + 1, ← below 4, ← below (maxAlias + 1),
+    p3mShapes.getD (← below p3mShapes.length) .gaussian, ← pick [0.4, 1.4], rect, a, b, c⟩
+
+/-- A wave index in `(−n/2, n/2]`, the triple not zero. -/
+def drawL (g : ℕ × ℕ × ℕ) : Gen (ℤ × ℤ × ℤ) := do
+  let one := fun (n : ℕ) => do return ((← below n : ℕ) : ℤ) - ((n / 2 : ℕ) : ℤ) + 1
+  let l := (← one g.1, ← one g.2.1, ← one g.2.2)
+  return if l = (0, 0, 0) then (1, 0, 0) else l
+
+def lList (l : ℤ × ℤ × ℤ) : List Float := [intF l.1, intF l.2.1, intF l.2.2]
+
+def influenceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 250 do
+    let k ← drawICase [4, 8] 2
+    let l ← drawL k.g
+    let wg := (← below 2) == 0
+    let (g, gam, q) := influenceAtFloat k.inputs.1 l wg
+    rows := rows.push (k.list ++ lList l ++ [if wg then 1 else 0, g] ++ symList gam ++ [q])
+  return rows.toList
+
+def qualityRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 80 do
+    let k ← drawICase [4, 8] 2
+    let l ← drawL k.g
+    let g := (influenceAtFloat k.inputs.1 l false).1 * (← uniform 0.9 1.1)
+    let (f, s) := qualityAtFloat k.inputs.1 l g
+    rows := rows.push (k.list ++ lList l ++ [g, f, s])
+  return rows.toList
+
+def drawM3 (lo hi : Float) : Gen (PM3 Float) := do
+  return ⟨⟨← uniform lo hi, ← uniform lo hi, ← uniform lo hi⟩,
+    ⟨← uniform lo hi, ← uniform lo hi, ← uniform lo hi⟩,
+    ⟨← uniform lo hi, ← uniform lo hi, ← uniform lo hi⟩⟩
+
+def boxCorrectionRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 100 do
+    let g ← uniform (-2) 2
+    let gam ← drawSym
+    let (_, a, b, c) ← drawBox
+    let t0 := (boxM3 a b c).inv
+    let dl ← drawM3 (-0.05) 0.05
+    rows := rows.push ([g] ++ symList gam ++ m3List t0 ++ m3List dl ++
+      [boxCorrectionFloat g gam t0 dl])
+  return rows.toList
+
+def forceErrorRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 50 do
+    let q ← logUniform 1e-12 1e-2
+    let s2 ← uniform 0.5 500
+    let v ← uniform 1 30
+    let n := (← below 3000) + 1
+    let fpe ← pick [138.9354, 138.935458]
+    rows := rows.push [q, s2, v, natF n, fpe, forceErrorFloat q s2 v n fpe]
+  return rows.toList
+
+def influenceFunctionRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 6 do
+    let k ← drawICase [4] 1
+    let (inp, vol) := k.inputs
+    let (gh, gam, q) := influenceFunctionFloat inp vol
+    rows := rows.push (k.list ++ [natF gh.size] ++ gh.toList ++ gam.toList.flatMap symList ++ [q])
+  return rows.toList
+
+/-- Atoms with fractional coordinates in `[0, 1)` (in the box). -/
+def drawAtomsIn (a b c : LV3 Float) (maxN : ℕ) : Gen (List (LV3 Float × Float)) := do
+  let n := (← below (maxN - 1)) + 2
+  let mut atoms := #[]
+  for _ in List.range n do
+    let fa ← unit
+    let fb ← unit
+    let fc ← unit
+    let r : LV3 Float := ⟨fa * a.x + fb * b.x + fc * c.x, fa * a.y + fb * b.y + fc * c.y,
+      fa * a.z + fb * b.z + fc * c.z⟩
+    atoms := atoms.push (r, ← uniform (-1) 1)
+  return atoms.toList
+
+def atomsList (atoms : List (LV3 Float × Float)) : List Float :=
+  [natF atoms.length] ++ atoms.flatMap fun at_ => v3List at_.1 ++ [at_.2]
+
+def drawSmallGrid : Gen (ℕ × ℕ × ℕ) := do
+  return [(4, 4, 4), (8, 4, 2), (2, 4, 8)].getD (← below 3) (4, 4, 4)
+
+def assignRows (squared : Bool) : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 30 do
+    let g ← drawSmallGrid
+    let p := (← below 5) + 1
+    let (rect, a, b, c) ← drawBox
+    let atoms ← drawAtomsIn a b c 8
+    let m := meshFloat (boxM3 a b c) g
+    let out := if squared then assignSquaredFloat m p atoms else assignChargesFloat m p atoms
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2, natF p] ++ boxList rect a b c ++
+      atomsList atoms ++ out.toList)
+  return rows.toList
+
+def p3mKspaceRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 8 do
+    let n := 64
+    let wg := (← below 2) == 0
+    let vc ← uniform 1e-3 1e-2
+    let e0 ← pick eps0Invs
+    let mut pts := #[]
+    for _ in List.range n do
+      pts := pts.push (← uniform 0 1, ← drawSym, ← uniform (-1) 1, ← uniform (-1) 1)
+    let (e, vir) := kspaceEnergyFloat pts.toList wg vc e0
+    let phi := pts.toList.flatMap fun pt =>
+      let (r, i) := potentialHatFloat n pt.1 pt.2.2.1 pt.2.2.2 e0
+      [r, i]
+    rows := rows.push ([natF n, if wg then 1 else 0, vc, e0] ++
+      pts.toList.flatMap (fun pt => [pt.1] ++ symList pt.2.1 ++ [pt.2.2.1, pt.2.2.2]) ++
+      [e] ++ symList vir ++ phi)
+  return rows.toList
+
+def a2Rows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 6 do
+    let n := 64
+    let wg := (← below 2) == 0
+    let s2 ← uniform 0.5 50
+    let mut pts := #[]
+    for _ in List.range n do
+      pts := pts.push (← uniform 0 1, ← drawSym, ← uniform (-1) 1)
+    let (a2t, d) := a2TildeFloat pts.toList wg s2
+    rows := rows.push ([natF n, if wg then 1 else 0, s2] ++
+      pts.toList.flatMap (fun pt => [pt.1] ++ symList pt.2.1 ++ [pt.2.2]) ++ [a2t] ++ symList d)
+  return rows.toList
+
+/-- Every grid point `(x, y, z)` in storage order. -/
+def gridPoints (g : ℕ × ℕ × ℕ) : List (ℕ × ℕ × ℕ) :=
+  (List.range g.1).flatMap fun x => (List.range g.2.1).flatMap fun y =>
+    (List.range g.2.2).map fun z => (x, y, z)
+
+def fieldIkRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 4 do
+    let g ← drawSmallGrid
+    let (rect, a, b, c) ← drawBox
+    let (_, u, v, w) := reciprocalBoxFloat a b c rect
+    let m := meshFloat (boxM3 a b c) g
+    let mut vals := #[]
+    for _ in gridPoints g do
+      vals := vals.push (← uniform (-1) 1, ← uniform (-1) 1)
+    let out := (gridPoints g).zip vals.toList |>.flatMap fun (pt, ri) =>
+      let (er, ei) := fieldIkFloat m ⟨u, v, w⟩ pt.1 pt.2.1 pt.2.2 ri.1 ri.2
+      v3List er ++ v3List ei
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2] ++ boxList rect a b c ++
+      vals.toList.flatMap (fun ri => [ri.1, ri.2]) ++ out)
+  return rows.toList
+
+def fieldFdRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 10 do
+    let g ← drawSmallGrid
+    let q := (← below 5) + 1
+    let (rect, a, b, c) ← drawBox
+    let m := meshFloat (boxM3 a b c) g
+    let mut phi := #[]
+    for _ in gridPoints g do
+      phi := phi.push (← uniform (-1) 1)
+    let out := (gridPoints g).flatMap fun pt =>
+      v3List (fieldFdFloat m q phi pt.1 pt.2.1 pt.2.2)
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2, natF q] ++ boxList rect a b c ++
+      phi.toList ++ out)
+  return rows.toList
+
+def interpolateRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 15 do
+    let g ← drawSmallGrid
+    let p := (← below 5) + 1
+    let (rect, a, b, c) ← drawBox
+    let m := meshFloat (boxM3 a b c) g
+    let atoms ← drawAtomsIn a b c 6
+    let mut ex := #[]
+    let mut ey := #[]
+    let mut ez := #[]
+    for _ in gridPoints g do
+      ex := ex.push (← uniform (-5) 5)
+      ey := ey.push (← uniform (-5) 5)
+      ez := ez.push (← uniform (-5) 5)
+    let forces := atoms.flatMap fun at_ => v3List (interpolateFloat m p ex ey ez at_)
+    rows := rows.push ([natF g.1, natF g.2.1, natF g.2.2, natF p] ++ boxList rect a b c ++
+      atomsList atoms ++ ex.toList ++ ey.toList ++ ez.toList ++ forces)
+  return rows.toList
+
+/-- The input grid of a `dft` row: `sin(0.37 i + seed)`, `cos(0.91 i + 2 seed)`. -/
+def dftInput (n : ℕ) (seed : Float) : Array Float × Array Float :=
+  ((Array.range n).map fun i => Float.sin (0.37 * i.toFloat + seed),
+    (Array.range n).map fun i => Float.cos (0.91 * i.toFloat + 2 * seed))
+
+def dftRows : List (List Float) :=
+  [((4, 4, 4), 1.0, -1.0), ((4, 4, 4), 2.0, 1.0), ((8, 8, 8), 1.0, -1.0), ((8, 8, 8), 3.0, 1.0),
+    ((8, 4, 2), 4.0, -1.0), ((16, 16, 16), 1.0, -1.0)].map fun (g, seed, sgn) =>
+    let n := g.1 * g.2.1 * g.2.2
+    let (re, im) := dftInput n seed
+    let (ore, oim) := dftFloat g re im sgn
+    [natF g.1, natF g.2.1, natF g.2.2, seed, sgn] ++ ore.toList ++ oim.toList
+
+def p3mEnergyRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 8 do
+    let k ← drawICase [8] 1
+    let (inp, vol) := k.inputs
+    let atoms ← drawAtomsIn k.a k.b k.c 12
+    let e0 ← pick eps0Invs
+    let (gh, _, _) := influenceFunctionFloat inp vol
+    let rho := assignChargesFloat inp.mesh k.order atoms
+    let (re, im) := dftFloat k.g rho (Array.replicate rho.size 0) (-1)
+    let pts := (List.range rho.size).map fun i =>
+      (gh.getD i 0, (NewenSpec.LatticeSum.Sym.zero : Sym Float), re.getD i 0, im.getD i 0)
+    let (e, _) := kspaceEnergyFloat pts false inp.mesh.cellVolume e0
+    rows := rows.push (k.list ++ [e0] ++ atomsList atoms ++ [e])
+  return rows.toList
+
+structure P3MRows where
+  weights : List (List Float)
+  selfterm : List (List Float)
+  sinc : List (List Float)
+  mesh : List (List Float)
+  influence : List (List Float)
+  quality : List (List Float)
+  boxCorrection : List (List Float)
+  forceError : List (List Float)
+  influenceFunction : List (List Float)
+  assign : List (List Float)
+  assignSquared : List (List Float)
+  kspace : List (List Float)
+  a2 : List (List Float)
+  fieldIk : List (List Float)
+  fieldFd : List (List Float)
+  interpolate : List (List Float)
+  p3mEnergy : List (List Float)
+
+def p3mRows : P3MRows :=
+  (do return ⟨← weightsRows, ← selftermRows, ← sincRows, ← meshRows, ← influenceRows,
+      ← qualityRows, ← boxCorrectionRows, ← forceErrorRows, ← influenceFunctionRows,
+      ← assignRows false, ← assignRows true, ← p3mKspaceRows, ← a2Rows, ← fieldIkRows,
+      ← fieldFdRows, ← interpolateRows, ← p3mEnergyRows⟩ : Gen _).run' 0x6e6577656e2d7033
+
+def p3mParts (r : P3MRows) : List (String × List (List Float)) :=
+  [("assignment_1d", assignmentRows), ("weights", r.weights), ("selfterm_fp", r.selfterm),
+    ("fd_coefficients", fdRows), ("sinc_power", r.sinc), ("mesh", r.mesh),
+    ("influence_at", r.influence), ("quality_at", r.quality), ("box_correction", r.boxCorrection),
+    ("force_error", r.forceError), ("influence_function", r.influenceFunction),
+    ("assign_charges", r.assign), ("assign_squared_charges", r.assignSquared),
+    ("kspace_energy", r.kspace), ("a2_tilde", r.a2), ("field_ik", r.fieldIk),
+    ("field_fd", r.fieldFd), ("interpolate_forces", r.interpolate), ("dft", dftRows),
+    ("p3m_energy", r.p3mEnergy)]
+
+def p3mJson (parts : List (String × List (List Float))) : String :=
+  let part (p : String × List (List Float)) : String :=
+    s!"  \"{p.1}\": [\n" ++ ",\n".intercalate (p.2.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"p3m.assignment_1d, p3m.nearest_grid_point, p3m.assignment_weights, p3m.selfterm_fp, " ++
+  "p3m.fd_coefficients, p3m.sinc_power, p3m.mesh, p3m.influence_at, p3m.quality_at, " ++
+  "p3m.influence_box_correction, p3m.force_error, p3m.assign_charges, " ++
+  "p3m.assign_squared_charges, p3m.kspace_energy, p3m.potential_hat, p3m.a2_tilde, p3m.field_ik, " ++
+  "p3m.field_fd, p3m.interpolate_forces (bit for bit); p3m.fft3, p3m.kspace (within a tolerance)\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.P3M, the *Float functions; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits; counts, orders, flags, " ++
+  "nshape and integer coordinates are floats; a vector is x, y, z; a matrix row by row; a symmetric " ++
+  "tensor xx, xy, xz, yy, yz, zz; a box is rectangular, a, b, c; grids in storage order z + Nz (y + Ny x)\",\n" ++
+  "  \"layout_assignment_1d\": \"p, x, w_p(x)\",\n" ++
+  "  \"layout_weights\": \"p, u, nearest grid point, five weights (unused zero)\",\n" ++
+  "  \"layout_selfterm_fp\": \"p, |n|, s, f_p\",\n" ++
+  "  \"layout_fd_coefficients\": \"q, five coefficients\",\n" ++
+  "  \"layout_sinc_power\": \"p, x, P_p(x)\",\n" ++
+  "  \"layout_mesh\": \"box, nx, ny, nz, H, H_inv, cell volume\",\n" ++
+  "  \"layout_influence_at\": \"case (nx, ny, nz, order, nfdord, nalias, nshape, width, box), l, " ++
+  "with_gamma, ghat, gammahat, q (reciprocal basis and mesh from reciprocal_box and Mesh::new of the box)\",\n" ++
+  "  \"layout_quality_at\": \"case, l, ghat, the two terms\",\n" ++
+  "  \"layout_box_correction\": \"ghat, gammahat, tl0_inv, delta_tl, corrected ghat\",\n" ++
+  "  \"layout_force_error\": \"q, sum_q2, volume, n_atoms, fpe, error\",\n" ++
+  "  \"layout_influence_function\": \"case, N, ghat per point, gammahat per point, Q\",\n" ++
+  "  \"layout_assign_charges\": \"nx, ny, nz, order, box, n_atoms, per atom r, q; grid\",\n" ++
+  "  \"layout_assign_squared_charges\": \"as assign_charges\",\n" ++
+  "  \"layout_kspace_energy\": \"N, with_gamma, cell volume, eps0_inv, per point ghat, gammahat, re, im; " ++
+  "energy, virial, per point the potential_hat re, im\",\n" ++
+  "  \"layout_a2_tilde\": \"N, with_gamma, sum_q2, per point ghat, gammahat, re R; a2_tilde, derivative\",\n" ++
+  "  \"layout_field_ik\": \"nx, ny, nz, box, per point phi re, im; per point Re E, Im E\",\n" ++
+  "  \"layout_field_fd\": \"nx, ny, nz, q, box, per point phi; per point E\",\n" ++
+  "  \"layout_interpolate_forces\": \"nx, ny, nz, order, box, atoms, Ex, Ey, Ez grids; per atom force\",\n" ++
+  "  \"layout_dft\": \"nx, ny, nz, seed, sign of the exponent; re, im of the transform (input sin(0.37 i + seed), " ++
+  "cos(0.91 i + 2 seed))\",\n" ++
+  "  \"layout_p3m_energy\": \"case (grid 8^3), eps0_inv, atoms; k-space energy through dftFloat\",\n" ++
+  ",\n".intercalate (parts.map part) ++ "\n}\n"
+
+end P3MRows
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -2092,3 +2516,11 @@ def main : IO Unit := do
     s!"{ew.a2Shells.length} a2_shells, {ew.chargeSums.length} charge_sums, " ++
     s!"{ew.selfA.length} self_and_a_terms, {ew.selfAVirial.length} self_and_a_virials, " ++
     s!"{ew.surface.length} surface_term rows)")
+  unless NewenSpec.P3M.epsFloat == 0.000000000001 && (1 / 10 : Float) == 0.1 &&
+      [3, 6, 8, 16, 32, 35, 63, 64, 96, 126, 192, 384, 576, 1152, 2304, 18432, 36864, 73728,
+        147456, 32227, 29440].all (fun n => (Float.ofNat n).toUInt64.toNat == n) do
+    throw (IO.userError "P3M literals are not the expected doubles")
+  let parts := p3mParts p3mRows
+  IO.FS.writeFile "vectors/p3m.json" (p3mJson parts)
+  IO.println (s!"wrote vectors/p3m.json (" ++
+    ", ".intercalate (parts.map fun p => s!"{p.2.length} {p.1}") ++ " rows)")

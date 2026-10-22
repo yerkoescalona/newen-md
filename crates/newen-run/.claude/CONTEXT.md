@@ -47,21 +47,27 @@ RunError                                                                 -> ever
   `1..=RTCLAST` spread over more than one bath pair (`topology.cc:1370-1394`); one bath is
   counted by `bath_dofs` like several. newen-io's topology reader refuses LJEXCEPTIONS with
   NEX > 0. No reference input trips them.
-- **Ewald runs, P3M refused (2026-10-22):** `check_electrostatics` (`plan.rs`, called by
+- **Ewald and P3M runs (2026-10-22):** `check_electrostatics` (`plan.rs`, called by
   `build_plan` and `build_sequence_from_plan`) checks the NONBONDED lattice-sum ranges gromosXX
   reads for every NLRELE (NSHAPE −1..10, ASHAPE > 0, NA2CLC 0..4, TOLA2 > 0, EPSLS 0 or ≥ 1,
-  NK* > 0, KCUT > 0, NA2CLC 1 only with Ewald, 4 only with P3M), refuses NLRELE 3 (P3M: phase 3),
-  and for NLRELE 2 the features gromosXX's FeatureChecker keeps locked against `ewald`: the
+  NK* > 0, KCUT > 0, NG* > 0, NASORD 1..5, NFDORD 0..5, NALIAS > 0, NQEVAL ≥ 0, FACCUR > 0,
+  NRDGRD/NWRGRD 0 or 1; NA2CLC 1 only with Ewald, 4 only with P3M; an odd grid and influence-
+  function I/O are errors whatever the NLRELE), refuses a P3M grid that is not a power of two in
+  every dimension (PhastFT; gromosXX accepts any even size), and for NLRELE 2 and 3 the
+  features gromosXX's FeatureChecker keeps locked against `ewald` and `p3m` (the same list): the
   charge-group cutoff (PAIRLIST TYPE atomic is required), the grid-cell pairlist, vacuum, the
   truncated octahedron, several energy groups, perturbation, EDS, A-EDS, GaMD, QM/ML terms, the
   conjugate-gradient minimiser, LINCS/SETTLE for the solvent. `ForcefieldPlan::lattice_sum`
-  (`LatticeSumPlan`) carries NSHAPE, ASHAPE, NK, KCUT, NA2CLC, TOLA2, EPSLS;
-  `instantiate_forcefield` builds `newen_forces::nonbonded::ewald::EwaldSum` from it with
-  `1/ε₀ = FPEPSI · 4 · π`; the RF excluded/self terms are off for NLRELE 2/3. A plan whose force
-  field disagrees with the recipe's NLRELE is refused (`check_plan_against_recipe`). References:
-  `nacl_pair_box_ewald`, `water_216_box_ewald`, `water_216_box_ewald_epsls`. Note: newen's GENBOX
-  reader ignores the angles, so an NTB = 2 input with non-right angles runs a rectangular box
-  (any NLRELE; not specific to Ewald).
+  (`LatticeSumPlan`) carries NSHAPE, ASHAPE, NK, KCUT, NA2CLC (4 stored as 3, as gromosXX), TOLA2,
+  EPSLS and, for P3M, `p3m: Option<P3mPlan>` (grid, NASORD, NFDORD, NALIAS, NQEVAL, FACCUR);
+  `instantiate_forcefield` builds a `newen_forces::nonbonded::ewald::LatticeSum::{Ewald, P3m}`
+  from it with `1/ε₀ = FPEPSI · 4 · π`; the RF excluded/self terms are off for NLRELE 2/3. A plan
+  whose force field disagrees with the recipe's NLRELE (no lattice sum, Ewald or P3M) is refused
+  (`check_plan_against_recipe`). References: `nacl_pair_box_ewald`, `water_216_box_ewald`,
+  `water_216_box_ewald_epsls`; `nacl_pair_box_p3m_fixed`, `water_216_box_p3m_fixed`,
+  `water_216_box_p3m_gauss_fixed` (gromosXX + `patches/p3m_nvt_a_term.patch`). Note: newen's
+  GENBOX reader ignores the angles, so an NTB = 2 input with non-right angles runs a rectangular
+  box (any NLRELE; not specific to lattice sums).
 - **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
   `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
   DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)

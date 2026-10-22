@@ -28,7 +28,8 @@ rayon = { workspace = true }
 # Logging
 log = { workspace = true }
 
-# FFT for PME electrostatics
+# FFT: PhastFT for P3M (NLRELE 3); rustfft only for the unwired PME code (pme.rs)
+phastft = { workspace = true }
 rustfft = { workspace = true }
 fftw = { workspace = true, optional = true }
 num-complex = { workspace = true }

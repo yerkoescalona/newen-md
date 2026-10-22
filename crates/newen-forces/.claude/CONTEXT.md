@@ -69,6 +69,23 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   surface virial (gromosXX adds `+Ξ`'s diagonal, not `−2 Ξ`). `1/ε₀` is a parameter: a run passes
   `FPEPSI · 4 · π` (gromosXX `in_topology.cc:1408`); `newen_core::units::EPS0_INV` is gromosXX's
   literal `eps0_i = 1745.9137`, used only without a PHYSICALCONSTANTS block.
+- **P3M (NLRELE 3), wired (2026-10-22):** `nonbonded/p3m.rs`: the per-point kernels with
+  `/// spec:` keys (`assignment_1d`, `nearest_grid_point`, `assignment_weights`, `Mesh::new`,
+  `assign_charges`, `selfterm_fp`, `assign_squared_charges`, `fd_coefficients`, `sinc_power`
+  (C `pow`, `extern "C"`), `influence_at` with `influence_function`, `quality_at`,
+  `influence_box_correction`, `force_error_estimate`, `kspace_energy`, `potential_hat`,
+  `field_ik`, `field_fd`, `interpolate_forces`, `a2_tilde_p3m`), `Fft3` (PhastFT along z, y, x,
+  both directions unnormalised; powers of two only, `Fft3::new` panics otherwise, the run checks
+  refuse first), and `P3m` (per-run state: the influence function at the first evaluation,
+  refused above FACCUR, re-evaluated every NQEVAL steps, corrected to first order in a changed
+  box). The self, A and surface terms are shared with Ewald (`ewald.rs::add_constant_terms`,
+  `self_constants_of_box`), and `ewald.rs::LatticeSum` is the enum the force field drives.
+  `tests/p3m_spec.rs`: the kernels bit for bit against `spec/vectors/p3m.json`, `Fft3` within
+  1e-12 of the Lean direct transform (measured 3e-15 on 16³), the k-space energy within 1e-11 of
+  the Lean pipeline, P3M against the direct Ewald sum within the force-error estimate, forces
+  against central differences of the energy. Differences from gromosXX: see
+  `docs/src/verification/index.md`, phase 3 (the NVT A term, the triclinic finite-difference
+  field, the triclinic wave vectors). rustfft stays only for the unwired PME code below.
 - **Unwired PME code, not GROMOS P3M:** `electrostatics.rs`, `pme.rs` and `pme_mpi.rs` implement a
   PME/Ewald of their own that nothing outside them calls and that does not follow GROMOS (no
   charge shapes, no `A`-terms, an Abramowitz–Stegun `erfc`; not gromosXX's P3M). Do not build on
@@ -146,7 +163,8 @@ src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbond
   excluded.rs          — `rf_excluded_pair`, `rf_self_term`, RF excluded and 1-4 loops
   params.rs            — `CRFParameters::new`
   lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants`, `A2`, self/A/surface terms
-  ewald.rs             — `k_vectors`, `ewald_kspace`, `EwaldSum` (NLRELE 2)
+  ewald.rs             — `k_vectors`, `ewald_kspace`, `EwaldSum` (NLRELE 2), the shared constant terms, `LatticeSum`
+  p3m.rs               — P3M (NLRELE 3): assignment, influence function, `Fft3` (PhastFT), fields, `P3m`
   ls_real_space.rs     — the real-space loops of a lattice-sum run
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
@@ -160,6 +178,7 @@ src/restraints.rs     — position + distance restraints
 tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
 tests/lattice_sum_spec.rs — lattice-sum kernels = Lean `Float` model, bit for bit; FD, quadrature
 tests/ewald_spec.rs   — Ewald kernels = Lean `Float` model, bit for bit; forces and virials by FD
+tests/p3m_spec.rs     — P3M kernels = Lean `Float` model, bit for bit; FFT within a tolerance; vs Ewald
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```
