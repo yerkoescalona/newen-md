@@ -1360,10 +1360,10 @@ pub fn build_topology(parsed: ParsedTopology) -> Topology {
         }
     }
 
-    // Sort and deduplicate exclusions for fast binary_search lookups
-    for excl in &mut topo.exclusions {
-        excl.sort_unstable();
-        excl.dedup();
+    // Sorted and deduplicated: `Topology::pair_kind_of` relies on the order
+    for list in topo.exclusions.iter_mut().chain(&mut topo.one_four_pairs) {
+        list.sort_unstable();
+        list.dedup();
     }
 
     topo

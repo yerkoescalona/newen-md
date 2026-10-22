@@ -787,4 +787,397 @@ def thermo.dof.total_dof
   let i4 ← i2 - i3
   i4 - ndfmin
 
+/-- [newen_logic::topology::groups::group_of]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 18:4-25:1
+    Visibility: public -/
+@[rust_loop_body]
+def topology.groups.group_of_loop.body
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) (g : Std.Usize) :
+  Result (ControlFlow Std.Usize (Option Std.Usize))
+  := do
+  let i := Slice.len last_atoms
+  if g < i
+  then
+    let i1 ← Slice.index_usize last_atoms g
+    if atom <= i1
+    then ok (done (some g))
+    else let g1 ← g + 1#usize
+         ok (cont g1)
+  else ok (done none)
+
+/-- [newen_logic::topology::groups::group_of]: loop 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 18:4-25:1
+    Visibility: public -/
+@[rust_loop]
+def topology.groups.group_of_loop
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) (g : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  loop
+    (fun g1 => topology.groups.group_of_loop.body last_atoms atom g1)
+    g
+
+/-- [newen_logic::topology::groups::group_of]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 16:0-25:1
+    Visibility: public -/
+@[reducible]
+def topology.groups.group_of
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  topology.groups.group_of_loop last_atoms atom 0#usize
+
+/-- [newen_logic::topology::groups::LastAtomsCheck]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 29:0-38:1
+    Visibility: public -/
+@[discriminant isize]
+inductive topology.groups.LastAtomsCheck where
+| Ok : topology.groups.LastAtomsCheck
+| Empty : topology.groups.LastAtomsCheck
+| NotIncreasing : Std.Usize → topology.groups.LastAtomsCheck
+| LastNotFinal : topology.groups.LastAtomsCheck
+
+/-- [newen_logic::topology::groups::{impl core::fmt::Debug for newen_logic::topology::groups::LastAtomsCheck}::fmt]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:9-28:14
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreFmtDebug.fmt
+  (self : topology.groups.LastAtomsCheck) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  match self with
+  | topology.groups.LastAtomsCheck.Ok =>
+    core.fmt.Formatter.write_str f (toStr "Ok")
+  | topology.groups.LastAtomsCheck.Empty =>
+    core.fmt.Formatter.write_str f (toStr "Empty")
+  | topology.groups.LastAtomsCheck.NotIncreasing __self_0 =>
+    let __self_01 :=
+      Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugUsize) __self_0
+    core.fmt.Formatter.debug_tuple_field1_finish f (toStr "NotIncreasing")
+      __self_01
+  | topology.groups.LastAtomsCheck.LastNotFinal =>
+    core.fmt.Formatter.write_str f (toStr "LastNotFinal")
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::fmt::Debug for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:9-28:14 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreFmtDebug : core.fmt.Debug
+  topology.groups.LastAtomsCheck := {
+  fmt := topology.groups.LastAtomsCheck.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::topology::groups::{impl core::clone::Clone for newen_logic::topology::groups::LastAtomsCheck}::clone]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:16-28:21
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCloneClone.clone
+  (self : topology.groups.LastAtomsCheck) :
+  Result topology.groups.LastAtomsCheck
+  := do
+  ok self
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::clone::Clone for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:16-28:21 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCloneClone : core.clone.Clone
+  topology.groups.LastAtomsCheck := {
+  clone := topology.groups.LastAtomsCheck.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::marker::Copy for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:23-28:27 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreMarkerCopy : core.marker.Copy
+  topology.groups.LastAtomsCheck := {
+  cloneInst := topology.groups.LastAtomsCheck.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::marker::StructuralPartialEq for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq topology.groups.LastAtomsCheck := {
+}
+
+/-- [newen_logic::topology::groups::{impl core::cmp::PartialEq<newen_logic::topology::groups::LastAtomsCheck> for newen_logic::topology::groups::LastAtomsCheck}::eq]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck.eq
+  (self : topology.groups.LastAtomsCheck)
+  (other : topology.groups.LastAtomsCheck) :
+  Result Bool
+  := do
+  let self1 := read_discriminant self
+  let other1 := read_discriminant other
+  if self1 = other1
+  then
+    match self with
+    | topology.groups.LastAtomsCheck.Ok => ok true
+    | topology.groups.LastAtomsCheck.Empty => ok true
+    | topology.groups.LastAtomsCheck.NotIncreasing __self_0 =>
+      match other with
+      | topology.groups.LastAtomsCheck.Ok => ok true
+      | topology.groups.LastAtomsCheck.Empty => ok true
+      | topology.groups.LastAtomsCheck.NotIncreasing __arg1_0 =>
+        lift (core.cmp.impls.PartialEqUsize.eq __self_0 __arg1_0)
+      | topology.groups.LastAtomsCheck.LastNotFinal => ok true
+    | topology.groups.LastAtomsCheck.LastNotFinal => ok true
+  else ok false
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::cmp::PartialEq<newen_logic::topology::groups::LastAtomsCheck> for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck :
+  core.cmp.PartialEq topology.groups.LastAtomsCheck
+  topology.groups.LastAtomsCheck := {
+  eq := topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck.eq
+}
+
+/-- [newen_logic::topology::groups::{impl core::cmp::Eq for newen_logic::topology::groups::LastAtomsCheck}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:40-28:42
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : topology.groups.LastAtomsCheck) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::cmp::Eq for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:40-28:42 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCmpEq : core.cmp.Eq
+  topology.groups.LastAtomsCheck := {
+  partialEqInst :=
+    topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck
+  assert_fields_are_eq :=
+    topology.groups.LastAtomsCheck.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::topology::groups::check_last_atoms]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 52:4-54:5
+    Visibility: public -/
+@[rust_loop_body]
+def topology.groups.check_last_atoms_loop.body
+  (last_atoms : Slice Std.Usize) (n : Std.Usize) (g : Std.Usize) :
+  Result (ControlFlow Std.Usize Std.Usize)
+  := do
+  if g < n
+  then
+    let i ← g - 1#usize
+    let i1 ← Slice.index_usize last_atoms i
+    let i2 ← Slice.index_usize last_atoms g
+    if i1 < i2
+    then let g1 ← g + 1#usize
+         ok (cont g1)
+    else ok (done g)
+  else ok (done g)
+
+/-- [newen_logic::topology::groups::check_last_atoms]: loop 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 52:4-54:5
+    Visibility: public -/
+@[rust_loop]
+def topology.groups.check_last_atoms_loop
+  (last_atoms : Slice Std.Usize) (n : Std.Usize) (g : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun g1 => topology.groups.check_last_atoms_loop.body last_atoms n g1)
+    g
+
+/-- [newen_logic::topology::groups::check_last_atoms]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 45:0-65:1
+    Visibility: public -/
+def topology.groups.check_last_atoms
+  (last_atoms : Slice Std.Usize) (n_atoms : Std.Usize) :
+  Result topology.groups.LastAtomsCheck
+  := do
+  let n := Slice.len last_atoms
+  if n = 0#usize
+  then ok topology.groups.LastAtomsCheck.Empty
+  else
+    let g ← topology.groups.check_last_atoms_loop last_atoms n 1#usize
+    if g < n
+    then ok (topology.groups.LastAtomsCheck.NotIncreasing g)
+    else
+      if n_atoms = 0#usize
+      then ok topology.groups.LastAtomsCheck.LastNotFinal
+      else
+        let i ← n - 1#usize
+        let i1 ← Slice.index_usize last_atoms i
+        let i2 ← n_atoms - 1#usize
+        if i1 != i2
+        then ok topology.groups.LastAtomsCheck.LastNotFinal
+        else ok topology.groups.LastAtomsCheck.Ok
+
+/-- [newen_logic::topology::groups::energy_cell]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 72:0-77:1
+    Visibility: public -/
+def topology.groups.energy_cell
+  (eg_i : Std.Usize) (eg_j : Std.Usize) (n_groups : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  if eg_i < n_groups
+  then
+    if eg_j < n_groups
+    then let i ← eg_i * n_groups
+         let i1 ← i + eg_j
+         ok (some i1)
+    else ok none
+  else ok none
+
+/-- [newen_logic::topology::pairs::PairKind]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 18:0-27:1
+    Visibility: public -/
+@[discriminant isize]
+inductive topology.pairs.PairKind where
+| Normal : topology.pairs.PairKind
+| Excluded : topology.pairs.PairKind
+| OneFour : topology.pairs.PairKind
+| AtomPair : topology.pairs.PairKind
+
+/-- [newen_logic::topology::pairs::{impl core::fmt::Debug for newen_logic::topology::pairs::PairKind}::fmt]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:9-17:14
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreFmtDebug.fmt
+  (self : topology.pairs.PairKind) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  match self with
+  | topology.pairs.PairKind.Normal =>
+    core.fmt.Formatter.write_str f (toStr "Normal")
+  | topology.pairs.PairKind.Excluded =>
+    core.fmt.Formatter.write_str f (toStr "Excluded")
+  | topology.pairs.PairKind.OneFour =>
+    core.fmt.Formatter.write_str f (toStr "OneFour")
+  | topology.pairs.PairKind.AtomPair =>
+    core.fmt.Formatter.write_str f (toStr "AtomPair")
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::fmt::Debug for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:9-17:14 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreFmtDebug : core.fmt.Debug
+  topology.pairs.PairKind := {
+  fmt := topology.pairs.PairKind.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::topology::pairs::{impl core::clone::Clone for newen_logic::topology::pairs::PairKind}::clone]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:16-17:21
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreCloneClone.clone
+  (self : topology.pairs.PairKind) : Result topology.pairs.PairKind := do
+  ok self
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::clone::Clone for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:16-17:21 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreCloneClone : core.clone.Clone
+  topology.pairs.PairKind := {
+  clone := topology.pairs.PairKind.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::marker::Copy for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:23-17:27 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreMarkerCopy : core.marker.Copy
+  topology.pairs.PairKind := {
+  cloneInst := topology.pairs.PairKind.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::marker::StructuralPartialEq for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq topology.pairs.PairKind := {
+}
+
+/-- [newen_logic::topology::pairs::{impl core::cmp::PartialEq<newen_logic::topology::pairs::PairKind> for newen_logic::topology::pairs::PairKind}::eq]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind.eq
+  (self : topology.pairs.PairKind) (other : topology.pairs.PairKind) :
+  Result Bool
+  := do
+  let self1 := read_discriminant self
+  let other1 := read_discriminant other
+  ok (self1 = other1)
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::cmp::PartialEq<newen_logic::topology::pairs::PairKind> for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind : core.cmp.PartialEq
+  topology.pairs.PairKind topology.pairs.PairKind := {
+  eq := topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind.eq
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::cmp::Eq for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:40-17:42 -/
+@[reducible]
+impl_def topology.pairs.PairKind.Insts.CoreCmpEq : core.cmp.Eq
+  topology.pairs.PairKind := {
+  partialEqInst := topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind
+  assert_fields_are_eq := core.cmp.Eq.assert_fields_are_eq.default
+    topology.pairs.PairKind.Insts.CoreCmpEq
+}
+
+/-- [newen_logic::topology::pairs::contains_sorted]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 44:4-51:1
+    Visibility: public -/
+@[rust_loop_body]
+def topology.pairs.contains_sorted_loop.body
+  (list : Slice Std.Usize) (j : Std.Usize) (n : Std.Usize) (k : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  if k < n
+  then
+    let i ← Slice.index_usize list k
+    if i = j
+    then ok (done true)
+    else let k1 ← k + 1#usize
+         ok (cont k1)
+  else ok (done false)
+
+/-- [newen_logic::topology::pairs::contains_sorted]: loop 0:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 44:4-51:1
+    Visibility: public -/
+@[rust_loop]
+def topology.pairs.contains_sorted_loop
+  (list : Slice Std.Usize) (j : Std.Usize) (n : Std.Usize) (k : Std.Usize) :
+  Result Bool
+  := do
+  loop
+    (fun k1 => topology.pairs.contains_sorted_loop.body list j n k1)
+    k
+
+/-- [newen_logic::topology::pairs::contains_sorted]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 35:0-51:1
+    Visibility: public -/
+def topology.pairs.contains_sorted
+  (list : Slice Std.Usize) (j : Std.Usize) : Result Bool := do
+  let n := Slice.len list
+  if n = 0#usize
+  then ok false
+  else
+    let i ← n - 1#usize
+    let i1 ← Slice.index_usize list i
+    if i1 < j
+    then ok false
+    else topology.pairs.contains_sorted_loop list j n 0#usize
+
+/-- [newen_logic::topology::pairs::pair_kind]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 59:0-75:1
+    Visibility: public -/
+def topology.pairs.pair_kind
+  (exclusions_i : Slice Std.Usize) (one_four_i : Slice Std.Usize)
+  (atom_pair_i : Slice Std.Usize) (j : Std.Usize) :
+  Result topology.pairs.PairKind
+  := do
+  let b ← topology.pairs.contains_sorted exclusions_i j
+  if b
+  then ok topology.pairs.PairKind.Excluded
+  else
+    let b1 ← topology.pairs.contains_sorted one_four_i j
+    if b1
+    then ok topology.pairs.PairKind.OneFour
+    else
+      let b2 ← topology.pairs.contains_sorted atom_pair_i j
+      if b2
+      then ok topology.pairs.PairKind.AtomPair
+      else ok topology.pairs.PairKind.Normal
+
 end newen_logic

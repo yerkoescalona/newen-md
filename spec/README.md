@@ -3,9 +3,12 @@
 Full explanation (why, how the pieces fit, guarantees, adding a function): [docs/src/verification/index.md](../docs/src/verification/index.md).
 
 Verified so far: `schedule::output_misses_longrange` (the pilot, explained below),
-`thermo::dof::total_dof`, and the five functions of `thermo::bath` (degrees of freedom per
-temperature bath and the atom-to-bath mapping); and thirteen floating-point kernels: the Berendsen
-and Nosé–Hoover thermostat steps of `crates/newen-integrators`, the Lennard-Jones and
+`thermo::dof::total_dof`, the five functions of `thermo::bath` (degrees of freedom per
+temperature bath and the atom-to-bath mapping), and the five functions of `topology`
+(`pairs::contains_sorted` and `pairs::pair_kind`: excluded, 1-4, owned or normal pair;
+`groups::group_of`, `groups::check_last_atoms` and `groups::energy_cell`: the energy group of an
+atom, the FORCE `NRE` rule, the energy-matrix cell); and thirteen floating-point kernels: the
+Berendsen and Nosé–Hoover thermostat steps of `crates/newen-integrators`, the Lennard-Jones and
 reaction-field pair term of `crates/newen-forces` with its reaction-field constants, excluded-pair
 and self terms, and the seven bonded terms of `crates/newen-forces` (quartic and harmonic bond,
 cosine-harmonic and harmonic angle, the two proper-dihedral forms, the improper dihedral; see

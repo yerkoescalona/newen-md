@@ -753,8 +753,12 @@ And at the level of the whole project:
 - **Not covered: everything outside `crates/newen-logic`.** The crate holds
   `schedule::output_misses_longrange`, `thermo::dof::total_dof`, and the per-bath degrees of
   freedom with the atom-to-bath mapping in `thermo::bath` (`baths_of`, `groups_starting_in`,
-  `bath_half_dof`, `bath_half_dofs`, `ndfmin_spread`); those are proven. The rest of newen is
-  checked the way it always was, by reference tests and unit tests.
+  `bath_half_dof`, `bath_half_dofs`, `ndfmin_spread`), and the topology bookkeeping in
+  `topology` (`pairs::contains_sorted`, `pairs::pair_kind`, `groups::group_of`,
+  `groups::check_last_atoms`, `groups::energy_cell`); those are proven. Their callers in
+  newen-core, newen-run and newen-forces (building the partner lists sorted and symmetric, which
+  the pair-kind theorems assume) are checked by unit tests. The rest of newen is checked the way
+  it always was, by reference tests and unit tests.
 - **Floating-point kernels: covered on generated inputs only.** The thermostat steps and the
   Lennard-Jones and reaction-field pair term equal their Lean models bit for bit on the rows
   `lake exe spec-vectors` writes; no rounding bound is proved, and inputs outside those rows are
@@ -944,6 +948,10 @@ Planned, in the order chosen:
   baths stays an integer; the NDFMIN spread as an exact rational, where gromosXX truncates the
   total, D40) and the atom-to-bath mapping that the thermostats and the temperature calculation
   read.
+- **Topology bookkeeping: pair kinds and group lookups, done; index conversions and
+  perturbed-atom matching planned.** Done: `topology::pairs` (whether a pair is excluded, 1-4,
+  owned by a `PERTATOMPAIR`/EDS atom, or on the pairlist) and `topology::groups` (the energy
+  group of an atom, the FORCE `NRE` rule, the energy-matrix cell).
 - **Floating-point kernels, with a Lean model and a differential test:** the Berendsen and
   Nosé–Hoover thermostats (see [Thermostats & Barostats](../algorithms/thermostats.md)) and the
   Lennard-Jones and reaction-field pair term (see

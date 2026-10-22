@@ -2,6 +2,8 @@ import Aeneas
 import NewenSpec.Schedule
 import NewenSpec.Thermo.Dof
 import NewenSpec.Thermo.Bath
+import NewenSpec.Topology.Pairs
+import NewenSpec.Topology.Groups
 import NewenSpec.Extracted.NewenLogic
 
 /-!
@@ -15,8 +17,9 @@ zero) and `ok b` for a normal return of `b`.
 The first theorems below say: for every pair of `usize` inputs the Rust function returns
 normally (it never panics) and returns exactly `missesModel`, hence (with
 `Schedule.missesModel_iff`) exactly `Misses` of `NewenTheory/Dynamics/Schedule.lean`.
-`thermo/dof.rs` (`total_dof`, over `U64` and `I64`) and `thermo/bath.rs` (five functions over
-slices) have their own sections at the end.
+`thermo/dof.rs` (`total_dof`, over `U64` and `I64`), `thermo/bath.rs` (five functions over
+slices) and `topology/` (pair kinds and group lookups, five functions) have their own sections
+at the end.
 -/
 
 open Aeneas Aeneas.Std Aeneas.Std.WP Result
@@ -761,5 +764,287 @@ theorem ndfmin_spread_eq_theory (hs : Slice I64) (ndfmin : I64)
   exact ⟨s, hr, hv.trans (ndfminSpreadModel_eq _ _)⟩
 
 end Bath
+
+/-! ## `topology`: pair kinds and group lookups
+
+The loops of `contains_sorted`, `group_of` and `check_last_atoms` run by `loop.spec_decr_nat`
+as in the `Bath` section: the model of the rest of the slice (`drop i`, or the descent search
+from `i`) equals the model of the whole. Only `energy_cell` does arithmetic that can overflow;
+its refinement assumes the cell of two in-range groups fits in `usize` (`EnergyCellInRange`),
+which holds for fewer than `2^32` energy groups. -/
+
+section Topology
+
+open newen_logic.topology.pairs
+open newen_logic.topology.groups
+open NewenSpec.Topology.Pairs
+open NewenSpec.Topology.Groups
+
+theorem scanModel_drop (l : List Nat) (k : Nat) (h : k < l.length) (j : Nat) :
+    scanModel (l.drop k) j = if l[k] = j then true else scanModel (l.drop (k + 1)) j := by
+  rw [List.drop_eq_getElem_cons h]; rfl
+
+@[step]
+theorem contains_sorted_loop_spec (list : Slice Usize) (j n k : Usize) (hn : n.val = list.length)
+    (hk : k.val ≤ n.val) :
+    contains_sorted_loop list j n k ⦃ b => b = scanModel ((natsOf list).drop k.val) j.val ⦄ := by
+  unfold contains_sorted_loop
+  apply loop.spec_decr_nat (fun k' => n.val - k'.val)
+    (fun k' => k'.val ≤ n.val ∧
+      scanModel ((natsOf list).drop k'.val) j.val = scanModel ((natsOf list).drop k.val) j.val)
+  · intro k' ⟨hk', hinv⟩
+    unfold contains_sorted_loop.body
+    have hlen : (natsOf list).length = list.length := by simp [natsOf]
+    step*
+    · rename_i hlt heq
+      have hl : k'.val < (natsOf list).length := by scalar_tac
+      rw [← hinv, scanModel_drop _ _ hl]
+      have e : (natsOf list)[k'.val]'hl = j.val := by simp [natsOf, ← i_post, heq]
+      simp [e]
+    · rename_i hlt _ hne
+      have hl : k'.val < (natsOf list).length := by scalar_tac
+      refine ⟨by scalar_tac, ?_, by scalar_tac⟩
+      rw [← hinv, scanModel_drop _ _ hl, k1_post]
+      have e : ¬ (natsOf list)[k'.val]'hl = j.val := by
+        simp only [natsOf, List.getElem_map, ← i_post]
+        intro h; exact hne (UScalar.eq_of_val_eq h)
+      simp [e]
+    · rename_i hge
+      have e : k'.val = (natsOf list).length := by scalar_tac
+      rw [← hinv, e, List.drop_length]
+      rfl
+  · exact ⟨hk, rfl⟩
+
+@[step]
+theorem contains_sorted_spec (list : Slice Usize) (j : Usize) :
+    contains_sorted list j ⦃ b => b = containsSortedModel (natsOf list) j.val ⦄ := by
+  unfold contains_sorted
+  have hlen : (natsOf list).length = list.length := by simp [natsOf]
+  step*
+  · have h0 : (natsOf list).length = 0 := by scalar_tac
+    simp [containsSortedModel, h0]
+  · rename_i hn _ hlt
+    have h0 : ¬ (natsOf list).length = 0 := by scalar_tac
+    have hl : (natsOf list)[(natsOf list).length - 1]'(by omega) = i1.val := by
+      simp [natsOf, i1_post, i_post]
+    unfold containsSortedModel
+    rw [dite_eq_right h0, ite_eq_left (by rw [hl]; scalar_tac)]
+  · rename_i hn _ hge
+    have h0 : ¬ (natsOf list).length = 0 := by scalar_tac
+    have hl : (natsOf list)[(natsOf list).length - 1]'(by omega) = i1.val := by
+      simp [natsOf, i1_post, i_post]
+    unfold containsSortedModel
+    rw [dite_eq_right h0, ite_eq_right (by rw [hl]; scalar_tac), b_post, List.drop_zero]
+
+/-- The Rust `PairKind` as the theory's. -/
+def kindVal : newen_logic.topology.pairs.PairKind → NewenTheory.Topology.Pairs.PairKind
+  | .Normal => .normal
+  | .Excluded => .excluded
+  | .OneFour => .oneFour
+  | .AtomPair => .atomPair
+
+@[step]
+theorem pair_kind_spec (e f a : Slice Usize) (j : Usize) :
+    pair_kind e f a j ⦃ k => kindVal k = pairKindModel (natsOf e) (natsOf f) (natsOf a) j.val ⦄ := by
+  unfold pair_kind
+  step*
+  all_goals simp_all [pairKindModel, kindVal]
+
+theorem groupOfLoop_drop (L : List Nat) (g : Nat) (h : g < L.length) (a : Nat) :
+    groupOfLoop (L.drop g) a g =
+      if a ≤ L[g] then some g else groupOfLoop (L.drop (g + 1)) a (g + 1) := by
+  rw [List.drop_eq_getElem_cons h]; rfl
+
+@[step]
+theorem group_of_spec (L : Slice Usize) (atom : Usize) :
+    group_of L atom ⦃ o => o.map (·.val) = groupOfModel (natsOf L) atom.val ⦄ := by
+  unfold group_of group_of_loop
+  have hlen : (natsOf L).length = L.length := by simp [natsOf]
+  apply loop.spec_decr_nat (fun g => L.length - g.val)
+    (fun g => g.val ≤ L.length ∧
+      groupOfLoop ((natsOf L).drop g.val) atom.val g.val = groupOfModel (natsOf L) atom.val)
+  · intro g ⟨hg, hinv⟩
+    unfold group_of_loop.body
+    step*
+    · rename_i hlt hle
+      have hl : g.val < (natsOf L).length := by scalar_tac
+      rw [← hinv, groupOfLoop_drop _ _ hl]
+      have hle' : atom.val ≤ (natsOf L)[g.val]'hl := by
+        simp only [natsOf, List.getElem_map, ← i1_post]; scalar_tac
+      simp [hle']
+    · rename_i hlt _ hle
+      have hl : g.val < (natsOf L).length := by scalar_tac
+      refine ⟨by scalar_tac, ?_, by scalar_tac⟩
+      rw [← hinv, groupOfLoop_drop _ _ hl]
+      have hle' : ¬ atom.val ≤ (natsOf L)[g.val]'hl := by
+        simp only [natsOf, List.getElem_map, ← i1_post]; scalar_tac
+      simp only [hle', ite_false, g1_post]
+    · rename_i hge
+      have e : g.val = (natsOf L).length := by scalar_tac
+      rw [← hinv, e, List.drop_length]
+      rfl
+  · simp [groupOfModel]
+
+@[step]
+theorem check_last_atoms_loop_spec (L : Slice Usize) (n g : Usize) (hn : n.val = L.length)
+    (hg1 : 1 ≤ g.val) (hg : g.val ≤ n.val) :
+    check_last_atoms_loop L n g ⦃ r => r.val = firstDescentFrom (natsOf L) g.val ⦄ := by
+  unfold check_last_atoms_loop
+  have hlen : (natsOf L).length = L.length := by simp [natsOf]
+  apply loop.spec_decr_nat (fun g' => n.val - g'.val)
+    (fun g' => 1 ≤ g'.val ∧ g'.val ≤ n.val ∧
+      firstDescentFrom (natsOf L) g'.val = firstDescentFrom (natsOf L) g.val)
+  · intro g' ⟨hg1', hg', hinv⟩
+    unfold check_last_atoms_loop.body
+    step*
+    · rename_i hlt _ _ _ hinc
+      have hl : g'.val < (natsOf L).length := by scalar_tac
+      have hinc' : (natsOf L)[g'.val - 1]'(by omega) < (natsOf L)[g'.val]'hl := by
+        simp only [natsOf, List.getElem_map]
+        have e1 : (L.val[g'.val - 1]'(by scalar_tac)) = i1 := by simp [i1_post, i_post]
+        rw [e1, ← i2_post]; scalar_tac
+      refine ⟨by scalar_tac, by scalar_tac, ?_, by scalar_tac⟩
+      rw [← hinv]
+      conv_rhs => rw [firstDescentFrom]
+      rw [dite_eq_left hl, ite_eq_left hinc', g1_post]
+    · rename_i hlt _ _ hinc
+      have hl : g'.val < (natsOf L).length := by scalar_tac
+      have hinc' : ¬ (natsOf L)[g'.val - 1]'(by omega) < (natsOf L)[g'.val]'hl := by
+        simp only [natsOf, List.getElem_map]
+        have e1 : (L.val[g'.val - 1]'(by scalar_tac)) = i1 := by simp [i1_post, i_post]
+        rw [e1, ← i2_post]; scalar_tac
+      rw [← hinv, firstDescentFrom, dite_eq_left hl, ite_eq_right hinc']
+    · rename_i hge
+      have hl : ¬ g'.val < (natsOf L).length := by scalar_tac
+      rw [← hinv, firstDescentFrom, dite_eq_right hl]
+  · exact ⟨hg1, hg, rfl⟩
+
+/-- The Rust `LastAtomsCheck` as the model's. -/
+def checkVal : newen_logic.topology.groups.LastAtomsCheck → NewenSpec.Topology.Groups.LastAtomsCheck
+  | .Ok => .ok
+  | .Empty => .empty
+  | .NotIncreasing g => .notIncreasing g.val
+  | .LastNotFinal => .lastNotFinal
+
+@[step]
+theorem check_last_atoms_spec (L : Slice Usize) (n : Usize) :
+    check_last_atoms L n ⦃ r => checkVal r = checkLastAtomsModel (natsOf L) n.val ⦄ := by
+  unfold check_last_atoms
+  have hlen : (natsOf L).length = L.length := by simp [natsOf]
+  step*
+  · have h0 : (natsOf L).length = 0 := by scalar_tac
+    simp [checkLastAtomsModel, h0, checkVal]
+  · rename_i h0 hlt
+    have h0' : ¬ (natsOf L).length = 0 := by scalar_tac
+    have hd : firstDescentFrom (natsOf L) 1 < (natsOf L).length := by scalar_tac
+    simp [checkLastAtomsModel, h0', hd, checkVal, g_post]
+  · rename_i h0 hge hn0
+    have h0' : ¬ (natsOf L).length = 0 := by scalar_tac
+    have hd : ¬ firstDescentFrom (natsOf L) 1 < (natsOf L).length := by scalar_tac
+    simp [checkLastAtomsModel, h0', hd, checkVal]
+  · rename_i h0 _ hge hn0 _ _ hne
+    have h0' : ¬ (natsOf L).length = 0 := by scalar_tac
+    have hd : ¬ firstDescentFrom (natsOf L) 1 < (natsOf L).length := by scalar_tac
+    have hn0' : ¬ n.val = 0 := by scalar_tac
+    have hl : (natsOf L)[(natsOf L).length - 1]'(by omega) = i1.val := by
+      simp [natsOf, i1_post, i_post]
+    have hne' : (natsOf L)[(natsOf L).length - 1]'(by omega) ≠ n.val - 1 := by
+      rw [hl]; simp only [bne_iff_ne, ne_eq] at hne
+      intro h; exact hne (UScalar.eq_of_val_eq (by scalar_tac))
+    simp [checkLastAtomsModel, h0', hd, hn0', hne', checkVal]
+  · rename_i h0 _ hge hn0 _ _ heq
+    have h0' : ¬ (natsOf L).length = 0 := by scalar_tac
+    have hd : ¬ firstDescentFrom (natsOf L) 1 < (natsOf L).length := by scalar_tac
+    have hn0' : ¬ n.val = 0 := by scalar_tac
+    have hl : (natsOf L)[(natsOf L).length - 1]'(by omega) = i1.val := by
+      simp [natsOf, i1_post, i_post]
+    have heq' : (natsOf L)[(natsOf L).length - 1]'(by omega) = n.val - 1 := by
+      rw [hl]; simp only [bne_iff_ne, ne_eq, Decidable.not_not] at heq
+      rw [heq]; scalar_tac
+    simp [checkLastAtomsModel, h0', hd, hn0', heq', checkVal]
+
+/-- No `usize` overflow in `energy_cell`: the cell of two groups in range fits. -/
+def EnergyCellInRange (i j n : Nat) : Prop := i < n → j < n → i * n + j ≤ Usize.max
+
+@[step]
+theorem energy_cell_spec (i j n : Usize) (hb : EnergyCellInRange i.val j.val n.val) :
+    energy_cell i j n ⦃ o => o.map (·.val) = energyCellModel i.val j.val n.val ⦄ := by
+  unfold energy_cell
+  step*
+  all_goals first
+    | (have := hb (by scalar_tac) (by scalar_tac)
+       scalar_tac)
+    | simp_all [energyCellModel]
+
+/-! ### Rust = model, and Rust = meaning -/
+
+/-- **Rust = model**: `contains_sorted` returns normally, with `containsSortedModel`. -/
+theorem contains_sorted_eq (list : Slice Usize) (j : Usize) :
+    contains_sorted list j = ok (containsSortedModel (natsOf list) j.val) :=
+  eq_ok_of_spec (contains_sorted_spec list j)
+
+/-- **Rust = meaning**: for an ascending slice, `contains_sorted` is membership. -/
+theorem contains_sorted_iff (list : Slice Usize) (j : Usize)
+    (h : (natsOf list).Pairwise (· ≤ ·)) :
+    contains_sorted list j = ok true ↔ j.val ∈ natsOf list := by
+  rw [contains_sorted_eq, Result.ok.injEq, containsSortedModel_iff h]
+
+/-- **Rust = model**: `pair_kind` returns normally, with `pairKindModel`. -/
+theorem pair_kind_eq (e f a : Slice Usize) (j : Usize) :
+    ∃ k, pair_kind e f a j = ok k
+      ∧ kindVal k = pairKindModel (natsOf e) (natsOf f) (natsOf a) j.val :=
+  exists_ok_of_spec (pair_kind_spec e f a j)
+
+/-- **Rust = meaning**: for ascending slices, `pair_kind` is the theory's kind by membership. -/
+theorem pair_kind_eq_theory (e f a : Slice Usize) (j : Usize)
+    (he : (natsOf e).Pairwise (· ≤ ·)) (hf : (natsOf f).Pairwise (· ≤ ·))
+    (ha : (natsOf a).Pairwise (· ≤ ·)) :
+    ∃ k, pair_kind e f a j = ok k
+      ∧ kindVal k = NewenTheory.Topology.Pairs.pairKind (natsOf e) (natsOf f) (natsOf a) j.val := by
+  obtain ⟨k, hr, hv⟩ := pair_kind_eq e f a j
+  exact ⟨k, hr, hv.trans (pairKindModel_eq he hf ha j.val)⟩
+
+/-- **Rust = model**: `group_of` returns normally, with `groupOfModel`. -/
+theorem group_of_eq (L : Slice Usize) (atom : Usize) :
+    ∃ o, group_of L atom = ok o ∧ o.map (·.val) = groupOfModel (natsOf L) atom.val :=
+  exists_ok_of_spec (group_of_spec L atom)
+
+/-- **Rust = meaning**: `group_of` returns the least group whose last atom reaches the atom. -/
+theorem group_of_eq_theory (L : Slice Usize) (atom : Usize) :
+    ∃ o, group_of L atom = ok o
+      ∧ o.map (·.val) = NewenTheory.Topology.Groups.groupOf (natsOf L) atom.val := by
+  obtain ⟨o, hr, hv⟩ := group_of_eq L atom
+  exact ⟨o, hr, hv.trans (groupOfModel_eq _ _)⟩
+
+/-- **Rust = model**: `check_last_atoms` returns normally, with `checkLastAtomsModel`. -/
+theorem check_last_atoms_eq (L : Slice Usize) (n : Usize) :
+    ∃ r, check_last_atoms L n = ok r ∧ checkVal r = checkLastAtomsModel (natsOf L) n.val :=
+  exists_ok_of_spec (check_last_atoms_spec L n)
+
+/-- **Rust = meaning**: `check_last_atoms` returns `Ok` exactly for lists of last atoms that
+partition the `n` atoms into non-empty consecutive groups. -/
+theorem check_last_atoms_ok_iff (L : Slice Usize) (n : Usize) :
+    check_last_atoms L n = ok .Ok ↔ NewenTheory.Topology.Groups.LastAtomsOk (natsOf L) n.val := by
+  obtain ⟨r, hr, hv⟩ := check_last_atoms_eq L n
+  rw [hr, Result.ok.injEq, ← checkLastAtomsModel_iff, ← hv]
+  cases r <;> simp [checkVal]
+
+/-- **Rust = model**: within the bound, `energy_cell` returns normally, with
+`energyCellModel`. -/
+theorem energy_cell_eq (i j n : Usize) (hb : EnergyCellInRange i.val j.val n.val) :
+    ∃ o, energy_cell i j n = ok o ∧ o.map (·.val) = energyCellModel i.val j.val n.val :=
+  exists_ok_of_spec (energy_cell_spec i j n hb)
+
+/-- **Rust = meaning**: within the bound, `energy_cell` returns the row-major cell of two
+in-range groups, and none otherwise. -/
+theorem energy_cell_eq_theory (i j n : Usize) (hb : EnergyCellInRange i.val j.val n.val) :
+    ∃ o, energy_cell i j n = ok o
+      ∧ o.map (·.val) = if i.val < n.val ∧ j.val < n.val
+          then some (NewenTheory.Topology.Groups.energyCell n.val i.val j.val) else none := by
+  obtain ⟨o, hr, hv⟩ := energy_cell_eq i j n hb
+  exact ⟨o, hr, hv.trans (energyCellModel_eq _ _ _)⟩
+
+end Topology
+
 
 end NewenSpec.Refinement

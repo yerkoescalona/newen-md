@@ -7,6 +7,9 @@ license.workspace = true
 description = "Core types and math primitives for newen molecular dynamics"
 
 [dependencies]
+# Integer decision logic with a Lean specification (pair kinds)
+newen-logic = { workspace = true }
+
 # SIMD and math
 glam = { workspace = true }
 wide = { workspace = true }

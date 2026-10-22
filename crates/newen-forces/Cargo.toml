@@ -16,6 +16,7 @@ needless_range_loop = "allow"
 
 [dependencies]
 newen-core = { workspace = true }
+newen-logic = { workspace = true }
 
 # SIMD and math
 glam = { workspace = true }

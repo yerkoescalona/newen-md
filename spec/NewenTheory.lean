@@ -4,6 +4,8 @@ import NewenTheory.Dynamics.Thermostats
 import NewenTheory.Interactions.Bonded
 import NewenTheory.Interactions.LennardJones
 import NewenTheory.Interactions.ReactionField
+import NewenTheory.Topology.Groups
+import NewenTheory.Topology.Pairs
 
 /-!
 # NewenTheory

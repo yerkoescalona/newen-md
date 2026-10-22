@@ -24,6 +24,7 @@ use newen_core::{
     IndividualLambdas, NetCharge, PrecalcLambdas, Topology,
 };
 use newen_io::{coordinate::CoordinateData, imd::ImdParameters, ptp::read_pttopo};
+use newen_logic::topology::groups::{check_last_atoms, group_of, LastAtomsCheck};
 
 use crate::{RunError, RunInputs};
 
@@ -695,44 +696,46 @@ fn assign_energy_groups(
     nre: &[usize],
 ) -> Result<Option<PrepareNote>, RunError> {
     let n_atoms = topology.num_atoms();
-    let mut last_atoms = Vec::with_capacity(nre.len() + 1);
-    let mut previous = 0usize;
-    for &e in nre {
-        if e == 0 || e <= previous {
-            return Err(RunError::Recipe(format!(
-                "FORCE block: energy group last atoms {nre:?} must be positive and strictly                  increasing"
-            )));
-        }
-        previous = e;
-        last_atoms.push(e - 1);
+    let not_increasing = || {
+        RunError::Recipe(format!(
+            "FORCE block: energy group last atoms {nre:?} must be positive and strictly \
+             increasing"
+        ))
+    };
+    // NRE is 1-based: 0 names no atom
+    if nre.contains(&0) {
+        return Err(not_increasing());
     }
+    let mut last_atoms: Vec<usize> = nre.iter().map(|&e| e - 1).collect();
+    // no NRE is one group; a last group short of the last atom gets one more for the rest
     let mut note = None;
     match last_atoms.last().copied() {
         None => last_atoms.push(n_atoms.saturating_sub(1)),
-        Some(last) if last + 1 > n_atoms => {
-            return Err(RunError::Recipe(format!(
-                "FORCE block: the last energy group ends at atom {} but the system has {n_atoms}                  atoms",
-                last + 1
-            )));
-        },
         Some(last) if last + 1 < n_atoms => {
             last_atoms.push(n_atoms - 1);
             note = Some(PrepareNote::EnergyGroupAdded { last_atom: n_atoms });
         },
         Some(_) => {},
     }
-    topology.energy_groups.clear();
+    match check_last_atoms(&last_atoms, n_atoms) {
+        LastAtomsCheck::Ok => {},
+        LastAtomsCheck::NotIncreasing(_) => return Err(not_increasing()),
+        LastAtomsCheck::LastNotFinal => {
+            return Err(RunError::Recipe(format!(
+                "FORCE block: the last energy group ends at atom {} but the system has \
+                 {n_atoms} atoms",
+                last_atoms[last_atoms.len() - 1] + 1
+            )));
+        },
+        LastAtomsCheck::Empty => unreachable!("an empty NRE became one group"),
+    }
+    topology.energy_groups = vec![Vec::new(); last_atoms.len()];
     topology.atom_to_energy_group.clear();
     topology.atom_to_energy_group.reserve(n_atoms);
-    let mut atom = 0usize;
-    for (g, &last) in last_atoms.iter().enumerate() {
-        let mut members = Vec::with_capacity((last + 1).saturating_sub(atom));
-        while atom <= last && atom < n_atoms {
-            members.push(atom);
-            topology.atom_to_energy_group.push(g);
-            atom += 1;
-        }
-        topology.energy_groups.push(members);
+    for atom in 0..n_atoms {
+        let g = group_of(&last_atoms, atom).expect("checked: the last group ends at the last atom");
+        topology.energy_groups[g].push(atom);
+        topology.atom_to_energy_group.push(g);
     }
     Ok(note)
 }

@@ -1,7 +1,8 @@
 //! Invariants that `Topology::is_excluded` / `is_excluded_or_14` rely on.
 //!
-//! Both query a single side of the per-atom lists, which is only correct if
-//! every list is sorted and symmetric. These tests load real reference
+//! Both query a single side of the per-atom lists and stop early once the last
+//! (largest) entry is below the partner, which is only correct if every list is
+//! sorted and symmetric. These tests load real reference
 //! topologies — one with dihedrals (so 1-4 pairs are present) and one that is
 //! then solvated — and check the invariants directly, plus agreement with the
 //! two-sided formulation the single-sided lookups replaced.
@@ -45,16 +46,7 @@ fn two_sided_excluded_or_14(topo: &Topology, i: usize, j: usize) -> bool {
 
 fn check(topo: &Topology) {
     assert_sorted_and_symmetric(&topo.exclusions, "exclusions");
-    if !topo.one_four_pairs.is_empty() {
-        for (i, list) in topo.one_four_pairs.iter().enumerate() {
-            for &j in list {
-                assert!(
-                    topo.one_four_pairs[j].contains(&i),
-                    "one_four_pairs not symmetric at ({i}, {j})"
-                );
-            }
-        }
-    }
+    assert_sorted_and_symmetric(&topo.one_four_pairs, "one_four_pairs");
 
     let n = topo.num_atoms();
     let mut excluded_pairs = 0usize;

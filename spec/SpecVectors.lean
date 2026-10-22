@@ -1,6 +1,8 @@
 import NewenSpec.Schedule
 import NewenSpec.Thermo.Dof
 import NewenSpec.Thermo.Bath
+import NewenSpec.Topology.Pairs
+import NewenSpec.Topology.Groups
 import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
 import NewenSpec.Bonded
@@ -12,6 +14,8 @@ thermostat, nonbonded and bonded models on random `Float` inputs) and write them
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
 open NewenSpec.Thermo.Bath
+open NewenSpec.Topology.Pairs
+open NewenSpec.Topology.Groups
 open NewenSpec.Thermostat
 open NewenSpec.Nonbonded
 open NewenSpec.Bonded (Vec3 tinyFloat quarterFloat piFloat quarticBondFloat harmonicBondFloat
@@ -113,6 +117,88 @@ def bathJson : String :=
   "(last_atom, com_bath, ir_bath) per range, n_groups, the group first atoms, n_constraints, " ++
   "(i, j) per constraint; then (com, ir) half dof per bath, the n_baths numerators, the " ++
   "denominator\",\n" ++
+  "  \"rows\": [\n" ++ ",\n".intercalate rows ++ "\n  ]\n}\n"
+
+/-! ## Topology: pair kinds and group lookups, flat integer rows -/
+
+/-- Every ascending subset of `0 .. n − 1`, by bitmask. -/
+def allSubsets (n : Nat) : List (List Nat) :=
+  (List.range (2 ^ n)).map fun m => (List.range n).filter fun b => m / 2 ^ b % 2 = 1
+
+/-- Every list of exactly `k` entries from `vals`, in any order, repeats allowed. -/
+def tuples (vals : List Nat) : Nat → List (List Nat)
+  | 0 => [[]]
+  | k + 1 => (tuples vals k).flatMap fun t => vals.map (· :: t)
+
+def ints (xs : List Nat) : List Int := xs.map Int.ofNat
+
+/-- `PairKind` as the Rust enum's declaration order. -/
+def kindCode : NewenTheory.Topology.Pairs.PairKind → Int
+  | .normal => 0
+  | .excluded => 1
+  | .oneFour => 2
+  | .atomPair => 3
+
+/-- `LastAtomsCheck` as `(code, index)`: Ok 0, Empty 1, NotIncreasing 2 with its index,
+LastNotFinal 3. -/
+def checkCode : NewenSpec.Topology.Groups.LastAtomsCheck → List Int
+  | .ok => [0, 0]
+  | .empty => [1, 0]
+  | .notIncreasing g => [2, g]
+  | .lastNotFinal => [3, 0]
+
+def optCode : Option Nat → Int
+  | some g => g
+  | none => -1
+
+/-- Tag 0: one ascending list, then `contains_sorted` for `j = 0 ..= jMax`. -/
+def containsRow (l : List Nat) (jMax : Nat) : List Int :=
+  [(0 : Int), l.length] ++ ints l ++ (List.range (jMax + 1)).map fun j =>
+    if containsSortedModel l j then 1 else 0
+
+/-- Tag 1: three ascending lists, then `pair_kind` for `j = 0 ..= jMax`. -/
+def pairRow (e f a : List Nat) (jMax : Nat) : List Int :=
+  [(1 : Int), e.length] ++ ints e ++ [(f.length : Int)] ++ ints f ++ [(a.length : Int)] ++ ints a
+    ++ (List.range (jMax + 1)).map fun j => kindCode (pairKindModel e f a j)
+
+/-- Tag 2: `n_atoms` and a list of last atoms, then `check_last_atoms`, then `group_of` for
+every atom `0 ..= n_atoms` (−1 for none). -/
+def groupRow (n : Nat) (l : List Nat) : List Int :=
+  [(2 : Int), n, l.length] ++ ints l ++ checkCode (checkLastAtomsModel l n)
+    ++ (List.range (n + 1)).map fun a => optCode (groupOfModel l a)
+
+/-- Tag 3: `eg_i, eg_j, n_groups`, then `energy_cell` (−1 for none). -/
+def cellRow (i j n : Nat) : List Int := [3, i, j, n, optCode (energyCellModel i j n)]
+
+/-- The `topology.json` rows. -/
+def topologyRows : List (List Int) :=
+  let subs8 := allSubsets 8
+  let subs4 := allSubsets 4
+  let pick (k : Nat) : List Nat := subs8.getD (k % subs8.length) []
+  (subs8.map fun l => containsRow l 8)
+    ++ (subs4.flatMap fun e => subs4.flatMap fun f => subs4.map fun a => pairRow e f a 4)
+    ++ ((List.range subs8.length).map fun k => pairRow (pick k) (pick (7 * k + 3)) (pick (13 * k + 5)) 8)
+    ++ ((List.range 9).flatMap fun n0 => (allSubsets 9).map fun l => groupRow (n0 + 1) l)
+    ++ ((List.range 5).flatMap fun n0 => ((List.range 4).flatMap (tuples (List.range 5))).map
+        fun l => groupRow (n0 + 1) l)
+    ++ ((List.range 5).flatMap fun n => (List.range 6).flatMap fun i => (List.range 6).map
+        fun j => cellRow i j n)
+
+def topologyJson : String :=
+  let rows := topologyRows.map fun r => "    [" ++ ", ".intercalate (r.map toString) ++ "]"
+  "{\n" ++
+  "  \"spec\": \"topology.pairs.contains_sorted, topology.pairs.pair_kind, " ++
+  "topology.groups.group_of, topology.groups.check_last_atoms, topology.groups.energy_cell\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Topology.Pairs.containsSortedModel, " ++
+  "pairKindModel; NewenSpec.Topology.Groups.groupOfModel, checkLastAtomsModel, " ++
+  "energyCellModel)\",\n" ++
+  "  \"layout\": \"one case per row, by its first entry. 0: len, the ascending list, then " ++
+  "contains_sorted (0/1) for j = 0..=8. 1: three ascending lists (exclusions, one_four, " ++
+  "atom_pair) each as len then entries, then pair_kind (0 Normal, 1 Excluded, 2 OneFour, " ++
+  "3 AtomPair) for j = 0..=jmax, jmax = 4 or 8 (the rest of the row). 2: n_atoms, len, the " ++
+  "last atoms, check_last_atoms as (code, index) with 0 Ok, 1 Empty, 2 NotIncreasing(index), " ++
+  "3 LastNotFinal, then group_of (-1 = None) for atom = 0..=n_atoms. 3: eg_i, eg_j, n_groups, " ++
+  "energy_cell (-1 = None)\",\n" ++
   "  \"rows\": [\n" ++ ",\n".intercalate rows ++ "\n  ]\n}\n"
 
 /-! ## Thermostats: random inputs as `Float`, every number written as its 64 bits -/
@@ -551,6 +637,8 @@ def main : IO Unit := do
   IO.println s!"wrote vectors/dof.json ({(dofGrid + 1) ^ 3} rows x {ndfmins.length})"
   IO.FS.writeFile "vectors/bath.json" bathJson
   IO.println s!"wrote vectors/bath.json ({bathSystems.length * 6} rows)"
+  IO.FS.writeFile "vectors/topology.json" topologyJson
+  IO.println s!"wrote vectors/topology.json ({topologyRows.length} rows)"
   -- the literals the models use must be the exact doubles 0, 1, 2, 6, 12 (and 0.5)
   unless (0 : Float).toBits == 0 && (1 : Float).toBits == 0x3FF0000000000000 &&
       (2 : Float).toBits == 0x4000000000000000 && (6 : Float).toBits == 0x4018000000000000 &&

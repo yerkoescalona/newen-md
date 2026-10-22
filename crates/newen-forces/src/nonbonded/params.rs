@@ -1,6 +1,7 @@
 //! LJ/CRF parameter types and force storage
 
 use newen_core::math::Vec3;
+use newen_logic::topology::groups::energy_cell;
 
 /// Lennard-Jones parameters for atom pair
 #[repr(C)]
@@ -156,7 +157,8 @@ impl<'a> EnergyGroups<'a> {
     /// Row-major cell `[eg(i)][eg(j)]` of an `n_groups × n_groups` matrix.
     #[inline(always)]
     pub fn cell(&self, i: usize, j: usize) -> usize {
-        self.atom_group[i] * self.n_groups + self.atom_group[j]
+        energy_cell(self.atom_group[i], self.atom_group[j], self.n_groups)
+            .expect("energy groups cover every atom")
     }
 }
 

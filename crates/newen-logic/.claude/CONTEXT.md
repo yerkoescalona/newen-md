@@ -45,9 +45,22 @@ thermo::bath::bath_half_dofs(n_baths, &[DofRange], &[usize], &[Constraint], rott
                        -> Vec<HalfDof>                  spec: thermo.bath.bath_half_dofs
 thermo::bath::ndfmin_spread(&[i64], ndfmin: i64) -> Spread
                                                         spec: thermo.bath.ndfmin_spread
+topology::pairs::contains_sorted(&[usize], j) -> bool   spec: topology.pairs.contains_sorted
+topology::pairs::pair_kind(exclusions_i, one_four_i, atom_pair_i: &[usize], j) -> PairKind
+                                                        spec: topology.pairs.pair_kind
+topology::groups::group_of(last_atoms: &[usize], atom) -> Option<usize>
+                                                        spec: topology.groups.group_of
+topology::groups::check_last_atoms(last_atoms: &[usize], n_atoms) -> LastAtomsCheck
+                                                        spec: topology.groups.check_last_atoms
+topology::groups::energy_cell(eg_i, eg_j, n_groups) -> Option<usize>
+                                                        spec: topology.groups.energy_cell
 ```
 `DofRange` is newen-integrators' `BathRange` (re-exported there, with `in_bath` a wrapper of
 `baths_of`); newen-run's `bath_dofs` adapts the topology to `bath_half_dofs` + `ndfmin_spread`.
+newen-core's `Topology::is_excluded` / `pair_kind_of` / `is_excluded_or_14` (every pairlist
+builder) call `contains_sorted` / `pair_kind` (re-exporting `PairKind`); newen-run's
+`assign_energy_groups` calls `check_last_atoms` and `group_of`; newen-forces'
+`EnergyGroups::cell` calls `energy_cell`.
 
 ## Crate rules
 1. **Decisions only.** No floats, no energies or forces. A function that needs a float threshold
@@ -72,7 +85,7 @@ src/
 ├── schedule/      L3 timing: pairlist steps, output steps, continuation counters    (D34; now: schedule.rs)
 ├── thermo/        L2: degrees of freedom per bath, atom → bath mapping   (now: dof.rs, bath.rs)
 ├── topology/      L0 bookkeeping: index conversions, exclusions and 1-4 ownership,
-│                  groups, perturbed atoms and bond matching                         (target)
+│                  groups, perturbed atoms and bond matching  (now: pairs.rs, groups.rs)
 └── plan/          L3 composition: step-order rules, the compatibility/refusal matrix (target)
 ```
 
@@ -84,7 +97,8 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
 ├── Dynamics/      leap-frog, constraints, thermostats (incl. equipartition and dof), barostats;
 │                  pairlist and output steps (now: Schedule.lean, DegreesOfFreedom.lean)
 ├── EnhancedSampling/  EDS, A-EDS
-└── Corrections/   Kastenholz–Hünenberger charging terms
+├── Corrections/   Kastenholz–Hünenberger charging terms
+└── Topology/      pair kinds, groups of consecutive atoms (now: Pairs.lean, Groups.lean)
 ```
 
 ## Status
@@ -125,6 +139,24 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
   the two DOFSET splits of `aladip_vacuum_multibath_ndfmin3`). A private helper `end_in_bath`
   (one constraint end) keeps the constraint loop free of nested matches. Not modelled: virtual
   atoms, position/angle/dihedral constraints. gromosXX references unchanged.
+- **Topology bookkeeping (2026-10-22):** `topology::pairs` (`contains_sorted`, `pair_kind`) and
+  `topology::groups` (`group_of`, `check_last_atoms`, `energy_cell`), the integer cores of
+  newen-core's pair tests (every pairlist builder), newen-run's `assign_energy_groups` and
+  newen-forces' `EnergyGroups::cell`. Meaning (`pairKind` by membership, `pairKind_symm` for
+  symmetric lists; `groupOf` as the least index, `LastAtomsOk`, `groupOf_some_iff`,
+  `groupOf_contiguous`, `groupOf_mono`, `energyCell_injective`) in
+  `spec/NewenTheory/Topology/{Pairs,Groups}.lean`; models and bridges
+  (`containsSortedModel_iff`, `pairKindModel_eq` for ascending lists; `groupOfModel_eq`,
+  `checkLastAtomsModel_iff`, `energyCellModel_eq`, and `bathsOf_eq_groupOf` tying
+  `thermo.bath.baths_of` to the same rule) in `spec/NewenSpec/Topology/{Pairs,Groups}.lean`;
+  Aeneas refinements `contains_sorted_eq`, `pair_kind_eq`, `group_of_eq`, `check_last_atoms_eq`,
+  `energy_cell_eq` (and `*_iff` / `*_eq_theory`) in `spec/NewenSpec/Refinement.lean`,
+  `energy_cell` for `EnergyCellInRange`; test `tests/topology_spec.rs` (membership and least
+  index by brute force, Lean vectors `spec/vectors/topology.json`, butane's lists and charge
+  groups, three FORCE `NRE` lines). `one_four_pairs` is now sorted and deduplicated like
+  `exclusions` (asserted in newen-io's `exclusion_invariants`), and the exclusion search is
+  linear after the early-out, as in gromosXX (it was a binary search). Not modelled: the list
+  construction itself (symmetry and order are unit-tested, not proven).
 - **NewenTheory (2026-10-17):** created as a second default library of the `spec/` Lake project,
   core Lean only (imports neither `NewenSpec` nor Aeneas); the pilot's meaning moved there with
   no change to any statement beyond its namespace. `SPEC.toml` names it in the `theory` field.
@@ -136,5 +168,7 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
 `src/schedule.rs`, `tests/schedule_spec.rs`, `spec/NewenTheory/Dynamics/Schedule.lean`,
 `spec/NewenSpec/{Schedule,Refinement}.lean`, `src/thermo/dof.rs`, `tests/dof_spec.rs`,
 `spec/NewenTheory/Dynamics/DegreesOfFreedom.lean`, `spec/NewenSpec/Thermo/Dof.lean`, `src/thermo/bath.rs`,
-`tests/bath_spec.rs`, `spec/NewenSpec/Thermo/Bath.lean`, `spec/NewenSpec/Extracted/NewenLogic.lean`
+`tests/bath_spec.rs`, `spec/NewenSpec/Thermo/Bath.lean`, `src/topology/{pairs,groups}.rs`,
+`tests/topology_spec.rs`, `spec/NewenTheory/Topology/{Pairs,Groups}.lean`,
+`spec/NewenSpec/Topology/{Pairs,Groups}.lean`, `spec/NewenSpec/Extracted/NewenLogic.lean`
 (generated), `spec/scripts/extract.sh`, `spec/SPEC.toml`, `docs/src/verification/index.md`.

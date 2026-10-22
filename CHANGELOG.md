@@ -26,12 +26,23 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   the platform libm); a finite-difference check compares every kernel's forces with its energy.
 - **Reference `butane_vacuum_ntbdn1`** (COVALENTFORM 0 0 1): the Chebyshev dihedral form
   against the released gromosXX; no reference used NTBDN = 1 before. 122 references, none ignored.
+- **Pair kinds and group lookups verified against the theory** (`newen-logic::topology`:
+  `contains_sorted`, `pair_kind`, `group_of`, `check_last_atoms`, `energy_cell`, with Aeneas
+  proofs). A pair is excluded, 1-4, an owned PERTATOMPAIR/EDS pair, or normal, decided from one
+  atom's ascending partner lists; the energy group of an atom is the first NRE group whose last
+  atom reaches it, the same rule as the atom-to-bath mapping (`bathsOf_eq_groupOf`); the energy
+  matrix cell is injective. `Topology::is_excluded_or_14`, `assign_energy_groups` and
+  `EnergyGroups::cell` call them; `one_four_pairs` is now sorted like `exclusions`.
+
 ### Changed
 
 - The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order
   instead of `powi` (whose expansion rounds differently for `m ≥ 3`); `cos θ0` of the
   cosine-harmonic angle is computed once per angle type instead of once per term. Last-bit
   differences only; every reference unchanged.
+- The exclusion lookup scans linearly after the `last < j` early-out, as gromosXX does, instead of
+  binary-searching.
+
 ## [0.0.73] (2026-10-22)
 
 ### Added

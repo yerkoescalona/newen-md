@@ -115,6 +115,86 @@ test = "crates/newen-logic/tests/bath_spec.rs"
 vectors = "spec/vectors/bath.json"
 
 [[function]]
+key = "topology.pairs.contains_sorted"
+rust = "crates/newen-logic/src/topology/pairs.rs::contains_sorted"
+used_by = ["crates/newen-logic/src/topology/pairs.rs::pair_kind", "crates/newen-core/src/topology.rs::Topology::is_excluded"]
+origin = "gromosXX Exclusions::is_excluded (exclusions.h:79-90): empty or last entry below j is false at once, then a linear search"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "List membership (NewenTheory.Topology.Pairs.pairKind is stated over it)"
+model = "NewenSpec.Topology.Pairs.containsSortedModel"
+theorem = "NewenSpec.Topology.Pairs.containsSortedModel_iff (for an ascending list)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.pairs.contains_sorted"
+refinement = "NewenSpec.Refinement.contains_sorted_eq (contains_sorted_iff)"
+# Layer 3, Rust = membership on every ascending subset of 0..10, j <= 11; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.pairs.pair_kind"
+rust = "crates/newen-logic/src/topology/pairs.rs::pair_kind"
+used_by = ["crates/newen-core/src/topology.rs::Topology::pair_kind_of", "crates/newen-core/src/topology.rs::Topology::is_excluded_or_14 (every pairlist builder in crates/newen-core/src/pairlist.rs)"]
+origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Pairs.pairKind (pairKind_symm, pairKind_excluded_iff, pairKind_normal_iff)"
+model = "NewenSpec.Topology.Pairs.pairKindModel"
+theorem = "NewenSpec.Topology.Pairs.pairKindModel_eq (for ascending lists)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.pairs.pair_kind"
+refinement = "NewenSpec.Refinement.pair_kind_eq (pair_kind_eq_theory)"
+# Layer 3, Rust = membership by priority on every triple of ascending subsets of 0..5, j <= 6; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.group_of"
+rust = "crates/newen-logic/src/topology/groups.rs::group_of"
+used_by = ["crates/newen-run/src/prepare.rs::assign_energy_groups"]
+origin = "gromosXX in_topology.cc:449-458 (atom_energy_group filled from the energy groups' last atoms, topology.h:716-743); the same rule as thermo.bath.baths_of"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.groupOf (groupOf_eq_some_iff, groupOf_some_iff, groupOf_contiguous, groupOf_mono)"
+model = "NewenSpec.Topology.Groups.groupOfModel"
+theorem = "NewenSpec.Topology.Groups.groupOfModel_eq (bathsOf_eq_groupOf ties thermo.bath.baths_of to it)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.group_of"
+refinement = "NewenSpec.Refinement.group_of_eq (group_of_eq_theory)"
+# Layer 3, Rust = least index on every list of <= 4 entries from 0..7, atoms <= 8; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.check_last_atoms"
+rust = "crates/newen-logic/src/topology/groups.rs::check_last_atoms"
+used_by = ["crates/newen-run/src/prepare.rs::assign_energy_groups"]
+origin = "FORCE NRE (in_parameter.cc:986-988, in_topology.cc:433-447): the last energy group must end at the last atom; gromosXX accepts a non-increasing NRE (an empty group), newen refuses it"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.LastAtomsOk"
+model = "NewenSpec.Topology.Groups.checkLastAtomsModel"
+theorem = "NewenSpec.Topology.Groups.checkLastAtomsModel_iff"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.check_last_atoms"
+refinement = "NewenSpec.Refinement.check_last_atoms_eq (check_last_atoms_ok_iff)"
+# Layer 3, Rust = adjacent-window check on every list of <= 4 entries from 0..7, n_atoms <= 8; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.energy_cell"
+rust = "crates/newen-logic/src/topology/groups.rs::energy_cell"
+used_by = ["crates/newen-forces/src/nonbonded/params.rs::EnergyGroups::cell"]
+origin = "gromosXX Energy::lj_energy[eg(i)][eg(j)] (configuration/energy.h:416), stored row-major in newen"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.energyCell (energyCell_lt, energyCell_injective)"
+model = "NewenSpec.Topology.Groups.energyCellModel"
+theorem = "NewenSpec.Topology.Groups.energyCellModel_eq"
+# Layer 2, Rust = model (Aeneas), for EnergyCellInRange: eg_i * n_groups + eg_j <= usize::MAX when both are in range
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.energy_cell"
+refinement = "NewenSpec.Refinement.energy_cell_eq (energy_cell_eq_theory)"
+# Layer 3, Rust = every cell of n_groups <= 6, distinct; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
 key = "thermostat.berendsen_scale"
 kind = "float"
 rust = "crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::berendsen_scale"
