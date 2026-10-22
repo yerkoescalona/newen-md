@@ -4,9 +4,9 @@ import NewenTheory.Dynamics.DegreesOfFreedom
 # Model of `crates/newen-logic/src/thermo/bath.rs`
 
 Rust: `crates/newen-logic/src/thermo/bath.rs`: `baths_of`, `groups_starting_in`, `bath_half_dof`,
-`bath_half_dofs`, `ndfmin_spread` (spec keys `thermo.bath.*` in `spec/SPEC.toml`).
+`bath_half_dofs`, `ndfmin_spread`, `empty_baths` (spec keys `thermo.bath.*` in `spec/SPEC.toml`).
 Theory: `NewenTheory/Dynamics/DegreesOfFreedom.lean`, section "Temperature baths" (`BathSystem`,
-`comHalf`, `irHalf`, `spreadNumerators`, `spreadDenominator`).
+`comHalf`, `irHalf`, `spreadNumerators`, `spreadDenominator`, `EmptyBath`).
 
 This file has two parts:
 
@@ -90,6 +90,9 @@ def ndfminSpreadModel (halfDofs : List Int) (ndfmin : Int) : List Int × Int :=
   let total := halfDofs.sum
   let fd : Int × Int := if 0 < total then (total - 2 * ndfmin, 2 * total) else (1, 2)
   (halfDofs.map (fun h => h * fd.1), fd.2)
+
+/-- `empty_baths`: `h ≤ 0` for every bath's half count before the spread. -/
+def emptyBathsModel (halves : List Int) : List Bool := halves.map fun h => decide (h ≤ 0)
 
 /-! ## 2. Bridges: the models are the theory's counts -/
 
@@ -387,5 +390,20 @@ theorem ndfminSpreadModel_eq (halfDofs : List Int) (ndfmin : Int) :
       = (spreadNumerators halfDofs ndfmin, spreadDenominator halfDofs) := by
   simp only [ndfminSpreadModel, spreadNumerators, spreadFactor, spreadDenominator]
   by_cases h : 0 < halfDofs.sum <;> simp [h]
+
+
+/-- **`empty_baths` on `bath_half_dofs`' totals flags the theory's empty baths**, in order:
+called as `newen-run` calls it, on `com + ir` of every bath before the spread, it says which
+baths gromosXX decouples. -/
+theorem emptyBathsModel_eq {nBaths n : Nat} {ranges : List Range} {groupFirsts : List Nat}
+    (h : RangesWellFormed nBaths n ranges groupFirsts) (constraints : List (Nat × Nat))
+    (rottrans : Bool) :
+    emptyBathsModel ((bathHalfDofsModel nBaths ranges groupFirsts constraints rottrans).map
+        fun p => p.1 + p.2)
+      = (List.range nBaths).map (fun b =>
+          decide (EmptyBath (systemOf n ranges groupFirsts constraints rottrans) b)) := by
+  rw [bathHalfDofsModel_eq h]
+  simp only [emptyBathsModel, List.map_map]
+  rfl
 
 end NewenSpec.Thermo.Bath

@@ -1,6 +1,10 @@
 //! Step schedules: which MD steps do what.
 //!
-//! Theory: `spec/NewenTheory/Dynamics/Schedule.lean`; model and bridge: `spec/NewenSpec/Schedule.lean`.
+//! Theory: `spec/NewenTheory/Dynamics/Schedule.lean`; models and bridges:
+//! `spec/NewenSpec/Schedule.lean`.
+
+pub mod com;
+pub mod output;
 
 /// Whether some free-energy output step (every `ntwg` steps) follows a pairlist step (every
 /// `nsnb` steps) that was not itself an output step.

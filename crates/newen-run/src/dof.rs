@@ -25,6 +25,8 @@ pub struct BathDof {
     pub com: f64,
     /// Internal and rotational (`ir_dof`).
     pub ir: f64,
+    /// Twice `com + ir`, exactly: the bath's half degrees of freedom before NDFMIN.
+    pub halves: i64,
 }
 
 /// Degrees of freedom per temperature bath, as gromosXX's
@@ -96,6 +98,7 @@ pub fn bath_dofs(
             dof: num as f64 / spread.denominator as f64,
             com: h.com as f64 / 2.0,
             ir: h.ir as f64 / 2.0,
+            halves: h.com + h.ir,
         })
         .collect()
 }

@@ -33,6 +33,14 @@ the dependency graph; newen-core, newen-run, newen-forces and newen-integrators 
 ## Outputs
 ```
 schedule::output_misses_longrange(nsnb, ntwg) -> bool     spec: schedule.output_misses_longrange
+schedule::output::due(step, every) -> bool               spec: schedule.output.due
+schedule::output::frames_in(n_steps, every) -> usize     spec: schedule.output.frames_in
+schedule::output::minimisation_stop(step, nmin, converged, ntwx, ntwf, ntwe, ntwg)
+                       -> Option<StopFrames>            spec: schedule.output.minimisation_stop
+schedule::output::final_step(n_steps, Option<usize>) -> usize
+                                                        spec: schedule.output.final_step
+schedule::com::com_removal(step, nticom: i64, nscm: i64, periodic) -> (bool, bool)
+                                                        spec: schedule.com.com_removal
 thermo::dof::total_dof(n_atoms: u64, solvent_constraints: u64, solute_constraints: u64,
                        ndfmin: i64) -> i64              spec: thermo.dof.total_dof
 thermo::bath::baths_of(&[DofRange], atom) -> Option<(usize, usize)>
@@ -45,6 +53,7 @@ thermo::bath::bath_half_dofs(n_baths, &[DofRange], &[usize], &[Constraint], rott
                        -> Vec<HalfDof>                  spec: thermo.bath.bath_half_dofs
 thermo::bath::ndfmin_spread(&[i64], ndfmin: i64) -> Spread
                                                         spec: thermo.bath.ndfmin_spread
+thermo::bath::empty_baths(&[i64]) -> Vec<bool>          spec: thermo.bath.empty_baths
 topology::pairs::contains_sorted(&[usize], j) -> bool   spec: topology.pairs.contains_sorted
 topology::pairs::pair_kind(exclusions_i, one_four_i, atom_pair_i: &[usize], j) -> PairKind
                                                         spec: topology.pairs.pair_kind
@@ -56,11 +65,13 @@ topology::groups::energy_cell(eg_i, eg_j, n_groups) -> Option<usize>
                                                         spec: topology.groups.energy_cell
 ```
 `DofRange` is newen-integrators' `BathRange` (re-exported there, with `in_bath` a wrapper of
-`baths_of`); newen-run's `bath_dofs` adapts the topology to `bath_half_dofs` + `ndfmin_spread`.
-newen-core's `Topology::is_excluded` / `pair_kind_of` / `is_excluded_or_14` (every pairlist
-builder) call `contains_sorted` / `pair_kind` (re-exporting `PairKind`); newen-run's
-`assign_energy_groups` calls `check_last_atoms` and `group_of`; newen-forces'
-`EnergyGroups::cell` calls `energy_cell`.
+`baths_of`); newen-run's `bath_dofs` adapts the topology to `bath_half_dofs` + `ndfmin_spread`,
+and its `thermostat_baths` decouples the baths `empty_baths` flags. The md binary writes its
+frames by `due`, `minimisation_stop` and `final_step`; `RemoveCOMMotion` asks `com_removal`;
+newen-core's `PrecalcLambdas::active` is `due`. newen-core's `Topology::is_excluded` /
+`pair_kind_of` / `is_excluded_or_14` (every pairlist builder) call `contains_sorted` /
+`pair_kind` (re-exporting `PairKind`); newen-run's `assign_energy_groups` calls
+`check_last_atoms` and `group_of`; newen-forces' `EnergyGroups::cell` calls `energy_cell`.
 
 ## Crate rules
 1. **Decisions only.** No floats, no energies or forces. A function that needs a float threshold
@@ -82,8 +93,10 @@ builder) call `contains_sorted` / `pair_kind` (re-exporting `PairKind`); newen-r
 
 ```
 src/
-├── schedule/      L3 timing: pairlist steps, output steps, continuation counters    (D34; now: schedule.rs)
-├── thermo/        L2: degrees of freedom per bath, atom → bath mapping   (now: dof.rs, bath.rs)
+├── schedule/      L3 timing: pairlist steps, output steps, continuation counters
+│                  (now: mod.rs D34, output.rs output frames, com.rs COM removal)
+├── thermo/        L2: degrees of freedom per bath, atom → bath mapping, empty baths
+│                  (now: dof.rs, bath.rs)
 ├── topology/      L0 bookkeeping: index conversions, exclusions and 1-4 ownership,
 │                  groups, perturbed atoms and bond matching  (now: pairs.rs, groups.rs)
 └── plan/          L3 composition: step-order rules, the compatibility/refusal matrix (target)
@@ -157,6 +170,26 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
   `exclusions` (asserted in newen-io's `exclusion_invariants`), and the exclusion search is
   linear after the early-out, as in gromosXX (it was a binary search). Not modelled: the list
   construction itself (symmetry and order are unit-tested, not proven).
+- **Run schedule (2026-10-22):** `schedule::output` (`due`, `frames_in`, `minimisation_stop`,
+  `final_step`), `schedule::com::com_removal` and `thermo::bath::empty_baths`. Callers: the md
+  binary's frame writes, the convergence branch and the final configuration's step;
+  `RemoveCOMMotion::apply` (state reduced to NTICOM and NSCM); `PrecalcLambdas::active`;
+  `newen-run::thermostat_baths` (both paths), which decouples empty baths with a warning, as
+  gromosXX does, and refuses an NDFMIN that removes every degree of freedom. Plan validation
+  refuses NTWV ≠ 0 in a minimisation, as gromosXX does, so `StopFrames` has no velocities.
+  Meaning in `spec/NewenTheory/Dynamics/Schedule.lean` (`Due`, `framesIn` with
+  `framesIn_eq_card` and `framesIn_eq_ceil`; the top-of-loop and end-of-step frames with
+  `stop_positions_eq`, `stop_lagged_eq`; `finalStep`; `comRemoval` with `com_step0`,
+  `com_period`) and `DegreesOfFreedom.lean` (`EmptyBath`, `emptyBath_of_unused`, `emptyBath_iff`:
+  deciding before the NDFMIN spread is deciding after it unless NDFMIN takes everything); models
+  and bridges in `spec/NewenSpec/Schedule.lean` and `Thermo/Bath.lean`; Aeneas refinements
+  `due_eq`, `frames_in_eq`, `minimisation_stop_eq`, `final_step_eq`, `com_removal_eq` (for
+  `nscm > i64::MIN`, `|nscm| ≤ usize::MAX`), `empty_baths_eq` (and `*_iff`/`*_theory`/`*_frames`
+  forms); tests `tests/schedule_spec.rs` (walking multiples, step-by-step frame counts, gromosXX's
+  top-of-loop writer simulated, `RemoveCOMMotion`'s former flag rule; Lean vectors
+  `spec/vectors/schedule2.json`) and `tests/bath_spec.rs` (`spec/vectors/bath_empty.json`).
+  121/121 gromosXX references unchanged. Not here yet: the pairlist rebuild counter, the
+  refusal matrix.
 - **NewenTheory (2026-10-17):** created as a second default library of the `spec/` Lake project,
   core Lean only (imports neither `NewenSpec` nor Aeneas); the pilot's meaning moved there with
   no change to any statement beyond its namespace. `SPEC.toml` names it in the `theory` field.
@@ -165,10 +198,11 @@ spec/NewenTheory/                       physics-shaped (target unless noted)
   `nightly-2026-09-17`. `NewenTheory` must use the same toolchain.
 
 ## Key files
-`src/schedule.rs`, `tests/schedule_spec.rs`, `spec/NewenTheory/Dynamics/Schedule.lean`,
+`src/schedule/{mod,output,com}.rs`, `tests/schedule_spec.rs`, `spec/NewenTheory/Dynamics/Schedule.lean`,
 `spec/NewenSpec/{Schedule,Refinement}.lean`, `src/thermo/dof.rs`, `tests/dof_spec.rs`,
 `spec/NewenTheory/Dynamics/DegreesOfFreedom.lean`, `spec/NewenSpec/Thermo/Dof.lean`, `src/thermo/bath.rs`,
 `tests/bath_spec.rs`, `spec/NewenSpec/Thermo/Bath.lean`, `src/topology/{pairs,groups}.rs`,
 `tests/topology_spec.rs`, `spec/NewenTheory/Topology/{Pairs,Groups}.lean`,
 `spec/NewenSpec/Topology/{Pairs,Groups}.lean`, `spec/NewenSpec/Extracted/NewenLogic.lean`
-(generated), `spec/scripts/extract.sh`, `spec/SPEC.toml`, `docs/src/verification/index.md`.
+(generated), `spec/scripts/extract.sh`, `spec/SPEC.toml`, `spec/vectors/{schedule2,bath_empty}.json`,
+`docs/src/verification/index.md`.

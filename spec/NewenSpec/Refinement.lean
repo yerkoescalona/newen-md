@@ -10,16 +10,16 @@ import NewenSpec.Extracted.NewenLogic
 # The extracted Rust computes the Lean model
 
 `NewenSpec/Extracted/NewenLogic.lean` is what Aeneas made of `crates/newen-logic`. For
-`crates/newen-logic/src/schedule.rs` it is a pure Lean function over `Usize` (the machine integer,
-`0 ≤ n < 2^64`) returning `Result Bool`, where `fail` would stand for a Rust panic (here: `%` by
-zero) and `ok b` for a normal return of `b`.
+`output_misses_longrange` (`crates/newen-logic/src/schedule/mod.rs`) it is a pure Lean function
+over `Usize` (the machine integer, `0 ≤ n < 2^64`) returning `Result Bool`, where `fail` would
+stand for a Rust panic (here: `%` by zero) and `ok b` for a normal return of `b`.
 
 The first theorems below say: for every pair of `usize` inputs the Rust function returns
 normally (it never panics) and returns exactly `missesModel`, hence (with
 `Schedule.missesModel_iff`) exactly `Misses` of `NewenTheory/Dynamics/Schedule.lean`.
-`thermo/dof.rs` (`total_dof`, over `U64` and `I64`), `thermo/bath.rs` (five functions over
-slices) and `topology/` (pair kinds and group lookups, five functions) have their own sections
-at the end.
+`thermo/dof.rs` (`total_dof`, over `U64` and `I64`), `thermo/bath.rs` (six functions over
+slices), `topology/` (pair kinds and group lookups, five functions), `schedule/output.rs` and
+`schedule/com.rs` have their own sections at the end.
 -/
 
 open Aeneas Aeneas.Std Aeneas.Std.WP Result
@@ -158,10 +158,10 @@ theorem total_dof_overflow (nAtoms solventConstraints soluteConstraints : U64) (
 
 /-! ## `thermo::bath`: degrees of freedom per bath
 
-The five functions loop over slices; Aeneas turns each `while` loop into a `loop` over the loop
-state, and each proof below runs the loop with `loop.spec_decr_nat`: an invariant saying that
-what is accumulated so far plus what the model gives for the rest of the slice (`drop i`) is the
-model's value for the whole slice, and a measure (`len − i`) that shrinks.
+The functions of `thermo::bath` loop over slices; Aeneas turns each `while` loop into a `loop`
+over the loop state, and each proof below runs the loop with `loop.spec_decr_nat`: an invariant
+saying that what is accumulated so far plus what the model gives for the rest of the slice
+(`drop i`) is the model's value for the whole slice, and a measure (`len − i`) that shrinks.
 
 The integer arithmetic is `i64` with overflow checks, so each proof assumes that no operation
 overflows (`BathHalfDofInRange`, `SpreadInRange`). For the ranges `newen-run` passes (they cover
@@ -1045,6 +1045,234 @@ theorem energy_cell_eq_theory (i j n : Usize) (hb : EnergyCellInRange i.val j.va
   exact ⟨o, hr, hv.trans (energyCellModel_eq _ _ _)⟩
 
 end Topology
+
+/-! ## `schedule::output` and `schedule::com`: output steps, the minimisation stop, the final
+step, centre-of-mass motion removal
+
+Straight-line functions over `usize`: each returns normally for every input (`frames_in`'s
+`+ 1` cannot overflow, the quotient being at most half of `n_steps` there), except `com_removal`,
+which negates `nscm` and casts `|nscm|` to `usize`; it assumes `nscm > i64::MIN` and
+`|nscm| ≤ usize::MAX` (callers pass `i32` values). -/
+
+section Output
+
+open newen_logic.schedule.output
+
+@[step]
+theorem due_spec (step every : Usize) :
+    due step every ⦃ b => b = Schedule.dueModel step.val every.val ⦄ := by
+  unfold due Schedule.dueModel
+  step*
+  all_goals simp_all [UScalar.eq_equiv]
+  rw [Bool.eq_iff_iff]; simp
+
+/-- **Rust = model**: `due` returns `dueModel` for all inputs. -/
+theorem due_eq (step every : Usize) :
+    due step every = ok (Schedule.dueModel step.val every.val) :=
+  eq_ok_of_spec (due_spec step every)
+
+/-- **Rust = meaning**: `due` returns `true` exactly on the theory's due steps. -/
+theorem due_iff (step every : Usize) :
+    due step every = ok true ↔ NewenTheory.Dynamics.Schedule.Due every.val step.val := by
+  rw [due_eq, Result.ok.injEq, Schedule.dueModel_iff]
+
+theorem frames_in_spec (n every : Usize) :
+    frames_in n every ⦃ r => r.val = Schedule.framesInModel n.val every.val ⦄ := by
+  unfold frames_in Schedule.framesInModel
+  step*
+  · have he' : every.val ≠ 0 := by scalar_tac
+    have hi' : n.val % every.val = 0 := by scalar_tac
+    simp [he', hi', whole_post]
+  · have he' : every.val ≠ 0 := by scalar_tac
+    have hi' : n.val % every.val ≠ 0 := by scalar_tac
+    have he2 : 2 ≤ every.val := by
+      apply Classical.byContradiction; intro hlt
+      have : every.val = 1 := by omega
+      rw [this, Nat.mod_one] at hi'; exact hi' rfl
+    have hdm := Nat.div_add_mod n.val every.val
+    have hm := Nat.mul_le_mul_right (n.val / every.val) he2
+    have hn := n.hBounds
+    scalar_tac
+  · have he' : every.val ≠ 0 := by scalar_tac
+    have hi' : n.val % every.val ≠ 0 := by scalar_tac
+    simp [he', hi', r_post, whole_post]
+
+/-- **Rust = model**: `frames_in` returns normally, with `framesInModel`. -/
+theorem frames_in_eq (n every : Usize) :
+    ∃ r, frames_in n every = ok r ∧ r.val = Schedule.framesInModel n.val every.val :=
+  exists_ok_of_spec (frames_in_spec n every)
+
+/-- **Rust = meaning**: `frames_in` is the number of due steps among `0 .. n_steps − 1`. -/
+theorem frames_in_eq_card (n every : Usize) :
+    ∃ r, frames_in n every = ok r
+      ∧ r.val = (NewenTheory.Dynamics.Schedule.dueSteps every.val (List.range n.val)).length := by
+  obtain ⟨r, hr, hv⟩ := frames_in_eq n every
+  refine ⟨r, hr, ?_⟩
+  rw [hv, Schedule.framesInModel_eq, NewenTheory.Dynamics.Schedule.framesIn_eq_card]
+
+/-- `StopFrames` as the model's `Stop`. -/
+def stopOf (s : StopFrames) : Schedule.Stop :=
+  ⟨s.positions, s.forces, s.energies, s.free_energy⟩
+
+theorem minimisation_stop_spec (step nmin : Usize) (converged : Bool) (ntwx ntwf ntwe ntwg : Usize) :
+    minimisation_stop step nmin converged ntwx ntwf ntwe ntwg ⦃ o =>
+      o.map stopOf = Schedule.minimisationStopModel step.val nmin.val converged ntwx.val ntwf.val
+        ntwe.val ntwg.val ⦄ := by
+  unfold minimisation_stop Schedule.minimisationStopModel
+  step*
+  · have hs' : step.val ≤ nmin.val := by scalar_tac
+    simp [hs']
+  · have hs' : ¬ step.val ≤ nmin.val := by scalar_tac
+    simp [hs', stopOf, b_post, b1_post, b2_post, b3_post, last_post]
+  · rfl
+
+/-- **Rust = model**: `minimisation_stop` returns normally, with `minimisationStopModel`. -/
+theorem minimisation_stop_eq (step nmin : Usize) (converged : Bool) (ntwx ntwf ntwe ntwg : Usize) :
+    ∃ o, minimisation_stop step nmin converged ntwx ntwf ntwe ntwg = ok o
+      ∧ o.map stopOf = Schedule.minimisationStopModel step.val nmin.val converged ntwx.val
+        ntwf.val ntwe.val ntwg.val :=
+  exists_ok_of_spec (minimisation_stop_spec step nmin converged ntwx ntwf ntwe ntwg)
+
+/-- **Rust = meaning**: when `minimisation_stop` names frames, an end-of-step writer that adds
+them at the stop writes gromosXX's frames, output by output. -/
+theorem minimisation_stop_frames (step nmin : Usize) (converged : Bool)
+    (ntwx ntwf ntwe ntwg : Usize) (s : StopFrames)
+    (h : minimisation_stop step nmin converged ntwx ntwf ntwe ntwg = ok (some s)) :
+    open NewenTheory.Dynamics.Schedule in
+    endOfStepPositions ntwx.val step.val s.positions = topOfLoopPositions ntwx.val step.val
+      ∧ endOfStepLagged ntwf.val step.val s.forces = topOfLoopLagged ntwf.val step.val
+      ∧ endOfStepLagged ntwe.val step.val s.energies = topOfLoopLagged ntwe.val step.val
+      ∧ endOfStepLagged ntwg.val step.val s.free_energy = topOfLoopLagged ntwg.val step.val := by
+  obtain ⟨o, ho, hm⟩ := minimisation_stop_eq step nmin converged ntwx ntwf ntwe ntwg
+  rw [h, Result.ok.injEq] at ho
+  subst ho
+  exact Schedule.minimisationStopModel_frames hm.symm
+
+theorem final_step_spec (n : Usize) (s : Option Usize) :
+    final_step n s ⦃ r => r.val = Schedule.finalStepModel n.val (s.map (·.val)) ⦄ := by
+  unfold final_step Schedule.finalStepModel
+  cases s <;> simp
+
+/-- **Rust = model** and **Rust = meaning**: `final_step` returns the theory's `finalStep`. -/
+theorem final_step_eq (n : Usize) (s : Option Usize) :
+    ∃ r, final_step n s = ok r ∧ r.val = Schedule.finalStepModel n.val (s.map (·.val))
+      ∧ r.val = NewenTheory.Dynamics.Schedule.finalStep n.val (s.map (·.val)) := by
+  obtain ⟨r, hr, hv⟩ := exists_ok_of_spec (final_step_spec n s)
+  exact ⟨r, hr, hv, hv.trans (Schedule.finalStepModel_eq _ _)⟩
+
+end Output
+
+section Com
+
+open newen_logic.schedule.com
+
+theorem com_removal_spec (step : Usize) (nticom nscm : I64) (periodic : Bool)
+    (h1 : I64.min < nscm.val) (h2 : nscm.val.natAbs ≤ Usize.max) :
+    com_removal step nticom nscm periodic ⦃ p =>
+      p = Schedule.comRemovalModel step.val nticom.val nscm.val periodic ⦄ := by
+  unfold com_removal Schedule.comRemovalModel
+  by_cases h0 : step = 0#usize
+  · have h0' : step.val = 0 := by scalar_tac
+    simp [h0]
+  have h0' : step.val ≠ 0 := by scalar_tac
+  simp only [h0, h0', ite_false]
+  by_cases hn : nscm < 0#i64
+  · have hn' : nscm.val < 0 := by scalar_tac
+    simp only [hn, hn', ite_true]
+    step*
+    all_goals
+      have hiv : (i.val : Int) = every.val := by
+        have hs := IScalar.hcast_inBounds_spec .Usize every (by scalar_tac)
+        simp only [lift, spec_ok] at hs; rw [i_post]; exact hs
+    · scalar_tac
+    · have hv : i1.val ≠ 0 := by
+        have h := ‹(i1 != 0#usize) = true›
+        rw [bne_iff_ne, ne_eq, UScalar.eq_equiv] at h; simpa using h
+      have hit : (-nscm.val).toNat = i.val := by omega
+      have hz : -nscm.val ≠ 0 := by omega
+      have hm : step.val % i.val ≠ 0 := by rw [← i1_post]; exact hv
+      simp [hit, hz, hm]
+    · have hv : i1.val = 0 := by simpa using ‹¬(i1 != 0#usize) = true›
+      have hit : (-nscm.val).toNat = i.val := by omega
+      have hz : -nscm.val ≠ 0 := by omega
+      have hm : step.val % i.val = 0 := by rw [← i1_post]; exact hv
+      simp [hit, hz, hm]
+  · have hn' : ¬ nscm.val < 0 := by scalar_tac
+    simp only [hn, hn', ite_false]
+    step*
+    all_goals
+      have hiv : (i.val : Int) = nscm.val := by
+        have hs := IScalar.hcast_inBounds_spec .Usize nscm (by scalar_tac)
+        simp only [lift, spec_ok] at hs; rw [i_post]; exact hs
+    · scalar_tac
+    · have hv : i1.val ≠ 0 := by
+        have h := ‹(i1 != 0#usize) = true›
+        rw [bne_iff_ne, ne_eq, UScalar.eq_equiv] at h; simpa using h
+      have hit : (nscm.val).toNat = i.val := by omega
+      have hz : nscm.val ≠ 0 := by clear i_post hiv; scalar_tac
+      have hm : step.val % i.val ≠ 0 := by rw [← i1_post]; exact hv
+      simp [hit, hz, hm]
+    · have hv : i1.val = 0 := by simpa using ‹¬(i1 != 0#usize) = true›
+      have hit : (nscm.val).toNat = i.val := by omega
+      have hz : nscm.val ≠ 0 := by clear i_post hiv; scalar_tac
+      have hm : step.val % i.val = 0 := by rw [← i1_post]; exact hv
+      simp [hit, hz, hm]
+
+/-- **Rust = model**: for `nscm > i64::MIN` with `|nscm|` a `usize`, `com_removal` returns
+`comRemovalModel`. -/
+theorem com_removal_eq (step : Usize) (nticom nscm : I64) (periodic : Bool)
+    (h1 : I64.min < nscm.val) (h2 : nscm.val.natAbs ≤ Usize.max) :
+    com_removal step nticom nscm periodic
+      = ok (Schedule.comRemovalModel step.val nticom.val nscm.val periodic) :=
+  eq_ok_of_spec (com_removal_spec step nticom nscm periodic h1 h2)
+
+/-- **Rust = meaning**: `com_removal` returns the theory's `comRemoval`. -/
+theorem com_removal_eq_theory (step : Usize) (nticom nscm : I64) (periodic : Bool)
+    (h1 : I64.min < nscm.val) (h2 : nscm.val.natAbs ≤ Usize.max) :
+    com_removal step nticom nscm periodic
+      = ok (NewenTheory.Dynamics.Schedule.comRemoval step.val nticom.val nscm.val periodic) := by
+  rw [com_removal_eq step nticom nscm periodic h1 h2, Schedule.comRemovalModel_eq]
+
+end Com
+
+section EmptyBaths
+
+open newen_logic.thermo.bath
+open NewenSpec.Thermo.Bath
+
+theorem empty_baths_spec (hs : Slice I64) :
+    empty_baths hs ⦃ v => v.val = emptyBathsModel (intsOf hs) ⦄ := by
+  unfold empty_baths empty_baths_loop
+  apply loop.spec_decr_nat (fun p => hs.length - p.2.val)
+    (fun p => p.2.val ≤ hs.length ∧ p.1.val.length = p.2.val ∧
+      p.1.val ++ emptyBathsModel ((intsOf hs).drop p.2.val) = emptyBathsModel (intsOf hs))
+  · intro ⟨acc, k⟩ ⟨hk, hlen, hinv⟩
+    unfold empty_baths_loop.body
+    simp only at hk hlen hinv ⊢
+    split
+    · rename_i hlt
+      have hl : k.val < (intsOf hs).length := by simp [intsOf]; scalar_tac
+      step with Slice.index_usize_spec as ⟨x, hx⟩
+      have hxv : (intsOf hs)[k.val]'hl = x.val := by simp [intsOf, hx]
+      step as ⟨acc1, hpush⟩
+      step as ⟨k1, hk1⟩
+      refine ⟨by scalar_tac, by simp [hpush, hlen, hk1], ?_, by scalar_tac⟩
+      rw [hpush, hk1, ← hinv, List.drop_eq_getElem_cons hl, hxv]
+      simp [emptyBathsModel]
+    · rename_i hge
+      simp only [spec_ok]
+      have : k.val = hs.length := by scalar_tac
+      have hnil : (intsOf hs).drop k.val = [] := by simp [intsOf, this]
+      rw [hnil] at hinv
+      simpa [emptyBathsModel] using hinv
+  · simp
+
+/-- **Rust = model**: `empty_baths` returns normally, with `emptyBathsModel`. -/
+theorem empty_baths_eq (hs : Slice I64) :
+    ∃ v, empty_baths hs = ok v ∧ v.val = emptyBathsModel (intsOf hs) :=
+  exists_ok_of_spec (empty_baths_spec hs)
+
+end EmptyBaths
 
 
 end NewenSpec.Refinement

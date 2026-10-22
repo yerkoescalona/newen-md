@@ -53,6 +53,17 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   is proven). `rint` is bound as the C function on both sides. `spec/vectors/periodicity.json` and
   `crates/newen-core/tests/periodicity_spec.rs`.
 
+- **Run schedule and empty baths proven against the theory** (`newen-logic::schedule::{output,com}`,
+  `thermo::bath::empty_baths`, Aeneas): which steps write which frames (`due`, `frames_in`), the
+  frames a converged minimisation writes (`minimisation_stop`: newen's end-of-step writer plus the
+  stop frames equals gromosXX's top-of-loop writer plus its final branch, proven), the final
+  configuration's step, the centre-of-mass removal rule, and which baths have no degrees of freedom.
+  `md`, `RemoveCOMMotion` and `PrecalcLambdas` call them.
+- **Two refusals and one decoupling, as gromosXX**: NTWV ≠ 0 under ENERGYMIN is refused
+  ("WRITETRAJ: NTWV has to be 0 for energy minimization", `check_parameter.cc:62-65`); an NDFMIN
+  that removes every degree of freedom is refused instead of producing NaN; a bath with no degrees
+  of freedom before the NDFMIN spread is decoupled with a warning (`topology.cc:1404-1411`).
+
 ### Changed
 
 - The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order

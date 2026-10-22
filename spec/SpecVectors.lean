@@ -43,6 +43,106 @@ def scheduleJson : String :=
   s!"  \"layout\": \"rows[nsnb - 1][ntwg - 1] for 1 <= nsnb, ntwg <= {grid}; 1 = true\",\n" ++
   "  \"rows\": [\n" ++ ",\n".intercalate rows ++ "\n  ]\n}\n"
 
+/-! ## Output steps, the minimisation stop, the final step, COM removal (`schedule2.json`)
+
+Grid bounds equal to the constants in `crates/newen-logic/tests/schedule_spec.rs`. -/
+
+/-- `due`, `frames_in`: `0 ≤ every ≤ outputEvery`, `0 ≤ step, n_steps ≤ outputSteps`. -/
+def outputEvery : Nat := 64
+def outputSteps : Nat := 256
+/-- `minimisation_stop`: `0 ≤ step < 16`, `0 ≤ nmin < 4`, `0 ≤ ntwx, ntwf, ntwe, ntwg < 4`. -/
+def stopSteps : Nat := 16
+def stopNmin : Nat := 4
+def stopEvery : Nat := 4
+/-- `final_step`: `0 ≤ n_steps, stopped_at ≤ finalSteps`. -/
+def finalSteps : Nat := 20
+/-- `com_removal`: `0 ≤ step ≤ comSteps`, `-1 ≤ nticom ≤ 3`, `-comNscm ≤ nscm ≤ comNscm`. -/
+def comSteps : Nat := 60
+def comNscm : Nat := 6
+
+def bit (b : Bool) : Char := if b then '1' else '0'
+
+def hexDigit (n : Nat) : Char := "0123456789abcdef".toList.getD n '?'
+
+def quoted (s : String) : String := "    \"" ++ s ++ "\""
+
+def intRow (xs : List Int) : String := "    [" ++ ", ".intercalate (xs.map toString) ++ "]"
+
+def dueRows : List String := (List.range (outputEvery + 1)).map fun every =>
+  quoted (String.ofList ((List.range (outputSteps + 1)).map fun s => bit (dueModel s every)))
+
+def framesInRows : List String := (List.range (outputEvery + 1)).map fun every =>
+  intRow ((List.range (outputSteps + 1)).map fun n => (framesInModel n every : Int))
+
+/-- `-` for no stop, else the hex digit `positions + 2·forces + 4·energies + 8·free_energy`. -/
+def stopChar : Option Stop → Char
+  | none => '-'
+  | some s => hexDigit (s.positions.toNat + 2 * s.forces.toNat + 4 * s.energies.toNat
+      + 8 * s.freeEnergy.toNat)
+
+def stopRows : List String :=
+  (List.range stopSteps).flatMap fun step => (List.range stopNmin).flatMap fun nmin =>
+    [false, true].map fun converged =>
+      let ws := List.range stopEvery
+      quoted (String.ofList (ws.flatMap fun x => ws.flatMap fun f => ws.flatMap fun e =>
+        ws.map fun g => stopChar (minimisationStopModel step nmin converged x f e g)))
+
+def finalRows : List String := (List.range (finalSteps + 1)).map fun n =>
+  intRow ((finalStepModel n none : Int) ::
+    (List.range (finalSteps + 1)).map fun k => (finalStepModel n (some k) : Int))
+
+def comRows : List String :=
+  ((List.range 5).map fun (i : Nat) => (i : Int) - 1).flatMap fun nticom =>
+    ((List.range (2 * comNscm + 1)).map fun (i : Nat) => (i : Int) - comNscm).flatMap fun nscm =>
+      [false, true].map fun periodic =>
+        quoted (String.ofList ((List.range (comSteps + 1)).map fun s =>
+          let p := comRemovalModel s nticom nscm periodic
+          hexDigit (p.1.toNat + 2 * p.2.toNat)))
+
+def jsonSection (name : String) (rows : List String) : String :=
+  s!"  \"{name}\": [\n" ++ ",\n".intercalate rows ++ "\n  ]"
+
+def schedule2Json : String :=
+  "{\n" ++
+  "  \"spec\": \"schedule.output.due, schedule.output.frames_in, " ++
+  "schedule.output.minimisation_stop, schedule.output.final_step, schedule.com.com_removal\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Schedule.dueModel, framesInModel, " ++
+  "minimisationStopModel, finalStepModel, comRemovalModel)\",\n" ++
+  s!"  \"layout_due\": \"due[every][step] for 0 <= every <= {outputEvery}, " ++
+  s!"0 <= step <= {outputSteps}; 1 = true\",\n" ++
+  s!"  \"layout_frames_in\": \"frames_in[every][n_steps] for 0 <= every <= {outputEvery}, " ++
+  s!"0 <= n_steps <= {outputSteps}\",\n" ++
+  s!"  \"layout_minimisation_stop\": \"minimisation_stop[(step * {stopNmin} + nmin) * 2 + " ++
+  s!"converged][((ntwx * {stopEvery} + ntwf) * {stopEvery} + ntwe) * {stopEvery} + ntwg] for " ++
+  s!"0 <= step < {stopSteps}, 0 <= nmin < {stopNmin}, converged 0/1, 0 <= ntwx, ntwf, ntwe, " ++
+  s!"ntwg < {stopEvery}; '-' = None, else the hex digit positions + 2 forces + 4 energies + " ++
+  "8 free_energy\",\n" ++
+  s!"  \"layout_final_step\": \"final_step[n_steps] = [None, Some(0), ..., " ++
+  s!"Some({finalSteps})] for 0 <= n_steps <= {finalSteps}\",\n" ++
+  s!"  \"layout_com_removal\": \"com_removal[((nticom + 1) * {2 * comNscm + 1} + nscm + " ++
+  s!"{comNscm}) * 2 + periodic][step] for -1 <= nticom <= 3, -{comNscm} <= nscm <= {comNscm}, " ++
+  s!"periodic 0/1, 0 <= step <= {comSteps}; digit translation + 2 rotation\",\n" ++
+  jsonSection "due" dueRows ++ ",\n" ++ jsonSection "frames_in" framesInRows ++ ",\n" ++
+  jsonSection "minimisation_stop" stopRows ++ ",\n" ++ jsonSection "final_step" finalRows ++
+  ",\n" ++ jsonSection "com_removal" comRows ++ "\n}\n"
+
+/-! ## Empty baths (`bath_empty.json`) -/
+
+/-- Every list of half counts in `-2 ..= 2` of length `0 ..= 4`. -/
+def halfLists : List (List Int) :=
+  (List.range 5).flatMap fun len =>
+    (List.range len).foldl (fun acc _ => acc.flatMap fun l =>
+      ((List.range 5).map fun (i : Nat) => (i : Int) - 2).map (l ++ [·])) [[]]
+
+def bathEmptyJson : String :=
+  let rows := halfLists.map fun h => intRow (h ++ (emptyBathsModel h).map fun b => (b.toNat : Int))
+  "{\n" ++
+  "  \"spec\": \"thermo.bath.empty_baths\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Thermo.Bath.emptyBathsModel)\",\n" ++
+  "  \"layout\": \"one list per row: the n half counts (every list over -2..=2 of length " ++
+  "0..=4), then the n flags (1 = empty)\",\n" ++
+  "  \"rows\": [\n" ++ ",\n".intercalate rows ++ "\n  ]\n}\n"
+
 /-- Count bound of the `total_dof` grid, equal to `GRID` in
 `crates/newen-logic/tests/dof_spec.rs`. -/
 def dofGrid : Nat := 10
@@ -1054,6 +1154,12 @@ def main : IO Unit := do
   IO.println s!"wrote vectors/dof.json ({(dofGrid + 1) ^ 3} rows x {ndfmins.length})"
   IO.FS.writeFile "vectors/bath.json" bathJson
   IO.println s!"wrote vectors/bath.json ({bathSystems.length * 6} rows)"
+  IO.FS.writeFile "vectors/schedule2.json" schedule2Json
+  IO.println (s!"wrote vectors/schedule2.json ({dueRows.length} due, {framesInRows.length} " ++
+    s!"frames_in, {stopRows.length} minimisation_stop, {finalRows.length} final_step, " ++
+    s!"{comRows.length} com_removal rows)")
+  IO.FS.writeFile "vectors/bath_empty.json" bathEmptyJson
+  IO.println s!"wrote vectors/bath_empty.json ({halfLists.length} rows)"
   IO.FS.writeFile "vectors/topology.json" topologyJson
   IO.println s!"wrote vectors/topology.json ({topologyRows.length} rows)"
   -- the literals the models use must be the exact doubles 0, 1, 2, 6, 12 (and 0.5)

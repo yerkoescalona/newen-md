@@ -23,7 +23,10 @@ matching gromosXX to reference tolerances.
   NTWF/NTWE/NTWG schedule and writes the stopping step's positions only on the NTWX schedule; the
   final configuration has gromosXX's TIMESTEP block and title layout. The comparator checks every
   TIMESTEP block and the force frame count. References `aladip_vacuum_fep_slowgrowth_t10`,
-  `aladip_vacuum_em_ntw5`.
+  `aladip_vacuum_em_ntw5`. Since 2026-10-22 the decisions are `newen_logic::schedule::output`
+  (`due`, `minimisation_stop`, `final_step`; proven to write gromosXX's top-of-loop and final
+  frames), and NTWV ≠ 0 in a minimisation is refused as gromosXX refuses it
+  (`check_parameter.cc:62-65`), so a minimisation writes no velocity frames.
 - **Slow growth (1.8, 0.0.61):** `md` calls `newen_run::advance_lambda` after each step (not on
   the step the minimiser stops at), writes the λ the step ran at into the `.trg` (`old_lambda`)
   and, on a converged minimisation, the repeated `.trg` frame next to the repeated `.tre` one.

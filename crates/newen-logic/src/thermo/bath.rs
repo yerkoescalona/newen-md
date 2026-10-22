@@ -223,9 +223,30 @@ pub fn ndfmin_spread(half_dofs: &[i64], ndfmin: i64) -> Spread {
     }
 }
 
+/// Which baths have no degrees of freedom: `halves[b] ≤ 0`, with `halves[b]` the half count
+/// `com + ir` of bath `b` *before* the NDFMIN spread. gromosXX decouples such a bath (`tau = -1`,
+/// `topology.cc:1404-1411`) and decides it there, before `multibath.cc:139-153` spreads NDFMIN.
+///
+/// spec: thermo.bath.empty_baths
+pub fn empty_baths(halves: &[i64]) -> Vec<bool> {
+    let mut empty = Vec::new();
+    let mut b = 0;
+    while b < halves.len() {
+        empty.push(halves[b] <= 0);
+        b += 1;
+    }
+    empty
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bath_without_degrees_of_freedom_is_empty() {
+        assert_eq!(empty_baths(&[24, 0, -2]), vec![false, true, true]);
+        assert!(empty_baths(&[]).is_empty());
+    }
 
     fn range(last_atom: usize, com_bath: usize, ir_bath: usize) -> DofRange {
         DofRange {

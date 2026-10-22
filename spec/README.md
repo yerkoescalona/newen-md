@@ -2,26 +2,30 @@
 
 Full explanation (why, how the pieces fit, guarantees, adding a function): [docs/src/verification/index.md](../docs/src/verification/index.md).
 
-Verified so far: `schedule::output_misses_longrange` (the pilot, explained below),
-`thermo::dof::total_dof`, the five functions of `thermo::bath` (degrees of freedom per
-temperature bath and the atom-to-bath mapping), and the five functions of `topology`
-(`pairs::contains_sorted` and `pairs::pair_kind`: excluded, 1-4, owned or normal pair;
-`groups::group_of`, `groups::check_last_atoms` and `groups::energy_cell`: the energy group of an
-atom, the FORCE `NRE` rule, the energy-matrix cell); and twenty-eight floating-point kernels: the
-Berendsen and Nosé–Hoover thermostat steps of `crates/newen-integrators`, the Lennard-Jones and
-reaction-field pair term of `crates/newen-forces` with its reaction-field constants, excluded-pair
-and self terms, the seven bonded terms of `crates/newen-forces` (quartic and harmonic bond,
-cosine-harmonic and harmonic angle, the two proper-dihedral forms, the improper dihedral), the
-dynamics kernels of `crates/newen-integrators` (the leap-frog velocity and position steps, the
-kinetic energy of the atoms and of a temperature group, the temperature, the pressure tensor and
-scalar pressure, and the Berendsen barostat factor), and the periodic boundaries of
-`crates/newen-core` (nearest image and put-into-box for vacuum, rectangular and triclinic boxes,
-the truncated octahedron being a triclinic box, with the two box constructors; see
-"Floating-point kernels" below and `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
-`crates/newen-logic/src/schedule.rs`. It answers: with a twin-range pairlist updated every
-`nsnb` steps and free-energy output every `ntwg` steps, does some output step reuse long-range
-terms from a pairlist step that was *not* an output step? (Under PRECALCLAM gromosXX then writes
-λ_k rows without the long-range part; `newen-run` warns about it.)
+Verified so far: `schedule::output_misses_longrange` (the pilot, explained below), the run
+schedule (`schedule::output::{due, frames_in, minimisation_stop, final_step}`: which steps write
+frames, how many, what a converged minimisation writes on the step it stops at, the step of the
+final configuration; `schedule::com::com_removal`: which steps remove the centre-of-mass motion),
+`thermo::dof::total_dof`, the six functions of `thermo::bath` (degrees of freedom per
+temperature bath, the atom-to-bath mapping, and which baths are empty and decoupled), and the
+five functions of `topology` (`pairs::contains_sorted` and `pairs::pair_kind`: excluded, 1-4,
+owned or normal pair; `groups::group_of`, `groups::check_last_atoms` and `groups::energy_cell`:
+the energy group of an atom, the FORCE `NRE` rule, the energy-matrix cell); and twenty-eight
+floating-point kernels: the Berendsen and Nosé–Hoover thermostat steps of
+`crates/newen-integrators`, the Lennard-Jones and reaction-field pair term of `crates/newen-forces`
+with its reaction-field constants, excluded-pair and self terms, the seven bonded terms of
+`crates/newen-forces` (quartic and harmonic bond, cosine-harmonic and harmonic angle, the two
+proper-dihedral forms, the improper dihedral), the dynamics kernels of `crates/newen-integrators`
+(the leap-frog velocity and position steps, the kinetic energy of the atoms and of a temperature
+group, the temperature, the pressure tensor and scalar pressure, and the Berendsen barostat
+factor), and the periodic boundaries of `crates/newen-core` (nearest image and put-into-box for
+vacuum, rectangular and triclinic boxes, the truncated octahedron being a triclinic box, with the
+two box constructors; see "Floating-point kernels" below and `spec/SPEC.toml`). The pilot:
+`output_misses_longrange(nsnb, ntwg)` in `crates/newen-logic/src/schedule/mod.rs`. It answers:
+with a twin-range pairlist updated every `nsnb` steps and free-energy output every `ntwg` steps,
+does some output step reuse long-range terms from a pairlist step that was *not* an output step?
+(Under PRECALCLAM gromosXX then writes λ_k rows without the long-range part; `newen-run` warns
+about it.)
 
 The meaning lives in `NewenTheory/` (physics, organised like the physics; it never imports the
 code's spec), the model and the bridge theorem in `NewenSpec/` (organised like the crate). Three
@@ -51,7 +55,7 @@ the formula, so a wrong `pairlistStep` definition in Lean would show up there.
 
 ```sh
 cd spec && lake build                    # layers 1 and 2: proofs (first run downloads Mathlib's cache)
-cd spec && lake exe spec-vectors         # rewrite vectors/schedule.json from the Lean model
+cd spec && lake exe spec-vectors         # rewrite vectors/*.json from the Lean models
 spec/scripts/extract.sh                  # regenerate NewenSpec/Extracted/ after editing the Rust
 cargo test --release -p newen-logic     # layer 3
 ```

@@ -8,9 +8,13 @@
 //! - `spec/vectors/bath.json` holds the Lean models on a family of small systems, written by
 //!   `lake exe spec-vectors` (checked in, so this test needs no Lean);
 //! - the two DOFSET splits of the gromosXX reference `aladip_vacuum_multibath_ndfmin3`.
+//!
+//! `empty_baths` is checked against `spec/vectors/bath_empty.json` and, on every system of the
+//! grid and of `bath.json`, against the spread: before and after it the same baths are empty
+//! whenever NDFMIN leaves some degrees of freedom (`emptyBath_iff`).
 
 use newen_logic::thermo::bath::{
-    bath_half_dofs, baths_of, ndfmin_spread, Constraint, DofRange, HalfDof, Spread,
+    bath_half_dofs, baths_of, empty_baths, ndfmin_spread, Constraint, DofRange, HalfDof, Spread,
 };
 
 /// The baths of `atom`: those of the first range reaching it.
@@ -85,6 +89,19 @@ fn check_spread(h: &[i64], ndfmin: i64, s: &Spread) -> Result<(), String> {
         return Err(format!("sum: {s:?}"));
     }
     Ok(())
+}
+
+/// `empty_baths` flags the baths with `h_b <= 0`; unless NDFMIN takes everything
+/// (`0 < H <= 2·ndfmin`), these are the baths whose spread numerator is `<= 0`.
+fn check_empty(h: &[i64], ndfmin: i64, s: &Spread) {
+    let flags = empty_baths(h);
+    let by_count: Vec<bool> = h.iter().map(|&x| x <= 0).collect();
+    assert_eq!(flags, by_count, "{h:?}");
+    let total: i64 = h.iter().sum();
+    if !(0 < total && total <= 2 * ndfmin) {
+        let by_spread: Vec<bool> = s.numerators.iter().map(|&x| x <= 0).collect();
+        assert_eq!(flags, by_spread, "{h:?} ndfmin {ndfmin}");
+    }
 }
 
 /// Ascending subsets of `xs` with at most `k` elements.
@@ -181,6 +198,7 @@ fn rust_equals_atom_count_on_grid() {
                                     if let Err(e) = check_spread(&h, ndfmin, &s) {
                                         panic!("{h:?} ndfmin {ndfmin}: {e}");
                                     }
+                                    check_empty(&h, ndfmin, &s);
                                 }
                                 checked += 1;
                             }
@@ -289,6 +307,7 @@ fn rust_equals_lean_model_on_vectors() {
         assert_eq!(got, row.halves, "row {v:?}");
         let h: Vec<i64> = got.iter().map(|b| b.com + b.ir).collect();
         assert_eq!(ndfmin_spread(&h, row.ndfmin), row.spread, "row {v:?}");
+        check_empty(&h, row.ndfmin, &row.spread);
         if h.iter().any(|x| x % 2 != 0) {
             half_integer += 1;
         }
@@ -380,4 +399,34 @@ fn an_atom_beyond_the_last_range_has_no_bath() {
     }];
     assert_eq!(baths_of(&ranges, 4), Some((0, 1)));
     assert_eq!(baths_of(&ranges, 5), None);
+}
+
+/// The rows of `bath_empty.json`: the half counts, then the flags.
+#[test]
+fn empty_baths_equals_lean_model_on_vectors() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../spec/vectors/bath_empty.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!("{path}: {e} (regenerate with `cd spec && lake exe spec-vectors`)")
+    });
+    let rows: Vec<Vec<i64>> = text
+        .lines()
+        .map(|l| l.trim().trim_end_matches(','))
+        .filter(|l| l.starts_with('[') && l.ends_with(']'))
+        .map(|l| {
+            l[1..l.len() - 1]
+                .split(',')
+                .filter(|v| !v.trim().is_empty())
+                .map(|v| v.trim().parse().expect("integer in bath_empty.json"))
+                .collect()
+        })
+        .collect();
+    assert_eq!(rows.len(), 781, "vector file has {} rows", rows.len());
+    for row in &rows {
+        let (h, flags) = row.split_at(row.len() / 2);
+        let want: Vec<bool> = flags.iter().map(|&f| f == 1).collect();
+        assert_eq!(empty_baths(h), want, "row {row:?}");
+    }
 }

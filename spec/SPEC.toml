@@ -4,7 +4,7 @@
 
 [[function]]
 key = "schedule.output_misses_longrange"
-rust = "crates/newen-logic/src/schedule.rs::output_misses_longrange"
+rust = "crates/newen-logic/src/schedule/mod.rs::output_misses_longrange"
 used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
 origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
@@ -17,6 +17,86 @@ refinement = "NewenSpec.Refinement.output_misses_longrange_eq"
 # Layer 3, Rust = meaning and Rust = model on 1 <= nsnb, ntwg <= 200 (cargo test)
 test = "crates/newen-logic/tests/schedule_spec.rs"
 vectors = "spec/vectors/schedule.json"
+
+[[function]]
+key = "schedule.output.due"
+rust = "crates/newen-logic/src/schedule/output.rs::due"
+used_by = ["crates/newen-md/src/bin/md.rs (every trajectory, energy, free-energy and force frame)", "crates/newen-logic/src/schedule/output.rs::minimisation_stop", "crates/newen-core/src/lambdas.rs::PrecalcLambdas::active"]
+origin = "gromosXX out_configuration.cc:324-488 (`steps % every == 0`, 0 = off); 0-based steps"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.Due (due_iff_dvd)"
+model = "NewenSpec.Schedule.dueModel"
+theorem = "NewenSpec.Schedule.dueModel_iff"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.due"
+refinement = "NewenSpec.Refinement.due_eq (due_iff)"
+# Layer 3, Rust = walking the multiples and Rust = model on 0 <= every <= 64, 0 <= step <= 256 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.frames_in"
+rust = "crates/newen-logic/src/schedule/output.rs::frames_in"
+used_by = []
+origin = "the number of frames an output written every `every` steps has after `n_steps` steps: ceil(n_steps / every)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.framesIn (framesIn_eq_card, framesIn_eq_ceil)"
+model = "NewenSpec.Schedule.framesInModel"
+theorem = "NewenSpec.Schedule.framesInModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs (the + 1 cannot overflow)
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.frames_in"
+refinement = "NewenSpec.Refinement.frames_in_eq (frames_in_eq_card)"
+# Layer 3, Rust = frames counted step by step and Rust = model on 0 <= every <= 64, 0 <= n_steps <= 256 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.minimisation_stop"
+rust = "crates/newen-logic/src/schedule/output.rs::minimisation_stop"
+used_by = ["crates/newen-md/src/bin/md.rs (the convergence branch of the step loop)"]
+origin = "gromosXX writes the top-of-loop frames of the stop step (out_configuration.cc:324-488: positions of k, forces/energies/free energy of k - 1) and its final frames of k - 1 (out_configuration.cc:624-641); no velocities (check_parameter.cc:62-65 refuses NTWV != 0 in a minimisation)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.topOfLoopPositions, topOfLoopLagged, endOfStepPositions, endOfStepLagged (stop_positions_eq, stop_lagged_eq)"
+model = "NewenSpec.Schedule.minimisationStopModel"
+theorem = "NewenSpec.Schedule.minimisationStopModel_frames (minimisationStopModel_isSome)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.minimisation_stop"
+refinement = "NewenSpec.Refinement.minimisation_stop_eq (minimisation_stop_frames)"
+# Layer 3, Rust = gromosXX's writer simulated against an end-of-step writer, and Rust = model, on step < 16, nmin < 4, NTW* < 4 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.final_step"
+rust = "crates/newen-logic/src/schedule/output.rs::final_step"
+used_by = ["crates/newen-md/src/bin/md.rs (the final configuration's TIMESTEP)"]
+origin = "gromosXX _print_timestep (out_configuration.cc:519): sim.steps() after the loop, NSTLIM or the step a minimisation stopped at"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.finalStep"
+model = "NewenSpec.Schedule.finalStepModel"
+theorem = "NewenSpec.Schedule.finalStepModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.final_step"
+refinement = "NewenSpec.Refinement.final_step_eq"
+# Layer 3, Rust = model on 0 <= n_steps, stopped_at <= 20 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.com.com_removal"
+rust = "crates/newen-logic/src/schedule/com.rs::com_removal"
+used_by = ["crates/newen-integrators/src/algorithms/remove_com_motion.rs::RemoveCOMMotion::apply"]
+origin = "gromosXX Remove_COM_Motion::apply (remove_com_motion.cc:240-262), NTICOM and the sign of NSCM (in_parameter.cc:1306-1317), no periodic rotation removal under PBC (configuration.cc:555-560)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.comRemoval (com_step0, com_period)"
+model = "NewenSpec.Schedule.comRemovalModel"
+theorem = "NewenSpec.Schedule.comRemovalModel_eq"
+# Layer 2, Rust = model (Aeneas), for nscm > i64::MIN and |nscm| <= usize::MAX (callers pass i32)
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.com.com_removal"
+refinement = "NewenSpec.Refinement.com_removal_eq (com_removal_eq_theory)"
+# Layer 3, Rust = RemoveCOMMotion's former flag rule and Rust = model on step <= 60, -1 <= NTICOM <= 3, |NSCM| <= 6 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
 
 [[function]]
 key = "thermo.dof.total_dof"
@@ -113,6 +193,22 @@ refinement = "NewenSpec.Refinement.ndfmin_spread_eq"
 # Layer 3, Rust = exact rational by i128 cross-multiplication, and Rust = model (cargo test)
 test = "crates/newen-logic/tests/bath_spec.rs"
 vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.empty_baths"
+rust = "crates/newen-logic/src/thermo/bath.rs::empty_baths"
+used_by = ["crates/newen-run/src/plan.rs::decouple_empty_baths (both paths of thermostat_baths)"]
+origin = "gromosXX topology.cc:1404-1411: a bath with dof <= 0 is decoupled (tau = -1), decided before multibath.cc:139-153 spreads NDFMIN"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.EmptyBath (emptyBath_of_unused, emptyBath_iff)"
+model = "NewenSpec.Thermo.Bath.emptyBathsModel"
+theorem = "NewenSpec.Thermo.Bath.emptyBathsModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.empty_baths"
+refinement = "NewenSpec.Refinement.empty_baths_eq"
+# Layer 3, Rust = h <= 0 and = the spread numerators' sign on every bath.json and grid system, Rust = model on 781 rows (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath_empty.json"
 
 [[function]]
 key = "topology.pairs.contains_sorted"

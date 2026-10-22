@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use newen_core::{units::PhysicalConstants, Topology};
 use serde::{Deserialize, Serialize};
 
-use crate::dof::{bath_dof, rottrans_dof};
+use crate::dof::{bath_dofs, rottrans_dof};
 use crate::recipe::{
     BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
     ThermostatAlgorithm,
@@ -26,6 +26,7 @@ use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
 use crate::{total_dof, ConstraintSelection, RunError};
 use newen_integrators::algorithms::{in_bath, BathRange};
 use newen_integrators::constraints::NtcMode;
+use newen_logic::thermo::bath::empty_baths;
 
 /// Position restraints as the plan carries them: the input files, the force constant, and
 /// whether the reference positions are the start-up configuration (`reference: None`).
@@ -617,7 +618,7 @@ fn thermostat_baths(
     let n_baths = t.baths.len();
     let last_atom = topo.num_atoms().saturating_sub(1);
     if n_baths <= 1 {
-        let baths = t
+        let mut baths: Vec<ThermostatBath> = t
             .baths
             .iter()
             .map(|b| ThermostatBath {
@@ -626,6 +627,9 @@ fn thermostat_baths(
                 dof: total,
             })
             .collect();
+        // `total` is NDFMIN less than the integer count of the whole system
+        let halves = (2.0 * (total + f64::from(ndfmin))).round() as i64;
+        decouple_empty_baths(&mut baths, &[halves], ndfmin)?;
         let whole = BathRange {
             last_atom,
             com_bath: 0,
@@ -697,18 +701,51 @@ fn thermostat_baths(
             )));
         }
     }
-    let dof = bath_dof(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
-    let baths = t
+    let dof = bath_dofs(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
+    let mut baths: Vec<ThermostatBath> = t
         .baths
         .iter()
         .enumerate()
         .map(|(i, b)| ThermostatBath {
             temperature: b.temperature,
             tau: b.tau,
-            dof: dof[i],
+            dof: dof[i].dof,
         })
         .collect();
+    let halves: Vec<i64> = dof.iter().map(|d| d.halves).collect();
+    decouple_empty_baths(&mut baths, &halves, ndfmin)?;
     Ok((baths, ranges))
+}
+
+/// Decouple (`tau = -1`) every coupled bath with no degrees of freedom, as gromosXX does
+/// (`topology.cc:1404-1411`, "removing coupling of bath with 0 dof"). gromosXX decides on the
+/// count *before* NDFMIN is spread over the baths (`multibath.cc:139-153` runs after it), so
+/// `halves` are the per-bath half degrees of freedom before NDFMIN. An NDFMIN that removes every
+/// degree of freedom (`0 < total <= NDFMIN`) leaves every bath with none or fewer, which gromosXX
+/// computes NaN temperatures for; it is refused.
+fn decouple_empty_baths(
+    baths: &mut [ThermostatBath],
+    halves: &[i64],
+    ndfmin: i32,
+) -> Result<(), RunError> {
+    let total: i64 = halves.iter().sum();
+    if 0 < total && total <= 2 * i64::from(ndfmin) {
+        return Err(RunError::Recipe(format!(
+            "NDFMIN removes every degree of freedom (total {}, NDFMIN {ndfmin})",
+            total as f64 / 2.0
+        )));
+    }
+    for (i, (bath, empty)) in baths.iter_mut().zip(empty_baths(halves)).enumerate() {
+        if empty && bath.tau >= 0.0 {
+            log::warn!(
+                "removing coupling of bath {} with 0 dof ({} degrees of freedom before NDFMIN)",
+                i + 1,
+                halves[i] as f64 / 2.0
+            );
+            bath.tau = -1.0;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a `LAMBDAS` block sets individual λ: NTIL on in a perturbed run (gromosXX ignores
@@ -1080,6 +1117,17 @@ pub(crate) fn check_pairlist(recipe: &RunRecipe) -> Result<(), RunError> {
     Ok(())
 }
 
+/// WRITETRAJ NTWV > 0 in an energy minimisation: gromosXX refuses it (`check_parameter.cc:62-65`,
+/// a minimisation has no velocities to write). Every build path runs it.
+pub(crate) fn check_outputs(recipe: &RunRecipe) -> Result<(), RunError> {
+    if recipe.is_minimization() && recipe.outputs.velocities_every != 0 {
+        return Err(RunError::Recipe(
+            "WRITETRAJ: NTWV has to be 0 for energy minimization".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// COVALENTFORM NTBDN = 1 (phase shifts 0° or 180° only) with a dihedral type of another phase:
 /// gromosXX refuses the topology when the dihedral term is on (`in_topology.cc:960-962`,
 /// `if (pdl != 0 && pdl != 180)` over every TORSDIHEDRALTYPE entry). Every build path runs it.
@@ -1378,6 +1426,7 @@ pub fn build_plan(
     check_start_time(recipe)?;
     check_electrostatics(recipe)?;
     check_pairlist(recipe)?;
+    check_outputs(recipe)?;
     check_dihedral_phases(recipe, topo)?;
     check_perturbation(recipe)?;
     check_eds(recipe)?;
@@ -2388,5 +2437,56 @@ mod tests {
         }
         let row: Row = toml::from_str("kind = 12").unwrap();
         assert_eq!(row.kind.0, newen_core::lambdas::InteractionLambda::Mass);
+    }
+
+    #[test]
+    fn velocity_frames_are_refused_in_a_minimisation() {
+        let mut r = RunRecipe::default();
+        r.outputs.velocities_every = 5;
+        assert!(check_outputs(&r).is_ok(), "MD may write velocities");
+        r.minimisation.method = 1;
+        let e = check_outputs(&r).unwrap_err().to_string();
+        assert!(
+            e.contains("WRITETRAJ: NTWV has to be 0 for energy minimization"),
+            "{e}"
+        );
+        r.outputs.velocities_every = 0;
+        assert!(check_outputs(&r).is_ok());
+    }
+
+    #[test]
+    fn a_bath_without_degrees_of_freedom_is_decoupled() {
+        let bath = |tau| ThermostatBath {
+            temperature: 300.0,
+            tau,
+            dof: 0.0,
+        };
+        // halves before NDFMIN: 24, 0, -2; the second and third baths are empty
+        let mut baths = vec![bath(0.1), bath(0.1), bath(-1.0)];
+        decouple_empty_baths(&mut baths, &[24, 0, -2], 3).unwrap();
+        let taus: Vec<f64> = baths.iter().map(|b| b.tau).collect();
+        assert_eq!(taus, vec![0.1, -1.0, -1.0]);
+        // nothing to spread over: an empty system decouples, NDFMIN is not blamed
+        let mut one = vec![bath(0.1)];
+        decouple_empty_baths(&mut one, &[0], 3).unwrap();
+        assert_eq!(one[0].tau, -1.0);
+    }
+
+    #[test]
+    fn an_ndfmin_that_removes_every_degree_of_freedom_is_refused() {
+        let mut baths = vec![ThermostatBath {
+            temperature: 300.0,
+            tau: 0.1,
+            dof: 0.0,
+        }];
+        // 6 dof (12 halves), NDFMIN 6
+        let e = decouple_empty_baths(&mut baths, &[12], 6)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("NDFMIN removes every degree of freedom (total 6, NDFMIN 6)"),
+            "{e}"
+        );
+        assert!(decouple_empty_baths(&mut baths, &[13], 6).is_ok());
     }
 }

@@ -761,6 +761,7 @@ pub fn build_sequence_from_plan(
     crate::plan::check_start_time(recipe)?;
     crate::plan::check_electrostatics(recipe)?;
     crate::plan::check_pairlist(recipe)?;
+    crate::plan::check_outputs(recipe)?;
     crate::plan::check_dihedral_phases(recipe, &prepared.topology)?;
     crate::plan::check_perturbation(recipe)?;
     crate::plan::check_eds(recipe)?;

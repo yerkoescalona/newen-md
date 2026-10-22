@@ -370,4 +370,81 @@ theorem spread_total_nonpos (h : List Int) (ndfmin : Int) (hnp : h.sum ≤ 0) :
   have hn : ¬ 0 < h.sum := by omega
   simp [spreadNumerators, spreadDenominator, spreadFactor, hn]
 
+
+/-! ### Empty baths
+
+A bath with no degrees of freedom cannot be coupled: its temperature is undefined. gromosXX
+decouples such a bath (`tau = -1`, "removing coupling of bath with 0 dof",
+`topology.cc:1404-1411`). It decides on the count *before* NDFMIN is spread over the baths
+(`multibath.cc:139-153` runs after it); `emptyBath_iff` shows that this is the same as deciding on
+the spread numerators, except when NDFMIN takes all the system's degrees of freedom
+(`0 < H ≤ 2·NDFMIN`), which newen refuses. -/
+
+/-- Bath `b` has no degrees of freedom before NDFMIN: `comHalf + irHalf ≤ 0` halves. -/
+def EmptyBath (s : BathSystem) (b : Nat) : Prop := comHalf s b + irHalf s b ≤ 0
+
+instance (s : BathSystem) (b : Nat) : Decidable (EmptyBath s b) :=
+  inferInstanceAs (Decidable (_ ≤ _))
+
+/-- **A bath no atom belongs to is empty**: it has exactly no degrees of freedom. -/
+theorem emptyBath_of_unused (s : BathSystem) (b : Nat)
+    (h : ∀ a, a < s.atoms → s.comBath a ≠ b ∧ s.irBath a ≠ b) :
+    comHalf s b + irHalf s b = 0 ∧ EmptyBath s b := by
+  have hz : ∀ (f : Nat → Nat), (∀ a, a < s.atoms → f a ≠ b) → ∀ (c : Int) (xs : List Nat),
+      sumOver xs (fun g => if g < s.atoms ∧ f g = b then c else 0) = 0 := by
+    intro f hf c xs
+    induction xs with
+    | nil => rfl
+    | cons x xs ih =>
+      simp only [sumOver, ih]
+      by_cases hx : x < s.atoms
+      · simp [hf x hx]
+      · simp [hx]
+  have hcom := hz s.comBath (fun a ha => (h a ha).1) 6 s.groupFirsts
+  have hir := hz s.irBath (fun a ha => (h a ha).2) 6 s.groupFirsts
+  have hatoms : sumBelow s.atoms (fun a => if s.irBath a = b then 6 else 0) = 0 := by
+    rw [sumBelow_congr s.atoms _ (fun _ => 0) (fun a ha => by simp [(h a ha).2])]
+    rw [sumBelow_const]; simp
+  have hcs : sumOver s.constraints (fun c =>
+      (if c.1 < s.atoms ∧ s.irBath c.1 = b then 1 else 0)
+        + (if c.2 < s.atoms ∧ s.irBath c.2 = b then 1 else 0)) = 0 := by
+    rw [sumOver_congr s.constraints _ (fun _ => 0)]
+    · rw [sumOver_const]; simp
+    · intro c _
+      have e1 : ¬ (c.1 < s.atoms ∧ s.irBath c.1 = b) := fun ⟨ha, he⟩ => (h c.1 ha).2 he
+      have e2 : ¬ (c.2 < s.atoms ∧ s.irBath c.2 = b) := fun ⟨ha, he⟩ => (h c.2 ha).2 he
+      simp only [e1, e2, ite_false]; rfl
+  have hrt : ∀ f : Nat → Nat, (∀ a, a < s.atoms → f a ≠ b) →
+      ¬ (s.rottransOn = true ∧ f 0 = b) := by
+    intro f hf ⟨hon, he⟩
+    simp only [BathSystem.rottransOn, Bool.and_eq_true, decide_eq_true_eq] at hon
+    exact hf 0 hon.2 he
+  have e := hrt s.comBath (fun a ha => (h a ha).1)
+  have e' := hrt s.irBath (fun a ha => (h a ha).2)
+  have hsum : comHalf s b + irHalf s b = 0 := by
+    simp only [comHalf, irHalf, hcom, hir, hatoms, hcs, e, e', ite_false]; rfl
+  exact ⟨hsum, by unfold EmptyBath; omega⟩
+
+theorem nonpos_iff_mul_nonpos (x : Int) {f : Int} (hf : 0 < f) : x ≤ 0 ↔ x * f ≤ 0 := by
+  constructor
+  · intro hx
+    have := Int.mul_le_mul_of_nonneg_right hx (Int.le_of_lt hf)
+    simpa using this
+  · intro hx
+    apply Classical.byContradiction
+    intro hn
+    have := Int.mul_pos (Int.lt_of_not_ge hn) hf
+    omega
+
+/-- **Deciding before the spread is deciding after it**, whenever NDFMIN leaves some degrees of
+freedom (`2·NDFMIN < H`) or there are none to spread over (`H ≤ 0`): bath `i` has no degrees of
+freedom before the spread exactly when its numerator after the spread is `≤ 0`. -/
+theorem emptyBath_iff (h : List Int) (ndfmin : Int)
+    (hv : 2 * ndfmin < h.sum ∨ h.sum ≤ 0) (i : Nat) (hi : i < h.length) :
+    h[i] ≤ 0 ↔ (spreadNumerators h ndfmin)[i]'(by simpa [spreadNumerators] using hi) ≤ 0 := by
+  simp only [spreadNumerators, List.getElem_map]
+  have hf : 0 < spreadFactor h ndfmin := by
+    unfold spreadFactor; split <;> omega
+  exact nonpos_iff_mul_nonpos h[i] hf
+
 end NewenTheory.Dynamics.DegreesOfFreedom

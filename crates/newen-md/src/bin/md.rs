@@ -30,6 +30,7 @@ use newen::{
     validation::validate_energy,
 };
 use newen_integrators::algorithms::kinetic_temperature;
+use newen_logic::schedule::output::{due, final_step, minimisation_stop};
 use newen_run::{
     advance_lambda, build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
     PassthroughPolicy, PrepareNote, Prepared, RunError, RunInputs, RunOptions,
@@ -496,8 +497,6 @@ fn main() {
     let nstxout = imd.ntwx;
     let nstener = imd.ntwe;
     let nstlog = imd.ntpr;
-    // GROMOS convention: a write/print frequency of 0 disables that output entirely.
-    let due = |step: usize, freq: usize| freq > 0 && step.is_multiple_of(freq);
 
     // Derive output file paths (from @args or defaults)
     let trc_file = md_args
@@ -1187,7 +1186,15 @@ fn main() {
         };
 
         // Minimization convergence check (mirrors GROMOS: compare potential_total + special_total)
-        if is_minimization && step > imd.nmin && min_de.abs() < imd.dele {
+        let stop = if is_minimization {
+            let converged = min_de.abs() < imd.dele;
+            minimisation_stop(
+                step, imd.nmin, converged, nstxout, imd.ntwf, nstener, imd.ntwg,
+            )
+        } else {
+            None
+        };
+        if let Some(frames) = stop {
             minimization_converged = true;
             println!();
             println!("*** Energy minimization CONVERGED at step {} ***", step);
@@ -1203,19 +1210,20 @@ fn main() {
             // converged forces, energies and dH/dλ once more, labelled with the previous step
             // and on its schedule (`out_configuration.cc:624-641`), so those frame counts are
             // NSTEPS + 1.
-            if let (true, Some(tw)) = (due(step, nstxout), traj_writer.as_mut()) {
+            if let (true, Some(tw)) = (frames.positions, traj_writer.as_mut()) {
                 if let Err(e) = tw.write_frame(step, time, &conf) {
                     eprintln!("Error writing final trajectory frame: {}", e);
                 }
             }
-            let last = step.saturating_sub(1);
+            // a minimisation stops only after step nmin >= 0
+            let last = step - 1;
             let last_time = sim_state.time_of(last);
-            if let (true, Some(fw)) = (due(last, imd.ntwf), force_writer.as_mut()) {
+            if let (true, Some(fw)) = (frames.forces, force_writer.as_mut()) {
                 if let Err(e) = write_forces(fw, &conf, shake_forces, last, last_time) {
                     eprintln!("Error writing final force frame: {}", e);
                 }
             }
-            if let (true, Some(ew)) = (due(last, nstener), ene_writer.as_mut()) {
+            if let (true, Some(ew)) = (frames.energies, ene_writer.as_mut()) {
                 let scales = thermostat_scales(&mut md_sequence);
                 if let Some(rows) = gamd_rows(&mut md_sequence) {
                     ew.set_gamd_rows(&rows);
@@ -1226,7 +1234,7 @@ fn main() {
                     eprintln!("Error writing final energy frame: {}", e);
                 }
             }
-            if let (true, Some(fw)) = (due(last, imd.ntwg), free_energy_writer.as_mut()) {
+            if let (true, Some(fw)) = (frames.free_energy, free_energy_writer.as_mut()) {
                 let d = &conf.old().perturbed_energy_derivatives;
                 if let Err(e) = fw.write_derivatives(last, last_time, old_lambda, d) {
                     eprintln!("Error writing final free-energy frame: {}", e);
@@ -1429,11 +1437,7 @@ fn main() {
         let title = format!("\t{}\n\n\tfinal configuration", imd.title);
         // gromosXX `_print_timestep` (`out_configuration.cc:519`): the step counter and time
         // after the loop — NSTLIM, or the step the minimiser stopped at
-        let final_step = if minimization_converged {
-            actual_steps
-        } else {
-            n_steps
-        };
+        let final_step = final_step(n_steps, minimization_converged.then_some(actual_steps));
         let final_time = sim_state.time_of(final_step);
         // gromosXX `out_configuration.cc:540-546`: a perturbed run (NTG=1) adds PERTDATA, the λ
         // a run with NRDGL=1 continues from; time-averaged distance restraints (NTDIR < 0) add

@@ -19,8 +19,32 @@ set_option maxRecDepth 2048
 
 namespace newen_logic
 
+/-- [newen_logic::schedule::com::com_removal]:
+    Source: 'crates/newen-logic/src/schedule/com.rs', lines 19:0-34:1
+    Visibility: public -/
+def schedule.com.com_removal
+  (step : Std.Usize) (nticom : Std.I64) (nscm : Std.I64) (periodic : Bool) :
+  Result (Bool × Bool)
+  := do
+  if step = 0#usize
+  then ok (nticom >= 1#i64, nticom >= 2#i64)
+  else
+    let every ← if nscm < 0#i64
+                  then -. nscm
+                  else ok nscm
+    if every = 0#i64
+    then ok (false, false)
+    else
+      let i ← lift (IScalar.hcast .Usize every)
+      let i1 ← step % i
+      if i1 != 0#usize
+      then ok (false, false)
+      else if nscm < 0#i64
+           then ok (true, ¬ periodic)
+           else ok (true, false)
+
 /-- [newen_logic::schedule::output_misses_longrange]:
-    Source: 'crates/newen-logic/src/schedule.rs', lines 18:0-23:1
+    Source: 'crates/newen-logic/src/schedule/mod.rs', lines 22:0-27:1
     Visibility: public -/
 def schedule.output_misses_longrange
   (nsnb : Std.Usize) (ntwg : Std.Usize) : Result Bool := do
@@ -35,6 +59,168 @@ def schedule.output_misses_longrange
       then let i1 ← nsnb % ntwg
            ok (i1 != 0#usize)
       else ok false
+
+/-- [newen_logic::schedule::output::due]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 17:0-22:1
+    Visibility: public -/
+def schedule.output.due
+  (step : Std.Usize) (every : Std.Usize) : Result Bool := do
+  if every = 0#usize
+  then ok false
+  else let i ← step % every
+       ok (i = 0#usize)
+
+/-- [newen_logic::schedule::output::frames_in]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 28:0-38:1
+    Visibility: public -/
+def schedule.output.frames_in
+  (n_steps : Std.Usize) (every : Std.Usize) : Result Std.Usize := do
+  if every = 0#usize
+  then ok 0#usize
+  else
+    let whole ← n_steps / every
+    let i ← n_steps % every
+    if i = 0#usize
+    then ok whole
+    else whole + 1#usize
+
+/-- [newen_logic::schedule::output::StopFrames]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 42:0-51:1
+    Visibility: public -/
+structure schedule.output.StopFrames where
+  positions : Bool
+  forces : Bool
+  energies : Bool
+  free_energy : Bool
+
+/-- [newen_logic::schedule::output::{impl core::fmt::Debug for newen_logic::schedule::output::StopFrames}::fmt]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:9-41:14
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreFmtDebug.fmt
+  (self : schedule.output.StopFrames) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ core.fmt.DebugBool self.positions
+  let dyn1 := Dyn.mk _ core.fmt.DebugBool self.forces
+  let dyn2 := Dyn.mk _ core.fmt.DebugBool self.energies
+  let dyn3 :=
+    Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugBool) self.free_energy
+  core.fmt.Formatter.debug_struct_field4_finish f (toStr "StopFrames") (toStr
+    "positions") dyn (toStr "forces") dyn1 (toStr "energies") dyn2 (toStr
+    "free_energy") dyn3
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::fmt::Debug for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:9-41:14 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreFmtDebug : core.fmt.Debug
+  schedule.output.StopFrames := {
+  fmt := schedule.output.StopFrames.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::schedule::output::{impl core::clone::Clone for newen_logic::schedule::output::StopFrames}::clone]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:16-41:21
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCloneClone.clone
+  (self : schedule.output.StopFrames) : Result schedule.output.StopFrames := do
+  ok self
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::clone::Clone for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:16-41:21 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCloneClone : core.clone.Clone
+  schedule.output.StopFrames := {
+  clone := schedule.output.StopFrames.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::marker::Copy for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:23-41:27 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreMarkerCopy : core.marker.Copy
+  schedule.output.StopFrames := {
+  cloneInst := schedule.output.StopFrames.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::marker::StructuralPartialEq for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq schedule.output.StopFrames := {
+}
+
+/-- [newen_logic::schedule::output::{impl core::cmp::PartialEq<newen_logic::schedule::output::StopFrames> for newen_logic::schedule::output::StopFrames}::eq]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames.eq
+  (self : schedule.output.StopFrames) (other : schedule.output.StopFrames) :
+  Result Bool
+  := do
+  if self.positions = other.positions
+  then
+    if self.forces = other.forces
+    then
+      if self.energies = other.energies
+      then ok (self.free_energy = other.free_energy)
+      else ok false
+    else ok false
+  else ok false
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::cmp::PartialEq<newen_logic::schedule::output::StopFrames> for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames :
+  core.cmp.PartialEq schedule.output.StopFrames schedule.output.StopFrames := {
+  eq := schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames.eq
+}
+
+/-- [newen_logic::schedule::output::{impl core::cmp::Eq for newen_logic::schedule::output::StopFrames}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:40-41:42
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : schedule.output.StopFrames) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::cmp::Eq for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:40-41:42 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCmpEq : core.cmp.Eq
+  schedule.output.StopFrames := {
+  partialEqInst := schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames
+  assert_fields_are_eq :=
+    schedule.output.StopFrames.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::schedule::output::minimisation_stop]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 62:0-82:1
+    Visibility: public -/
+def schedule.output.minimisation_stop
+  (step : Std.Usize) (nmin : Std.Usize) (converged : Bool) (ntwx : Std.Usize)
+  (ntwf : Std.Usize) (ntwe : Std.Usize) (ntwg : Std.Usize) :
+  Result (Option schedule.output.StopFrames)
+  := do
+  if converged
+  then
+    if step <= nmin
+    then ok none
+    else
+      let last ← step - 1#usize
+      let b ← schedule.output.due step ntwx
+      let b1 ← schedule.output.due last ntwf
+      let b2 ← schedule.output.due last ntwe
+      let b3 ← schedule.output.due last ntwg
+      ok (some
+        { positions := b, forces := b1, energies := b2, free_energy := b3 })
+  else ok none
+
+/-- [newen_logic::schedule::output::final_step]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 88:0-93:1
+    Visibility: public -/
+def schedule.output.final_step
+  (n_steps : Std.Usize) (stopped_at : Option Std.Usize) :
+  Result Std.Usize
+  := do
+  match stopped_at with
+  | none => ok n_steps
+  | some step => ok step
 
 /-- [newen_logic::thermo::bath::DofRange]
     Source: 'crates/newen-logic/src/thermo/bath.rs', lines 24:0-31:1
@@ -770,6 +956,43 @@ def thermo.bath.ndfmin_spread
     thermo.bath.ndfmin_spread_loop1 half_dofs factor (alloc.vec.Vec.new
       Std.I64) 0#usize
   ok { numerators, denominator }
+
+/-- [newen_logic::thermo::bath::empty_baths]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 234:4-237:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.empty_baths_loop.body
+  (halves : Slice Std.I64) (empty : alloc.vec.Vec Bool) (b : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Bool) × Std.Usize) (alloc.vec.Vec Bool))
+  := do
+  let i := Slice.len halves
+  if b < i
+  then
+    let i1 ← Slice.index_usize halves b
+    let empty1 ← alloc.vec.Vec.push empty (i1 <= 0#i64)
+    let b1 ← b + 1#usize
+    ok (cont (empty1, b1))
+  else ok (done empty)
+
+/-- [newen_logic::thermo::bath::empty_baths]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 234:4-237:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.empty_baths_loop
+  (halves : Slice Std.I64) (empty : alloc.vec.Vec Bool) (b : Std.Usize) :
+  Result (alloc.vec.Vec Bool)
+  := do
+  loop
+    (fun (empty1, b1) => thermo.bath.empty_baths_loop.body halves empty1 b1)
+    (empty, b)
+
+/-- [newen_logic::thermo::bath::empty_baths]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 231:0-239:1
+    Visibility: public -/
+@[reducible]
+def thermo.bath.empty_baths
+  (halves : Slice Std.I64) : Result (alloc.vec.Vec Bool) := do
+  thermo.bath.empty_baths_loop halves (alloc.vec.Vec.new Bool) 0#usize
 
 /-- [newen_logic::thermo::dof::total_dof]:
     Source: 'crates/newen-logic/src/thermo/dof.rs', lines 22:0-30:1

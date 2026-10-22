@@ -153,7 +153,7 @@ miss its long-range part?* That question is the pilot function.
 
 ### The Rust code
 
-`crates/newen-logic/src/schedule.rs`:
+`crates/newen-logic/src/schedule/mod.rs`:
 
 ```rust
 /// Whether some free-energy output step (every `ntwg` steps) follows a pairlist step (every
@@ -983,20 +983,22 @@ account.
 And at the level of the whole project:
 
 - **Not covered: everything outside `crates/newen-logic`.** The crate holds
-  `schedule::output_misses_longrange`, `thermo::dof::total_dof`, and the per-bath degrees of
-  freedom with the atom-to-bath mapping in `thermo::bath` (`baths_of`, `groups_starting_in`,
-  `bath_half_dof`, `bath_half_dofs`, `ndfmin_spread`), and the topology bookkeeping in
-  `topology` (`pairs::contains_sorted`, `pairs::pair_kind`, `groups::group_of`,
-  `groups::check_last_atoms`, `groups::energy_cell`); those are proven. Their callers in
-  newen-core, newen-run and newen-forces (building the partner lists sorted and symmetric, which
-  the pair-kind theorems assume) are checked by unit tests. The rest of newen is checked the way
-  it always was, by reference tests and unit tests.
+  `schedule::output_misses_longrange`, the run schedule (`schedule::output::due`, `frames_in`,
+  `minimisation_stop`, `final_step`; `schedule::com::com_removal`), `thermo::dof::total_dof`,
+  the per-bath degrees of freedom with the atom-to-bath mapping in `thermo::bath` (`baths_of`,
+  `groups_starting_in`, `bath_half_dof`, `bath_half_dofs`, `ndfmin_spread`, `empty_baths`), and
+  the topology bookkeeping in `topology` (`pairs::contains_sorted`, `pairs::pair_kind`,
+  `groups::group_of`, `groups::check_last_atoms`, `groups::energy_cell`); those are proven. Their
+  callers in newen-core, newen-run and newen-forces (building the partner lists sorted and
+  symmetric, which the pair-kind theorems assume) are checked by unit tests. The pairlist rebuild
+  counter and the refusal matrix are not there yet. The rest of newen is checked the way it always
+  was, by reference tests and unit tests.
 - **Floating-point kernels: covered on generated inputs only.** The thermostat steps, the
   Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy,
   temperature, pressure and barostat kernels, and the periodic boundaries equal their Lean models
   bit for bit on the rows `lake exe spec-vectors` writes; no rounding bound is proved, and inputs
-  outside those rows are not checked. The bonded kernels' agreement also assumes the same C `acos`, `cos` and `sin` on
-  both sides, the barostat's the same C `pow`.
+  outside those rows are not checked. The bonded kernels' agreement also assumes the same C
+  `acos`, `cos` and `sin` on both sides, the barostat's the same C `pow`.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
   against published values stay necessary; verification adds to them, it does not replace them.
@@ -1087,7 +1089,7 @@ installed binary.
    ```toml
    [[function]]
    key = "schedule.output_misses_longrange"
-   rust = "crates/newen-logic/src/schedule.rs::output_misses_longrange"
+   rust = "crates/newen-logic/src/schedule/mod.rs::output_misses_longrange"
    used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
    origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
    # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
@@ -1182,6 +1184,13 @@ Planned, in the order chosen:
   baths stays an integer; the NDFMIN spread as an exact rational, where gromosXX truncates the
   total, D40) and the atom-to-bath mapping that the thermostats and the temperature calculation
   read.
+- **Run schedule: output frames, minimisation stop, COM removal, bath decoupling, done;
+  pairlist counter and the refusal matrix planned.** `schedule::output` (which steps write a
+  frame, how many a run writes, the frames a converged minimisation writes on the step it stops
+  at, proven equal to gromosXX's top-of-loop and final writes; the final configuration's step),
+  `schedule::com::com_removal` (NTICOM at step 0, NSCM after it, no periodic rotation removal in
+  a periodic box) and `thermo::bath::empty_baths` (the baths gromosXX decouples, decided before
+  the NDFMIN spread).
 - **Topology bookkeeping: pair kinds and group lookups, done; index conversions and
   perturbed-atom matching planned.** Done: `topology::pairs` (whether a pair is excluded, 1-4,
   owned by a `PERTATOMPAIR`/EDS atom, or on the pairlist) and `topology::groups` (the energy
