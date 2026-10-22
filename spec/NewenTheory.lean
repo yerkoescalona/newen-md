@@ -1,4 +1,6 @@
 import NewenTheory.Dynamics.DegreesOfFreedom
+import NewenTheory.Dynamics.Integration
+import NewenTheory.Dynamics.Pressure
 import NewenTheory.Dynamics.Schedule
 import NewenTheory.Dynamics.Thermostats
 import NewenTheory.Interactions.Bonded

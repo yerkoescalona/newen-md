@@ -34,6 +34,17 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   matrix cell is injective. `Topology::is_excluded_or_14`, `assign_energy_groups` and
   `EnergyGroups::cell` call them; `one_four_pairs` is now sorted like `exclusions`.
 
+- **Dynamics kernels checked against a Lean model, bit for bit**: `leap_frog_velocity`,
+  `leap_frog_position`, `kinetic_energy`, `group_kinetic_energy`, `kinetic_temperature`,
+  `pressure_tensor`, `scalar_pressure` and `berendsen_barostat_scale` are pure functions called by
+  the integrator, the temperature calculation, the pressure calculation, the barostat and the
+  temperatures `md` writes. Lean (`NewenTheory/Dynamics/{Integration,Pressure}.lean`): the leap-frog
+  map is time-reversible, exact for constant acceleration and has unit Jacobian; the half-step
+  kinetic-energy average equals the velocity-Verlet energy plus exactly `m·dt²·|a|²/8`; König's
+  theorem for the centre-of-mass split; the virial form of the pressure; the barostat's fixed point
+  and relaxation. `spec/vectors/dynamics.json` and `crates/newen-integrators/tests/dynamics_spec.rs`,
+  bit-exact in dev, release and generic builds (the barostat's `powf` included).
+
 ### Changed
 
 - The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order

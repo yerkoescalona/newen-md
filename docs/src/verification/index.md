@@ -96,9 +96,9 @@ and they are exactly what current tools can prove. They go into `crates/newen-lo
 no floating point, no dependencies, the subset that Charon and Aeneas translate into Lean. A Lean
 proof then shows that the Rust function equals the model for every input.
 
-**Floating-point kernels.** Lennard-Jones and reaction-field pair terms, thermostats. These compute
-with `f64`. Proving that a floating-point kernel computes its real-number equation, within a
-rounding bound, is a research problem: Boldo et al. (2013) needed a long paper and machine-checked
+**Floating-point kernels.** Lennard-Jones and reaction-field pair terms, thermostats, the
+integrator and the pressure. These compute with `f64`. Proving that a floating-point kernel
+computes its real-number equation, within a rounding bound, is a research problem: Boldo et al. (2013) needed a long paper and machine-checked
 proofs of both the method error and the rounding error for a single C program solving the one-dimensional
 wave equation. For these kernels we use the technique AWS uses for its Cedar authorization
 language: write an executable model in Lean, prove properties of the model, and test the Rust
@@ -106,11 +106,11 @@ kernel against the model on many random inputs (differential random testing).
 
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
-| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, Berendsen, Nosé–Hoover |
+| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure |
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats and the Lennard-Jones and reaction-field pair term (below) |
+| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, and the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels (below) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -492,7 +492,8 @@ One value has no bits in Lean: its `Float` has a single NaN, so a NaN matches an
 
 Bit-exact comparison stops working when a kernel calls a function that IEEE 754 does not require
 to be correctly rounded, such as `exp`, `log`, `pow` or `erfc` (Ewald sums need `erfc`):
-Rust's and C's libraries may differ in the last bit. It also stops working when the two sides
+Rust's and C's libraries may differ in the last bit. (The Berendsen barostat calls `pow`; both
+sides reach the same C `pow` there, see below.) It also stops working when the two sides
 sum in a different order, as a parallel reduction over pairs does. There a tolerance, justified by a rounding analysis, has to replace equality.
 
 What is not guaranteed: how far the `Float` model is from the ℝ model (no rounding bound is
@@ -669,6 +670,120 @@ cargo test -p newen-forces --test bonded_spec    # Rust = Float model, bit for b
 cargo test -p newen-md --test test_gromosXX_references butane_vacuum_ntbdn1
 ```
 
+### The integrator, temperature and pressure
+
+The same three pieces cover the per-step dynamics of `crates/newen-integrators`. Each production
+algorithm calls a pure kernel, extracted without changing one operation:
+
+| Kernel | Called by | Computes |
+|---|---|---|
+| `leap_frog_velocity(v, f, m⁻¹, dt)` | `LeapFrogVelocity::apply` | `v + f · m⁻¹ · dt` per component |
+| `leap_frog_position(x, v, dt)` | `LeapFrogPosition::apply` | `x + v · dt` per component |
+| `kinetic_energy(m, v_new, v_old)` | `TemperatureCalculation::apply` | `Σ ½ m (‖v_new‖² + ‖v_old‖²)/2` and `Σ ½ m ‖v_new‖²`, in atom order |
+| `group_kinetic_energy(m, v_new, v_old)` | `TemperatureCalculation::apply`, per temperature group | the centre-of-mass energy of the averaged velocities, the half-step total, and the same two for the new velocities |
+| `kinetic_temperature(K, N_df, k_B)` | `md` (bath temperatures of the energy trajectory, the energy check) | `2K / k_B / N_df`, 0 for `N_df = 0` |
+| `pressure_tensor(K, W, V)` | `PressureCalculation::apply` | `(K + W · ½) · (2/V)` element by element, `W = Σ r⊗f` |
+| `scalar_pressure(P)` | `BerendsenBarostat::apply` | `(P_xx + P_yy + P_zz)/3` |
+| `berendsen_barostat_scale(P, P₀, β, τ, dt)` | `BerendsenBarostat::apply` | `powf(1 − β·dt/τ·(P₀ − P), 1/3)` |
+
+**The meaning.** `spec/NewenTheory/Dynamics/Integration.lean` states the leap-frog step for an
+acceleration field in any real vector space, `leapFrog a dt (x, v) = (x + dt·v', v')` with
+`v' = v + dt·a(x)`, and proves the three properties that make it the integrator of molecular
+dynamics:
+
+```lean
+theorem leapFrog_reversible (a : E → E) (dt : ℝ) (s : E × E) :
+    leapFrog a dt (reverse a dt (leapFrog a dt s)) = reverse a dt s
+
+theorem leapFrog_iterate_exact (x₀ u a₀ : E) (dt : ℝ) (n : ℕ) :
+    (leapFrog (fun _ => a₀) dt)^[n] (x₀, u - (dt / 2) • a₀) =
+      (x₀ + (n * dt) • u + ((n * dt) ^ 2 / 2) • a₀, u + (n * dt - dt / 2) • a₀)
+
+theorem leapFrog_jacobian (a : ℝ → ℝ) {a' x v dt : ℝ} (ha : HasDerivAt a a' x) :
+    HasDerivAt (fun y => (leapFrog a dt (y, v)).1) (1 + dt ^ 2 * a') x ∧ … ∧
+      (1 + dt ^ 2 * a') * 1 - dt * (dt * a') = 1
+```
+
+Read aloud: a step, a velocity reversal and a step bring the system back to where it started,
+with the velocity reversed (`reverse` flips the velocity of the *other* half step,
+`−(v + a(x) dt)`, because the state carries the half-step velocity before `x`; step-then-reverse
+is an involution, `reverse_comp_leapFrog_involutive`); under a constant acceleration `n` steps
+land exactly on the parabola; and in one dimension the Jacobian of the step has determinant 1, so
+phase-space area is conserved.
+
+GROMOS takes the kinetic energy at time `t` as the average of the two half-step energies.
+`halfStep_vs_verlet` says what that is, exactly: after the kick `v₊ = v₋ + a dt`,
+
+```lean
+halfStepKinetic m v₋ (v₋ + dt • a) = 1/2 * m * ‖v₋ + (dt/2) • a‖ ^ 2 + m * dt ^ 2 / 8 * ‖a‖ ^ 2
+```
+
+the energy of the full-step velocity that velocity Verlet would use, plus a second-order term that
+is never negative. For a temperature group, `group_split` decomposes the half-step energy into the
+centre-of-mass energy of the averaged velocities (what GROMOS books to the COM bath), the averaged
+velocities relative to their centre of mass, and the half kicks (König's theorem, `koenig`, plus
+the parallelogram law), so `group_internal_nonneg`: the part booked to the internal bath is never
+negative. `temperatureOf_iff` says `T = 2K/(N_df k_B)` is equipartition `K = ½ N_df k_B T`
+inverted.
+
+`spec/NewenTheory/Dynamics/Pressure.lean` states the virial theorem in GROMOS's tensor form,
+`P = 2/V · (K − Ξ)` with `Ξ = −½ Σ r⊗f`; `scalarPressure_virial` gives the scalar form
+`P = 2/(3V) · (tr K − tr Ξ)` and `ideal_gas` the ideal gas law without forces. For the barostat
+factor `μ = (1 − β dt/τ (P₀ − P))^{1/3}`: `barostat_fixed` (`P = P₀` gives `μ = 1`),
+`barostat_grows_iff` and `barostat_shrinks_iff` (with a positive coupling the box grows exactly
+when `P > P₀` and shrinks exactly when `P < P₀`), `barostat_volume` (the volume is scaled by the
+radicand), and `barostat_relax`: if the pressure responds to the volume as the compressibility
+says, `P' = P − (V' − V)/(βV)`, one step moves the pressure the fraction `dt/τ` of the way to `P₀`,
+the barostat's analogue of `berendsen_relax`.
+
+**One model.** `spec/NewenSpec/Dynamics.lean` writes the eight kernels once over any number type,
+a `glam::DVec3` as a structure of three numbers with `length_squared` as glam writes it
+(`x·x + y·y + z·z`), and every sum over atoms as the Rust loop `acc += term` from zero (a left
+fold). The `0.5` literal and the `1.0 / 3.0` of the barostat are parameters, given at `Float` by
+their bits. At ℝ, `leapFrogModel_real_eq` proves the two leap-frog kernels are the theory's step
+with acceleration `m⁻¹ f`, `kineticEnergyModel_real_eq` and `groupKineticModel_real_eq` that the
+kinetic energies are the theory's sums (velocities as vectors of `EuclideanSpace ℝ (Fin 3)`, the
+centre of mass `comVelocity`), `kineticTemperatureModel_real_eq` that the temperature is
+`temperatureOf`, and `pressureTensorModel_real_eq`, `scalarPressureModel_real_eq`,
+`berendsenBarostatModel_real_eq` the same for the pressure and the barostat.
+
+**The bit-exact test.** `lake exe spec-vectors` writes `spec/vectors/dynamics.json`: 1 200
+leap-frog rows (velocities in `[−3, 3]` nm/ps, forces to `10⁶` kJ mol⁻¹ nm⁻¹, GROMOS masses,
+random ones and massless atoms with `m⁻¹ = 0`), 500 groups of 1–8 atoms for both kinetic-energy
+kernels (one in 40 massless, a centre of mass of `0/0`), 800 temperature rows (`N_df = 0` and a
+negative count included), 600 pressure rows (`V = 0` included) and 1 500 barostat rows, a quarter
+of them with a coupling term of order 1, because at GROMOS values `β dt/τ (P₀ − P)` is far below
+the last bit of 1 and the result hides how the term was rounded.
+`crates/newen-integrators/tests/dynamics_spec.rs` requires the same 64 bits on every row, the
+position kernel fed the model's new velocity so that each kernel is tested on its own. Planting a
+reassociation fails it: `v + f · (m⁻¹ · dt)` makes 331 of the 1 200 leap-frog rows differ,
+`2K/(N_df k_B)` 216 of the 800 temperature rows, `com_v *= 1/M` instead of `com_v /= M` 137 of
+the 500 groups, summing the atoms in reverse 208 of them, `K·(2/V) + W·½·(2/V)` 442 of the 600
+pressure rows, `β · (dt/τ)` 17 of the 1 500 barostat rows. Rewrites that only scale by a power of
+two (`½ m ((a + b)/2)` for `(½ m (a + b))/2`, `1/V · 2` for `2/V`) are exact and pass, as they
+should.
+
+The barostat is the one kernel that calls a function IEEE 754 does not round correctly,
+`powf(x, 1/3)`. Rust's `f64::powf` and Lean's `Float.pow` both call the C library's `pow` (the
+Lean executable links the system `libm` dynamically, as Rust's standard library does), so the
+comparison is kept strict and holds where both run against the same `libm`. It does catch a
+change of function: `cbrt` in place of `powf(…, 1.0 / 3.0)` makes 52 of the 1 500 rows differ (by
+1 ulp, and for a negative radicand `cbrt` returns a negative number where `pow` returns NaN).
+
+The model follows newen, not gromosXX, and differs from it in these places:
+
+- gromosXX's velocity step is `v + f · dt / m` (`leap_frog.cc`), newen's `v + f · m⁻¹ · dt` with
+  `m⁻¹` precomputed: differences in the last bits. A massless atom has `m⁻¹ = 0` in newen and
+  does not move; gromosXX divides by zero.
+- gromosXX multiplies the pressure tensor by `tot_cg_factor` (1 without coarse graining, an exact
+  factor) and divides by any volume; newen skips the update for `V < 10⁻³⁰`.
+- The temperatures written out are `2K/k_B/N_df` (gromosXX's `out_configuration.cc` order), the
+  thermostats' `2K/(N_df k_B)` (gromosXX's thermostat order); the two can differ in the last bit.
+
+```sh
+cargo test -p newen-integrators --test dynamics_spec    # Rust = Float model, bit for bit
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -759,10 +874,12 @@ And at the level of the whole project:
   newen-core, newen-run and newen-forces (building the partner lists sorted and symmetric, which
   the pair-kind theorems assume) are checked by unit tests. The rest of newen is checked the way
   it always was, by reference tests and unit tests.
-- **Floating-point kernels: covered on generated inputs only.** The thermostat steps and the
-  Lennard-Jones and reaction-field pair term equal their Lean models bit for bit on the rows
+- **Floating-point kernels: covered on generated inputs only.** The thermostat steps, the
+  Lennard-Jones and reaction-field pair term, the bonded terms, and the leap-frog, kinetic-energy,
+  temperature, pressure and barostat kernels equal their Lean models bit for bit on the rows
   `lake exe spec-vectors` writes; no rounding bound is proved, and inputs outside those rows are
-  not checked.
+  not checked. The bonded kernels' agreement also assumes the same C `acos`, `cos` and `sin` on
+  both sides, the barostat's the same C `pow`.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
   against published values stay necessary; verification adds to them, it does not replace them.
@@ -958,10 +1075,15 @@ Planned, in the order chosen:
   [Nonbonded Interactions](../algorithms/nonbonded.md)). Done: the thermostats
   (`berendsen_scale`, `nose_hoover_scale`), the pair term (`CRFParameters::new`,
   `lj_crf_pair`, `rf_excluded_pair`, `rf_self_term`, with the SIMD lanes checked against the scalar
-  kernel), and the bonded terms (`quartic_bond`, `harmonic_bond`, `cosine_angle`,
+  kernel), the bonded terms (`quartic_bond`, `harmonic_bond`, `cosine_angle`,
   `harmonic_angle`, `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral`, with a
-  finite-difference check of every force); each with ℝ theorems, a `Float` model and a bit-exact
-  differential test.
+  finite-difference check of every force), and the dynamics kernels (`leap_frog_velocity`,
+  `leap_frog_position`, `kinetic_energy`, `group_kinetic_energy`, `kinetic_temperature`,
+  `pressure_tensor`, `scalar_pressure`, `berendsen_barostat_scale`); each with ℝ theorems, a
+  `Float` model and a bit-exact differential test. Not yet covered in `newen-integrators`: the
+  constraint algorithms (SHAKE, SETTLE, LINCS), centre-of-mass removal, the anisotropic barostat
+  modes gromosXX has, and the older `integrator.rs` and `barostats.rs` implementations, which the
+  MD sequence does not use.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

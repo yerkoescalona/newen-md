@@ -375,3 +375,106 @@ theorem = "NewenSpec.Bonded.improperModel_real_eq (wrap_real_of_mem)"
 # Rust = model at Float, bit for bit on the generated rows (acos: same C library); forces = -dE/dx by finite differences (cargo test)
 differential = "crates/newen-forces/tests/bonded_spec.rs"
 vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "dynamics.leap_frog_velocity"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/leap_frog.rs::leap_frog_velocity"
+used_by = ["crates/newen-integrators/src/algorithms/leap_frog.rs::LeapFrogVelocity::apply (serial and parallel loops)"]
+origin = "gromosXX Leap_Frog_Velocity::apply (leap_frog.cc): v + f * dt / m; newen computes v + f * m^-1 * dt with m^-1 from Topology::compute_inverse_masses (0 for m <= 0, where gromosXX divides by zero), last-bit differences"
+# Theorems over R: leap-frog is time-reversible, exact for constant acceleration, area preserving in 1-D; the model at R is the theory's step
+theory = "NewenTheory.Dynamics.Integration.leapFrog (leapFrog_reversible, reverse_comp_leapFrog_involutive, leapFrog_exact_constant, leapFrog_iterate_exact, leapFrog_jacobian)"
+model = "NewenSpec.Dynamics.leapFrogVelocityModel (at Float: leapFrogVelocityFloat)"
+theorem = "NewenSpec.Dynamics.leapFrogModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.leap_frog_position"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/leap_frog.rs::leap_frog_position"
+used_by = ["crates/newen-integrators/src/algorithms/leap_frog.rs::LeapFrogPosition::apply (serial and parallel loops)"]
+origin = "gromosXX Leap_Frog_Position::apply (leap_frog.cc): x + v * dt"
+theory = "NewenTheory.Dynamics.Integration.leapFrog (with leap_frog_velocity)"
+model = "NewenSpec.Dynamics.leapFrogPositionModel (at Float: leapFrogPositionFloat)"
+theorem = "NewenSpec.Dynamics.leapFrogModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.kinetic_energy"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::kinetic_energy"
+used_by = ["crates/newen-integrators/src/algorithms/temperature.rs::TemperatureCalculation::apply (kinetic_total, kinetic_energy_new)"]
+origin = "gromosXX Temperature_Calculation: E_kin = 1/2 m (|v_old|^2 + |v_new|^2)/2 per atom; newen sums in atom order"
+# Theorems over R: the half-step average is the energy of the full-step (velocity-Verlet) velocity plus m dt^2 |a|^2/8
+theory = "NewenTheory.Dynamics.Integration.halfStepKinetic (halfStep_average, halfStep_vs_verlet)"
+model = "NewenSpec.Dynamics.kineticEnergyModel (at Float: kineticEnergyFloat)"
+theorem = "NewenSpec.Dynamics.kineticEnergyModel_real_eq (sumModel_real)"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.group_kinetic_energy"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::group_kinetic_energy"
+used_by = ["crates/newen-integrators/src/algorithms/temperature.rs::TemperatureCalculation::apply (com/ir per bath, kinetic_energy_new_bath)"]
+origin = "gromosXX state_properties.cc:153-186 (molecular_translational_ekin): centre-of-mass velocity of the averaged velocities, total over the half-step average"
+# Theorems over R: Koenig's split; the internal part GROMOS books (total - com) is never negative
+theory = "NewenTheory.Dynamics.Integration.groupKinetic (koenig, kinetic_shift, group_split, group_internal_nonneg)"
+model = "NewenSpec.Dynamics.groupKineticModel (at Float: groupKineticFloat)"
+theorem = "NewenSpec.Dynamics.groupKineticModel_real_eq (comModel_real_eq, toE_momentum)"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.kinetic_temperature"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::kinetic_temperature"
+used_by = ["crates/newen-md/src/bin/md.rs::volume_pressure (bath temperatures written to the energy trajectory)", "crates/newen-md/src/bin/md.rs (total temperature of the energy check)"]
+origin = "gromosXX out_configuration.cc:3293-3301: 2 * ekin / k_B / dof; the thermostats use 2 * ekin / (dof * k_B) (berendsen_scale, nose_hoover_scale), as gromosXX's thermostats do"
+# Theorems over R: equipartition inverted
+theory = "NewenTheory.Dynamics.Integration.temperatureOf (temperatureOf_iff)"
+model = "NewenSpec.Dynamics.kineticTemperatureModel (at Float: kineticTemperatureFloat)"
+theorem = "NewenSpec.Dynamics.kineticTemperatureModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.pressure_tensor"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/pressure_calculation.rs::pressure_tensor"
+used_by = ["crates/newen-integrators/src/algorithms/pressure_calculation.rs::PressureCalculation::apply"]
+origin = "gromosXX Pressure_Calculation::apply (pressure_calculation.cc): tot_cg_factor * (K + 0.5 W) * (2 / V); newen omits tot_cg_factor (1 without coarse graining, an exact factor) and skips V < 1e-30, where gromosXX divides"
+# Theorems over R: the virial theorem P = 2/V (K - Xi), its scalar form and the ideal gas
+theory = "NewenTheory.Dynamics.Pressure.pressureTensor (scalarPressure_virial, ideal_gas)"
+model = "NewenSpec.Dynamics.pressureTensorModel (at Float: pressureTensorFloat)"
+theorem = "NewenSpec.Dynamics.pressureTensorModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.scalar_pressure"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/pressure_calculation.rs::scalar_pressure"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_barostat.rs::BerendsenBarostat::apply"]
+origin = "gromosXX Berendsen_Barostat::apply (berendsen_barostat.cc, isotropic): (P_xx + P_yy + P_zz) / 3; newen_core Configuration::pressure computes the same expression for output"
+theory = "NewenTheory.Dynamics.Pressure.scalarPressure (scalarPressure_virial)"
+model = "NewenSpec.Dynamics.scalarPressureModel (at Float: scalarPressureFloat)"
+theorem = "NewenSpec.Dynamics.scalarPressureModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.berendsen_barostat_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/berendsen_barostat.rs::berendsen_barostat_scale"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_barostat.rs::BerendsenBarostat::apply"]
+origin = "gromosXX Berendsen_Barostat::apply (berendsen_barostat.cc, isotropic): pow(1 - comp * dt / tau * (P0 - P), 1/3); calls powf, the platform pow (not correctly rounded; Rust and Lean both call libm)"
+# Theorems over R: fixed point at P0, the box grows exactly when P > P0, the volume scales by the radicand, and the pressure relaxes by dt/tau under linear response
+theory = "NewenTheory.Dynamics.Pressure.barostatScale (barostat_fixed, barostat_grows_iff, barostat_shrinks_iff, barostat_volume, barostat_relax)"
+model = "NewenSpec.Dynamics.berendsenBarostatModel (at Float: berendsenBarostatFloat)"
+theorem = "NewenSpec.Dynamics.berendsenBarostatModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"

@@ -6,10 +6,11 @@ import NewenSpec.Topology.Groups
 import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
 import NewenSpec.Bonded
+import NewenSpec.Dynamics
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat, nonbonded and bonded models on random `Float` inputs) and write them to `vectors/`, so
-`cargo test` can compare the Rust functions against Lean without Lean. -/
+thermostat, nonbonded, bonded and dynamics models on random `Float` inputs) and write them to
+`vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
@@ -20,6 +21,9 @@ open NewenSpec.Thermostat
 open NewenSpec.Nonbonded
 open NewenSpec.Bonded (Vec3 tinyFloat quarterFloat piFloat quarticBondFloat harmonicBondFloat
   cosineAngleFloat harmonicAngleFloat dihedralChebyshevFloat dihedralNewFloat improperFloat)
+open NewenSpec.Dynamics (V3 M3 Atom leapFrogVelocityFloat leapFrogPositionFloat kineticEnergyFloat
+  groupKineticFloat kineticTemperatureFloat pressureTensorFloat scalarPressureFloat
+  berendsenBarostatFloat thirdFloat)
 
 /-- Grid bound of the schedule grid, equal to `GRID` in
 `crates/newen-logic/tests/schedule_spec.rs`. -/
@@ -629,6 +633,155 @@ def bondedJson (bonds angles dihedrals : List (List Float)) : String :=
   part "bonds" bonds ++ ",\n" ++ part "angles" angles ++ ",\n" ++
   part "dihedrals" dihedrals ++ "\n}\n"
 
+/-! ## Dynamics: leap-frog, kinetic energy, temperature, pressure, barostat -/
+
+def v3 (a : V3 Float) : List Float := [a.x, a.y, a.z]
+
+def m3 (p : M3 Float) : List Float := v3 p.c0 ++ v3 p.c1 ++ v3 p.c2
+
+def drawV3 (lo hi : Float) : Gen (V3 Float) := do
+  return ⟨← uniform lo hi, ← uniform lo hi, ← uniform lo hi⟩
+
+def dynDts : List Float := [5e-4, 1e-3, 2e-3, 4e-3]
+def atomMasses : List Float := [1.008, 12.011, 14.0067, 15.9994, 32.06, 39.948]
+
+/-- A mass in u: one of `atomMasses`, uniform in `[0.5, 200]`, or `0` one time in 16. -/
+def drawMass : Gen Float := do
+  if (← below 16) == 0 then return 0
+  drawFrom atomMasses 0.5 200
+
+/-- A velocity: uniform in `[-3, 3]` nm/ps per component, or zero one time in ten. -/
+def drawVelocity : Gen (V3 Float) := do
+  if (← below 10) == 0 then return ⟨0, 0, 0⟩
+  drawV3 (-3) 3
+
+/-- A force: uniform in `[-2000, 2000]` kJ mol⁻¹ nm⁻¹ per component, up to `1e6`, or zero. -/
+def drawForce : Gen (V3 Float) := do
+  match ← below 8 with
+  | 0 => return ⟨0, 0, 0⟩
+  | 1 => drawV3 (-1e6) 1e6
+  | _ => drawV3 (-2000) 2000
+
+/-- One atom per row: `v, f, m⁻¹, dt, x`, then the new velocity, then the position step from the
+new velocity. The inverse mass is `1/m` as `Topology::compute_inverse_masses` forms it (`0` for
+a massless atom). -/
+def leapFrogRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1200 do
+    let m ← drawMass
+    let im := if m > 0 then 1 / m else 0
+    let dt ← drawFrom dynDts 1e-4 5e-3
+    let v ← drawVelocity
+    let f ← drawForce
+    let x ← drawV3 (-10) 10
+    let v' := leapFrogVelocityFloat v f im dt
+    let x' := leapFrogPositionFloat x v' dt
+    rows := rows.push (v3 v ++ v3 f ++ [im, dt] ++ v3 x ++ v3 v' ++ v3 x')
+  return rows.toList
+
+/-- One group of 1–8 atoms per row. The old velocity is the new one less a leap-frog kick, or
+independent; one group in 40 has only massless atoms (a centre of mass of `0/0`). -/
+def kineticRows : Gen (List String) := do
+  let mut rows := #[]
+  for _ in List.range 500 do
+    let n := 1 + (← below 8)
+    let massless := (← below 40) == 0
+    let mut atoms := #[]
+    for _ in List.range n do
+      let m ← if massless then pure 0 else drawMass
+      let vNew ← drawVelocity
+      let vOld ← if (← below 2) == 0 then drawVelocity else do
+        let dt ← pick dynDts
+        let kick ← drawV3 (-2000) 2000
+        let im := if m > 0 then 1 / m else 0
+        pure ⟨vNew.x - kick.x * im * dt, vNew.y - kick.y * im * dt, vNew.z - kick.z * im * dt⟩
+      atoms := atoms.push (⟨m, vNew, vOld⟩ : Atom Float)
+    let (eKin, eKinNew) := kineticEnergyFloat atoms.toList
+    let (com, total, newCom, newTotal) := groupKineticFloat atoms.toList
+    let fields := atoms.toList.flatMap fun a => [a.m] ++ v3 a.vNew ++ v3 a.vOld
+    rows := rows.push ("    [" ++ ", ".intercalate ([toString n] ++
+      (fields ++ [eKin, eKinNew, com, total, newCom, newTotal]).map hexBits) ++ "]")
+  return rows.toList
+
+/-- `ekin, dof, k_B, T`: `dof` among the GROMOS-sized counts, `0` and a negative one, `k_B` the
+GROMOS value, the CODATA value or near them. -/
+def temperatureRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 800 do
+    let ekin ← orZero (logUniform 1e-6 1e7)
+    let dof ← drawFrom [0, 1, 3, 5.5, 12.76, 100, 6000, 1e5, -3] 1 1e5
+    let kB ← drawFrom [kBFloat, 0.00831446261815324] 0.008 0.0085
+    rows := rows.push [ekin, dof, kB, kineticTemperatureFloat ekin dof kB]
+  return rows.toList
+
+/-- `K, W, V` (tensors by columns), the pressure tensor, its scalar pressure. `K` has a
+non-negative diagonal; `V` is log-uniform in `[1, 1e4]` nm³, or `0` one time in 40. -/
+def pressureRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 600 do
+    let k ← (List.range 9).mapM fun i =>
+      if i % 4 == 0 then uniform 0 1e4 else uniform (-1e3) 1e3
+    let w ← (List.range 9).mapM fun _ => uniform (-1e5) 1e5
+    let col (l : List Float) (j : Nat) : V3 Float :=
+      ⟨l.getD (3 * j) 0, l.getD (3 * j + 1) 0, l.getD (3 * j + 2) 0⟩
+    let K : M3 Float := ⟨col k 0, col k 1, col k 2⟩
+    let W : M3 Float := ⟨col w 0, col w 1, col w 2⟩
+    let V ← if (← below 40) == 0 then pure 0 else logUniform 1 1e4
+    let P := pressureTensorFloat K W V
+    rows := rows.push (m3 K ++ m3 W ++ [V] ++ m3 P ++ [scalarPressureFloat P])
+  return rows.toList
+
+/-- `P, P₀, β, τ, dt, μ` in GROMOS units (kJ mol⁻¹ nm⁻³; 1 bar = 0.06102): one row in ten at
+`P = P₀`, one in twenty with `|P|` up to `1e5` (a negative radicand, `μ` NaN), one in thirty
+with `τ = 0`. In GROMOS units the coupling term `β dt/τ (P₀ − P)` is far below the last bit of
+`1`, so the result hides its rounding; a quarter of the rows are stressed instead, with
+`β ∈ [0.1, 1]`, `τ ∈ [dt/2, 4 dt]` and `|P|` up to `2`, a term of order `1`. -/
+def barostatRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1500 do
+    let dt ← drawFrom dynDts 1e-4 5e-3
+    let p0 ← drawFrom [0.06102, 0, 1] (-1) 1
+    let stressed := (← below 4) == 0
+    let p ← if stressed then uniform (-2) 2 else match ← below 20 with
+      | 0 | 1 => pure p0
+      | 2 => uniform (-1e5) 1e5
+      | _ => drawFrom [0, 0.06102, 1, -1] (-50) 50
+    let beta ← if stressed then uniform 0.1 1 else drawFrom [4.575e-4, 7.513e-4] 1e-5 1e-3
+    let tau ← if stressed then pure (dt * (← uniform 0.5 4))
+      else if (← below 30) == 0 then pure 0 else drawFrom [0.1, 0.5, 1, 2] 0.05 5
+    rows := rows.push [p, p0, beta, tau, dt, berendsenBarostatFloat p p0 beta tau dt]
+  return rows.toList
+
+/-- The row sets of `vectors/dynamics.json`, from a fixed seed. -/
+def dynamicsRows : List (List Float) × List String × List (List Float) × List (List Float) ×
+    List (List Float) :=
+  (do return (← leapFrogRows, ← kineticRows, ← temperatureRows, ← pressureRows,
+    ← barostatRows) : Gen _).run' 0x6e6577656e2d6479
+
+def dynamicsJson (leap : List (List Float)) (kin : List String)
+    (temp pres baro : List (List Float)) : String :=
+  let part (name : String) (rows : List String) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate rows ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"dynamics.leap_frog_velocity, dynamics.leap_frog_position, " ++
+  "dynamics.kinetic_energy, dynamics.group_kinetic_energy, dynamics.kinetic_temperature, " ++
+  "dynamics.pressure_tensor, dynamics.scalar_pressure, dynamics.berendsen_barostat_scale\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Dynamics.*Float; SplitMix64, " ++
+  "fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); n is a plain integer\",\n" ++
+  "  \"layout_leap_frog\": \"v(3), f(3), inverse_mass, dt, x(3), v_new(3), x_new(3); x_new is " ++
+  "leap_frog_position(x, v_new, dt)\",\n" ++
+  "  \"layout_kinetic\": \"n, then (mass, v_new(3), v_old(3)) per atom, then kinetic_energy " ++
+  "(average, new) and group_kinetic_energy (com, total, new_com, new_total)\",\n" ++
+  "  \"layout_temperature\": \"ekin, dof, k_boltzmann, temperature\",\n" ++
+  "  \"layout_pressure\": \"kinetic(9), virial(9), volume, pressure(9), scalar_pressure; " ++
+  "tensors by columns (x_axis, y_axis, z_axis), each x, y, z\",\n" ++
+  "  \"layout_barostat\": \"pressure, pressure0, compressibility, tau, dt, mu\",\n" ++
+  part "leap_frog" (leap.map hexRow) ++ ",\n" ++ part "kinetic" kin ++ ",\n" ++
+  part "temperature" (temp.map hexRow) ++ ",\n" ++ part "pressure" (pres.map hexRow) ++ ",\n" ++
+  part "barostat" (baro.map hexRow) ++ "\n}\n"
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -643,8 +796,10 @@ def main : IO Unit := do
   unless (0 : Float).toBits == 0 && (1 : Float).toBits == 0x3FF0000000000000 &&
       (2 : Float).toBits == 0x4000000000000000 && (6 : Float).toBits == 0x4018000000000000 &&
       (12 : Float).toBits == 0x4028000000000000 && NewenSpec.Nonbonded.halfFloat == 1 / 2 &&
-      NewenSpec.Bonded.halfFloat == 1 / 2 && quarterFloat == 1 / 4 do
-    throw (IO.userError "Float literals 0, 1, 2, 6, 12 are not exact")
+      NewenSpec.Bonded.halfFloat == 1 / 2 && quarterFloat == 1 / 4 &&
+      (3 : Float).toBits == 0x4008000000000000 && NewenSpec.Dynamics.halfFloat == 1 / 2 &&
+      thirdFloat == 1 / 3 do
+    throw (IO.userError "Float literals 0, 1, 2, 3, 6, 12 are not exact")
   -- the other literals of the bonded models, and 1e-10 and π as the nearest doubles
   let lits : List Nat := [3, 4, 5, 8, 16, 18, 20, 32, 36, 48, 60, 80, 192, 180]
   unless lits.all (fun n => (Float.ofNat n).toUInt64.toNat == n) &&
@@ -663,3 +818,7 @@ def main : IO Unit := do
   IO.FS.writeFile "vectors/bonded.json" (bondedJson bonds angles dihedrals)
   IO.println (s!"wrote vectors/bonded.json ({bonds.length} bonds, {angles.length} angles, " ++
     s!"{dihedrals.length} dihedrals rows)")
+  let (leap, kin, temp, pres, baro) := dynamicsRows
+  IO.FS.writeFile "vectors/dynamics.json" (dynamicsJson leap kin temp pres baro)
+  IO.println (s!"wrote vectors/dynamics.json ({leap.length} leap_frog, {kin.length} kinetic, " ++
+    s!"{temp.length} temperature, {pres.length} pressure, {baro.length} barostat rows)")

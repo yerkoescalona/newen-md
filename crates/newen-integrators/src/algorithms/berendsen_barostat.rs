@@ -13,6 +13,23 @@ use newen_core::algorithm::{Algorithm, SimulationState};
 use newen_core::configuration::Configuration;
 use newen_core::topology::Topology;
 
+use super::pressure_calculation::scalar_pressure;
+
+/// The Berendsen box scaling factor `μ = (1 − β·dt/τ·(P₀ − P))^(1/3)` (gromosXX
+/// `Berendsen_Barostat::apply`, isotropic), with `β` the compressibility; `powf` is the
+/// platform's `pow`.
+///
+/// spec: dynamics.berendsen_barostat_scale
+pub fn berendsen_barostat_scale(
+    pressure: f64,
+    pressure0: f64,
+    compressibility: f64,
+    tau: f64,
+    dt: f64,
+) -> f64 {
+    (1.0 - compressibility * dt / tau * (pressure0 - pressure)).powf(1.0 / 3.0)
+}
+
 /// Berendsen barostat parameters.
 #[derive(Debug, Clone)]
 pub struct BerendsenBarostatParams {
@@ -50,14 +67,13 @@ impl Algorithm for BerendsenBarostat {
         // Read pressure tensor from PressureCalculation (stored in old())
         let pressure = conf.old().pressure_tensor;
 
-        // Isotropic pressure: P = (P_xx + P_yy + P_zz) / 3
-        let total_pressure = (pressure.x_axis.x + pressure.y_axis.y + pressure.z_axis.z) / 3.0;
-
-        // Scaling factor: mu = (1 - comp * dt / tau * (P0 - P))^(1/3)
-        let mu = (1.0
-            - self.params.compressibility * sim.dt / self.params.tau
-                * (self.params.pressure0 - total_pressure))
-            .powf(1.0 / 3.0);
+        let mu = berendsen_barostat_scale(
+            scalar_pressure(pressure),
+            self.params.pressure0,
+            self.params.compressibility,
+            self.params.tau,
+            sim.dt,
+        );
 
         // Scale the box
         {

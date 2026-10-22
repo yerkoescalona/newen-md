@@ -18,6 +18,16 @@ Berendsen barostat, COM removal.
   (ℝ theorems in `spec/NewenTheory/Dynamics/Thermostats.lean`); `tests/thermostat_spec.rs`
   compares the Rust with the model's `Float` evaluation bit for bit on `spec/vectors/thermostat.json`.
   Keep the operation order of both kernels as it is: a reassociation fails that test.
+- **Dynamics kernels verified (2026-10-22):** the per-step arithmetic is in pure kernels the
+  algorithms call: `leap_frog_velocity`, `leap_frog_position` (`LeapFrogVelocity`/`Position`),
+  `kinetic_energy`, `group_kinetic_energy` (`TemperatureCalculation`), `kinetic_temperature`
+  (called by `md` for the written temperatures), `pressure_tensor`, `scalar_pressure`
+  (`PressureCalculation`, `BerendsenBarostat`) and `berendsen_barostat_scale`. Lean model in
+  `spec/NewenSpec/Dynamics.lean` (ℝ theorems in `spec/NewenTheory/Dynamics/Integration.lean` and
+  `Pressure.lean`); `tests/dynamics_spec.rs` compares the Rust with the model's `Float` evaluation
+  bit for bit on `spec/vectors/dynamics.json`. Keep the operation order of these kernels and of
+  their sums (atom order, `acc += term`): a reassociation fails that test. The barostat calls
+  `powf`; its rows agree because Rust and Lean call the same C `pow`.
 - **Nosé–Hoover restart (0.0.69, D41):** `NoseHooverThermostat::init` restores ζ from
   `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), every link of every bath,
   plain NH included (`restored_zeta`);
@@ -63,6 +73,9 @@ src/algorithms/berendsen_thermostat.rs, nosehoover_thermostat.rs — the thermos
                         (`berendsen_scale`, `nose_hoover_scale`) and their `Algorithm`s
 src/algorithms/multibath.rs — atom → bath mapping, `ZERO_TEMPERATURE`
 tests/thermostat_spec.rs — kernels = Lean `Float` model, bit for bit
+src/algorithms/leap_frog.rs, temperature.rs, pressure_calculation.rs, berendsen_barostat.rs —
+                        the dynamics kernels and their `Algorithm`s
+tests/dynamics_spec.rs — dynamics kernels = Lean `Float` model, bit for bit
 src/constraints.rs    — SHAKE, SETTLE, LINCS
 src/thermostats.rs    — Berendsen, Nosé-Hoover (+ chain NHC)
 src/barostats.rs      — Berendsen, Parrinello-Rahman

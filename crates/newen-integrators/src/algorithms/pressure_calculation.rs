@@ -18,6 +18,38 @@ use newen_core::configuration::Configuration;
 use newen_core::math::Mat3;
 use newen_core::topology::Topology;
 
+/// The pressure tensor `2/V · (E_kin + ½·W)`, element by element, from the kinetic-energy
+/// tensor, the virial `W = Σ r⊗f` as newen stores it (the GROMOS virial is `Ξ = −½·W`) and the
+/// volume.
+///
+/// spec: dynamics.pressure_tensor
+pub fn pressure_tensor(kinetic: Mat3, virial: Mat3, volume: f64) -> Mat3 {
+    // tot_cg_factor = 1.0 for non-coarse-grained systems
+    let factor = 2.0 / volume;
+    let half_virial = Mat3::from_cols(
+        virial.x_axis * 0.5,
+        virial.y_axis * 0.5,
+        virial.z_axis * 0.5,
+    );
+    let sum = Mat3::from_cols(
+        kinetic.x_axis + half_virial.x_axis,
+        kinetic.y_axis + half_virial.y_axis,
+        kinetic.z_axis + half_virial.z_axis,
+    );
+    Mat3::from_cols(
+        sum.x_axis * factor,
+        sum.y_axis * factor,
+        sum.z_axis * factor,
+    )
+}
+
+/// The scalar pressure, a third of the trace of the pressure tensor.
+///
+/// spec: dynamics.scalar_pressure
+pub fn scalar_pressure(p: Mat3) -> f64 {
+    (p.x_axis.x + p.y_axis.y + p.z_axis.z) / 3.0
+}
+
 /// Virial type: how the virial and KE tensor are computed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VirialType {
@@ -68,24 +100,7 @@ impl Algorithm for PressureCalculation {
         let ke_tensor = conf.old().kinetic_energy_tensor;
         let virial_tensor = conf.old().virial_tensor;
 
-        // P_tensor = (KE_tensor + 0.5 * virial_tensor) * (2.0 / V)
-        // tot_cg_factor = 1.0 for non-coarse-grained systems
-        let factor = 2.0 / volume;
-        let half_virial = Mat3::from_cols(
-            virial_tensor.x_axis * 0.5,
-            virial_tensor.y_axis * 0.5,
-            virial_tensor.z_axis * 0.5,
-        );
-        let sum = Mat3::from_cols(
-            ke_tensor.x_axis + half_virial.x_axis,
-            ke_tensor.y_axis + half_virial.y_axis,
-            ke_tensor.z_axis + half_virial.z_axis,
-        );
-        let p_tensor = Mat3::from_cols(
-            sum.x_axis * factor,
-            sum.y_axis * factor,
-            sum.z_axis * factor,
-        );
+        let p_tensor = pressure_tensor(ke_tensor, virial_tensor, volume);
 
         // Store pressure tensor in old() (GROMOS convention)
         conf.old_mut().pressure_tensor = p_tensor;

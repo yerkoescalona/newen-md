@@ -29,6 +29,7 @@ use newen::{
     math::{truncoct_triclinic_rotmat, Vec3},
     validation::validate_energy,
 };
+use newen_integrators::algorithms::kinetic_temperature;
 use newen_run::{
     advance_lambda, build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
     PassthroughPolicy, PrepareNote, Prepared, RunError, RunInputs, RunOptions,
@@ -264,9 +265,8 @@ fn volume_pressure(
     k_boltzmann: f64,
 ) -> VolumePressure {
     let e = &state.energies;
-    let t = |ekin: Option<&f64>, dof: f64| match ekin {
-        Some(&ekin) if dof != 0.0 => 2.0 * ekin / k_boltzmann / dof,
-        _ => 0.0,
+    let t = |ekin: Option<&f64>, dof: f64| {
+        ekin.map_or(0.0, |&ekin| kinetic_temperature(ekin, dof, k_boltzmann))
     };
     let mut vp = VolumePressure {
         mass: topo.mass.iter().sum(),
@@ -1148,7 +1148,7 @@ fn main() {
         //  Temperature_Calculation and Energy_Calculation also write to old())
         let state = conf.old();
         let temp = if summary.total_dof > 0.0 {
-            2.0 * state.energies.kinetic_total / k_boltzmann / summary.total_dof
+            kinetic_temperature(state.energies.kinetic_total, summary.total_dof, k_boltzmann)
         } else {
             0.0
         };
