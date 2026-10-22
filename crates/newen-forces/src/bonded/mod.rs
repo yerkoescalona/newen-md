@@ -24,6 +24,23 @@ use newen_core::math::Periodicity;
 use newen_core::math::Vec3;
 use newen_core::topology::Topology;
 
+// ─── Guards of the per-term kernels ──────────────────────────────────────────
+
+/// Length below which a bond vector or a dihedral projection counts as zero (nm): the term
+/// contributes nothing.
+pub const ZERO_DISTANCE: f64 = 1e-10;
+
+/// Squared length (nm²) below which `r_kj` of a Chebyshev dihedral, or `|r_ij × r_kj|` of an
+/// improper, counts as zero: the term contributes nothing.
+pub const ZERO_DISTANCE2: f64 = 1e-10;
+
+/// `|sin θ|` below which a harmonic angle is linear; also the tolerance of `θ0 = π` there.
+pub const ZERO_SINE: f64 = 1e-10;
+
+/// `|r_ij × r_kj|² < NEAR_LINEAR · |r_kj|²`: a bond angle of a dihedral is within about
+/// 1e-5 rad of 180°, and the force on its outer atom is dropped.
+pub const NEAR_LINEAR: f64 = 1e-10;
+
 // ─── Shared result types ─────────────────────────────────────────────────────
 
 /// Energy + per-atom forces + virial tensor from a bonded term.

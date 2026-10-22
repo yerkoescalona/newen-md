@@ -1,0 +1,36 @@
+# butane_vacuum with COVALENTFORM 0 0 1 (NTBDN = 1, the Chebyshev dihedral)
+# gromosXX v1.6.0, double precision, 4 atoms
+
+[system]
+name = "butane_vacuum_ntbdn1"
+description = "Level 1: butane_vacuum with COVALENTFORM 0 0 1: the dihedral as K(1 + cos(delta) cos(m phi))"
+level = 1
+natoms = 4
+isolates = "COVALENTFORM NTBDN = 1: the Chebyshev-polynomial dihedral (delta = 0)"
+
+[input]
+topology = "../butane_vacuum/butane_vacuum.topo"
+configuration = "../butane_vacuum/butane_vacuum.conf"
+parameters = "butane_vacuum_ntbdn1.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+# gromosXX internal: double (64-bit)
+# Output positions: 9 decimal digits fixed-point
+# Output forces: 9 decimal digits fixed-point
+# Output energies: 10 significant digits scientific
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+# Recommended tolerances for newen comparison
+force_abs = 1e-6        # kJ/(mol*nm)
+energy_rel = 1e-8       # relative
+position_abs = 1e-9     # nm

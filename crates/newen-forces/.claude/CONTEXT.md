@@ -19,6 +19,14 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   `Float` evaluation bit for bit on `spec/vectors/nonbonded.json`, and a unit test in
   `innerloops.rs` checks every lane of `lj_crf_interaction_x4` against `lj_crf_pair`. Keep the
   operation order of these kernels as it is: a reassociation fails those tests.
+- **Bonded kernels verified (2026-10-22):** `quartic_bond`, `harmonic_bond`, `cosine_angle`,
+  `harmonic_angle`, `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral` (one pure kernel per
+  form in `bonded/`, called by the `calculate_*_grouped` loops) carry `/// spec:` keys. Lean model
+  in `spec/NewenSpec/Bonded.lean`, theory in `spec/NewenTheory/Interactions/Bonded.lean`;
+  `tests/bonded_spec.rs` compares them bit for bit on `spec/vectors/bonded.json` (acos/cos/sin from
+  the same C library as Lean's `Float`) and checks every force against the energy by finite
+  differences. The guards are `ZERO_DISTANCE`, `ZERO_DISTANCE2`, `ZERO_SINE`, `NEAR_LINEAR` in
+  `bonded/mod.rs`. Same rule: keep the operation order.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections

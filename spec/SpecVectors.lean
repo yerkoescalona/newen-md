@@ -3,9 +3,10 @@ import NewenSpec.Thermo.Dof
 import NewenSpec.Thermo.Bath
 import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
+import NewenSpec.Bonded
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat and nonbonded models on random `Float` inputs) and write them to `vectors/`, so
+thermostat, nonbonded and bonded models on random `Float` inputs) and write them to `vectors/`, so
 `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
@@ -13,6 +14,8 @@ open NewenSpec.Thermo.Dof
 open NewenSpec.Thermo.Bath
 open NewenSpec.Thermostat
 open NewenSpec.Nonbonded
+open NewenSpec.Bonded (Vec3 tinyFloat quarterFloat piFloat quarticBondFloat harmonicBondFloat
+  cosineAngleFloat harmonicAngleFloat dihedralChebyshevFloat dihedralNewFloat improperFloat)
 
 /-- Grid bound of the schedule grid, equal to `GRID` in
 `crates/newen-logic/tests/schedule_spec.rs`. -/
@@ -360,6 +363,186 @@ def nonbondedJson (crf lj excl selfRows : List (List Float)) : String :=
   part "crf_parameters" crf ++ ",\n" ++ part "lj_crf_pair" lj ++ ",\n" ++
   part "rf_excluded_pair" excl ++ ",\n" ++ part "rf_self_term" selfRows ++ "\n}\n"
 
+/-! ## Bonded: the bonded kernels on random `Float` inputs, written as bits
+
+Three row sets share their inputs between the kernels of one geometry: `bonds` (quartic and
+harmonic bond), `angles` (cosine-harmonic and harmonic angle), `dihedrals` (Chebyshev and NTBDN = 0
+dihedral, improper dihedral). Each set has random rows first, then rows at the edges: zero and
+guard lengths, collinear and planar geometries, `cos φ = ±1`, `|sin θ| < 1e-10`, a linear bond angle
+inside a dihedral, ζ next to ζ0 ± π. -/
+
+def vec (x y z : Float) : Vec3 Float := ⟨x, y, z⟩
+
+def vecBits (v : Vec3 Float) : List Float := [v.x, v.y, v.z]
+
+/-- A vector with components uniform in `[−a, a]`. -/
+def drawVec (a : Float) : Gen (Vec3 Float) := do
+  return vec (← uniform (-a) a) (← uniform (-a) a) (← uniform (-a) a)
+
+/-- A vector of random direction and length `len`. -/
+def drawVecOfLength (len : Float) : Gen (Vec3 Float) := do
+  let d ← drawVec 1
+  let n := Float.sqrt (d.x * d.x + d.y * d.y + d.z * d.z)
+  return d * (len / n)
+
+/-- A bond-like vector: one time in four uniform in `[−0.5, 0.5]³`, else of length within 20 % of
+`b0` (in `[0.09, 0.2]` nm when `b0 = 0`). -/
+def drawBondVec (b0 : Float) : Gen (Vec3 Float) := do
+  if (← below 4) == 0 then drawVec 0.5
+  else
+    let b0 ← if b0 == 0 then uniform 0.09 0.2 else pure b0
+    drawVecOfLength (b0 * (← uniform 0.8 1.2))
+
+/-- `degrees · π/180`. -/
+def rad (deg : Float) : Float := deg * piFloat / 180
+
+/-- One `bonds` row: `r, k_quartic, b0, k_harmonic`, then the outputs of both kernels. -/
+def bondRow (r : Vec3 Float) (kq b0 kh : Float) : List Float :=
+  let (eq, fq) := quarticBondFloat r kq b0
+  let (eh, fh) := harmonicBondFloat r kh b0
+  vecBits r ++ [kq, b0, kh] ++ [eq] ++ vecBits fq ++ [eh] ++ vecBits fh
+
+def bondRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1450 do
+    let kq ← logUniform 1e5 2e7
+    let b0 ← uniform 0.09 0.2
+    let kh ← logUniform 1e5 5e5
+    rows := rows.push (bondRow (← drawBondVec b0) kq b0 kh)
+  let edges : List (Vec3 Float) :=
+    [vec 0 0 0, vec 1e-11 0 0, vec 0 (-5e-11) 5e-11, vec 0 0 1e-10, vec tinyFloat 0 0,
+      vec 0.1 0 0, vec 0 (-0.153) 0, vec 0.5 (-0.5) 0.5]
+  for r in edges do
+    for b0 in [0.1, 0.153] do
+      rows := rows.push (bondRow r 1.57e7 b0 (2 * 1.57e7 * b0 * b0))
+      rows := rows.push (bondRow r (← logUniform 1e5 2e7) b0 (← logUniform 1e5 5e5))
+  return rows.toList
+
+/-- One `angles` row: `r_ij, r_kj, k_cosine, cos0, k_harmonic, theta0`, then the outputs of both
+kernels; `cos0 = cos theta0` for the random rows. -/
+def angleRow (rij rkj : Vec3 Float) (kc cos0 kh theta0 : Float) : List Float :=
+  let (ec, fic, fjc, fkc) := cosineAngleFloat rij rkj kc cos0
+  let (eh, fih, fjh, fkh) := harmonicAngleFloat rij rkj kh theta0
+  vecBits rij ++ vecBits rkj ++ [kc, cos0, kh, theta0] ++
+    [ec] ++ vecBits fic ++ vecBits fjc ++ vecBits fkc ++
+    [eh] ++ vecBits fih ++ vecBits fjh ++ vecBits fkh
+
+/-- Force constants and a reference angle in `[90°, 125°]` (or `θ0`): `k_cosine, cos0, k_harmonic,
+theta0`. -/
+def drawAngleParams (theta0 : Option Float := none) : Gen (Float × Float × Float × Float) := do
+  let theta0 ← match theta0 with
+    | some t => pure t
+    | none => do let d ← uniform 90 125; pure (rad d)
+  return (← uniform 200 800, Float.cos theta0, ← uniform 100 800, theta0)
+
+def angleRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 950 do
+    let (kc, cos0, kh, theta0) ← drawAngleParams
+    rows := rows.push (angleRow (← drawBondVec 0) (← drawBondVec 0) kc cos0 kh theta0)
+  for i in List.range 50 do
+    let rij ← drawBondVec 0
+    let s ← uniform 0.5 2
+    let a ← uniform 0.09 0.2
+    -- collinear (θ = 0 and θ = π; along an axis cos θ = ±1 exactly, so |sin θ| < 1e-10),
+    -- perpendicular, a zero bond, a bond at the guard
+    let (rij, rkj) := match i % 8 with
+      | 0 => (rij, rij * s)
+      | 1 => (rij, rij * (-s))
+      | 2 | 3 => (vec a 0 0, vec (-a * s) 0 0)
+      | 4 => (vec 0 a 0, vec 0 (a * s) 0)
+      | 5 => (rij, vec (-rij.y) rij.x 0)
+      | 6 => (rij, vec 0 0 0)
+      | _ => (rij, vec 0 0 tinyFloat)
+    let (kc, cos0, kh, theta0) ← drawAngleParams (if i % 8 == 2 then some piFloat else none)
+    rows := rows.push (angleRow rij rkj kc cos0 kh theta0)
+  return rows.toList
+
+/-- One `dihedrals` row: `r_ij, r_kj, r_kl, k, cos_delta, delta, m, k_improper, zeta0`, then the
+outputs of the Chebyshev, the NTBDN = 0 and the improper kernel (`m` as a float). -/
+def dihedralRow (rij rkj rkl : Vec3 Float) (k delta : Float) (m : Nat) (ki zeta0 : Float) :
+    List Float :=
+  let cosDelta := Float.cos delta
+  let (ec, fic, fjc, fkc, flc) := dihedralChebyshevFloat rij rkj rkl k cosDelta m
+  let (en, fin, fjn, fkn, fln) := dihedralNewFloat rij rkj rkl k delta m.toFloat
+  let (ei, fii, fji, fki, fli) := improperFloat rij rkj rkl ki zeta0
+  let out (e : Float) (fi fj fk fl : Vec3 Float) :=
+    [e] ++ vecBits fi ++ vecBits fj ++ vecBits fk ++ vecBits fl
+  vecBits rij ++ vecBits rkj ++ vecBits rkl ++ [k, cosDelta, delta, m.toFloat, ki, zeta0] ++
+    out ec fic fjc fkc flc ++ out en fin fjn fkn fln ++ out ei fii fji fki fli
+
+/-- `k, delta, m, k_improper, zeta0`: `δ ∈ {0, π}` two times in three, else uniform in
+`[−π, π]`; `m` in `0..6` (and the unsupported 7 one time in sixteen); `ζ0 ∈ {0, 35.26°}` three
+times in four, else uniform in `[−π, π]`. -/
+def drawDihedralParams : Gen (Float × Float × Nat × Float × Float) := do
+  let k ← uniform 0.1 50
+  let delta ← match ← below 3 with
+    | 0 => pure 0
+    | 1 => pure piFloat
+    | _ => uniform (-piFloat) piFloat
+  let m ← if (← below 16) == 0 then pure 7 else below 7
+  let zeta0 ← match ← below 4 with
+    | 0 => pure 0
+    | 1 | 2 => pure (rad 35.26)
+    | _ => uniform (-piFloat) piFloat
+  return (k, delta, m, ← uniform 100 400, zeta0)
+
+def dihedralRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 650 do
+    let (k, delta, m, ki, zeta0) ← drawDihedralParams
+    rows := rows.push
+      (dihedralRow (← drawBondVec 0) (← drawBondVec 0) (← drawBondVec 0) k delta m ki zeta0)
+  for i in List.range 60 do
+    let rij ← drawBondVec 0
+    let rkj ← drawBondVec 0
+    let rkl ← drawBondVec 0
+    let a ← uniform (-1.5) 1.5
+    let b ← uniform (-1.5) 1.5
+    let s ← uniform 0.5 2
+    let perp := (rij.cross rkj) * (1e-6 / Float.sqrt ((rij.cross rkj).dot (rij.cross rkj)))
+    let (rij, rkj, rkl) := match i % 10 with
+      | 0 => (rij, rkj, rij * a + rkj * b)          -- planar: cos φ = ±1
+      | 1 => (rij, rkj, rij * (-s) + rkj * b)       -- planar, the other side
+      | 2 => (rkj * s, rkj, rkl)                    -- i, j, k collinear
+      | 3 => (rij, rkj, rkj * s)                    -- j, k, l collinear
+      | 4 => (rkj * s + perp, rkj, rkl)             -- bond angle within 1e-5 rad of 0 or π
+      | 5 => (rij, vec 0 0 0, rkl)                  -- r_kj = 0
+      | 6 => (rij, rkj * 1e-6, rkl)                 -- |r_kj|² below the guard
+      | 7 => (rij, rkj, rij * (-1 : Float) + rkj * b)  -- trans: ζ, φ at ±π
+      | 8 => (rij, rkj, rij * (-1 : Float) + rkj * b + perp * (10 : Float))  -- just off trans
+      | _ => (rij, rkj, rkl)
+    let (k, delta, m, ki, zeta0) ← drawDihedralParams
+    rows := rows.push (dihedralRow rij rkj rkl k delta m ki zeta0)
+  return rows.toList
+
+/-- The three row sets of `vectors/bonded.json`, from a fixed seed. -/
+def bondedRows : List (List Float) × List (List Float) × List (List Float) :=
+  (do return (← bondRows, ← angleRows, ← dihedralRows) : Gen _).run' 0x6e6577656e2d6264
+
+def bondedJson (bonds angles dihedrals : List (List Float)) : String :=
+  let part (name : String) (rows : List (List Float)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"bonded.quartic_bond, bonded.harmonic_bond, bonded.cosine_angle, " ++
+  "bonded.harmonic_angle, bonded.dihedral_chebyshev, bonded.dihedral_new, " ++
+  "bonded.improper_dihedral\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.Bonded.quarticBondFloat, " ++
+  "harmonicBondFloat, cosineAngleFloat, harmonicAngleFloat, dihedralChebyshevFloat, " ++
+  "dihedralNewFloat, improperFloat; SplitMix64, fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); m is a float\",\n" ++
+  "  \"layout_bonds\": \"r (3), k_quartic, b0, k_harmonic; quartic_bond energy, f_i (3); " ++
+  "harmonic_bond energy, f_i (3)\",\n" ++
+  "  \"layout_angles\": \"r_ij (3), r_kj (3), k_cosine, cos0, k_harmonic, theta0; cosine_angle " ++
+  "energy, f_i, f_j, f_k (3 each); harmonic_angle energy, f_i, f_j, f_k\",\n" ++
+  "  \"layout_dihedrals\": \"r_ij (3), r_kj (3), r_kl (3), k, cos_delta, delta, m, k_improper, " ++
+  "zeta0; dihedral_chebyshev(k, cos_delta, m) energy, f_i, f_j, f_k, f_l (3 each); " ++
+  "dihedral_new(k, delta, m) energy, f_i, f_j, f_k, f_l; improper_dihedral(k_improper, zeta0) " ++
+  "energy, f_i, f_j, f_k, f_l\",\n" ++
+  part "bonds" bonds ++ ",\n" ++ part "angles" angles ++ ",\n" ++
+  part "dihedrals" dihedrals ++ "\n}\n"
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -371,8 +554,15 @@ def main : IO Unit := do
   -- the literals the models use must be the exact doubles 0, 1, 2, 6, 12 (and 0.5)
   unless (0 : Float).toBits == 0 && (1 : Float).toBits == 0x3FF0000000000000 &&
       (2 : Float).toBits == 0x4000000000000000 && (6 : Float).toBits == 0x4018000000000000 &&
-      (12 : Float).toBits == 0x4028000000000000 && halfFloat == 1 / 2 do
+      (12 : Float).toBits == 0x4028000000000000 && NewenSpec.Nonbonded.halfFloat == 1 / 2 &&
+      NewenSpec.Bonded.halfFloat == 1 / 2 && quarterFloat == 1 / 4 do
     throw (IO.userError "Float literals 0, 1, 2, 6, 12 are not exact")
+  -- the other literals of the bonded models, and 1e-10 and π as the nearest doubles
+  let lits : List Nat := [3, 4, 5, 8, 16, 18, 20, 32, 36, 48, 60, 80, 192, 180]
+  unless lits.all (fun n => (Float.ofNat n).toUInt64.toNat == n) &&
+      piFloat == 3.141592653589793 &&
+      tinyFloat == 1e-10 do
+    throw (IO.userError "bonded literals are not the expected doubles")
   let (berendsen, noseHoover) := thermostatRows
   IO.FS.writeFile "vectors/thermostat.json" (thermostatJson berendsen noseHoover)
   IO.println (s!"wrote vectors/thermostat.json ({berendsen.length} Berendsen rows, " ++
@@ -381,3 +571,7 @@ def main : IO Unit := do
   IO.FS.writeFile "vectors/nonbonded.json" (nonbondedJson crf lj excl selfRows)
   IO.println (s!"wrote vectors/nonbonded.json ({crf.length} crf_parameters, {lj.length} " ++
     s!"lj_crf_pair, {excl.length} rf_excluded_pair, {selfRows.length} rf_self_term rows)")
+  let (bonds, angles, dihedrals) := bondedRows
+  IO.FS.writeFile "vectors/bonded.json" (bondedJson bonds angles dihedrals)
+  IO.println (s!"wrote vectors/bonded.json ({bonds.length} bonds, {angles.length} angles, " ++
+    s!"{dihedrals.length} dihedrals rows)")

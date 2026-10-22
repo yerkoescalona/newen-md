@@ -266,6 +266,7 @@ REFERENCE_SYSTEMS = [
     "benzene_vacuum",
     "nacl_pair_box",
     "butane_vacuum",
+    "butane_vacuum_ntbdn1",
     "aladip_vacuum",
     # Level 2: Small solvated
     "water_3_box",

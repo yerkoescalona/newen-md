@@ -4,5 +4,6 @@ import NewenSpec.Thermo.Bath
 import NewenSpec.Float
 import NewenSpec.Thermostat
 import NewenSpec.Nonbonded
+import NewenSpec.Bonded
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement

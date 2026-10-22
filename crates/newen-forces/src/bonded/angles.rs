@@ -3,8 +3,94 @@
 use newen_core::configuration::Configuration;
 use newen_core::topology::Topology;
 
-use super::ForceEnergy;
-use newen_core::math::Periodicity;
+use super::{ForceEnergy, ZERO_DISTANCE, ZERO_SINE};
+use newen_core::math::{Periodicity, Vec3};
+
+/// One cosine-harmonic angle `V = K/2 · (cos θ − cos θ0)²` at `r_ij = x_i − x_j`,
+/// `r_kj = x_k − x_j`: `(energy, f_i, f_j, f_k)`; nothing when a bond is shorter than
+/// [`ZERO_DISTANCE`]. `cos0 = cos θ0` comes precomputed, once per angle type. In this order:
+///
+/// ```text
+/// d_ij = |r_ij|,  d_kj = |r_kj|
+/// cost   = clamp(r_ij · r_kj / (d_ij · d_kj), −1, 1)
+/// d_cos  = cost − cos0
+/// energy = 0.5 · k · d_cos · d_cos
+/// df     = −k · d_cos
+/// f_i    = (r_kj · (1/d_kj) − r_ij · (cost/d_ij)) · (df/d_ij)
+/// f_k    = (r_ij · (1/d_ij) − r_kj · (cost/d_kj)) · (df/d_kj)
+/// f_j    = −(f_i + f_k)
+/// ```
+///
+/// spec: bonded.cosine_angle
+#[inline]
+pub fn cosine_angle(r_ij: Vec3, r_kj: Vec3, k: f64, cos0: f64) -> (f64, Vec3, Vec3, Vec3) {
+    let d_ij = r_ij.length();
+    let d_kj = r_kj.length();
+    if d_ij < ZERO_DISTANCE || d_kj < ZERO_DISTANCE {
+        return (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    }
+    let cost = (r_ij.dot(r_kj) / (d_ij * d_kj)).clamp(-1.0, 1.0);
+    let d_cos = cost - cos0;
+    let energy = 0.5 * k * d_cos * d_cos;
+    let df = -k * d_cos;
+    let f_i = (r_kj * (1.0 / d_kj) - r_ij * (cost / d_ij)) * (df / d_ij);
+    let f_k = (r_ij * (1.0 / d_ij) - r_kj * (cost / d_kj)) * (df / d_kj);
+    let f_j = -(f_i + f_k);
+    (energy, f_i, f_j, f_k)
+}
+
+/// One harmonic angle `V = K/2 · (θ − θ0)²` at `r_ij = x_i − x_j`, `r_kj = x_k − x_j`:
+/// `(energy, f_i, f_j, f_k)`; nothing when a bond is shorter than [`ZERO_DISTANCE`]. In this
+/// order:
+///
+/// ```text
+/// d_ij = |r_ij|,  d_kj = |r_kj|
+/// cos_theta = clamp(r_ij · r_kj / (d_ij · d_kj), −1, 1)
+/// theta = acos(cos_theta),  sin_theta = sin(theta)
+/// |sin_theta| ≥ ZERO_SINE:
+///     ff = k · (theta − theta0) / sin_theta;  k_i = ff / d_ij;  k_k = ff / d_kj
+///     energy = 0.5 · k · (theta − theta0) · (theta − theta0)
+/// |sin_theta| < ZERO_SINE (θ = π) and |theta0 − π| ≤ ZERO_SINE:
+///     k_i = −k / d_ij;  k_k = −k / d_kj;  energy = k · (1 + cos_theta)
+/// |sin_theta| < ZERO_SINE otherwise: nothing
+/// f_i = (r_kj/d_kj − (r_ij/d_ij) · cos_theta) · k_i
+/// f_k = (r_ij/d_ij − (r_kj/d_kj) · cos_theta) · k_k
+/// f_j = −(f_i + f_k)
+/// ```
+///
+/// spec: bonded.harmonic_angle
+#[inline]
+pub fn harmonic_angle(r_ij: Vec3, r_kj: Vec3, k: f64, theta0: f64) -> (f64, Vec3, Vec3, Vec3) {
+    const PI: f64 = std::f64::consts::PI;
+    let nothing = (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let d_ij = r_ij.length();
+    let d_kj = r_kj.length();
+    if d_ij < ZERO_DISTANCE || d_kj < ZERO_DISTANCE {
+        return nothing;
+    }
+    let cos_theta = (r_ij.dot(r_kj) / (d_ij * d_kj)).clamp(-1.0, 1.0);
+    let theta = cos_theta.acos();
+    let sin_theta = theta.sin();
+
+    let (k_i, k_k, energy) = if sin_theta.abs() < ZERO_SINE {
+        // θ = π, where (θ − θ0)/sin θ → −1 if θ0 = π; any other θ0 has no finite force there
+        if theta0 > PI + ZERO_SINE || theta0 < PI - ZERO_SINE {
+            return nothing;
+        }
+        (-k / d_ij, -k / d_kj, k * (1.0 + cos_theta))
+    } else {
+        let ff = k * (theta - theta0) / sin_theta;
+        let d_theta = theta - theta0;
+        (ff / d_ij, ff / d_kj, 0.5 * k * d_theta * d_theta)
+    };
+
+    let unit_ij = r_ij / d_ij;
+    let unit_kj = r_kj / d_kj;
+    let f_i = (unit_kj - unit_ij * cos_theta) * k_i;
+    let f_k = (unit_ij - unit_kj * cos_theta) * k_k;
+    let f_j = -(f_i + f_k);
+    (energy, f_i, f_j, f_k)
+}
 
 /// Calculate angle forces (GROMOS cosine-based)
 ///
@@ -27,6 +113,12 @@ pub(crate) fn calculate_angle_forces_grouped<const GROUPS: bool>(
     per_group: &mut [f64],
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
+    // cos θ0 once per angle type, as gromosXX stores it when it reads the topology
+    let cos0: Vec<f64> = topo
+        .angle_parameters
+        .iter()
+        .map(|p| p.theta0.cos())
+        .collect();
 
     for angle in topo.all_angles_global() {
         if angle.angle_type >= topo.angle_parameters.len() {
@@ -39,29 +131,8 @@ pub(crate) fn calculate_angle_forces_grouped<const GROUPS: bool>(
         let rij = pbc.nearest_image(conf.current().pos[angle.i], conf.current().pos[angle.j]);
         let rkj = pbc.nearest_image(conf.current().pos[angle.k], conf.current().pos[angle.j]);
 
-        let dij = rij.length();
-        let dkj = rkj.length();
-
-        if dij < 1e-10 || dkj < 1e-10 {
-            continue;
-        }
-
-        let cost = (rij.dot(rkj) / (dij * dkj)).clamp(-1.0, 1.0);
-        let cos0 = params.theta0.cos();
-
-        // Energy: V = (1/2) * K * (cos(θ) - cos(θ0))^2
-        let d_cos = cost - cos0;
-        let energy = 0.5 * params.k_cosine * d_cos * d_cos;
-
-        // Force: GROMOS convention (angle_interaction.cc)
-        // df = -K * (cos(θ) - cos(θ0))
-        // fi = df/dij * (rkj/dkj - rij/dij * cos(θ))
-        // fk = df/dkj * (rij/dij - rkj/dkj * cos(θ))
-        let df = -params.k_cosine * d_cos;
-
-        let f_i = (rkj * (1.0 / dkj) - rij * (cost / dij)) * (df / dij);
-        let f_k = (rij * (1.0 / dij) - rkj * (cost / dkj)) * (df / dkj);
-        let f_j = -(f_i + f_k);
+        let (energy, f_i, f_j, f_k) =
+            cosine_angle(rij, rkj, params.k_cosine, cos0[angle.angle_type]);
 
         result.energy += energy;
         if GROUPS {
@@ -114,9 +185,6 @@ pub(crate) fn calculate_harmonic_angle_forces_grouped<const GROUPS: bool>(
 ) -> ForceEnergy {
     let mut result = ForceEnergy::new(topo.num_atoms());
 
-    const EPSILON: f64 = 1e-10; // Small value for numerical stability
-    const PI: f64 = std::f64::consts::PI;
-
     for angle in topo.all_angles_global() {
         if angle.angle_type >= topo.angle_parameters.len() {
             continue;
@@ -128,66 +196,7 @@ pub(crate) fn calculate_harmonic_angle_forces_grouped<const GROUPS: bool>(
         let r_ij = pbc.nearest_image(conf.current().pos[angle.i], conf.current().pos[angle.j]);
         let r_kj = pbc.nearest_image(conf.current().pos[angle.k], conf.current().pos[angle.j]);
 
-        let d_ij = r_ij.length();
-        let d_kj = r_kj.length();
-
-        if d_ij < EPSILON || d_kj < EPSILON {
-            continue; // Avoid division by zero
-        }
-
-        // Calculate angle θ using dot product
-        let cos_theta = (r_ij.dot(r_kj) / (d_ij * d_kj)).clamp(-1.0, 1.0);
-        let theta = cos_theta.acos();
-        let sin_theta = theta.sin();
-
-        // Get equilibrium angle (stored in params.theta0)
-        let theta0 = params.theta0;
-
-        // Force constants for the three atoms
-        let k_i: f64;
-        let k_k: f64;
-        let energy: f64;
-
-        // Special handling when sin(θ) ≈ 0 (θ near 0 or π)
-        if sin_theta.abs() < EPSILON {
-            // When θ ≈ π (linear angle), special treatment to avoid numerical errors
-            if (theta0 > PI + EPSILON) || (theta0 < PI - EPSILON) {
-                // θ₀ ≠ π but current angle is π: this is problematic
-                // Skip this angle to avoid numerical issues
-                continue;
-            }
-
-            // Special force constants when θ ≈ π
-            // From GROMOS++: ki = -K / dij, kk = -K / dkj
-            k_i = -params.k_harmonic / d_ij;
-            k_k = -params.k_harmonic / d_kj;
-
-            // Energy when θ ≈ π: V = K * (1 + cos(θ))
-            energy = params.k_harmonic * (1.0 + cos_theta);
-        } else {
-            // Normal case: θ is not near 0 or π
-            // Force constants: ki = K * (θ - θ₀) / (sin(θ) * dij)
-            let force_factor = params.k_harmonic * (theta - theta0) / sin_theta;
-            k_i = force_factor / d_ij;
-            k_k = force_factor / d_kj;
-
-            // Energy: V = 0.5 * K * (θ - θ₀)²
-            let d_theta = theta - theta0;
-            energy = 0.5 * params.k_harmonic * d_theta * d_theta;
-        }
-
-        // Calculate forces on the three atoms
-        // The force direction is perpendicular to the bond vectors
-        // fi = ki * (r_kj/d_kj - cos(θ) * r_ij/d_ij)
-        // fk = kk * (r_ij/d_ij - cos(θ) * r_kj/d_kj)
-        // fj = -(fi + fk)  [force conservation]
-
-        let unit_ij = r_ij / d_ij;
-        let unit_kj = r_kj / d_kj;
-
-        let f_i = (unit_kj - unit_ij * cos_theta) * k_i;
-        let f_k = (unit_ij - unit_kj * cos_theta) * k_k;
-        let f_j = -(f_i + f_k); // Force conservation
+        let (energy, f_i, f_j, f_k) = harmonic_angle(r_ij, r_kj, params.k_harmonic, params.theta0);
 
         result.energy += energy;
         if GROUPS {

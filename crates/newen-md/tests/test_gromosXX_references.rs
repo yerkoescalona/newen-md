@@ -1050,6 +1050,8 @@ ref_test!(water_single_genvel, "water_single_genvel");
 ref_test!(benzene_vacuum, "benzene_vacuum");
 ref_test!(nacl_pair_box, "nacl_pair_box");
 ref_test!(butane_vacuum, "butane_vacuum");
+// COVALENTFORM 0 0 1: the Chebyshev-polynomial dihedral (NTBDN = 1).
+ref_test!(butane_vacuum_ntbdn1, "butane_vacuum_ntbdn1");
 
 // ── Level 2: PBC, pairlist, SHAKE, solvent, twin-range ──────────────────────
 ref_test!(water_3_box, "water_3_box");

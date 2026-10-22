@@ -4,8 +4,87 @@ use newen_core::configuration::Configuration;
 use newen_core::math::Vec3;
 use newen_core::topology::Topology;
 
-use super::ForceEnergy;
+use super::{ForceEnergy, NEAR_LINEAR, ZERO_DISTANCE2};
 use newen_core::math::Periodicity;
+
+/// One improper dihedral `V = K/2 · (ζ − ζ0)²` at `r_ij = x_i − x_j`, `r_kj = x_k − x_j`,
+/// `r_kl = x_k − x_l`: `(energy, f_i, f_j, f_k, f_l)`; nothing when a plane normal is shorter
+/// than [`ZERO_DISTANCE2`] (nm²). ζ is the angle between the plane normals, signed by
+/// `r_ij · r_nk` and moved by whole turns into `[ζ0 − π, ζ0 + π]`. In this order:
+///
+/// ```text
+/// r_mj = r_ij × r_kj;   r_nk = r_kj × r_kl
+/// d_kj2 = r_kj · r_kj;  d_mj2 = r_mj · r_mj;  d_nk2 = r_nk · r_nk
+/// d_kj = sqrt(d_kj2);   d_mj = sqrt(d_mj2);   d_nk = sqrt(d_nk2)
+/// zeta = acos(clamp(r_mj · r_nk / (d_mj · d_nk), −1, 1)), negated when r_ij · r_nk < 0
+/// while zeta < zeta0 − π: zeta += 2π;   while zeta > zeta0 + π: zeta −= 2π
+/// d_zeta = zeta − zeta0
+/// energy = 0.5 · k · d_zeta · d_zeta
+/// k_i = −k · d_zeta · d_kj;   k_l = −k_i
+/// k_i = 0 if d_mj2 < NEAR_LINEAR · d_kj2, else k_i / d_mj2   (k_l the same with d_nk2)
+/// f_i = r_mj · k_i;   f_l = r_nk · k_l
+/// f_j = f_i · (r_ij · r_kj / d_kj2 − 1) − f_l · (r_kl · r_kj / d_kj2)
+/// f_k = −(f_i + f_j + f_l)
+/// ```
+///
+/// spec: bonded.improper_dihedral
+#[inline]
+pub fn improper_dihedral(
+    r_ij: Vec3,
+    r_kj: Vec3,
+    r_kl: Vec3,
+    k: f64,
+    zeta0: f64,
+) -> (f64, Vec3, Vec3, Vec3, Vec3) {
+    const PI: f64 = std::f64::consts::PI;
+    let r_mj = r_ij.cross(r_kj);
+    let r_nk = r_kj.cross(r_kl);
+    let d_kj2 = r_kj.dot(r_kj);
+    let d_mj2 = r_mj.dot(r_mj);
+    let d_nk2 = r_nk.dot(r_nk);
+    let d_kj = d_kj2.sqrt();
+    let d_mj = d_mj2.sqrt();
+    let d_nk = d_nk2.sqrt();
+    if d_mj < ZERO_DISTANCE2 || d_nk < ZERO_DISTANCE2 {
+        return (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    }
+
+    let acs = (r_mj.dot(r_nk) / (d_mj * d_nk)).clamp(-1.0, 1.0);
+    let mut zeta = acs.acos();
+    if r_ij.dot(r_nk) < 0.0 {
+        zeta = -zeta;
+    }
+    while zeta < zeta0 - PI {
+        zeta += 2.0 * PI;
+    }
+    while zeta > zeta0 + PI {
+        zeta -= 2.0 * PI;
+    }
+
+    let d_zeta = zeta - zeta0;
+    let energy = 0.5 * k * d_zeta * d_zeta;
+
+    let k_i = -k * d_zeta * d_kj;
+    let k_l = -k_i;
+    let k_i = if d_mj2 < NEAR_LINEAR * d_kj2 {
+        0.0
+    } else {
+        k_i / d_mj2
+    };
+    let k_l = if d_nk2 < NEAR_LINEAR * d_kj2 {
+        0.0
+    } else {
+        k_l / d_nk2
+    };
+
+    let k_j1 = r_ij.dot(r_kj) / d_kj2 - 1.0;
+    let k_j2 = r_kl.dot(r_kj) / d_kj2;
+    let f_i = r_mj * k_i;
+    let f_l = r_nk * k_l;
+    let f_j = f_i * k_j1 - f_l * k_j2;
+    let f_k = -(f_i + f_j + f_l);
+    (energy, f_i, f_j, f_k, f_l)
+}
 
 /// Calculate improper dihedral forces (for planarity/chirality).
 ///
@@ -49,62 +128,7 @@ pub(crate) fn calculate_improper_dihedral_forces_grouped<const GROUPS: bool>(
             conf.current().pos[improper.l],
         );
 
-        let r_mj = r_ij.cross(r_kj);
-        let r_nk = r_kj.cross(r_kl);
-
-        let d_kj2 = r_kj.dot(r_kj);
-        let d_mj2 = r_mj.dot(r_mj);
-        let d_nk2 = r_nk.dot(r_nk);
-
-        let d_kj = d_kj2.sqrt();
-        let d_mj = d_mj2.sqrt();
-        let d_nk = d_nk2.sqrt();
-
-        if d_mj < 1e-10 || d_nk < 1e-10 {
-            continue;
-        }
-
-        let acs = (r_mj.dot(r_nk) / (d_mj * d_nk)).clamp(-1.0, 1.0);
-        let mut zeta = acs.acos();
-
-        if r_ij.dot(r_nk) < 0.0 {
-            zeta = -zeta;
-        }
-
-        // Bring ζ to interval [ζ₀ - π, ζ₀ + π]
-        let mut zeta_adj = zeta;
-        while zeta_adj < (params.q0 - std::f64::consts::PI) {
-            zeta_adj += 2.0 * std::f64::consts::PI;
-        }
-        while zeta_adj > (params.q0 + std::f64::consts::PI) {
-            zeta_adj -= 2.0 * std::f64::consts::PI;
-        }
-
-        let d_zeta = zeta_adj - params.q0;
-        let energy = 0.5 * params.k * d_zeta * d_zeta;
-
-        let mut k_i = -params.k * d_zeta * d_kj;
-        let mut k_l = -k_i;
-
-        if d_mj2 < 1.0e-10 * d_kj2 {
-            k_i = 0.0;
-        } else {
-            k_i /= d_mj2;
-        }
-
-        if d_nk2 < 1.0e-10 * d_kj2 {
-            k_l = 0.0;
-        } else {
-            k_l /= d_nk2;
-        }
-
-        let k_j1 = r_ij.dot(r_kj) / d_kj2 - 1.0;
-        let k_j2 = r_kl.dot(r_kj) / d_kj2;
-
-        let f_i = r_mj * k_i;
-        let f_l = r_nk * k_l;
-        let f_j = f_i * k_j1 - f_l * k_j2;
-        let f_k = -(f_i + f_j + f_l);
+        let (energy, f_i, f_j, f_k, f_l) = improper_dihedral(r_ij, r_kj, r_kl, params.k, params.q0);
 
         result.energy += energy;
         if GROUPS {

@@ -197,3 +197,101 @@ theorem = "NewenSpec.Nonbonded.rfSelfTermModel_real_eq"
 # Rust = model at Float, bit for bit on the generated rows (cargo test)
 differential = "crates/newen-forces/tests/nonbonded_spec.rs"
 vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "bonded.quartic_bond"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/bonds.rs::quartic_bond"
+used_by = ["crates/newen-forces/src/bonded/bonds.rs::calculate_bond_forces_quartic_grouped (COVALENTFORM NTBBH = 0)"]
+origin = "gromosXX Quartic_Bond_Interaction (quartic_bond_interaction.cc:71-113), the same operations in the same order"
+# Theorems over R: force = -grad V, and the quartic/harmonic match at b0
+theory = "NewenTheory.Interactions.Bonded.quarticBond, radialForce (quarticBond_force_is_minus_grad, quartic_harmonic_match)"
+model = "NewenSpec.Bonded.quarticBondModel (at Float: quarticBondFloat)"
+theorem = "NewenSpec.Bonded.quarticBondModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.harmonic_bond"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/bonds.rs::harmonic_bond"
+used_by = ["crates/newen-forces/src/bonded/bonds.rs::calculate_bond_forces_harmonic_grouped (COVALENTFORM NTBBH = 1)"]
+origin = "gromosXX Harmonic_Bond_Interaction (harmonic_bond_interaction.cc:71-107), the same operations in the same order; the guard b < 1e-10 (no term) is newen's, gromosXX asserts b != 0"
+# Theorems over R: force = -grad V
+theory = "NewenTheory.Interactions.Bonded.harmonicBond, radialForce (harmonicBond_force_is_minus_grad)"
+model = "NewenSpec.Bonded.harmonicBondModel (at Float: harmonicBondFloat)"
+theorem = "NewenSpec.Bonded.harmonicBondModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.cosine_angle"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/angles.rs::cosine_angle"
+used_by = ["crates/newen-forces/src/bonded/angles.rs::calculate_angle_forces_grouped (COVALENTFORM NTBAH = 0; cos theta0 computed once per angle type)"]
+origin = "gromosXX Angle_Interaction (angle_interaction.cc:75-139); gromosXX writes f_i = df/d_ij * (r_kj/d_kj - r_ij/d_ij * cos), newen (r_kj * (1/d_kj) - r_ij * (cos/d_ij)) * (df/d_ij) (last-bit differences); the clamp of cos to [-1, 1] and the guard d < 1e-10 are newen's"
+# Theorems over R: forces = -grad V on all three atoms, sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.cosineAngle, cosineAngleForces (cosineAngle_force_is_minus_grad, cosineAngle_forces_sum_zero, cosineAngle_torque_zero)"
+model = "NewenSpec.Bonded.cosineAngleModel (at Float: cosineAngleFloat)"
+theorem = "NewenSpec.Bonded.cosineAngleModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.harmonic_angle"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/angles.rs::harmonic_angle"
+used_by = ["crates/newen-forces/src/bonded/angles.rs::calculate_harmonic_angle_forces_grouped (COVALENTFORM NTBAH = 1)"]
+origin = "gromosXX Harm_Angle_Interaction (harm_angle_interaction.cc:73-163); the linear test is |sin theta| < 1e-10 in newen, sin theta < 1e-12 (math::epsilon) in gromosXX; the clamp and the guard d < 1e-10 are newen's"
+# Theorems over R: sum zero and no torque (the gradient is checked by finite differences only)
+theory = "NewenTheory.Interactions.Bonded.harmonicAngle, harmonicAngleForces (harmonicAngle_conservation)"
+model = "NewenSpec.Bonded.harmonicAngleModel (at Float: harmonicAngleFloat)"
+theorem = "NewenSpec.Bonded.harmonicAngleModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (acos, sin: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.dihedral_chebyshev"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_chebyshev"
+used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_forces_grouped (COVALENTFORM NTBDN = 1)"]
+origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
+# Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_conservation)"
+model = "NewenSpec.Bonded.dihedralChebyshevModel (at Float: dihedralChebyshevFloat)"
+theorem = "NewenSpec.Bonded.dihedralChebyshevModel_real_eq (cosMultipleModel_real)"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test); reference butane_vacuum_ntbdn1
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.dihedral_new"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_new"
+used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_new_forces_grouped (COVALENTFORM NTBDN = 0, the default)"]
+origin = "gromosXX Dihedral_new_Interaction (dihedral_new_interaction.cc:73-153); gromosXX forms f_i as ((k_i*d_kj) * r_mj) / d_mj2, newen r_mj * (k_i*d_kj/d_mj2) (last-bit differences); gromosXX drops f_i when d_mj2 < 1e-10 d_kj2, newen keeps it only when d_mj2 > 1e-10 d_kj2 (equality differs); the guards |r_kj|, |r_im|, |r_ln| < 1e-10 are newen's"
+# Theorems over R: equal to the Chebyshev form for delta in {0, pi}; sum zero, no torque away from a linear bond angle
+theory = "NewenTheory.Interactions.Bonded.dihedralNew, signedDihedral, newDihedralForces (dihedral_new_eq_dihedral, newDihedral_conservation)"
+model = "NewenSpec.Bonded.dihedralNewModel (at Float: dihedralNewFloat)"
+theorem = "NewenSpec.Bonded.dihedralNewModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (acos, cos, sin: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.improper_dihedral"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/improper.rs::improper_dihedral"
+used_by = ["crates/newen-forces/src/bonded/improper.rs::calculate_improper_dihedral_forces_grouped"]
+origin = "gromosXX Improper_Dihedral_Interaction (improper_dihedral_interaction.cc:70-173), the same operations in the same order; gromosXX clamps cos zeta only within 1e-12 of +-1 and reports anything further out as critical, newen clamps silently; the guard |r_mj|, |r_nk| < 1e-10 is newen's (gromosXX asserts they are nonzero)"
+# Theorems over R: sum zero, no torque away from a linear bond angle
+theory = "NewenTheory.Interactions.Bonded.improper, improperAngle, improperForces (improper_conservation)"
+model = "NewenSpec.Bonded.improperModel (at Float: improperFloat)"
+theorem = "NewenSpec.Bonded.improperModel_real_eq (wrap_real_of_mem)"
+# Rust = model at Float, bit for bit on the generated rows (acos: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"

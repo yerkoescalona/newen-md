@@ -4,8 +4,181 @@ use newen_core::configuration::Configuration;
 use newen_core::math::Vec3;
 use newen_core::topology::Topology;
 
-use super::ForceEnergy;
+use super::{ForceEnergy, NEAR_LINEAR, ZERO_DISTANCE, ZERO_DISTANCE2};
 use newen_core::math::Periodicity;
+
+/// `(cos mφ, d cos mφ / d cos φ)` for `0 ≤ m ≤ 6` as polynomials in `c = cos φ`, with the powers
+/// formed as gromosXX forms them (`dihedral_interaction.cc`); `None` for `m > 6`.
+///
+/// ```text
+/// c2 = c · c;  c3 = c2 · c;  c4 = c3 · c
+/// m = 0: 0                                   0
+/// m = 1: c                                   1
+/// m = 2: 2·c2 − 1                            4·c
+/// m = 3: 4·c3 − 3·c                          12·c2 − 3
+/// m = 4: 8·c4 − 8·c2 + 1                     32·c3 − 16·c
+/// m = 5: 16·c4·c − 20·c3 + 5·c               80·c4 − 60·c2 + 5
+/// m = 6: 32·c4·c2 − 48·c4 + 18·c2 − 1        192·c4·c − 192·c3 + 36·c
+/// ```
+#[inline]
+fn cos_multiple(m: u32, c: f64) -> Option<(f64, f64)> {
+    let c2 = c * c;
+    let c3 = c2 * c;
+    let c4 = c3 * c;
+    match m {
+        0 => Some((0.0, 0.0)),
+        1 => Some((c, 1.0)),
+        2 => Some((2.0 * c2 - 1.0, 4.0 * c)),
+        3 => Some((4.0 * c3 - 3.0 * c, 12.0 * c2 - 3.0)),
+        4 => Some((8.0 * c4 - 8.0 * c2 + 1.0, 32.0 * c3 - 16.0 * c)),
+        5 => Some((
+            16.0 * c4 * c - 20.0 * c3 + 5.0 * c,
+            80.0 * c4 - 60.0 * c2 + 5.0,
+        )),
+        6 => Some((
+            32.0 * c4 * c2 - 48.0 * c4 + 18.0 * c2 - 1.0,
+            192.0 * c4 * c - 192.0 * c3 + 36.0 * c,
+        )),
+        _ => None,
+    }
+}
+
+/// One dihedral `V = K · (1 + cos δ · cos mφ)` (COVALENTFORM NTBDN = 1, δ ∈ {0, π}) at
+/// `r_ij = x_i − x_j`, `r_kj = x_k − x_j`, `r_kl = x_k − x_l`: `(energy, f_i, f_j, f_k, f_l)`;
+/// nothing when `|r_kj|² <` [`ZERO_DISTANCE2`], a projection is shorter than [`ZERO_DISTANCE`],
+/// or `m > 6`. `cos mφ` is the polynomial of [`cos_multiple`]. In this order:
+///
+/// ```text
+/// d_kj2 = r_kj · r_kj
+/// f_rim = r_ij · r_kj / d_kj2;   f_rln = r_kl · r_kj / d_kj2
+/// r_im  = r_ij − r_kj · f_rim;   r_ln  = r_kj · f_rln − r_kl     (perpendicular to r_kj)
+/// d_im = |r_im|,  d_ln = |r_ln|
+/// cos_phi = clamp(r_im · r_ln / (d_im · d_ln), −1, 1)
+/// energy = k · (1 + cos_delta · cos_m_phi)
+/// k_i = −k · cos_delta · d_cos_m_phi / d_im;   k_l = −k · cos_delta · d_cos_m_phi / d_ln
+/// f_i = r_ln · (k_i/d_ln) − r_im · (k_i · cos_phi/d_im)
+/// f_l = r_im · (k_l/d_im) − r_ln · (k_l · cos_phi/d_ln)
+/// f_j = f_i · (f_rim − 1) − f_l · f_rln
+/// f_k = −(f_i + f_j + f_l)
+/// ```
+///
+/// spec: bonded.dihedral_chebyshev
+#[inline]
+pub fn dihedral_chebyshev(
+    r_ij: Vec3,
+    r_kj: Vec3,
+    r_kl: Vec3,
+    k: f64,
+    cos_delta: f64,
+    m: u32,
+) -> (f64, Vec3, Vec3, Vec3, Vec3) {
+    let nothing = (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let d_kj2 = r_kj.dot(r_kj);
+    if d_kj2 < ZERO_DISTANCE2 {
+        return nothing;
+    }
+
+    let f_rim = r_ij.dot(r_kj) / d_kj2;
+    let f_rln = r_kl.dot(r_kj) / d_kj2;
+    let r_im = r_ij - r_kj * f_rim;
+    let r_ln = r_kj * f_rln - r_kl;
+    let d_im = r_im.length();
+    let d_ln = r_ln.length();
+    if d_im < ZERO_DISTANCE || d_ln < ZERO_DISTANCE {
+        return nothing;
+    }
+
+    let cos_phi = (r_im.dot(r_ln) / (d_im * d_ln)).clamp(-1.0, 1.0);
+    let Some((cos_m_phi, d_cos_m_phi)) = cos_multiple(m, cos_phi) else {
+        return nothing;
+    };
+    let energy = k * (1.0 + cos_delta * cos_m_phi);
+
+    let k_i = -k * cos_delta * d_cos_m_phi / d_im;
+    let k_l = -k * cos_delta * d_cos_m_phi / d_ln;
+    let f_i = r_ln * (k_i / d_ln) - r_im * (k_i * cos_phi / d_im);
+    let f_l = r_im * (k_l / d_im) - r_ln * (k_l * cos_phi / d_ln);
+    let f_j = f_i * (f_rim - 1.0) - f_l * f_rln;
+    let f_k = -(f_i + f_j + f_l);
+    (energy, f_i, f_j, f_k, f_l)
+}
+
+/// One dihedral `V = K · (1 + cos(mφ − δ))` (COVALENTFORM NTBDN = 0, any δ) at
+/// `r_ij = x_i − x_j`, `r_kj = x_k − x_j`, `r_kl = x_k − x_l`: `(energy, f_i, f_j, f_k, f_l)`;
+/// nothing when `|r_kj|` or a projection is shorter than [`ZERO_DISTANCE`]. φ is the angle
+/// between the projections `r_im`, `r_ln` (as in [`dihedral_chebyshev`]), signed by
+/// `r_ij · (r_kj × r_kl)`; the forces lie along the plane normals. In this order:
+///
+/// ```text
+/// r_mj = r_ij × r_kj;   r_nk = r_kj × r_kl
+/// d_kj2 = r_kj · r_kj;  d_mj2 = r_mj · r_mj;  d_nk2 = r_nk · r_nk;  d_kj = sqrt(d_kj2)
+/// f_rim, f_rln, r_im, r_ln, d_im, d_ln, cos_phi as in dihedral_chebyshev
+/// phi = acos(cos_phi), negated when r_ij · r_nk < 0
+/// x = m · phi − delta
+/// energy = k · (1 + cos x)
+/// k_i = k · m · sin x;   k_l = −k_i
+/// f_i = r_mj · (k_i · d_kj / d_mj2)   if d_mj2 > NEAR_LINEAR · d_kj2, else 0
+/// f_l = r_nk · (k_l · d_kj / d_nk2)   if d_nk2 > NEAR_LINEAR · d_kj2, else 0
+/// f_j = f_i · (f_rim − 1) − f_l · f_rln
+/// f_k = −(f_i + f_j + f_l)
+/// ```
+///
+/// spec: bonded.dihedral_new
+#[inline]
+pub fn dihedral_new(
+    r_ij: Vec3,
+    r_kj: Vec3,
+    r_kl: Vec3,
+    k: f64,
+    delta: f64,
+    m: f64,
+) -> (f64, Vec3, Vec3, Vec3, Vec3) {
+    let nothing = (0.0, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let r_mj = r_ij.cross(r_kj);
+    let r_nk = r_kj.cross(r_kl);
+    let d_kj2 = r_kj.dot(r_kj);
+    let d_mj2 = r_mj.dot(r_mj);
+    let d_nk2 = r_nk.dot(r_nk);
+    let d_kj = d_kj2.sqrt();
+    if d_kj < ZERO_DISTANCE {
+        return nothing;
+    }
+
+    let f_rim = r_ij.dot(r_kj) / d_kj2;
+    let f_rln = r_kl.dot(r_kj) / d_kj2;
+    let r_im = r_ij - r_kj * f_rim;
+    let r_ln = r_kj * f_rln - r_kl;
+    let d_im = r_im.length();
+    let d_ln = r_ln.length();
+    if d_im < ZERO_DISTANCE || d_ln < ZERO_DISTANCE {
+        return nothing;
+    }
+
+    let cos_phi = (r_im.dot(r_ln) / (d_im * d_ln)).clamp(-1.0, 1.0);
+    let mut phi = cos_phi.acos();
+    if r_ij.dot(r_nk) < 0.0 {
+        phi = -phi;
+    }
+
+    let x = m * phi - delta;
+    let energy = k * (1.0 + x.cos());
+    let k_i = k * m * x.sin();
+    let k_l = -k_i;
+
+    let f_i = if d_mj2 > NEAR_LINEAR * d_kj2 {
+        r_mj * (k_i * d_kj / d_mj2)
+    } else {
+        Vec3::ZERO
+    };
+    let f_l = if d_nk2 > NEAR_LINEAR * d_kj2 {
+        r_nk * (k_l * d_kj / d_nk2)
+    } else {
+        Vec3::ZERO
+    };
+    let f_j = f_i * (f_rim - 1.0) - f_l * f_rln;
+    let f_k = -(f_i + f_j + f_l);
+    (energy, f_i, f_j, f_k, f_l)
+}
 
 /// Calculate proper dihedral forces (GROMOS torsional potential)
 ///
@@ -56,72 +229,12 @@ pub(crate) fn calculate_dihedral_forces_grouped<const GROUPS: bool>(
             conf.current().pos[dihedral.l],
         );
 
-        // Cross products kept for reference (Chebyshev path uses projection instead)
-        let _r_mj = r_ij.cross(r_kj); // normal to plane i-j-k
-        let _r_nk = r_kj.cross(r_kl); // normal to plane j-k-l
-
-        let d_kj2 = r_kj.dot(r_kj);
-
-        if d_kj2 < 1e-10 {
+        if !(0..=6).contains(&params.m) {
+            eprintln!("Warning: unsupported dihedral multiplicity {}", params.m);
             continue;
         }
-
-        let f_rim = r_ij.dot(r_kj) / d_kj2;
-        let f_rln = r_kl.dot(r_kj) / d_kj2;
-
-        let r_im = r_ij - r_kj * f_rim;
-        let r_ln = r_kj * f_rln - r_kl;
-
-        let d_im = r_im.length();
-        let d_ln = r_ln.length();
-
-        if d_im < 1e-10 || d_ln < 1e-10 {
-            continue;
-        }
-
-        // Calculate cos(φ)
-        let cos_phi = (r_im.dot(r_ln) / (d_im * d_ln)).clamp(-1.0, 1.0);
-
-        // Calculate cos(m*φ) and d[cos(m*φ)]/d[cos(φ)] using Chebyshev polynomials
-        let (cos_m_phi, d_cos_m_phi) = match params.m {
-            0 => (0.0, 0.0),
-            1 => (cos_phi, 1.0),
-            2 => (2.0 * cos_phi * cos_phi - 1.0, 4.0 * cos_phi),
-            3 => (
-                4.0 * cos_phi.powi(3) - 3.0 * cos_phi,
-                12.0 * cos_phi * cos_phi - 3.0,
-            ),
-            4 => (
-                8.0 * cos_phi.powi(4) - 8.0 * cos_phi * cos_phi + 1.0,
-                32.0 * cos_phi.powi(3) - 16.0 * cos_phi,
-            ),
-            5 => (
-                16.0 * cos_phi.powi(5) - 20.0 * cos_phi.powi(3) + 5.0 * cos_phi,
-                80.0 * cos_phi.powi(4) - 60.0 * cos_phi * cos_phi + 5.0,
-            ),
-            6 => (
-                32.0 * cos_phi.powi(6) - 48.0 * cos_phi.powi(4) + 18.0 * cos_phi * cos_phi - 1.0,
-                192.0 * cos_phi.powi(5) - 192.0 * cos_phi.powi(3) + 36.0 * cos_phi,
-            ),
-            _ => {
-                eprintln!("Warning: unsupported dihedral multiplicity {}", params.m);
-                continue;
-            },
-        };
-
-        // Energy: V = K * (1 + cos(δ) * cos(m*φ))
-        let energy = params.k * (1.0 + params.cospd * cos_m_phi);
-
-        // Force calculation
-        let k_i = -params.k * params.cospd * d_cos_m_phi / d_im;
-        let k_l = -params.k * params.cospd * d_cos_m_phi / d_ln;
-        let k_j1 = f_rim - 1.0;
-        let k_j2 = f_rln;
-
-        let f_i = r_ln * (k_i / d_ln) - r_im * (k_i * cos_phi / d_im);
-        let f_l = r_im * (k_l / d_im) - r_ln * (k_l * cos_phi / d_ln);
-        let f_j = f_i * k_j1 - f_l * k_j2;
-        let f_k = -(f_i + f_j + f_l);
+        let (energy, f_i, f_j, f_k, f_l) =
+            dihedral_chebyshev(r_ij, r_kj, r_kl, params.k, params.cospd, params.m as u32);
 
         result.energy += energy;
         if GROUPS {
@@ -201,70 +314,8 @@ pub(crate) fn calculate_dihedral_new_forces_grouped<const GROUPS: bool>(
             conf.current().pos[dihedral.l],
         );
 
-        // Cross products to get plane normals
-        let r_mj = r_ij.cross(r_kj); // normal to plane i-j-k
-        let r_nk = r_kj.cross(r_kl); // normal to plane j-k-l
-
-        let d_kj2 = r_kj.dot(r_kj);
-        let d_mj2 = r_mj.dot(r_mj);
-        let d_nk2 = r_nk.dot(r_nk);
-        let d_kj = (d_kj2).sqrt();
-
-        if d_kj < 1e-10 {
-            continue;
-        }
-
-        // Project vectors onto plane perpendicular to k-j bond
-        let f_rim = r_ij.dot(r_kj) / d_kj2;
-        let f_rln = r_kl.dot(r_kj) / d_kj2;
-
-        let r_im = r_ij - r_kj * f_rim;
-        let r_ln = r_kj * f_rln - r_kl;
-
-        let d_im = r_im.length();
-        let d_ln = r_ln.length();
-
-        if d_im < 1e-10 || d_ln < 1e-10 {
-            continue;
-        }
-
-        // Calculate dihedral angle φ
-        let cos_phi = (r_im.dot(r_ln) / (d_im * d_ln)).clamp(-1.0, 1.0);
-        let mut phi = cos_phi.acos();
-
-        // Determine sign of angle
-        let sign = r_ij.dot(r_nk);
-        if sign < 0.0 {
-            phi = -phi;
-        }
-
-        // Calculate energy and force derivative
-        // Energy: V = K * (1 + cos(m*φ - δ))
-        let m_phi_minus_delta = params.m as f64 * phi - params.pd;
-        let energy = params.k * (1.0 + m_phi_minus_delta.cos());
-
-        // Force derivative: dV/dφ = K * m * sin(m*φ - δ)
-        let k_i = params.k * params.m as f64 * m_phi_minus_delta.sin();
-        let k_l = -k_i;
-
-        // Calculate forces on each atom
-        // Check for near-linear angles to avoid division by zero
-        let mut f_i = Vec3::ZERO;
-        let mut f_l = Vec3::ZERO;
-
-        if d_mj2 > 1e-10 * d_kj2 {
-            f_i = r_mj * (k_i * d_kj / d_mj2);
-        }
-
-        if d_nk2 > 1e-10 * d_kj2 {
-            f_l = r_nk * (k_l * d_kj / d_nk2);
-        }
-
-        // Forces on j and k from chain rule
-        let k_j1 = f_rim - 1.0;
-        let k_j2 = f_rln;
-        let f_j = f_i * k_j1 - f_l * k_j2;
-        let f_k = -(f_i + f_j + f_l);
+        let (energy, f_i, f_j, f_k, f_l) =
+            dihedral_new(r_ij, r_kj, r_kl, params.k, params.pd, params.m as f64);
 
         result.energy += energy;
         if GROUPS {

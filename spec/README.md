@@ -4,10 +4,12 @@ Full explanation (why, how the pieces fit, guarantees, adding a function): [docs
 
 Verified so far: `schedule::output_misses_longrange` (the pilot, explained below),
 `thermo::dof::total_dof`, and the five functions of `thermo::bath` (degrees of freedom per
-temperature bath and the atom-to-bath mapping); and six floating-point kernels: the Berendsen and
-Nosé–Hoover thermostat steps of `crates/newen-integrators`, and the Lennard-Jones and
+temperature bath and the atom-to-bath mapping); and thirteen floating-point kernels: the Berendsen
+and Nosé–Hoover thermostat steps of `crates/newen-integrators`, the Lennard-Jones and
 reaction-field pair term of `crates/newen-forces` with its reaction-field constants, excluded-pair
-and self terms (see "Floating-point kernels" below and `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
+and self terms, and the seven bonded terms of `crates/newen-forces` (quartic and harmonic bond,
+cosine-harmonic and harmonic angle, the two proper-dihedral forms, the improper dihedral; see
+"Floating-point kernels" below and `spec/SPEC.toml`). The pilot: `output_misses_longrange(nsnb, ntwg)` in
 `crates/newen-logic/src/schedule.rs`. It answers: with a twin-range pairlist updated every
 `nsnb` steps and free-energy output every `ntwg` steps, does some output step reuse long-range
 terms from a pairlist step that was *not* an output step? (Under PRECALCLAM gromosXX then writes
@@ -62,30 +64,37 @@ binary and the pinned library differ.
 
 ## Floating-point kernels
 
-`berendsen_scale` and `nose_hoover_scale` (`crates/newen-integrators/src/algorithms/`), and
+`berendsen_scale` and `nose_hoover_scale` (`crates/newen-integrators/src/algorithms/`),
 `CRFParameters::new`, `lj_crf_pair`, `rf_excluded_pair` and `rf_self_term`
-(`crates/newen-forces/src/nonbonded/`) compute with `f64`, so Aeneas does not apply
+(`crates/newen-forces/src/nonbonded/`), and `quartic_bond`, `harmonic_bond`, `cosine_angle`,
+`harmonic_angle`, `dihedral_chebyshev`, `dihedral_new` and `improper_dihedral`
+(`crates/newen-forces/src/bonded/`) compute with `f64`, so Aeneas does not apply
 (`kind = "float"` in `SPEC.toml`). Three pieces instead:
 
 | Piece | Claim | Where |
 |---|---|---|
-| ℝ theorems | what the formula means: Berendsen relaxes `T` towards `T₀` by `dt/τ` per step and never overshoots for `dt ≤ τ`; the Nosé–Hoover friction grows exactly when the bath is too hot; the LJ and reaction-field scalar forces are `−E'(r)/r` (`lj_force_is_minus_grad`, `crf_force_is_minus_grad`), the LJ energy vanishes at σ and has its minimum `−C6²/(4 C12)` at `2^(1/6) σ`, the reaction-field energy vanishes at the cutoff, and the excluded-pair and self terms are the pair term without its Coulomb part | `NewenTheory/Dynamics/Thermostats.lean`, `NewenTheory/Interactions/LennardJones.lean`, `NewenTheory/Interactions/ReactionField.lean` (import Mathlib) |
-| Float model | one definition per kernel, polymorphic in the number type and written operation by operation like the Rust; at ℝ it equals the theory (`berendsenModel_real_eq`, `noseHooverModel_real_eq`, `crfParametersModel_real_eq`, `ljCrfPairModel_real_eq`, `rfExcludedPairModel_real_eq`, `rfSelfTermModel_real_eq`), at `Float` it is executed | `NewenSpec/Thermostat.lean`, `NewenSpec/Nonbonded.lean` (the shared `Sqrt` class in `NewenSpec/Float.lean`) |
-| Differential test | the compiled Rust returns the same 64 bits as the `Float` model on every generated input (6 840 Berendsen rows, 3 036 Nosé–Hoover rows, chains iterated over 1–8 steps; 600 reaction-field constant rows, 6 000 LJ + CRF pair rows, 1 500 excluded-pair rows, 300 self-term rows; the generator makes as many more as a nightly run wants) | `crates/newen-integrators/tests/thermostat_spec.rs`, `vectors/thermostat.json`; `crates/newen-forces/tests/nonbonded_spec.rs`, `vectors/nonbonded.json` |
+| ℝ theorems | what the formula means: Berendsen relaxes `T` towards `T₀` by `dt/τ` per step and never overshoots for `dt ≤ τ`; the Nosé–Hoover friction grows exactly when the bath is too hot; the LJ and reaction-field scalar forces are `−E'(r)/r` (`lj_force_is_minus_grad`, `crf_force_is_minus_grad`), the LJ energy vanishes at σ and has its minimum `−C6²/(4 C12)` at `2^(1/6) σ`, the reaction-field energy vanishes at the cutoff, and the excluded-pair and self terms are the pair term without its Coulomb part; the bond forces and the cosine-angle forces (on all three atoms) are `−∇V` (`quarticBond_force_is_minus_grad`, `harmonicBond_force_is_minus_grad`, `cosineAngle_force_is_minus_grad`), a quartic bond matches a harmonic one of force constant `2 K b0²` (`quartic_harmonic_match`), the code's dihedral polynomials are `cos mφ` and their derivatives (`cosMultiple_eq_cos`, `dcosMultiple_is_deriv`), the two dihedral forms agree for `δ ∈ {0, π}` (`dihedral_new_eq_dihedral`), and the angle and dihedral forces sum to zero and exert no torque (`cosineAngle_torque_zero`, `chebyshev_conservation`, `newDihedral_conservation`, `improper_conservation`, …) | `NewenTheory/Dynamics/Thermostats.lean`, `NewenTheory/Interactions/LennardJones.lean`, `NewenTheory/Interactions/ReactionField.lean`, `NewenTheory/Interactions/Bonded.lean` (import Mathlib) |
+| Float model | one definition per kernel, polymorphic in the number type and written operation by operation like the Rust; at ℝ it equals the theory (`berendsenModel_real_eq`, `noseHooverModel_real_eq`, `crfParametersModel_real_eq`, `ljCrfPairModel_real_eq`, `rfExcludedPairModel_real_eq`, `rfSelfTermModel_real_eq`, and one `*Model_real_eq` per bonded kernel), at `Float` it is executed | `NewenSpec/Thermostat.lean`, `NewenSpec/Nonbonded.lean`, `NewenSpec/Bonded.lean` (the shared `Sqrt`, `Acos`, `Cos`, `Sin` classes in `NewenSpec/Float.lean`) |
+| Differential test | the compiled Rust returns the same 64 bits as the `Float` model on every generated input (6 840 Berendsen rows, 3 036 Nosé–Hoover rows, chains iterated over 1–8 steps; 600 reaction-field constant rows, 6 000 LJ + CRF pair rows, 1 500 excluded-pair rows, 300 self-term rows; 1 482 bond rows, 1 000 angle rows, 710 dihedral rows, each evaluated by every kernel of its kind; the generator makes as many more as a nightly run wants); for the bonded kernels also a finite-difference check of the forces against the energy on 200 rows per kernel | `crates/newen-integrators/tests/thermostat_spec.rs`, `vectors/thermostat.json`; `crates/newen-forces/tests/nonbonded_spec.rs`, `vectors/nonbonded.json`; `crates/newen-forces/tests/bonded_spec.rs`, `vectors/bonded.json` |
 
 The four-lane copy of the pair kernel, `lj_crf_interaction_x4`, is checked against the scalar
 `lj_crf_pair` on the same rows, lane by lane and bit for bit, by a unit test in
 `crates/newen-forces/src/nonbonded/innerloops.rs`.
 
-The comparison is exact, not within a tolerance: the kernels use only `+ − × ÷` and `sqrt`, which
+The comparison is exact, not within a tolerance: the kernels use `+ − × ÷` and `sqrt`, which
 IEEE 754 rounds correctly, in Rust as in Lean's `Float` (C `double`), so the same operations in
-the same order give the same bits. The constants (`k_B`, `ZERO_TEMPERATURE`, `ZERO_DISTANCE2`)
-and every input are written as bits. The one exception is NaN: Lean has a single NaN, so a NaN matches any NaN.
+the same order give the same bits. The bonded kernels also call `acos`, `cos` and `sin`, which
+IEEE 754 does not round correctly; there the bits agree because Lean's `Float.acos`, `Float.cos`,
+`Float.sin` and Rust's `f64::acos`, `cos`, `sin` call the same C library (glibc's `libm` on
+Linux), so the check is exact on one machine and says nothing about another `libm`. The constants
+(`k_B`, `ZERO_TEMPERATURE`, `ZERO_DISTANCE2`, the bonded guards, `π`) and every input are written
+as bits. The one exception is NaN: Lean has a single NaN, so a NaN matches any NaN.
 
 ```sh
-cd spec && lake exe spec-vectors                              # rewrite vectors/thermostat.json, vectors/nonbonded.json
+cd spec && lake exe spec-vectors                              # rewrite vectors/thermostat.json, nonbonded.json, bonded.json
 cargo test -p newen-integrators --test thermostat_spec        # Rust = Float model, bit for bit
 cargo test -p newen-forces --test nonbonded_spec              # Rust = Float model, bit for bit
+cargo test -p newen-forces --test bonded_spec                 # Rust = Float model, bit for bit; forces = −∇E by finite differences
 cargo test -p newen-forces --lib x4_lanes                     # SIMD lanes = scalar kernel, bit for bit
 ```
 

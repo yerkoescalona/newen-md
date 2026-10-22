@@ -567,6 +567,108 @@ cargo test -p newen-forces --test nonbonded_spec    # Rust = Float model, bit fo
 cargo test -p newen-forces --lib x4_lanes           # SIMD lanes = scalar kernel, bit for bit
 ```
 
+### The bonded terms
+
+The covalent terms of `crates/newen-forces/src/bonded/` have one pure kernel per functional form,
+called by the loops that walk the topology (which keep the bookkeeping: energy groups, virial,
+skipped constrained bonds):
+
+| Kernel | Energy | gromosXX |
+|---|---|---|
+| `quartic_bond(r, k, b0)` | `K/4 · (b² − b0²)²` | `quartic_bond_interaction.cc` |
+| `harmonic_bond(r, k, b0)` | `K/2 · (b − b0)²` | `harmonic_bond_interaction.cc` |
+| `cosine_angle(r_ij, r_kj, k, cos0)` | `K/2 · (cos θ − cos θ0)²` | `angle_interaction.cc` |
+| `harmonic_angle(r_ij, r_kj, k, theta0)` | `K/2 · (θ − θ0)²` | `harm_angle_interaction.cc` |
+| `dihedral_chebyshev(r_ij, r_kj, r_kl, k, cos_delta, m)` | `K (1 + cos δ · cos mφ)`, NTBDN = 1 | `dihedral_interaction.cc` |
+| `dihedral_new(r_ij, r_kj, r_kl, k, delta, m)` | `K (1 + cos(mφ − δ))`, NTBDN = 0 | `dihedral_new_interaction.cc` |
+| `improper_dihedral(r_ij, r_kj, r_kl, k, zeta0)` | `K/2 · (ζ − ζ0)²` | `improper_dihedral_interaction.cc` |
+
+Each returns the energy and the forces on its atoms; its doc comment gives the formula in the
+order the code evaluates it.
+
+**The meaning.** `spec/NewenTheory/Interactions/Bonded.lean` writes vectors of ℝ³ out by components
+(`V3`, with `dot`, `cross`, `len`) and defines the energies and the force expressions the kernels
+evaluate. The theorems:
+
+- `quarticBond_force_is_minus_grad`, `harmonicBond_force_is_minus_grad`: along every direction
+  `e`, the derivative of `V(|r + t e|)` at `t = 0` is `−f_i · e`, so the bond force is `−∇V`;
+  `quartic_harmonic_match`: the curvature of the quartic bond at `b0` is `2 K b0²`, the GROMOS
+  relation `K_harm = 2 K_quartic b0²` (Vol. 2).
+- `cosMultiple_eq_cos`: for `1 ≤ m ≤ 6` the code's polynomial in `cos φ` is `cos(mφ)` (by the
+  recursion `cos((n+2)φ) = 2 cos φ cos((n+1)φ) − cos(nφ)`); `dcosMultiple_is_deriv`: its second
+  polynomial is the derivative of the first; `dihedral_new_eq_dihedral`: with `δ ∈ {0, π}` the
+  NTBDN = 0 and NTBDN = 1 energies are equal, which is why the two forms agree on every GROMOS
+  topology.
+- `cosineAngle_forces_sum_zero`, `cosineAngle_torque_zero`, `harmonicAngle_conservation`,
+  `chebyshev_conservation`, `newDihedral_conservation`, `improper_conservation`: the forces of an
+  angle or a dihedral sum to zero and exert no torque about any origin. For the two forms whose
+  forces lie along the plane normals (NTBDN = 0 and the improper) this needs Lagrange's identity
+  `|r_ij|²|r_kj|² − (r_ij · r_kj)² = |r_ij × r_kj|²` and holds away from a linear bond angle, where
+  the kernels drop a force on purpose.
+- `cosineAngle_force_is_minus_grad`: moving atom `i`, `j` or `k` along any `e`, the
+  cosine-harmonic energy changes at the rate `−f · e` of that atom's force. The other angle and the
+  dihedrals have the conservation theorems but no gradient theorem; the finite-difference test below
+  covers them.
+
+**One model.** `spec/NewenSpec/Bonded.lean` writes the seven kernels once over any number type, on
+a `Vec3 α` with glam's `dot` (`x·x' + y·y' + z·z'`, left to right), `cross` and `length`. The bonded
+kernels also call `acos`, `cos` and `sin`, so `NewenSpec/Float.lean` gains the classes `Acos`, `Cos`
+and `Sin` next to `Sqrt` (`Float.acos`, … at `Float`; `Real.arccos`, … at ℝ). The guards (all
+`1e-10`: `ZERO_DISTANCE`, `ZERO_DISTANCE2`, `ZERO_SINE`, `NEAR_LINEAR`), `0.25`, `0.5` and `π` are
+parameters given at `Float` by their bits; the two `while` loops that move ζ into `[ζ0 − π, ζ0 + π]`
+run with fuel (one turn suffices for `|ζ0| ≤ π`). At ℝ, one `*Model_real_eq` per kernel proves
+that, outside the guards, the model returns the theory's energy at the theory's geometry and the
+theory's force expressions; the clamps of `cos θ`, `cos φ`, `cos ζ` to `[−1, 1]` never act there
+(`cos_between_mem`, Cauchy–Schwarz). The improper's theorem assumes ζ already in
+`[ζ0 − π, ζ0 + π]`, always true for `ζ0 = 0`.
+
+**The tests.** `lake exe spec-vectors` writes `spec/vectors/bonded.json` (under 2 MB): 1 482 bond
+rows, 1 000 angle rows and 710 dihedral rows, each row evaluated by every kernel of its kind
+(quartic and harmonic bond; cosine and harmonic angle; Chebyshev, NTBDN = 0 and improper
+dihedral). Random rows have components in `[−0.5, 0.5]` nm or bond lengths within 20 % of `b0`,
+GROMOS-sized parameters (`K_quartic ∈ [10⁵, 2·10⁷]` kJ mol⁻¹ nm⁻⁴, `b0 ∈ [0.09, 0.2]` nm,
+`θ0 ∈ [90°, 125°]`, dihedral `K ∈ [0.1, 50]` kJ mol⁻¹, `m ∈ 0..6` and the unsupported 7,
+`δ ∈ {0, π}` or random, `ζ0 ∈ {0, 35.26°}` or random); the edge rows hit every guard: zero and
+guard lengths, collinear angles with `cos θ = ±1` exactly (`|sin θ| < 10⁻¹⁰`, with `θ0 = π` and
+without), planar dihedrals, a bond angle within 10⁻⁵ rad of 180° inside a dihedral, `|r_kj|²`
+below the guard, ζ at ±π. `crates/newen-forces/tests/bonded_spec.rs` requires the same 64 bits as
+the Lean model on every row, and the bits of the four guards and of `std::f64::consts::PI`. It also
+checks the physics independently of the bits: on 200 well-conditioned rows per kernel, the
+central difference of the kernel's energy (`h = 10⁻⁶` nm) along every coordinate of every atom is
+minus the returned force, to `10⁻⁵` of the row's largest force component plus `10⁻⁶`.
+
+`acos`, `cos` and `sin` are not correctly rounded by IEEE 754. The bits agree because Lean's
+`Float` functions and Rust's `f64` functions call the same C library (glibc's `libm`); on a
+machine with another `libm` the Lean vectors would have to be regenerated there. The test passes
+in debug, release and `target-cpu=generic` builds.
+
+Two changes to the Rust came with the kernels; neither moves a gromosXX reference:
+
+- **`powi` replaced by gromosXX's products.** The Chebyshev dihedral wrote `cos³φ … cos⁶φ` with
+  `powi`, whose rounding is the compiler's business; gromosXX forms `c² = c·c`, `c³ = c²·c`,
+  `c⁴ = c³·c` and writes `16 · c⁴ · c` for `c⁵`. The kernel now does the same. On the 637
+  dihedral rows with `m ≤ 6` outside the guards, the `powi` form gives other bits for 138 (all with
+  `m ≥ 3`), and at 71 % of 200 001 evenly spaced `cos φ ∈ [−1, 1]` for at least one `m`. No gromosXX reference used
+  NTBDN = 1, so `butane_vacuum_ntbdn1` (`butane_vacuum` with `COVALENTFORM 0 0 1`) was added first
+  and passes before and after.
+- **`cos θ0` once per angle type.** The cosine-angle loop took `theta0.cos()` for every angle;
+  gromosXX stores `cos θ0` when it reads the topology. The loop now computes it once per type
+  before the walk and passes it to `cosine_angle`; the bits are the same.
+
+The Rust follows newen where it differs from gromosXX in the order of operations, all within the
+reference tolerances (each listed in the `origin` of its `SPEC.toml` entry): the cosine-angle
+force is `(r_kj · (1/d_kj) − r_ij · (cos θ/d_ij)) · (df/d_ij)` where gromosXX writes
+`df/d_ij · (r_kj/d_kj − r_ij/d_ij · cos θ)`; the Chebyshev force groups `k_i` with the scalars; the
+NTBDN = 0 force divides the scalar `k_i · d_kj` by `|r_mj|²` before scaling `r_mj`. One oddity is
+shared with gromosXX and stated in the theory: for `m = 0` the Chebyshev form takes `cos mφ = 0`,
+not `cos 0 = 1`, so its energy is `K` where the NTBDN = 0 form gives `K (1 + cos δ)`; the force is
+zero in both.
+
+```sh
+cargo test -p newen-forces --test bonded_spec    # Rust = Float model, bit for bit; forces = −∇E by finite differences
+cargo test -p newen-md --test test_gromosXX_references butane_vacuum_ntbdn1
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -846,9 +948,12 @@ Planned, in the order chosen:
   Nosé–Hoover thermostats (see [Thermostats & Barostats](../algorithms/thermostats.md)) and the
   Lennard-Jones and reaction-field pair term (see
   [Nonbonded Interactions](../algorithms/nonbonded.md)). Done: the thermostats
-  (`berendsen_scale`, `nose_hoover_scale`) and the pair term (`CRFParameters::new`,
+  (`berendsen_scale`, `nose_hoover_scale`), the pair term (`CRFParameters::new`,
   `lj_crf_pair`, `rf_excluded_pair`, `rf_self_term`, with the SIMD lanes checked against the scalar
-  kernel); each with ℝ theorems, a `Float` model and a bit-exact differential test.
+  kernel), and the bonded terms (`quartic_bond`, `harmonic_bond`, `cosine_angle`,
+  `harmonic_angle`, `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral`, with a
+  finite-difference check of every force); each with ℝ theorems, a `Float` model and a bit-exact
+  differential test.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

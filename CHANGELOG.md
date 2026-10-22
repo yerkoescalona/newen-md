@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.74] (2026-10-22)
+
+### Added
+
+- **The bonded terms checked against a Lean model, bit for bit.** Seven pure kernels in
+  newen-forces (`quartic_bond`, `harmonic_bond`, `cosine_angle`, `harmonic_angle`,
+  `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral`), called by the topology walks, which
+  keep the energy-group and virial booking. Lean: `NewenTheory/Interactions/Bonded.lean` proves
+  that the bond forces are minus the energy gradient, that the quartic bond's curvature at `b0`
+  is the harmonic constant `2·K·b0²`, that the dihedral's polynomials in `cos φ` are `cos(mφ)`
+  (`m ≤ 6`) with the matching derivatives, that the two dihedral forms agree for `δ ∈ {0, π}`,
+  that every angle and dihedral kernel's forces sum to zero and exert no net torque, and that the
+  cosine-harmonic angle's forces are minus the energy gradient on all three atoms;
+  `NewenSpec/Bonded.lean` transcribes each kernel once, polymorphic in the number type, proven
+  equal to the theory at ℝ and executed at `Float`. `spec/vectors/bonded.json` (1 482 bond,
+  1 000 angle and 710 dihedral rows, every row through every kernel of its kind) and
+  `crates/newen-forces/tests/bonded_spec.rs` require the compiled Rust to return the same bits in
+  dev, release and `target-cpu=generic` builds, `acos`, `cos` and `sin` included (both sides call
+  the platform libm); a finite-difference check compares every kernel's forces with its energy.
+- **Reference `butane_vacuum_ntbdn1`** (COVALENTFORM 0 0 1): the Chebyshev dihedral form
+  against the released gromosXX; no reference used NTBDN = 1 before. 122 references, none ignored.
+### Changed
+
+- The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order
+  instead of `powi` (whose expansion rounds differently for `m ≥ 3`); `cos θ0` of the
+  cosine-harmonic angle is computed once per angle type instead of once per term. Last-bit
+  differences only; every reference unchanged.
 ## [0.0.73] (2026-10-22)
 
 ### Added

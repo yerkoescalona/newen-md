@@ -34,6 +34,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 1   | benzene_vacuum   | 12    | aromatic ring + improper + torsion   | **PASS** |
 | 1   | nacl_pair_box    | 2     | Coulomb + LJ in PBC with RF (no solvent) | **PASS** |
 | 1   | butane_vacuum    | 4     | dihedral + 1-4 LJ interaction        | **PASS** |
+| 1   | butane_vacuum_ntbdn1 | 4 | `butane_vacuum` with `COVALENTFORM 0 0 1`: the Chebyshev-polynomial dihedral K(1 + cos δ cos mφ) (NTBDN = 1, δ = 0) | **PASS** |
 | 1   | aladip_vacuum    | 12    | all bonded + exclusions + 1-4        | **PASS** |
 | 2   | water_3_box      | 9     | PBC + min image + pairlist + CRF     | **PASS** |
 | 2   | nacl_1water_box  | 5     | minimal solute-solvent + SHAKE       | **PASS** |
