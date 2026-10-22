@@ -57,6 +57,12 @@ pub const four_pi_eps_i: f64 = 138.9354;
 /// Derived as 4π × `four_pi_eps_i`.
 pub const eps0_i: f64 = 4.0 * std::f64::consts::PI * four_pi_eps_i;
 
+/// ε₀⁻¹ (kJ mol⁻¹ nm e⁻²) as gromosXX writes it, for the lattice-sum terms.
+///
+/// gromosXX `math/math.cc`: `eps0_i = 1745.9137`, a literal, not `4π · 138.9354`
+/// (= 1745.9137278…, a different double from [`eps0_i`] above).
+pub const EPS0_INV: f64 = 1745.9137;
+
 /// Reduced Planck constant ħ (kJ ps mol⁻¹).
 ///
 /// gromosXX `math/math.cc`: `h_bar = 0.0635078`.

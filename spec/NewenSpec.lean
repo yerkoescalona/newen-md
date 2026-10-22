@@ -11,5 +11,6 @@ import NewenSpec.Dynamics
 import NewenSpec.Periodicity
 import NewenSpec.SoftCore
 import NewenSpec.PerturbedBonded
+import NewenSpec.LatticeSum
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement

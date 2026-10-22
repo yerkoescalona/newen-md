@@ -10,10 +10,11 @@ import NewenSpec.Dynamics
 import NewenSpec.Periodicity
 import NewenSpec.SoftCore
 import NewenSpec.PerturbedBonded
+import NewenSpec.LatticeSum
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat, nonbonded, bonded, dynamics, periodicity, soft-core and perturbed bonded models on
-random `Float` inputs) and write them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
+thermostat, nonbonded, bonded, dynamics, periodicity, soft-core, perturbed bonded and lattice-sum
+models on random `Float` inputs) and write them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
@@ -1602,6 +1603,147 @@ def perturbedBondedJson (r : PerturbedBondedRows) : String :=
   part "angle" r.angle ++ ",\n" ++ part "improper" r.improper ++ ",\n" ++
   part "dihedral" r.dihedral ++ ",\n" ++ part "soft" r.soft ++ "\n}\n"
 
+/-! ## Lattice sum: the charge-shape and real-space kernels on grids and random `Float` inputs
+
+`vectors/lattice_sum.json`: every shape (`NSHAPE = −1 … 10`) at `ξ = 0`, `1`, the doubles next to
+`1` on either side, a log grid in `[10⁻³, 3]`, random points in `[0, 3]` and a few large and
+negative ones (`erfc` underflows near 27); `κ = 0`, a log grid in `[10⁻³, 40]`, random points in
+`[0, 40]`; pair rows with `r²` log-uniform in `[10⁻⁴, 4]` nm² or at the support edge `r = a`,
+widths `a ∈ {0.4, 0.8, 1.4}` and the `C6`, `C12`, charge families of `nonbonded.json`; the
+self-term constants of every shape for several widths and volumes. -/
+
+section LatticeSumRows
+
+open NewenTheory.Interactions.LatticeSum (Shape TPOrder)
+open NewenSpec.LatticeSum
+
+def lsShapes : List Shape :=
+  [.gaussian, .poly .o0, .poly .o1, .poly .o2, .poly .o3, .poly .o4, .poly .o5, .poly .o6,
+    .poly .o7, .poly .o8, .poly .o9, .poly .o10]
+
+def nshapeFloat (s : Shape) : Float := Float.ofInt s.nshape
+
+/-- `n` points log-spaced from `a` to `b`. -/
+def logGrid (a b : Float) (n : Nat) : List Float :=
+  (List.range n).map fun i =>
+    Float.exp (Float.log a + (Float.log b - Float.log a) * i.toFloat / (n - 1).toFloat)
+
+def lsWidths : List Float := [0.4, 0.8, 1.4]
+
+/-- The doubles next to 1: `1 − 2⁻⁵³` and `1 + 2⁻⁵²`. -/
+def belowOne : Float := Float.ofBits 0x3fefffffffffffff
+def aboveOne : Float := Float.ofBits 0x3ff0000000000001
+
+def shapeSwitchRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for s in lsShapes do
+    let mut xs := [0, 1, belowOne, aboveOne, -0.25, 5, 10, 26.5, 27.3, 30] ++ logGrid 1e-3 3 120
+    for _ in List.range 60 do
+      xs := xs ++ [← uniform 0 3]
+    for xi in xs do
+      let (eta, dEta) := shapeSwitchFloat s xi
+      rows := rows.push [nshapeFloat s, xi, eta, dEta]
+  return rows.toList
+
+def shapeFourierRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for s in lsShapes do
+    let mut ks := [0, 1, NewenSpec.LatticeSum.piFloat, 2 * NewenSpec.LatticeSum.piFloat, 40] ++ logGrid 1e-3 40 120
+    for _ in List.range 60 do
+      ks := ks ++ [← uniform 0 40]
+    for kappa in ks do
+      let (g, dg) := shapeFourierFloat s kappa
+      rows := rows.push [nshapeFloat s, kappa, g, dg]
+  return rows.toList
+
+/-- A squared distance for a shape of width `a`: log-uniform in `[1e-4, 4]` nm², or at the
+support edge, `a²` and the doubles `a²(1 ± 2⁻⁴⁰)` around it. -/
+def drawLsR2 (width : Float) : Gen Float := do
+  match ← below 20 with
+  | 0 => return width * width
+  | 1 => return width * width * (1 - 9.094947017729282e-13)
+  | 2 => return width * width * (1 + 9.094947017729282e-13)
+  | _ => logUniform 1e-4 4
+
+def lsShapeAndWidth : Gen (Shape × Float × Float) := do
+  let s := lsShapes.getD (← below lsShapes.length) .gaussian
+  let width ← drawFrom lsWidths 0.2 1.5
+  return (s, width, 1 / width)
+
+def ljLsPairRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 2400 do
+    let (s, width, invWidth) ← lsShapeAndWidth
+    let r2 ← drawLsR2 width
+    let c6 ← orZero (logUniform 1e-5 1e-2)
+    let c12 ← orZero (logUniform 1e-8 1e-5)
+    let q ← orZero (uniform (-150) 150)
+    let (f, eLj, eLs) := ljLsPairFloat r2 c6 c12 q s invWidth
+    rows := rows.push [r2, c6, c12, q, nshapeFloat s, width, invWidth, f, eLj, eLs]
+  return rows.toList
+
+def lsExcludedPairRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 1200 do
+    let (s, width, invWidth) ← lsShapeAndWidth
+    let r2 ← drawLsR2 width
+    let q ← orZero (uniform (-150) 150)
+    let (f, e) := lsExcludedPairFloat r2 q s invWidth
+    rows := rows.push [r2, q, nshapeFloat s, width, invWidth, f, e]
+  return rows.toList
+
+def selfConstantsRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for s in lsShapes do
+    for width in lsWidths ++ [← uniform 0.2 1.5] do
+      for volume in [1, 27, 125, ← uniform 1 1000] do
+        let (a1, a3) := selfConstantsFloat s width volume
+        rows := rows.push [nshapeFloat s, width, volume, a1, a3]
+  return rows.toList
+
+structure LatticeSumRows where
+  switch : List (List Float)
+  fourier : List (List Float)
+  pair : List (List Float)
+  excluded : List (List Float)
+  selfConstants : List (List Float)
+
+def latticeSumRows : LatticeSumRows :=
+  (do return ⟨← shapeSwitchRows, ← shapeFourierRows, ← ljLsPairRows, ← lsExcludedPairRows,
+      ← selfConstantsRows⟩ : Gen _).run' 0x6e6577656e2d6c73
+
+def latticeSumJson (r : LatticeSumRows) : String :=
+  let part (name : String) (rows : List (List Float)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map hexRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"lattice_sum.shape_switch, lattice_sum.shape_fourier, lattice_sum.lj_ls_pair, " ++
+  "lattice_sum.ls_excluded_pair, lattice_sum.self_constants\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.LatticeSum.shapeSwitchFloat, " ++
+  "shapeFourierFloat, ljLsPairFloat, lsExcludedPairFloat, selfConstantsFloat; SplitMix64, " ++
+  "fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); nshape is NSHAPE as a float (-1 Gaussian, 0..10 polynomial)\",\n" ++
+  "  \"layout_shape_switch\": \"nshape, xi, eta, d_eta\",\n" ++
+  "  \"layout_shape_fourier\": \"nshape, kappa, gamma_hat, gamma_hat_prime\",\n" ++
+  "  \"layout_lj_ls_pair\": \"r2, c6, c12, q_eps, nshape, width, inv_width = 1/width, f_mag, " ++
+  "e_lj, e_ls\",\n" ++
+  "  \"layout_ls_excluded_pair\": \"r2, q_eps, nshape, width, inv_width = 1/width, f_mag, " ++
+  "e_ls\",\n" ++
+  "  \"layout_self_constants\": \"nshape, width, volume, a1, a3\",\n" ++
+  part "shape_switch" r.switch ++ ",\n" ++ part "shape_fourier" r.fourier ++ ",\n" ++
+  part "lj_ls_pair" r.pair ++ ",\n" ++ part "ls_excluded_pair" r.excluded ++ ",\n" ++
+  part "self_constants" r.selfConstants ++ "\n}\n"
+
+/-- The integer literals of the lattice-sum models, each an exact double through `NatCast`. -/
+def lsLiterals : List Nat :=
+  [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 19, 21, 22, 24, 25, 26, 30, 31, 32, 33, 35,
+    36, 39, 45, 47, 48, 49, 51, 55, 56, 57, 60, 62, 64, 65, 66, 69, 73, 77, 87, 90, 91, 104, 105,
+    123, 128, 136, 141, 151, 160, 187, 192, 203, 207, 285, 312, 315, 335, 384, 405, 455, 545,
+    630, 640, 697, 936, 945, 975, 1155, 1536, 1545, 1665, 1920, 2075, 3465, 5040, 7560, 9009,
+    12645, 22005, 75600, 831600, 1247400, 16216200]
+
+end LatticeSumRows
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -1668,3 +1810,13 @@ def main : IO Unit := do
   IO.println (s!"wrote vectors/perturbed_bonded.json ({pb.chebyshev.length} chebyshev, " ++
     s!"{pb.quartic.length} quartic, {pb.angle.length} angle, {pb.improper.length} improper, " ++
     s!"{pb.dihedral.length} dihedral, {pb.soft.length} soft rows)")
+  unless lsLiterals.all (fun n => (Float.ofNat n).toUInt64.toNat == n &&
+        ((n : Float) : Float).toBits == (Float.ofNat n).toBits) &&
+      (1 / 2 : Float) == 0.5 && (1 / 128 : Float) == 0.0078125 &&
+      NewenSpec.LatticeSum.piFloat == 3.141592653589793 do
+    throw (IO.userError "lattice-sum literals are not the expected doubles")
+  let ls := latticeSumRows
+  IO.FS.writeFile "vectors/lattice_sum.json" (latticeSumJson ls)
+  IO.println (s!"wrote vectors/lattice_sum.json ({ls.switch.length} shape_switch, " ++
+    s!"{ls.fourier.length} shape_fourier, {ls.pair.length} lj_ls_pair, " ++
+    s!"{ls.excluded.length} ls_excluded_pair, {ls.selfConstants.length} self_constants rows)")

@@ -5,6 +5,7 @@ pub mod embedding;
 pub mod excluded;
 pub mod innerloops;
 pub mod interaction;
+pub mod lattice_sum;
 pub mod mopac;
 pub mod params;
 pub mod perturbed;

@@ -833,3 +833,73 @@ model = "NewenSpec.PerturbedBonded.softModel (at Float: softFloat)"
 theorem = "NewenSpec.PerturbedBonded.softModel_real_eq, softModel_dvdl_is_deriv"
 differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
 vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "lattice_sum.shape_switch"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_switch"
+used_by = ["crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair", "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair (no run calls them yet: NLRELE 2/3 are refused)"]
+origin = "gromosXX Lattice_Sum::charge_shape_switch (latticesum.h:86-252); GROMOS Vol. 2 eta_function_def, tables ls_switch_function and ls_switch_prime; erfc is C erfc"
+# Theorems over R: eta' is the derivative of eta for every shape and xi (across the support edge too), compact support, eta(0) = 1, eta'' = 4 xi pi gamma (the eta and gamma tables agree), unit charge
+theory = "NewenTheory.Interactions.LatticeSum.eta, etaDeriv (eta_hasDerivAt, eta_compact_support, eta_zero_eq_one, etaPoly_derivative_two, chargeShape_normalized; erfc defined by its integral, erfc_hasDerivAt)"
+model = "NewenSpec.LatticeSum.shapeSwitchModel (at Float: shapeSwitchFloat)"
+theorem = "NewenSpec.LatticeSum.shapeSwitchModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; eta' against central differences of eta; eta(0) = 1 (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.shape_fourier"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_fourier"
+used_by = []
+origin = "gromosXX Lattice_Sum::charge_shape_fourier (latticesum.h:309-467, the corrected lines after the three 'wrong!!!' comments); GROMOS Vol. 2 latsum_gamma_ft, tables ls_fcoef and ls_fcoef_prime; kappa = 0 divides by zero for the polynomial shapes (Vol. 2 sets gamma_hat(0) = 1)"
+# Theorems over R: the tabulated gamma_hat' is the derivative of the tabulated gamma_hat at every kappa != 0, gamma_hat(0) = 1
+theory = "NewenTheory.Interactions.LatticeSum.gammaHat, gammaHatDeriv (gammaHat_hasDerivAt, gammaHat_zero_eq_one, fourierForm_hasDerivAt)"
+model = "NewenSpec.LatticeSum.shapeFourierModel (at Float: shapeFourierFloat)"
+theorem = "NewenSpec.LatticeSum.shapeFourierModel_real_eq (kappa != 0)"
+# Rust = model at Float, bit for bit; gamma_hat' against central differences, gamma_hat against a quadrature of the Fourier transform of Vol. 2's shape (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.lj_ls_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair"
+used_by = []
+origin = "gromosXX Nonbonded_Term::lj_ls_interaction (nonbonded_term.cc:361-388), its LJ force (c12/r^6 + c12/r^6 - c6) * 6 / r^6 / r^2 included; no zero-distance guard (gromosXX asserts r^2 != 0); GROMOS Vol. 2 e_eta_approx, e_eta_approx_force"
+# Theorems over R: the real-space force is -dE/dr; the model at R equals the theory for r > 0, a != 0
+theory = "NewenTheory.Interactions.LatticeSum.realSpacePair, realSpacePairForce (realSpacePair_force_is_minus_grad); NewenTheory.Interactions.LennardJones.ljEnergy, ljForce"
+model = "NewenSpec.LatticeSum.ljLsPairModel (at Float: ljLsPairFloat)"
+theorem = "NewenSpec.LatticeSum.ljLsPairModel_real_eq"
+# Rust = model at Float, bit for bit; the force against central differences of the energy in r (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.ls_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair"
+used_by = []
+origin = "gromosXX Nonbonded_Term::ls_excluded_interaction (nonbonded_term.cc:393-411); GROMOS Vol. 2 e_eta_approx (second sum)"
+# Theorems over R: the excluded-pair force is -dE/dr; the model at R equals the theory for r > 0, a != 0
+theory = "NewenTheory.Interactions.LatticeSum.realSpaceExcluded, realSpaceExcludedForce (realSpaceExcluded_force_is_minus_grad)"
+model = "NewenSpec.LatticeSum.lsExcludedPairModel (at Float: lsExcludedPairFloat)"
+theorem = "NewenSpec.LatticeSum.lsExcludedPairModel_real_eq"
+# Rust = model at Float, bit for bit; the force against central differences of the energy in r (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.self_constants"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::self_constants"
+used_by = []
+origin = "gromosXX Nonbonded_Outerloop::ls_self_outerloop (nonbonded_outerloop.cc:2291-2353: the A1, A3 table, a1 *= -pi a^2 / V, a3 *= -1/a); GROMOS Vol. 2 latsum_a1_def, latsum_a3_def, table ls_acst; the cubic Wigner constant -2.83729748 (outerloop.cc:2379; Vol. 2 prints -2.83792748) is NewenTheory.Interactions.LatticeSum.wignerCube"
+# Theorems over R: the model equals A1 = -pi a^2 Ã1 / V, A3 = -Ã3 / a; Ã3 = -eta'(0) for every shape
+theory = "NewenTheory.Interactions.LatticeSum.a1, a3, a1Tilde, a3Tilde (a3Tilde_eq_neg_etaDeriv_zero), selfTerm, aTerm"
+model = "NewenSpec.LatticeSum.selfConstantsModel (at Float: selfConstantsFloat)"
+theorem = "NewenSpec.LatticeSum.selfConstantsModel_real_eq"
+# Rust = model at Float, bit for bit; Ã1 = 4 ∫ xi eta(xi) dxi and Ã3 = -eta'(0) against the Rust switch function (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"

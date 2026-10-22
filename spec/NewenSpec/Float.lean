@@ -10,15 +10,16 @@ public import NewenTheory.Space.Periodicity
 
 The models of the floating-point kernels (`NewenSpec/Thermostat.lean`, `NewenSpec/Nonbonded.lean`,
 `NewenSpec/Bonded.lean`, `NewenSpec/Dynamics.lean`, `NewenSpec/Periodicity.lean`,
-`NewenSpec/SoftCore.lean`, `NewenSpec/PerturbedBonded.lean`) are written once over any number type
-`α` and used at `Float` (executed) and at `ℝ` (proven about). `+ − × ÷ <` come from the standard
-classes; the square root, the three transcendental functions of the bonded kernels, the power
-function and the two roundings to an integer have none that covers both, so
-they are the classes below. A Lean `module`, as the theory files that import Mathlib.
+`NewenSpec/SoftCore.lean`, `NewenSpec/PerturbedBonded.lean`, `NewenSpec/LatticeSum.lean`) are
+written once over any number type `α` and used at `Float` (executed) and at `ℝ` (proven about).
+`+ − × ÷ <` come from the standard classes; the square root, the transcendental functions
+(`acos`, `cos`, `sin`, `exp`, `erfc`), the power function and the two roundings to an integer have
+none that covers both, so they are the classes below. A Lean `module`, as the theory files that
+import Mathlib.
 
-`sqrt` is correctly rounded (IEEE 754); `acos`, `cos`, `sin` and `pow` are not, so `Float` and
-Rust's `f64` agree on them only because both call the same C library (`Float.acos` is C `acos`,
-Rust's `f64::acos` the platform `acos`, glibc's on Linux).
+`sqrt` is correctly rounded (IEEE 754); `acos`, `cos`, `sin`, `exp`, `erfc` and `pow` are not, so
+`Float` and Rust's `f64` agree on them only because both call the same C library (`Float.acos` is
+C `acos`, Rust's `f64::acos` the platform `acos`, glibc's on Linux).
 -/
 
 @[expose] public section
@@ -86,6 +87,33 @@ class Floor (α : Type) where
 instance : Floor Float := ⟨Float.floor⟩
 
 noncomputable instance : Floor ℝ := ⟨fun x => ((⌊x⌋ : ℤ) : ℝ)⟩
+
+/-- The exponential a kernel calls: `Float.exp` (C `exp`, not correctly rounded; Rust's
+`f64::exp` calls the same) or `Real.exp`. -/
+class Exp (α : Type) where
+  exp : α → α
+
+instance : Exp Float := ⟨Float.exp⟩
+
+noncomputable instance : Exp ℝ := ⟨Real.exp⟩
+
+/-- C `erfc`, the complementary error function, which Lean's `Float` lacks. Not correctly
+rounded; the Rust kernels call the same C function (`newen_forces::nonbonded::lattice_sum`), so
+the bits agree on one machine. Compiled code only, like `rintFloat`. -/
+@[extern "erfc"] opaque erfcFloat : Float → Float
+
+/-- The complementary error function a kernel calls: `erfcFloat` (C `erfc`) or, over ℝ, the
+`erfc` of `NewenTheory/Interactions/LatticeSum.lean` (instance in `NewenSpec/LatticeSum.lean`;
+Mathlib has none). -/
+class Erfc (α : Type) where
+  erfc : α → α
+
+instance : Erfc Float := ⟨erfcFloat⟩
+
+/-- A natural-number literal of a kernel as a `Float`: `Float.ofNat`, the nearest double, exact
+below `2⁵³`. Lets a model over `α` with `[NatCast α]` write its many integer literals as
+numerals (Mathlib's `instOfNat`); `lake exe spec-vectors` checks the literals are exact. -/
+instance : NatCast Float := ⟨Float.ofNat⟩
 
 end NewenSpec
 

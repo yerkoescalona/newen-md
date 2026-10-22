@@ -195,7 +195,7 @@ pub struct LatticeSum {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct NonbondedSpec {
-    /// NLRELE: 0 cutoff, 1 reaction field, 2 PME, 3 P3M
+    /// NLRELE: 0 cutoff, 1 reaction field, 2 Ewald, 3 P3M
     pub electrostatics: i32,
     /// APPAK — reaction-field inverse Debye length (nm⁻¹)
     pub kappa: f64,

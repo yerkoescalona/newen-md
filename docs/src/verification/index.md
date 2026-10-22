@@ -106,11 +106,11 @@ kernel against the model on many random inputs (differential random testing).
 
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
-| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, soft-core and perturbed terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
+| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, soft-core and perturbed terms, lattice-sum charge shapes and pair terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (eighteen functions: the pilot below, the run schedule, the degrees of freedom and bath mapping, the topology bookkeeping) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, and the soft-core and perturbed free-energy terms (below) |
+| Status | working (eighteen functions: the pilot below, the run schedule, the degrees of freedom and bath mapping, the topology bookkeeping) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, the soft-core and perturbed free-energy terms, and the lattice-sum kernels Ewald and P3M share (below; not yet called by a run) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -496,7 +496,8 @@ One value has no bits in Lean: its `Float` has a single NaN, so a NaN matches an
 
 Bit-exact comparison stops working when a kernel calls a function that IEEE 754 does not require
 to be correctly rounded, such as `exp`, `log`, `pow` or `erfc` (Ewald sums need `erfc`):
-Rust's and C's libraries may differ in the last bit. (The Berendsen barostat calls `pow`; both
+Rust's and C's libraries may differ in the last bit. (The lattice-sum kernels below call C's
+`erfc` and `exp` from Rust as Lean does, so their check stays exact on one machine.) (The Berendsen barostat calls `pow`; both
 sides reach the same C `pow` there, see below.) It also stops working when the two sides
 sum in a different order, as a parallel reduction over pairs does. There a tolerance, justified by a rounding analysis, has to replace equality.
 
@@ -1013,6 +1014,86 @@ cargo test -p newen-forces --test softcore_spec            # soft-core kernels =
 cargo test -p newen-forces --test perturbed_bonded_spec    # perturbed bonded kernels = Float model; dV/dλ by FD
 ```
 
+### Lattice-sum electrostatics, phase 1
+
+GROMOS has two lattice-sum methods for the electrostatics of a periodic box, Ewald (NONBONDED
+NLRELE = 2) and P3M (NLRELE = 3). newen refuses both for now. Before either is wired into a run,
+the pieces they share get the same three layers as the kernels above: the charge-shaping
+functions, the real-space pair terms and the self-term constants. Nothing calls them yet.
+
+**The kernels.** `crates/newen-forces/src/nonbonded/lattice_sum.rs`, ported from gromosXX in its
+operation order: `shape_switch` (the switch function `η(ξ)`, `ξ = r/a`, and `η'(ξ)` of the twelve
+charge shapes, NSHAPE −1 for the Gaussian and 0 … 10 for the truncated polynomials,
+`latticesum.h:86-252`), `shape_fourier` (the Fourier coefficient `γ̂(κ)` of the shape and
+`γ̂'(κ)`, `latticesum.h:309-467`), `lj_ls_pair` (one Lennard-Jones + real-space pair,
+`lj_ls_interaction`), `ls_excluded_pair` (the real-space term of an excluded pair,
+`ls_excluded_interaction`) and `self_constants` (`A1` and `A3` for a width `a` and a box volume
+`V`, from the table of `ls_self_outerloop`). Rust's standard library has no `erfc`, so the module
+declares C `erfc` itself, the function gromosXX calls.
+
+**The meaning.** `spec/NewenTheory/Interactions/LatticeSum.lean` writes GROMOS Vol. 2's lattice
+sum: the energy is `E_γ + E_η + E_A + E_slf + E_srf` (`chg_fe_all`), a reciprocal-space sum over
+wave vectors weighted by `γ̂(ak)/k²`, a real-space sum of `q η(r/a)/r` over pairs, constants built
+from `A1`, `A2`, `A3`, and the surface term of the box dipole. That these add up to the lattice sum
+of `1/r` is the definition of the method and is not proved. What is proved:
+
+- the switch functions of Vol. 2's tables: `η'` is the derivative of `η` for every shape and every
+  `ξ`, across the edge of the support too (`eta_hasDerivAt`); the polynomial shapes vanish for
+  `ξ ≥ 1` (`eta_compact_support`); `η(0) = 1` (`eta_zero_eq_one`); `η'' = 4ξ · πγ(ξ)`, so the
+  tables of `η` and of the shape `γ` agree (`etaPoly_derivative_two`), and the shapes carry unit
+  charge (`chargeShape_normalized`), which is why Vol. 2 can set `γ̂(0) = 1`
+  (`gammaHat_zero_eq_one`);
+- the tabulated `γ̂'` is the derivative of the tabulated `γ̂` at every `κ ≠ 0`
+  (`gammaHat_hasDerivAt`), through one lemma about `(A + B cos κ + D sin κ)/κⁿ` with polynomials
+  `A`, `B`, `D`;
+- force = −∇E for the real-space pair and excluded-pair terms (`realSpacePair_force_is_minus_grad`,
+  `realSpaceExcluded_force_is_minus_grad`, in the kernel's form `(q η/r − q η'/a)/r²`), for the
+  reciprocal-space energy (`kSpace_force_is_minus_grad`: moving atom `i` along `e` changes the energy
+  at the rate `−F_i · e`, with `F_i` Vol. 2's `ewald_reci_force`; `structureFactorSq_hasDerivAt` per
+  wave vector) and for the surface term (`surface_force_is_minus_grad`, Vol. 2's `e_srf_forces`);
+- shifting every atom by the same vector leaves `C(k)² + S(k)²` unchanged
+  (`kSpace_translation_invariant`);
+- the table's `−a A3` is `−η'(0)` (`a3Tilde_eq_neg_etaDeriv_zero`).
+
+Mathlib has no error function, so the theory defines `erf x = 2/√π ∫₀ˣ exp(−t²) dt` and proves
+`erfc' = −2/√π · exp(−x²)`; that the integral tends to 1 is not needed and not proved.
+
+**One model.** `spec/NewenSpec/LatticeSum.lean` writes the five kernels once over any number type.
+The polynomial coefficients run up to `16 216 200`; they come from `[NatCast α]` (at `Float`,
+`Float.ofNat`, exact below `2⁵³`, which `lake exe spec-vectors` checks), so the model reads like
+the C. `NewenSpec/Float.lean` gains `Exp` and `Erfc` classes; at `Float`, `Erfc` binds C `erfc`
+(`erfcFloat`), at ℝ it is the theory's `erfc`. `shapeSwitchModel_real_eq`,
+`shapeFourierModel_real_eq` (`κ ≠ 0`), `ljLsPairModel_real_eq`, `lsExcludedPairModel_real_eq`
+(`r > 0`, `a ≠ 0`) and `selfConstantsModel_real_eq` prove the model at ℝ equal to the theory.
+
+**The tests.** `lake exe spec-vectors` writes `spec/vectors/lattice_sum.json`: every shape at
+`ξ = 0`, `1`, the doubles on either side of `1`, a log grid in `[10⁻³, 3]` and random points
+(2 280 rows); `κ = 0` and a log grid in `[10⁻³, 40]` (2 220 rows); 2 400 pair and 1 200
+excluded-pair rows with `r²` log-uniform in `[10⁻⁴, 4]` nm² or at `r = a`, widths `0.4`, `0.8`,
+`1.4` nm and random; 192 rows of self constants. `crates/newen-forces/tests/lattice_sum_spec.rs`
+requires the same 64 bits on every row, in debug, release and `target-cpu=generic` builds, and the
+bits of `π`, `four_pi_eps_i` and `EPS0_INV` (gromosXX's literal `eps0_i = 1745.9137`, which is
+not `4π · 138.9354`). `exp`, `erfc`, `sin` and `cos` are not correctly rounded; both sides call
+glibc. Written newen's way, `(12 c12/r⁶ − 6 c6)/r⁸`, the LJ force of the pair kernel differs from
+gromosXX's `(c12/r⁶ + c12/r⁶ − c6) · 6/r⁸` on 504 of the 2 400 pair rows; the lattice-sum kernel
+keeps gromosXX's. Independently of Lean, the test checks `η'`, `γ̂'` (where the closed form does
+not cancel, `κ ≥ 5` for the polynomials) and the pair forces against central differences,
+`η(0) = 1` for every shape, and against Vol. 2's table of the shapes themselves: Simpson's rule
+gives `γ̂(κ) = 4/κ ∫ ξ sin(κξ) πγ(ξ) dξ` to `10⁻⁶` at `κ` from 2 to 35, `4 ∫ ξ² πγ = 1`, and
+`Ã1 = 4 ∫ ξ η(ξ) dξ`.
+
+Three things in the sources are worth knowing. gromosXX's `charge_shape_fourier` keeps three
+earlier versions as comments marked "wrong!!!" (order 2's `γ̂`, order 4's `k2 = kappa` and order
+4's `γ̂'` with an extra `κ`); the code as it stands is Vol. 2's tables `ls_fcoef` and
+`ls_fcoef_prime`, and `gammaHat_hasDerivAt` and the quadrature confirm them. Vol. 2 prints the
+cubic Wigner constant as `−2.83792748`; gromosXX uses `−2.83729748` (`nonbonded_outerloop.cc:2379`),
+the known value, so the book transposes two digits (`wignerCube`). And the polynomial shapes
+divide by `κ^(N+3)`: `κ = 0` gives NaN, which is harmless because the `k = 0` term is never summed.
+
+```sh
+cargo test -p newen-forces --test lattice_sum_spec    # Rust = Float model, bit for bit; η', γ̂', forces by FD; γ̂, A1, A3 by quadrature
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -1342,6 +1423,17 @@ Planned, in the order chosen:
   uniqueness and idempotence theorems, the rectangular image proven shortest, and the triclinic
   one proven not always shortest. Not covered: image code outside `newen-core`, such as the
   `[−L/2, L/2]` wrapping in `remove_com_motion.rs`, which uses its own `f64::round` and `x / L`.
+- **Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M), in four phases.** Phase 1, done: the
+  Lean theory of the GROMOS lattice sum and the kernels both methods share (charge shapes, their
+  Fourier coefficients, the real-space pair and excluded-pair terms, the self constants), with
+  their models and bit-exact tests (see
+  [Lattice-sum electrostatics, phase 1](#lattice-sum-electrostatics-phase-1)). Phase 2: the direct
+  Ewald sum over wave vectors (`C(k)`, `S(k)`, the reciprocal-space energy and forces, `A2`), wired
+  in for NLRELE = 2 and checked against gromosXX references. Phase 3: P3M (NLRELE = 3), charge
+  assignment to a grid, the optimal influence function and the FFT with `rustfft`. Phase 4: the
+  refusals that remain (the combinations gromosXX itself refuses, and those newen does not
+  support), and the removal of the unwired smooth-PME code in `crates/newen-forces`
+  (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`), which is not GROMOS's P3M.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

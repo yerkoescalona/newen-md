@@ -22,8 +22,9 @@ Aeneas refinement proofs. -/
 `vectors/bath.json`, `vectors/bath_empty.json` and `vectors/topology.json` (the Lean models on the
 grids the Rust tests sweep), `vectors/thermostat.json`, `vectors/nonbonded.json`,
 `vectors/bonded.json`, `vectors/dynamics.json`, `vectors/periodicity.json`,
-`vectors/softcore.json` and `vectors/perturbed_bonded.json` (the thermostat, LJ + reaction-field,
-bonded, leap-frog, kinetic-energy, temperature, pressure, barostat, periodic-boundary, soft-core
-and perturbed bonded models at `Float` on random inputs, as bits). -/
+`vectors/softcore.json`, `vectors/perturbed_bonded.json` and `vectors/lattice_sum.json` (the
+thermostat, LJ + reaction-field, bonded, leap-frog, kinetic-energy, temperature, pressure,
+barostat, periodic-boundary, soft-core, perturbed bonded and lattice-sum models at `Float` on
+grids and random inputs, as bits). -/
 lean_exe «spec-vectors» where
   root := `SpecVectors

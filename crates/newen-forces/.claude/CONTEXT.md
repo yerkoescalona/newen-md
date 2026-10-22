@@ -44,6 +44,22 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   2026-10-22 `perturbed_lj_crf_pair` has no distance guard and takes `C12/C6` for any `C6 ≠ 0`,
   as gromosXX and the ext kernel (overlapping soft-core atoms are finite; a state with `C6 = 0`
   has no soft-core length there and diverges at `r = 0`, as in gromosXX).
+- **Lattice-sum kernels verified, not wired (2026-10-22):** `nonbonded/lattice_sum.rs` holds the
+  pieces Ewald (NLRELE 2) and P3M (NLRELE 3) share, ported from gromosXX in its operation order:
+  `ChargeShape` (NSHAPE −1 Gaussian, 0..=10 truncated polynomials), `shape_switch` (`η`, `η'`),
+  `shape_fourier` (`γ̂`, `γ̂'`), `lj_ls_pair` (LJ + real-space pair, gromosXX's LJ force form),
+  `ls_excluded_pair`, `self_constants` (`A1`, `A3`), with `/// spec:` keys. C `erfc` is declared
+  `extern "C"` there (Rust's std has none). Lean model `spec/NewenSpec/LatticeSum.lean`, theory
+  `spec/NewenTheory/Interactions/LatticeSum.lean`; `tests/lattice_sum_spec.rs` compares them bit
+  for bit on `spec/vectors/lattice_sum.json`, checks `η'`, `γ̂'` and the pair forces by finite
+  differences and `γ̂`, `A1`, `A3` against Vol. 2's shape table by quadrature. No run calls them:
+  NLRELE 2/3 are refused in `newen-run`. `newen_core::units::EPS0_INV` is gromosXX's literal
+  `eps0_i = 1745.9137` for the reciprocal-space terms (`units::eps0_i`, `4π · 138.9354`, is a
+  different double). Keep the operation order.
+- **Unwired PME code, not GROMOS P3M:** `electrostatics.rs`, `pme.rs` and `pme_mpi.rs` implement a
+  PME/Ewald of their own that nothing outside them calls and that does not follow GROMOS (no
+  charge shapes, no `A`-terms, an Abramowitz–Stegun `erfc`; not gromosXX's P3M). Do not build on
+  them; they are to be removed once P3M is ported.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
@@ -116,6 +132,7 @@ src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbond
   innerloops.rs        — `lj_crf_pair` (scalar pair kernel), `lj_crf_interaction_x4` (4 lanes), the loops
   excluded.rs          — `rf_excluded_pair`, `rf_self_term`, RF excluded and 1-4 loops
   params.rs            — `CRFParameters::new`
+  lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants` (not wired)
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
   schnet.rs            — SchNetInteraction (feature `ml`)
@@ -126,6 +143,7 @@ src/zones.rs          — Zone, ZonePartition, PairOwner (QM/MM/BuRNN double-cou
 src/energy.rs         — single_point_energy() entry point for analysis
 src/restraints.rs     — position + distance restraints
 tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
+tests/lattice_sum_spec.rs — lattice-sum kernels = Lean `Float` model, bit for bit; FD, quadrature
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```
