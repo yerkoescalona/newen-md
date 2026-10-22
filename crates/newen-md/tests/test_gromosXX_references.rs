@@ -594,6 +594,46 @@ fn run_reference(system: &str) {
     }
     report_mismatches(system, &mismatches);
 
+    // Every frame's TIMESTEP (step and time, t = T + step·DT) in each file gromosXX wrote: the
+    // energies, dH/dλ, forces, positions and the final configuration — the frame count of each
+    // with it.
+    for (file, ours) in [
+        ("expected/energies.tre".to_string(), tre.clone()),
+        ("expected/forces.trf".to_string(), trf.clone()),
+        (
+            "expected/trajectory.trc".to_string(),
+            out.join("trajectory.trc"),
+        ),
+        ("expected/final.conf".to_string(), out.join("final.conf")),
+    ]
+    .into_iter()
+    .chain(toml_str_opt(&toml, "free_energy").map(|fe| (fe, trg.clone())))
+    {
+        let theirs = sys_dir.join(&file);
+        if !theirs.exists() {
+            continue;
+        }
+        let expected = parse_timesteps(&theirs);
+        let actual = if ours.exists() {
+            parse_timesteps(&ours)
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{system}: {file}: {} TIMESTEP blocks, gromosXX wrote {}",
+            actual.len(),
+            expected.len()
+        );
+        for (i, (&(es, et), &(a_s, at))) in expected.iter().zip(&actual).enumerate() {
+            assert!(
+                es == a_s && (et - at).abs() <= 1e-9,
+                "{system}: {file} frame {i}: TIMESTEP {a_s} {at} vs gromosXX {es} {et}"
+            );
+        }
+    }
+
     // Compare forces if reference .trf exists: the free forces, and the constraint forces
     // gromosXX writes when SHAKE runs
     let expected_trf = sys_dir.join("expected/forces.trf");
@@ -611,7 +651,14 @@ fn run_reference(system: &str) {
             );
         }
 
-        let n_compare = exp_forces.len().min(act_forces.len());
+        // a converged minimisation repeats its last frame (`out_configuration.cc:624-630`)
+        assert_eq!(
+            act_forces.len(),
+            exp_forces.len(),
+            "{system}: {block} frame count differs from gromosXX (expected {}, got {})",
+            exp_forces.len(),
+            act_forces.len()
+        );
         for (frame_idx, (ef, af)) in exp_forces.iter().zip(&act_forces).enumerate() {
             assert_eq!(
                 ef.len(),
@@ -637,12 +684,6 @@ fn run_reference(system: &str) {
                     &format!("{system}[{frame_idx}] {block} atom {atom_idx} fz"),
                 );
             }
-        }
-        if n_compare == 0 && !exp_forces.is_empty() {
-            panic!(
-                "{system}: expected {} {block} frames but got none",
-                exp_forces.len()
-            );
         }
     }
 
@@ -778,6 +819,42 @@ fn run_reference(system: &str) {
                 i + 1
             );
         }
+        // A Nosé–Hoover run: the ζ of every bath a continuation starts from (NHCVARIABLES, 9
+        // decimals, `out_configuration.cc:3426-3443`); gromosXX writes it for chains only (D41).
+        let ours = parse_block_values(&out.join("final.conf"), "NHCVARIABLES");
+        let theirs = parse_block_values(&expected_fin, "NHCVARIABLES");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration NHCVARIABLES has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-8 * b.abs().max(1.0),
+                "{system}: NHCVARIABLES value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
+        // A GaMD search (SEARCH 1/2): the statistics a continuation starts from, printed with 9
+        // decimals (`out_configuration.cc:4013-4034`).
+        let ours = parse_block_values(&out.join("final.conf"), "GAMDSTAT");
+        let theirs = parse_block_values(&expected_fin, "GAMDSTAT");
+        assert_eq!(
+            ours.len(),
+            theirs.len(),
+            "{system}: final configuration GAMDSTAT has {} values, gromosXX's {}",
+            ours.len(),
+            theirs.len()
+        );
+        for (i, (a, b)) in ours.iter().zip(&theirs).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-8 * b.abs().max(1.0),
+                "{system}: GAMDSTAT value {}: {a} vs gromosXX {b}",
+                i + 1
+            );
+        }
         // Time-averaged distance restraints (NTDIR < 0): the ⟨r⁻³⟩ a continuation starts from.
         let ours = parse_block_values(&out.join("final.conf"), "DISRESEXPAVE");
         let theirs = parse_block_values(&expected_fin, "DISRESEXPAVE");
@@ -798,6 +875,27 @@ fn run_reference(system: &str) {
     }
 
     let _ = fs::remove_dir_all(&out);
+}
+
+/// The (step, time) of every `TIMESTEP` block of a file, in file order.
+fn parse_timesteps(path: &Path) -> Vec<(u64, f64)> {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let mut lines = text.lines().map(str::trim);
+    let mut out = Vec::new();
+    while let Some(l) = lines.next() {
+        if l != "TIMESTEP" {
+            continue;
+        }
+        let row = lines
+            .find(|l| !l.is_empty() && !l.starts_with('#'))
+            .unwrap_or_else(|| panic!("{}: empty TIMESTEP block", path.display()));
+        let mut v = row.split_whitespace();
+        let bad = format!("{}: bad TIMESTEP line {row:?}", path.display());
+        let step: u64 = v.next().and_then(|x| x.parse().ok()).expect(&bad);
+        let time: f64 = v.next().and_then(|x| x.parse().ok()).expect(&bad);
+        out.push((step, time));
+    }
+    out
 }
 
 /// Every number of a `.cnf` block (empty if the block is absent).
@@ -832,11 +930,18 @@ fn parse_pertdata(path: &Path) -> Option<f64> {
 /// rule *in the cube frame* (the cubic minimum image, then the body-centred (±L/2)³ shift), not
 /// with the triclinic lattice the engine works in.
 fn fold_into_box(path: &Path, d: [f64; 3]) -> [f64; 3] {
-    let Some((ntb, edges)) = parse_box(path) else {
+    let Some((ntb, edges, angles)) = parse_box(path) else {
         return d;
     };
     if edges[0] <= 0.0 || ntb == 0 {
         return d;
+    }
+    if ntb == 2 {
+        // a triclinic cell: fold the fractional coordinates
+        use newen_core::math::{genbox_box, Vec3};
+        let h = genbox_box(Vec3::from(edges), Vec3::from(angles));
+        let f = h.inverse() * Vec3::from(d);
+        return (h * (f - f.round())).to_array();
     }
     let mut r = [0.0; 3];
     for c in 0..3 {
@@ -859,8 +964,8 @@ fn fold_into_box(path: &Path, d: [f64; 3]) -> [f64; 3] {
     r
 }
 
-/// NTB and the box edge lengths of a `.cnf`'s GENBOX block, if it has one.
-fn parse_box(path: &Path) -> Option<(i32, [f64; 3])> {
+/// NTB, the box edge lengths and the angles of a `.cnf`'s GENBOX block, if it has one.
+fn parse_box(path: &Path) -> Option<(i32, [f64; 3], [f64; 3])> {
     let text = fs::read_to_string(path).ok()?;
     let mut lines = text
         .lines()
@@ -869,12 +974,17 @@ fn parse_box(path: &Path) -> Option<(i32, [f64; 3])> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'));
     let ntb: i32 = lines.next()?.split_whitespace().next()?.parse().ok()?;
-    let v: Vec<f64> = lines
-        .next()?
-        .split_whitespace()
-        .filter_map(|x| x.parse().ok())
-        .collect();
-    (v.len() >= 3).then_some((ntb, [v[0], v[1], v[2]]))
+    let mut row = || -> Option<[f64; 3]> {
+        let v: Vec<f64> = lines
+            .next()?
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        (v.len() >= 3).then_some([v[0], v[1], v[2]])
+    };
+    let edges = row()?;
+    let angles = row().unwrap_or([90.0; 3]);
+    Some((ntb, edges, angles))
 }
 
 /// POSITION and VELOCITY blocks of a `.cnf`, as `[x, y, z]` per atom.
@@ -951,7 +1061,16 @@ ref_test!(water_single, "water_single");
 ref_test!(water_single_genvel, "water_single_genvel");
 ref_test!(benzene_vacuum, "benzene_vacuum");
 ref_test!(nacl_pair_box, "nacl_pair_box");
+// The direct Ewald sum (NLRELE 2, atomic cutoff, Gaussian a = 0.4 nm, cubic A2); expected
+// output from the released binary run with @develop (see its input.toml).
+ref_test!(nacl_pair_box_ewald, "nacl_pair_box_ewald");
+// P3M (NLRELE 3): NSHAPE 3, ASHAPE 1.4 nm, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, P3M Ã2
+// (NA2CLC 3); expected output from the released binary. The FFTs differ (PhastFT vs FFTW), so
+// the agreement is within the tolerances, not byte for byte.
+ref_test!(nacl_pair_box_p3m_fixed, "nacl_pair_box_p3m_fixed");
 ref_test!(butane_vacuum, "butane_vacuum");
+// COVALENTFORM 0 0 1: the Chebyshev-polynomial dihedral (NTBDN = 1).
+ref_test!(butane_vacuum_ntbdn1, "butane_vacuum_ntbdn1");
 
 // ── Level 2: PBC, pairlist, SHAKE, solvent, twin-range ──────────────────────
 ref_test!(water_3_box, "water_3_box");
@@ -962,6 +1081,13 @@ ref_test!(water_10_box, "water_10_box");
 ref_test!(nacl_3water_cutoff, "nacl_3water_cutoff");
 ref_test!(nacl_water_box, "nacl_water_box");
 ref_test!(nacl_water_box_shifted, "nacl_water_box_shifted");
+// GENBOX NTB 2 with angles 75/80/65: the box vectors from lengths and angles
+ref_test!(nacl_water_box_triclinic, "nacl_water_box_triclinic");
+// P3M in the same cell: the wave vectors Σ l_i b_i (patched oracle, LS3)
+ref_test!(
+    nacl_water_box_triclinic_p3m_fixed,
+    "nacl_water_box_triclinic_p3m_fixed"
+);
 
 // ── Constraint algorithms ────────────────────────────────────────────────────
 ref_test!(nacl_1water_settle, "nacl_1water_settle");
@@ -979,11 +1105,37 @@ ref_test!(water_216_box, "water_216_box");
 ref_test!(water_216_nve_nobath, "water_216_nve_nobath");
 ref_test!(water_216_box_com, "water_216_box_com");
 ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
+// The direct Ewald sum in bulk water: excluded pairs, the twin-range LJ-only shell; and with the
+// surface term of a dielectric boundary (EPSLS = 61). Expected output from @develop.
+ref_test!(water_216_box_ewald, "water_216_box_ewald");
+ref_test!(water_216_box_ewald_epsls, "water_216_box_ewald_epsls");
+// The same under Berendsen pressure coupling: the surface-term virial stored as −2Ξ with the whole
+// tensor (patched oracle, LS2).
+ref_test!(
+    water_216_npt_ewald_epsls_fixed,
+    "water_216_npt_ewald_epsls_fixed"
+);
+// P3M in bulk water: the finite-difference field (NFDORD 2) with NSHAPE 3, and the Gaussian
+// (a = 0.4 nm) with ik differentiation (NFDORD 0).
+ref_test!(water_216_box_p3m_fixed, "water_216_box_p3m_fixed");
+ref_test!(
+    water_216_box_p3m_gauss_fixed,
+    "water_216_box_p3m_gauss_fixed"
+);
 
 // ── Level 3: thermostats / barostats ────────────────────────────────────────
 ref_test!(water_216_nvt, "water_216_nvt");
+// The final configuration's NHCVARIABLES block, plain Nosé–Hoover included (D41).
 ref_test!(water_216_nvt_nosehoover, "water_216_nvt_nosehoover");
 ref_test!(water_216_nvt_nhc_chain, "water_216_nvt_nhc_chain");
+// Steps 100-199 of a 100 + 100 run, continued (NTINHT 0) against gromosXX with D41 patched
+// (`patches/D41_nh_restart.patch`): every variable of every bath restored. The continued run is
+// checked against the single run by `tests/nh_restart.rs`.
+ref_test!(
+    water_216_nvt_nosehoover_cont_fixed,
+    "water_216_nvt_nosehoover_cont_fixed"
+);
+ref_test!(water_216_nvt_nhc_cont_fixed, "water_216_nvt_nhc_cont_fixed");
 ref_test!(water_216_npt, "water_216_npt");
 // Berendsen barostat (VIRIAL 2) with all-bond and solvent SHAKE: the constraint virial enters
 // only the atomic virial (gromosXX `shake.h:380`).
@@ -1086,15 +1238,8 @@ ref_test!(
     "aladip_vacuum_fep_distres_precalc"
 );
 // PERTATOMPAIR rows with a perturbed atom, one per state type (excluded / normal / 1-4) in A and
-// in B: the ext energies of the filled state only, the other state's parameters set to 0. The
-// main energies carry gromosXX's argument-shift defect in the perturbed pair branches, run with
-// `atom_pair_kernel = "gromosxx-shifted"` (see `perturbed_atom_pair_interactions`).
-ref_test!(
-    aladip_vacuum_fep_pairpert_precalc,
-    "aladip_vacuum_fep_pairpert_precalc"
-);
-// The same run against native gromosXX 247c95c4 with the argument shift patched
-// (`tests/gromosXX_references/patches/D1_pair_kernel_args.patch`): the intended kernel, newen's default.
+// in B: the ext energies of the filled state only, the other state's parameters set to 0. Against
+// gromosXX with the argument shift patched (D1, `patches/D1_pair_kernel_args.patch`).
 ref_test!(
     aladip_vacuum_fep_pairpert_precalc_fixed,
     "aladip_vacuum_fep_pairpert_precalc_fixed"
@@ -1128,6 +1273,11 @@ ref_test!(
 ref_test!(
     aladip_vacuum_fep_slowgrowth_cont,
     "aladip_vacuum_fep_slowgrowth_cont"
+);
+// Started at STEP T = 10 ps: every TIMESTEP time is T + step·DT, the physics unchanged.
+ref_test!(
+    aladip_vacuum_fep_slowgrowth_t10,
+    "aladip_vacuum_fep_slowgrowth_t10"
 );
 // In solvent: soft-core pairs at a moving λ in a periodic box with solvent SHAKE.
 ref_test!(ch4_water_fep_slowgrowth, "ch4_water_fep_slowgrowth");
@@ -1171,24 +1321,12 @@ ref_test!(aladip_vacuum_eds_pairs, "aladip_vacuum_eds_pairs");
 ref_test!(aladip_vacuum_aeds_below, "aladip_vacuum_aeds_below");
 ref_test!(aladip_vacuum_aeds_inside, "aladip_vacuum_aeds_inside");
 ref_test!(aladip_vacuum_aeds_above, "aladip_vacuum_aeds_above");
-// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block, against the
-// released gromosXX: its defects D16, D25 and D32 reproduced by the `[recipe_overrides]` of each
-// input.toml.
-ref_test!(aladip_vacuum_aeds_f2, "aladip_vacuum_aeds_f2");
-ref_test!(aladip_vacuum_aeds_f4, "aladip_vacuum_aeds_f4");
-ref_test!(aladip_vacuum_aeds_f5, "aladip_vacuum_aeds_f5");
-ref_test!(aladip_vacuum_aeds_f6, "aladip_vacuum_aeds_f6");
-// BMAXTYPE 2 with a target state without variance, held by RESTREMIN 1.
-ref_test!(aladip_vacuum_aeds_sigma0, "aladip_vacuum_aeds_sigma0");
-// A search in two jobs: the second continues the first's AEDSSEARCH block (NTIAEDSS 0).
-ref_test!(aladip_vacuum_aeds_cont1, "aladip_vacuum_aeds_cont1");
-ref_test!(aladip_vacuum_aeds_cont2, "aladip_vacuum_aeds_cont2");
-// FORM 6 with E_2^R = 6000: e^{−β(V_2 − E_2^R)} overflows, the released gromosXX freezes the
-// offsets (D25 reproduced).
-ref_test!(aladip_vacuum_aeds_f6_ovf, "aladip_vacuum_aeds_f6_ovf");
-// The same searches against gromosXX with D16, D25 and D32 patched
-// (`tests/gromosXX_references/patches/`): newen's defaults — the columns a frame's V_R* used,
-// log-sum-exp prevalences, a sampled state as the E_min target.
+// The parameter searches, whole-block over 300 steps, and their final AEDSSEARCH block, against
+// gromosXX with D16, D25 and D32 patched (`tests/gromosXX_references/patches/`): the columns a
+// frame's V_R* used, log-sum-exp prevalences, a sampled state as the E_min target. `_sigma0`:
+// BMAXTYPE 2 with a target state without variance, held by RESTREMIN 1. `_cont1/2`: a search in
+// two jobs, the second continuing the first's AEDSSEARCH block (NTIAEDSS 0). `_f6_ovf`: FORM 6
+// with E_2^R = 6000, where e^{−β(V_2 − E_2^R)} overflows.
 ref_test!(aladip_vacuum_aeds_f2_fixed, "aladip_vacuum_aeds_f2_fixed");
 ref_test!(aladip_vacuum_aeds_f4_fixed, "aladip_vacuum_aeds_f4_fixed");
 ref_test!(aladip_vacuum_aeds_f5_fixed, "aladip_vacuum_aeds_f5_fixed");
@@ -1211,8 +1349,11 @@ ref_test!(
 );
 
 // ── Energy minimization ──────────────────────────────────────────────────────
-// gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34.
+// gromosXX writes the converged energies once more at convergence; `md` does the same since 0.0.34,
+// the forces too since 0.0.68. With output every 5 steps: the repeat only on the schedule of the
+// step before, the stopping step's positions only on their own.
 ref_test!(aladip_vacuum_em, "aladip_vacuum_em");
+ref_test!(aladip_vacuum_em_ntw5, "aladip_vacuum_em_ntw5");
 ref_test!(aladip_vacuum_em_shake, "aladip_vacuum_em_shake");
 ref_test!(aladip_solvated_em_noshake, "aladip_solvated_em_noshake");
 ref_test!(aladip_solvated_em_shake, "aladip_solvated_em_shake");
@@ -1237,19 +1378,33 @@ ref_test!(aladip_multibath_swapped, "aladip_multibath_swapped");
 // ROTTRANS on the solute of the two-bath system: 3 COM and 3 internal-rotational degrees of
 // freedom leave the solute's baths (gromosXX `topology.cc:1370-1402`).
 ref_test!(aladip_multibath_rottrans, "aladip_multibath_rottrans");
+// Two Nosé–Hoover baths (plain and chain) with different TEMP0 and TAU: one ζ or chain per bath
+// (gromosXX `nosehoover_thermostat.cc:120-230`).
+ref_test!(aladip_multibath_nosehoover, "aladip_multibath_nosehoover");
+ref_test!(aladip_multibath_nhc, "aladip_multibath_nhc");
+// NDFMIN 3 over two baths whose degrees of freedom are integers (12, 13): gromosXX spreads it
+// through an `int` total (`multibath.cc:145-152`), exact here. The half-integer case (14.5, 10.5)
+// is `_half_fixed`, generated with D40 patched (the total summed exactly).
+ref_test!(
+    aladip_vacuum_multibath_ndfmin3,
+    "aladip_vacuum_multibath_ndfmin3"
+);
+ref_test!(
+    aladip_vacuum_multibath_ndfmin3_half_fixed,
+    "aladip_vacuum_multibath_ndfmin3_half_fixed"
+);
 // Three energy groups: harmonic bonds/angles and dihedrals booked by first atom across groups.
 ref_test!(
     aladip_harmonic_covalent_groups,
     "aladip_harmonic_covalent_groups"
 );
-// The classical part of this system already matches gromosXX exactly (its potential energy at
-// frame 0 agrees to 1e-9); what differs is the GaMD boost itself. gromosXX accumulates the
-// dihedral and total forces of every acceleration group during the force calculation and scales
-// them by k·(V−E), recording ΔV = k(V−E)²/2 in the special energy — on this system ΔV ≈ 1.23
-// kJ/mol, which our run neither applies the same way nor reports. The reference stays here as the
-// specification for that work (1.9).
-ref_test!(
-    ignore: aladip_gamd,
-    "aladip_gamd",
-    "GaMD boost unvalidated: gromosXX's per-acceleration-group force scaling and its ΔV in the special energy are not reproduced (1.9)"
-);
+// GaMD, fixed parameters (SEARCH 0), one interaction group over all atoms. FORM 3: the dihedral
+// boost, ΔV = kD(V_D − ED)²/2 ≈ 1.23 kJ/mol in the special energy and ENER[51], the proper and
+// improper dihedral forces scaled by 1 + kD(V_D − ED).
+ref_test!(aladip_gamd, "aladip_gamd");
+// FORM 1 with ET above V_T: both boosts act on the forces, and ΔV is the dihedral one only —
+// gromosXX assigns `gamd_DV` twice (`gamd.cc:364, 381`), reproduced.
+ref_test!(aladip_gamd_dual, "aladip_gamd_dual");
+// SEARCH 1, NTIGAMDS 1: a cMD search from scratch, no boost; the statistics end in the final
+// configuration's GAMDSTAT block.
+ref_test!(aladip_gamd_cmd_search, "aladip_gamd_cmd_search");

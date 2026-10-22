@@ -6,7 +6,10 @@ use newen_core::math::{BoundaryCondition, Vec3};
 use rayon::prelude::*;
 use wide::{f64x4, CmpLt};
 
-/// Core LJ + CRF interaction calculation (hot path!)
+/// `r²` below which a pair is treated as coincident and contributes nothing.
+pub const ZERO_DISTANCE2: f64 = 1e-10;
+
+/// Core LJ + CRF interaction calculation (hot path!): [`lj_crf_pair`] of `r.length_squared()`.
 ///
 /// # Arguments
 /// * `r` - Distance vector from i to j
@@ -16,7 +19,7 @@ use wide::{f64x4, CmpLt};
 /// * `crf` - CRF parameters
 ///
 /// # Returns
-/// * `force_magnitude` - Scalar force magnitude
+/// * `force_magnitude` - Scalar force magnitude (the force on i is `r * force_magnitude`)
 /// * `e_lj` - Lennard-Jones energy
 /// * `e_crf` - Coulomb reaction field energy
 #[inline(always)]
@@ -27,25 +30,46 @@ pub fn lj_crf_interaction(
     q_prod: f64,
     crf: &CRFParameters,
 ) -> (f64, f64, f64) {
-    let r2 = r.length_squared();
+    lj_crf_pair(r.length_squared(), c6, c12, q_prod, crf)
+}
 
+/// One LJ + CRF pair at squared distance `r2`: `(f_mag, e_lj, e_crf)`, computed in this order
+/// (`R` the reaction-field radius, `C_RF` the reaction-field constant):
+///
+/// ```text
+/// r2 < ZERO_DISTANCE2:  (0, 0, 0)
+/// inv_r2 = 1 / r2
+/// inv_r6 = inv_r2 · inv_r2 · inv_r2
+/// e_lj   = (c12 · inv_r6 − c6) · inv_r6                      C12/r¹² − C6/r⁶
+/// f_lj   = (12 · c12 · inv_r6 − 6 · c6) · inv_r6 · inv_r2    12 C12/r¹⁴ − 6 C6/r⁸
+/// inv_r  = sqrt(inv_r2)
+/// e_crf  = q · (inv_r − crf_2cut3i · r2 − crf_cut)           q (1/r − C_RF r²/(2R³) − (1 − C_RF/2)/R)
+/// f_crf  = q · (inv_r · inv_r2 + crf_cut3i)                  q (1/r³ + C_RF/R³)
+/// f_mag  = f_lj + f_crf
+/// ```
+///
+/// `f_mag` is `−(dE/dr)/r`, so the force on atom i is `r_vec · f_mag`.
+///
+/// spec: nonbonded.lj_crf_pair
+#[inline(always)]
+pub fn lj_crf_pair(
+    r2: f64,
+    c6: f64,
+    c12: f64,
+    q_prod: f64,
+    crf: &CRFParameters,
+) -> (f64, f64, f64) {
     // Early exit for zero distance (should not happen, but safety)
-    if r2 < 1e-10 {
+    if r2 < ZERO_DISTANCE2 {
         return (0.0, 0.0, 0.0);
     }
 
     let inv_r2 = 1.0 / r2;
     let inv_r6 = inv_r2 * inv_r2 * inv_r2;
 
-    // Lennard-Jones: E_lj = C12/r^12 - C6/r^6
     let e_lj = (c12 * inv_r6 - c6) * inv_r6;
-
-    // Lennard-Jones force: F = 12*C12/r^14 - 6*C6/r^8
     let f_lj = (12.0 * c12 * inv_r6 - 6.0 * c6) * inv_r6 * inv_r2;
 
-    // Coulomb Reaction Field
-    // E_crf = q * (1/r - crf_2cut3i * r² - crf_cut)
-    // F_crf = q * (1/r³ + crf_cut3i)
     let inv_r = inv_r2.sqrt();
     let e_crf = q_prod * (inv_r - crf.crf_2cut3i * r2 - crf.crf_cut);
     let f_crf = q_prod * (inv_r * inv_r2 + crf.crf_cut3i);
@@ -58,7 +82,7 @@ pub fn lj_crf_interaction(
 /// Pairs evaluated per SIMD batch — one AVX2 `f64x4` register.
 const BATCH: usize = 4;
 
-/// [`lj_crf_interaction`] for four pairs at once.
+/// [`lj_crf_pair`] for four pairs at once.
 ///
 /// Takes `r²` rather than `r` so the caller decides how the separation is
 /// formed (minimum image vs. charge-group shift). Every expression is written
@@ -95,7 +119,7 @@ fn lj_crf_interaction_x4(
     let force = f_lj + f_crf;
 
     // Same zero-distance guard as the scalar kernel, as a lane mask.
-    let near_zero = r2.cmp_lt(f64x4::splat(1e-10));
+    let near_zero = r2.cmp_lt(f64x4::splat(ZERO_DISTANCE2));
     let zero = f64x4::splat(0.0);
     (
         near_zero.blend(zero, force).to_array(),
@@ -1102,6 +1126,66 @@ mod tests {
         let expected_e_lj = c12 - c6;
         assert_relative_eq!(e_lj, expected_e_lj, epsilon = 1e-9);
         assert!(f < 0.0, "Force should be attractive");
+    }
+
+    /// Every lane of [`lj_crf_interaction_x4`] returns the bits of [`lj_crf_pair`], on the
+    /// `lj_crf_pair` rows of `spec/vectors/nonbonded.json` taken four at a time. A batch mixes
+    /// rows with different reaction-field inputs, so each batch is run once with the parameters
+    /// of each of its rows.
+    #[test]
+    fn x4_lanes_equal_the_scalar_kernel_bit_for_bit() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../spec/vectors/nonbonded.json"
+        );
+        let text = std::fs::read_to_string(path).expect("spec/vectors/nonbonded.json");
+        let mut in_section = false;
+        let mut rows: Vec<Vec<f64>> = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('"') {
+                in_section = line.starts_with("\"lj_crf_pair\"");
+            }
+            let line = line.trim_end_matches(',');
+            if in_section && line.starts_with('[') && line.ends_with(']') {
+                rows.push(
+                    line[1..line.len() - 1]
+                        .split(',')
+                        .map(|f| {
+                            let hex = f.trim().trim_matches('"').trim_start_matches("0x");
+                            f64::from_bits(u64::from_str_radix(hex, 16).expect("hex bits"))
+                        })
+                        .collect(),
+                );
+            }
+        }
+        assert!(rows.len() >= 5_000, "{} lj_crf_pair rows", rows.len());
+
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan());
+        let mut mismatches = Vec::new();
+        for batch in rows.chunks_exact(BATCH) {
+            let lane = |k: usize| std::array::from_fn(|i| batch[i][k]);
+            let (r2, c6, c12, q_prod) = (lane(0), lane(1), lane(2), lane(3));
+            for params in batch {
+                let crf = CRFParameters::new(params[4], params[5], params[6], params[7]);
+                let (f4, elj4, ecrf4) = lj_crf_interaction_x4(r2, c6, c12, q_prod, &crf);
+                for i in 0..BATCH {
+                    let (f, elj, ecrf) = lj_crf_pair(r2[i], c6[i], c12[i], q_prod[i], &crf);
+                    if !(same(f4[i], f) && same(elj4[i], elj) && same(ecrf4[i], ecrf)) {
+                        mismatches.push(format!(
+                            "  r2={:e} c6={:e} c12={:e} q={:e} crf={crf:?}: \
+                             x4=({:e}, {:e}, {:e}) scalar=({f:e}, {elj:e}, {ecrf:e})",
+                            r2[i], c6[i], c12[i], q_prod[i], f4[i], elj4[i], ecrf4[i]
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "{} lanes differ from the scalar kernel; the first ones:\n{}",
+            mismatches.len(),
+            mismatches[..mismatches.len().min(20)].join("\n")
+        );
     }
 
     #[test]

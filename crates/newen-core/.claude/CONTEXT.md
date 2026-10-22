@@ -16,6 +16,14 @@ None — foundation crate.
 
 ## Status
 - Boundary: Vacuum ✓, Rectangular ✓, Triclinic ✓ (NTB=-1 truncated-octahedron)
+- Boundary kernels checked against a Lean model (2026-10-22): `vacuum_nearest_image`,
+  `Rectangular::new`, `rectangular_nearest_image`, `rectangular_put_into_box`, `Triclinic::new`,
+  `triclinic_nearest_image`, `triclinic_put_into_box` (pure functions in `math.rs`, called by the
+  `BoundaryCondition` impls; `/// spec: periodicity.*`). ℝ theorems in
+  `spec/NewenTheory/Space/Periodicity.lean`, model in `spec/NewenSpec/Periodicity.lean`, bit-exact
+  test `tests/periodicity_spec.rs` on `spec/vectors/periodicity.json`. Keep the operation order
+  of these functions: any change shows up as differing bits there; regenerate the vectors only
+  after changing the Lean model to match.
 - Topology: the instancing model complete — `moltypes[0]` = solute, `moltypes[1..]` = solvent types,
   `instances[k].role` = Solute/Solvent; flat arrays derived from instances; `Solvent` struct removed;
   `Solute` is a ZST shell (atoms moved to moltypes). Direct field access: `topo.moltypes[0].bonds`.
@@ -39,7 +47,8 @@ src/selection.rs  — AtomSelection, full grammar + error hints
 src/gather.rs     — PBC molecule gathering
 src/stat.rs       — Stat, block-averaging ee()
 src/pairlist.rs   — StandardPairlistAlgorithm, CellListPairlistAlgorithm
-src/math.rs       — Vec3, Periodicity, truncoct_triclinic_*
+src/math.rs       — Vec3, Periodicity, the boundary kernels, truncoct_triclinic_*
+tests/periodicity_spec.rs — boundary kernels = Lean model, bit for bit
 src/spatial_index.rs — SpatialIndex trait, ConfigurationSpatialIndex
 ```
 

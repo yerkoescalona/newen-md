@@ -1,0 +1,12 @@
+diff --git a/md++/src/configuration/energy.cc b/md++/src/configuration/energy.cc
+index 986aef7..2e00c28 100644
+--- a/md++/src/configuration/energy.cc
++++ b/md++/src/configuration/energy.cc
+@@ -576,7 +576,6 @@ int configuration::Energy::calculate_totals()
+   if(ls_self_total_nvt < 0){ 
+   // is only possible for constant volume simulation, otherwise it is zero. 
+      ls_self_total = ls_self_total_nvt;
+-     ls_a_term_total = ls_a_term_total_nvt;
+   }
+   
+   ls_pair_total = ls_realspace_total + ls_kspace_total + ls_a_term_total;

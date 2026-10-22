@@ -27,6 +27,83 @@ use newen_core::topology::Topology;
 
 use super::multibath::{in_bath, BathRange};
 
+/// The kinetic energy of the atoms, summed in atom order: the leap-frog average
+/// `Σ ½·m·(|v_new|² + |v_old|²)/2` and the energy of the new half-step velocities
+/// `Σ ½·m·|v_new|²`. Returns `(average, new)`.
+///
+/// spec: dynamics.kinetic_energy
+pub fn kinetic_energy(mass: &[f64], vel_new: &[Vec3], vel_old: &[Vec3]) -> (f64, f64) {
+    let mut e_kin = 0.0;
+    let mut e_kin_new = 0.0;
+    for ((&m, v_new), v_old) in mass.iter().zip(vel_new).zip(vel_old) {
+        e_kin += 0.5 * m * (v_new.length_squared() + v_old.length_squared()) / 2.0;
+        e_kin_new += 0.5 * m * v_new.length_squared();
+    }
+    (e_kin, e_kin_new)
+}
+
+/// The kinetic energies of one temperature group (gromosXX `state_properties.cc:153-186`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GroupKineticEnergy {
+    /// `½·M·|V|²`, `V` the centre-of-mass velocity of the averages `(v_new + v_old)/2`.
+    pub com: f64,
+    /// `Σ ½·m·(|v_new|² + |v_old|²)/2`.
+    pub total: f64,
+    /// `½·M·|V_new|²`, `V_new` the centre-of-mass velocity of the new velocities.
+    pub new_com: f64,
+    /// `Σ ½·m·|v_new|²`.
+    pub new_total: f64,
+}
+
+/// The kinetic energies of one temperature group, its atoms in order; the internal and
+/// rotational part is `total − com` (and `new_total − new_com`).
+///
+/// spec: dynamics.group_kinetic_energy
+pub fn group_kinetic_energy(
+    mass: &[f64],
+    vel_new: &[Vec3],
+    vel_old: &[Vec3],
+) -> GroupKineticEnergy {
+    let mut tot_mass = 0.0;
+    let mut com_v = Vec3::ZERO;
+    let mut ekin = 0.0;
+    let mut new_com_v = Vec3::ZERO;
+    let mut new_ekin = 0.0;
+    for ((&m, &new_v), &old_v) in mass.iter().zip(vel_new).zip(vel_old) {
+        tot_mass += m;
+        let v = 0.5 * (new_v + old_v);
+        com_v += m * v;
+        ekin += m * (new_v.length_squared() + old_v.length_squared()) / 2.0;
+        new_com_v += m * new_v;
+        new_ekin += m * new_v.length_squared();
+    }
+    com_v /= tot_mass;
+    new_com_v /= tot_mass;
+    let com_ekin = 0.5 * tot_mass * com_v.length_squared();
+    ekin *= 0.5;
+    let new_com_ekin = 0.5 * tot_mass * new_com_v.length_squared();
+    new_ekin *= 0.5;
+    GroupKineticEnergy {
+        com: com_ekin,
+        total: ekin,
+        new_com: new_com_ekin,
+        new_total: new_ekin,
+    }
+}
+
+/// The temperature `2·E_kin / k_B / N_df` of `dof` degrees of freedom holding the kinetic energy
+/// `ekin`, in gromosXX's order (`out_configuration.cc:3293`); 0 for `dof ≤ 0`, as the
+/// thermostats.
+///
+/// spec: dynamics.kinetic_temperature
+pub fn kinetic_temperature(ekin: f64, dof: f64, k_boltzmann: f64) -> f64 {
+    if dof > 0.0 {
+        2.0 * ekin / k_boltzmann / dof
+    } else {
+        0.0
+    }
+}
+
 /// Calculates kinetic energy and temperature using GROMOS's averaged formula.
 ///
 /// In GROMOS, E_kin = 0.5 * sum_i( m_i * (|v_new|^2 + |v_old|^2) / 2 )
@@ -155,15 +232,11 @@ impl Algorithm for TemperatureCalculation {
         //   old().vel     = previous velocities v(t-dt/2)
         // The average gives the kinetic energy at time t.
         let n_atoms = topo.inverse_mass.len();
-        let mut e_kin = 0.0;
-        let mut e_kin_new = 0.0;
-        for i in 0..n_atoms {
-            let v_new = conf.current().vel[i];
-            let v_old = conf.old().vel[i];
-            let m = topo.mass[i];
-            e_kin += 0.5 * m * (v_new.length_squared() + v_old.length_squared()) / 2.0;
-            e_kin_new += 0.5 * m * v_new.length_squared();
-        }
+        let (e_kin, e_kin_new) = kinetic_energy(
+            &topo.mass[..n_atoms],
+            &conf.current().vel[..n_atoms],
+            &conf.old().vel[..n_atoms],
+        );
 
         self.prepare(topo, n_atoms);
         let n_baths = if self.ranges.is_empty() {
@@ -179,33 +252,16 @@ impl Algorithm for TemperatureCalculation {
             let vel = &conf.current().vel;
             let old_vel = &conf.old().vel;
             for &(first, last) in &self.groups {
-                let mut tot_mass = 0.0;
-                let mut com_v = Vec3::ZERO;
-                let mut ekin = 0.0;
-                let mut new_com_v = Vec3::ZERO;
-                let mut new_ekin = 0.0;
-                for a in first..=last {
-                    let m = topo.mass[a];
-                    tot_mass += m;
-                    let (new_v, old_v) = (vel[a], old_vel[a]);
-                    let v = 0.5 * (new_v + old_v);
-                    com_v += m * v;
-                    ekin += m * (new_v.length_squared() + old_v.length_squared()) / 2.0;
-                    new_com_v += m * new_v;
-                    new_ekin += m * new_v.length_squared();
-                }
-                com_v /= tot_mass;
-                new_com_v /= tot_mass;
-                let com_ekin = 0.5 * tot_mass * com_v.length_squared();
-                ekin *= 0.5;
-                let new_com_ekin = 0.5 * tot_mass * new_com_v.length_squared();
-                new_ekin *= 0.5;
-
+                let g = group_kinetic_energy(
+                    &topo.mass[first..=last],
+                    &vel[first..=last],
+                    &old_vel[first..=last],
+                );
                 let (com_bath, ir_bath) = in_bath(&self.ranges, first);
-                self.new_bath[com_bath] += new_com_ekin;
-                self.new_bath[ir_bath] += new_ekin - new_com_ekin;
-                self.com[com_bath] += com_ekin;
-                self.ir[ir_bath] += ekin - com_ekin;
+                self.new_bath[com_bath] += g.new_com;
+                self.new_bath[ir_bath] += g.new_total - g.new_com;
+                self.com[com_bath] += g.com;
+                self.ir[ir_bath] += g.total - g.com;
             }
         }
 
@@ -301,7 +357,14 @@ impl Algorithm for TemperatureCalculation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use newen_core::math::Vec3;
+
+    /// No temperature for a non-positive number of degrees of freedom, as the thermostats.
+    #[test]
+    fn kinetic_temperature_is_zero_without_positive_dof() {
+        assert_eq!(kinetic_temperature(10.0, -1.0, 0.00831441), 0.0);
+        assert_eq!(kinetic_temperature(10.0, 0.0, 0.00831441), 0.0);
+        assert_eq!(kinetic_temperature(10.0, 2.0, 0.5), 20.0);
+    }
 
     #[test]
     fn kinetic_energy_is_the_average_of_the_old_and_new_half_steps() {

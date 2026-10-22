@@ -21,13 +21,16 @@ use newen::{
         energy::{EnergyWriter, VolumePressure},
         force::ForceWriter,
         free_energy::FreeEnergyWriter,
+        input::gamd_block::{GamdGroups, GamdStat},
         topology::{build_topology, read_topology_file},
         trajectory::TrajectoryWriter,
-        GamdBlock, GamdBoostWriter, GamdStatsWriter,
+        GamdBlock,
     },
     math::{truncoct_triclinic_rotmat, Vec3},
     validation::validate_energy,
 };
+use newen_integrators::algorithms::kinetic_temperature;
+use newen_logic::schedule::output::{due, final_step, minimisation_stop};
 use newen_run::{
     advance_lambda, build_sequence_from_imd, plan_to_json, prepare_system, start, BathDof, Built,
     PassthroughPolicy, PrepareNote, Prepared, RunError, RunInputs, RunOptions,
@@ -108,7 +111,7 @@ fn print_usage() {
     eprintln!("  @develop    Run untested development code");
     eprintln!("  @dump       Print the run recipe and algorithm plan (JSON) and exit");
     eprintln!("  @recipe_set key=value  Set a recipe field no .imd block carries (repeatable),");
-    eprintln!("              e.g. perturbation.atom_pair_kernel=gromosxx-shifted");
+    eprintln!("              e.g. execution.parallel=serial");
     eprintln!();
     eprintln!("All simulation parameters (timestep, cutoffs, thermostat, etc.)");
     eprintln!("are specified in the @input file, following GROMOS conventions.");
@@ -263,9 +266,8 @@ fn volume_pressure(
     k_boltzmann: f64,
 ) -> VolumePressure {
     let e = &state.energies;
-    let t = |ekin: Option<&f64>, dof: f64| match ekin {
-        Some(&ekin) if dof != 0.0 => 2.0 * ekin / k_boltzmann / dof,
-        _ => 0.0,
+    let t = |ekin: Option<&f64>, dof: f64| {
+        ekin.map_or(0.0, |&ekin| kinetic_temperature(ekin, dof, k_boltzmann))
     };
     let mut vp = VolumePressure {
         mass: topo.mass.iter().sum(),
@@ -300,6 +302,92 @@ fn volume_pressure(
     vp
 }
 
+/// This step's GaMD rows of the energy record (`None` without GaMD).
+fn gamd_rows(seq: &mut newen::algorithm::AlgorithmSequence) -> Option<Vec<[f64; 5]>> {
+    seq.find_mut::<newen_integrators::algorithms::Forcefield>()?
+        .gamd
+        .as_ref()
+        .map(|g| g.rows.clone())
+}
+
+/// gromosXX's GAMD set-up for a run with GAMD = 1: the `@gamd` groups (`read_special.cc:490-513`),
+/// the statistics a search continues from (`read_gamdstat`, `in_configuration.cc:1458-1507`) and
+/// `GAMD::init`. newen splits the force evaluation for one interaction group, so every
+/// interaction must be booked to the same one; the combinations whose terms it cannot yet split
+/// as gromosXX does are refused.
+fn gamd_setup(
+    block: &GamdBlock,
+    imd: &newen::io::imd::ImdParameters,
+    recipe: &newen_run::RunRecipe,
+    args: &MDArgs,
+    (num_atoms, num_solute): (usize, usize),
+) -> Result<newen_integrators::gamd::Gamd, String> {
+    use newen_integrators::gamd::{Gamd, GamdGroupStats, SearchMode};
+    let refuse = |what: &str| {
+        Err(format!(
+            "Gaussian accelerated MD (GAMD) together with {what} is not supported: newen \
+             cannot yet book those terms to the GaMD interaction groups as gromosXX does"
+        ))
+    };
+    if imd.ntg != 0 {
+        return refuse("a perturbation (PERTURBATION NTG = 1)");
+    }
+    if imd.nlrele != 1 {
+        return refuse(&format!(
+            "NONBONDED NLRELE = {} (only the reaction field, 1)",
+            imd.nlrele
+        ));
+    }
+    if !recipe.forcefield.terms.is_empty() {
+        return refuse("QM/ML terms");
+    }
+    let path = args
+        .gamd_file
+        .as_ref()
+        .ok_or("gaussian accelerated MD: no data file specified (use @gamd)")?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("gaussian accelerated MD: could not open {path}: {e}"))?;
+    let groups = GamdGroups::parse(&text, num_atoms, block.agroups, block.igroups)?;
+    let split = || {
+        "GAMD: the GAMDATOMS/GAMDGROUPS assignment books the interactions to more than one \
+         interaction group; newen applies GaMD only when every interaction belongs to one"
+            .to_string()
+    };
+    let group = groups.single_interaction_group().ok_or_else(split)?;
+    let excluded_group = groups.excluded_pair_group(num_solute).ok_or_else(split)?;
+    let n = block.n_interaction_groups();
+    let search = block.search_mode();
+    let mut warnings = Vec::new();
+    let mut stats = vec![GamdGroupStats::default(); n];
+    let mut stepsdone = 0;
+    if search != SearchMode::NoSearch {
+        let conf = std::fs::read_to_string(&args.conf_file)
+            .map_err(|e| format!("could not read {}: {e}", args.conf_file))?;
+        match GamdStat::from_configuration(&conf, n)? {
+            Some(stat) if !block.ntigamds => {
+                stepsdone = stat.stepsdone;
+                stats = stat
+                    .rows
+                    .into_iter()
+                    .map(GamdGroupStats::from_row)
+                    .collect();
+            },
+            Some(_) => warnings.push(
+                "Initial settings for GAMD from a previous search simulation found but not read! \
+                 This happended because NTIAEDSS = 1."
+                    .to_string(),
+            ),
+            None if !block.ntigamds => return Err("no GAMDSTAT block in configuration.".into()),
+            None => {},
+        }
+    }
+    let groups = (group as usize, excluded_group as usize);
+    let mut gamd = Gamd::new(block.settings(), groups, stats, stepsdone);
+    warnings.append(&mut gamd.warnings);
+    gamd.warnings = warnings;
+    Ok(gamd)
+}
+
 /// The scaling factor of every bath at the last step, from the run's thermostat (none without).
 fn thermostat_scales(seq: &mut newen::algorithm::AlgorithmSequence) -> Vec<f64> {
     use newen_integrators::algorithms::{BerendsenThermostat, NoseHooverThermostat};
@@ -309,6 +397,57 @@ fn thermostat_scales(seq: &mut newen::algorithm::AlgorithmSequence) -> Vec<f64> 
     seq.find_mut::<NoseHooverThermostat>()
         .map(|t| t.scales().to_vec())
         .unwrap_or_default()
+}
+
+/// One force frame of the state the step's energies describe (`conf.old()`): the free forces and,
+/// when SHAKE runs, the constraint forces. gromosXX `_print_forcered` rotates them back into the
+/// cube frame of a truncated octahedron (`truncoct_triclinic_rotmat(false)`; without ROTTRANS
+/// `rmat(phi, theta, psi)` is the identity).
+fn write_forces(
+    fw: &mut ForceWriter,
+    conf: &newen::configuration::Configuration,
+    shake_forces: bool,
+    step: usize,
+    time: f64,
+) -> Result<(), String> {
+    let forces = &conf.old().force;
+    let constraint_forces = shake_forces.then(|| conf.old().constraint_force.as_slice());
+    let result = if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
+        let rot = truncoct_triclinic_rotmat(false);
+        let rotated_forces: Vec<Vec3> = forces.iter().map(|f| rot * *f).collect();
+        let rotated_constraints: Option<Vec<Vec3>> =
+            constraint_forces.map(|cf| cf.iter().map(|f| rot * *f).collect());
+        fw.write_frame(step, time, &rotated_forces, rotated_constraints.as_deref())
+    } else {
+        fw.write_frame(step, time, forces, constraint_forces)
+    };
+    result.map_err(|e| e.to_string())
+}
+
+/// The GENBOX of `state`'s box under the run's NTB: its NTB and box vectors; `None` in vacuum.
+fn genbox_of(ntb: i32, state: &newen::configuration::State) -> Option<(i32, newen::math::Mat3)> {
+    let vectors = state.box_config.vectors;
+    (ntb != 0 && vectors.x_axis.x > 0.0).then_some((ntb, vectors))
+}
+
+/// One NTWX frame of `state`'s positions; gromosXX writes a truncated octahedron in its cube frame
+/// (`truncoct_triclinic_rotmat(false)`), as the final configuration.
+fn write_positions(
+    tw: &mut TrajectoryWriter,
+    step: usize,
+    time: f64,
+    state: &newen::configuration::State,
+    ntb: i32,
+) -> Result<(), String> {
+    let genbox = genbox_of(ntb, state);
+    let result = if state.box_config.box_type == BoxType::TruncatedOctahedral {
+        let rot = truncoct_triclinic_rotmat(false);
+        let pos: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
+        tw.write_trc_frame_genbox(step, time, &pos, genbox)
+    } else {
+        tw.write_trc_frame_genbox(step, time, &state.pos, genbox)
+    };
+    result.map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -384,8 +523,6 @@ fn main() {
     let nstxout = imd.ntwx;
     let nstener = imd.ntwe;
     let nstlog = imd.ntpr;
-    // GROMOS convention: a write/print frequency of 0 disables that output entirely.
-    let due = |step: usize, freq: usize| freq > 0 && step.is_multiple_of(freq);
 
     // Derive output file paths (from @args or defaults)
     let trc_file = md_args
@@ -533,6 +670,11 @@ fn main() {
                 "  WARNING: Initial settings for A-EDS parameter search simulation found but not \
                  read (NTIAEDSS = 1)"
             ),
+            PrepareNote::NoseHooverVariablesIgnored => {
+                println!("  WARNING: Nose-Hoover-Chains variables found but not read (NTINHT = 1)")
+            },
+            // reported once the recipe is built (`nose_hoover_missing_warning`)
+            PrepareNote::NoseHooverVariablesMissing => {},
             PrepareNote::LambdaOutOfRange { lambda } => {
                 log::warn!("{}", newen_run::lambda_warning(None, *lambda))
             },
@@ -581,38 +723,29 @@ fn main() {
         println!();
     }
 
-    // Parse input file for the GAMD block
-    let gamd_block = {
-        log::debug!("Parsing input file for GAMD block: {}", md_args.input_file);
-        match GamdBlock::parse_file(&md_args.input_file) {
-            Ok(block) => block,
-            Err(e) => {
-                log::warn!("Failed to parse GAMD block: {}", e);
-                None
-            },
-        }
+    // The GAMD block (gromosXX `read_GAMD`), read in full whatever its GAMD switch says; the
+    // force field applies it (`Forcefield::gamd`, set up once the sequence is built).
+    let gamd_block = match imd.raw_blocks.get("GAMD").map(|l| GamdBlock::from_lines(l)) {
+        None => None,
+        Some(Ok(b)) => Some(b),
+        Some(Err(e)) => {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        },
     };
-
-    if let Some(ref block) = gamd_block {
+    if let Some(block) = gamd_block.as_ref().filter(|b| b.enabled) {
         println!();
         println!("GAMD Parameters detected:");
-        println!("  Search mode:  {:?}", block.search_mode);
-        println!("  Boost form:   {:?}", block.boost_form);
-        println!("  Threshold:    {:?}", block.threshold_type);
-        println!("  Sigma0 dih:   {:.2}", block.sigma0_dih);
-        println!("  Sigma0 tot:   {:.2}", block.sigma0_tot);
-        if let (Some(k), Some(e)) = (block.k_tot, block.e_tot) {
-            println!("  K_tot:        {:.6}", k);
-            println!("  E_tot:        {:.2}", e);
-        }
+        println!("  Search mode:  {:?}", block.search_mode());
+        println!("  Boost form:   {:?}", block.boost_form());
+        println!("  Threshold:    {:?}", block.threshold());
+        println!("  DIHSTD/TOTSTD {:.2} {:.2}", block.dihstd, block.totstd);
+        println!(
+            "  Groups:       {} atom, {} interaction",
+            block.agroups, block.igroups
+        );
         println!();
     }
-
-    // Create GAMD parameters if enabled
-    let mut gamd_params = gamd_block.as_ref().map(|block| {
-        log::info!("Creating GAMD parameters from input block");
-        block.to_parameters()
-    });
 
     // === 4. Build the algorithm sequence (newen-run: the one builder) ===
     println!("Setting up nonbonded interactions:");
@@ -648,8 +781,41 @@ fn main() {
     } = built;
     #[cfg(feature = "use-mpi")]
     mpi_run.install_reducer(&mut md_sequence);
+    if let Some(block) = gamd_block.as_ref().filter(|b| b.enabled) {
+        let atoms = (
+            prepared.topology.num_atoms(),
+            prepared.topology.num_solute_atoms(),
+        );
+        match gamd_setup(block, &imd, &recipe, &md_args, atoms) {
+            Ok(gamd) => {
+                for w in &gamd.warnings {
+                    println!("  WARNING: {}", w);
+                }
+                match md_sequence.find_mut::<newen_integrators::algorithms::Forcefield>() {
+                    Some(ff) => ff.gamd = Some(gamd),
+                    None => {
+                        eprintln!("Error: GAMD needs a force field in the algorithm sequence");
+                        process::exit(1);
+                    },
+                }
+            },
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                process::exit(1);
+            },
+        }
+    }
     for note in &diagnostics.notes {
         println!("  NOTE: {}", note);
+    }
+    if prepared
+        .notes
+        .iter()
+        .any(|n| matches!(n, PrepareNote::NoseHooverVariablesMissing))
+    {
+        if let Some(w) = newen_run::nose_hoover_missing_warning(&recipe) {
+            log::warn!("{w}");
+        }
     }
 
     // @dump: the recipe and the plan as data, nothing else — the Rust-side A/B (3.9).
@@ -731,7 +897,7 @@ fn main() {
     println!();
 
     // `init()` and step 0 run through `newen_run::start` at the top of the main loop.
-    let mut sim_state = SimulationState::new(dt, n_steps);
+    let mut sim_state = SimulationState::new(dt, n_steps).with_start_time(recipe.control.t0);
 
     if let Some(t) = &summary.thermostat {
         println!("Setting up thermostat: {}", t.label);
@@ -825,7 +991,14 @@ fn main() {
             .map(|w| w.with_layout(imd.num_temp_baths, topo.energy_groups.len()))
             .and_then(|w| w.with_provenance(&provenance))
         {
-            Ok(w) => Some(w),
+            Ok(mut w) => {
+                // gromosXX sizes the `# gamd` rows IGROUPS + 1 whenever it reads a GAMD block
+                // (`configuration.cc:422-444`), GAMD on or off
+                if let Some(b) = &gamd_block {
+                    w.set_gamd_rows(&vec![[0.0; 5]; b.n_interaction_groups()]);
+                }
+                Some(w)
+            },
             Err(e) => {
                 eprintln!("Error creating energy file: {}", e);
                 process::exit(1);
@@ -848,40 +1021,6 @@ fn main() {
             Err(e) => {
                 eprintln!("Error creating force file: {}", e);
                 process::exit(1);
-            },
-        }
-    } else {
-        None
-    };
-
-    // Setup GaMD writers if enabled
-    let mut gamd_stats_writer = if writes_files && gamd_params.is_some() {
-        let stats_file = "gamd_stats.dat";
-        match GamdStatsWriter::new(stats_file, "newen GaMD Statistics") {
-            Ok(mut w) => {
-                w.set_write_interval(10); // Write every 10 steps
-                println!("  GaMD stats:   {}", stats_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create GaMD stats file: {}", e);
-                None
-            },
-        }
-    } else {
-        None
-    };
-
-    let mut gamd_boost_writer = if writes_files && gamd_params.is_some() {
-        let boost_file = "gamd_boost.dat";
-        match GamdBoostWriter::new(boost_file, "newen GaMD Boost Potential") {
-            Ok(w) => {
-                println!("  GaMD boost:   {}", boost_file);
-                Some(w)
-            },
-            Err(e) => {
-                eprintln!("Warning: Failed to create GaMD boost file: {}", e);
-                None
             },
         }
     } else {
@@ -994,7 +1133,7 @@ fn main() {
         }
     }
     for step in 0..n_steps {
-        let time = step as f64 * dt;
+        let time = sim_state.time_of(step);
 
         log::debug!("Step {}: time = {:.6} ps", step, time);
 
@@ -1028,67 +1167,13 @@ fn main() {
             }
         }
 
-        // Apply GAMD boost if enabled
-        if let Some(ref mut gamd) = gamd_params {
-            let dihedral_energy = conf.current().energies.dihedral_total;
-            let total_potential = conf.current().energies.potential_total;
-
-            // Update GAMD statistics
-            gamd.update_statistics(dihedral_energy, total_potential);
-
-            // Update parameters if in GaMD search mode
-            if gamd.search_mode == newen::gamd::SearchMode::GamdSearch {
-                gamd.update_all_parameters();
-            }
-
-            // Apply boost potential
-            // For now, use simplified version with only total potential boost
-            // TODO: Separate dihedral forces for dual boost
-            let dihedral_forces = vec![Vec3::ZERO; topo.num_atoms()];
-            let other_forces: Vec<Vec3> = conf.current().force.clone();
-
-            let boost = gamd.apply_boost(
-                &mut conf,
-                dihedral_energy,
-                &dihedral_forces,
-                total_potential,
-                &other_forces,
-            );
-
-            // Add boost to potential energy
-            conf.current_mut().energies.potential_total += boost;
-
-            log::debug!(
-                "GAMD boost applied: ΔV={:.4}, V_new={:.4}",
-                boost,
-                conf.current().energies.potential_total
-            );
-
-            // Write GaMD statistics
-            if let Some(ref mut writer) = gamd_stats_writer {
-                if let Err(e) = writer.write_frame(step, dihedral_energy, total_potential, gamd) {
-                    log::warn!("Failed to write GaMD stats at step {}: {}", step, e);
-                }
-            }
-
-            // Write GaMD boost potential
-            if let Some(ref mut writer) = gamd_boost_writer {
-                // For now, assume boost is only from total potential
-                let boost_dih = 0.0;
-                let boost_pot = boost;
-                if let Err(e) = writer.write_frame(step, time, boost, boost_dih, boost_pot) {
-                    log::warn!("Failed to write GaMD boost at step {}: {}", step, e);
-                }
-            }
-        }
-
         // Validate energy
         // GROMOS convention: after the algorithm sequence, energies are in old()
         // (Forcefield wrote to current(), exchange_state moved it to old(),
         //  Temperature_Calculation and Energy_Calculation also write to old())
         let state = conf.old();
         let temp = if summary.total_dof > 0.0 {
-            2.0 * state.energies.kinetic_total / k_boltzmann / summary.total_dof
+            kinetic_temperature(state.energies.kinetic_total, summary.total_dof, k_boltzmann)
         } else {
             0.0
         };
@@ -1127,7 +1212,15 @@ fn main() {
         };
 
         // Minimization convergence check (mirrors GROMOS: compare potential_total + special_total)
-        if is_minimization && step > imd.nmin && min_de.abs() < imd.dele {
+        let stop = if is_minimization {
+            let converged = min_de.abs() < imd.dele;
+            minimisation_stop(
+                step, imd.nmin, converged, nstxout, imd.ntwf, nstener, imd.ntwg,
+            )
+        } else {
+            None
+        };
+        if let Some(frames) = stop {
             minimization_converged = true;
             println!();
             println!("*** Energy minimization CONVERGED at step {} ***", step);
@@ -1138,31 +1231,40 @@ fn main() {
             );
             println!("    E_pot = {:.10e} kJ/mol", state.energies.potential_total);
             println!();
-            // Write final frames before breaking. gromosXX writes the converged energies
-            // once more, labelled with the previous step (its frame count is NSTEPS + 1).
-            if let Some(tw) = traj_writer.as_mut() {
-                if let Err(e) = tw.write_frame(step, time, &conf) {
+            // Write final frames before breaking: the positions of this step on the NTWX
+            // schedule (gromosXX writes them before the step that stops). gromosXX writes the
+            // converged forces, energies and dH/dλ once more, labelled with the previous step
+            // and on its schedule (`out_configuration.cc:624-641`), so those frame counts are
+            // NSTEPS + 1.
+            // the minimiser stopped before its buffer swap: step k's positions are `current`
+            if let (true, Some(tw)) = (frames.positions, traj_writer.as_mut()) {
+                if let Err(e) = write_positions(tw, step, time, conf.current(), imd.ntb) {
                     eprintln!("Error writing final trajectory frame: {}", e);
                 }
             }
-            if let Some(ew) = ene_writer.as_mut() {
-                let last = step.saturating_sub(1);
+            // a minimisation stops only after step nmin >= 0
+            let last = step - 1;
+            let last_time = sim_state.time_of(last);
+            if let (true, Some(fw)) = (frames.forces, force_writer.as_mut()) {
+                if let Err(e) = write_forces(fw, &conf, shake_forces, last, last_time) {
+                    eprintln!("Error writing final force frame: {}", e);
+                }
+            }
+            if let (true, Some(ew)) = (frames.energies, ene_writer.as_mut()) {
                 let scales = thermostat_scales(&mut md_sequence);
+                if let Some(rows) = gamd_rows(&mut md_sequence) {
+                    ew.set_gamd_rows(&rows);
+                }
                 let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
-                let e = ew.write_energy(last, last as f64 * dt, &conf.old().energies, &vp);
+                let e = ew.write_energy(last, last_time, &conf.old().energies, &vp);
                 if let Err(e) = e {
                     eprintln!("Error writing final energy frame: {}", e);
                 }
             }
-            // and the converged dH/dλ, on the NTWG schedule of the previous step
-            // (`out_configuration.cc:638-641`)
-            if let Some(fw) = free_energy_writer.as_mut() {
-                let last = step.saturating_sub(1);
-                if due(last, imd.ntwg) {
-                    let d = &conf.old().perturbed_energy_derivatives;
-                    if let Err(e) = fw.write_derivatives(last, last as f64 * dt, old_lambda, d) {
-                        eprintln!("Error writing final free-energy frame: {}", e);
-                    }
+            if let (true, Some(fw)) = (frames.free_energy, free_energy_writer.as_mut()) {
+                let d = &conf.old().perturbed_energy_derivatives;
+                if let Err(e) = fw.write_derivatives(last, last_time, old_lambda, d) {
+                    eprintln!("Error writing final free-energy frame: {}", e);
                 }
             }
             break;
@@ -1206,16 +1308,7 @@ fn main() {
         // schedule (frame 0 is the input configuration).
         if let (true, Some(traj_writer)) = (due(step, nstxout) && step < n_steps, &mut traj_writer)
         {
-            let write = if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
-                // as for the final configuration: gromosXX writes the cube frame
-                let rot = truncoct_triclinic_rotmat(false);
-                let pos: Vec<Vec3> = conf.old().pos.iter().map(|p| rot * *p).collect();
-                let dims = conf.old().box_config.dimensions();
-                traj_writer.write_trc_frame(step, time, &pos, (dims.x > 0.0).then_some(dims))
-            } else {
-                traj_writer.write_frame_of_step(step, time, &conf)
-            };
-            if let Err(e) = write {
+            if let Err(e) = write_positions(traj_writer, step, time, conf.old(), imd.ntb) {
                 eprintln!("Error writing trajectory: {}", e);
             }
         }
@@ -1237,6 +1330,9 @@ fn main() {
         // last step is in the final configuration, not in the energy trajectory).
         if let (true, Some(ew)) = (due(step, nstener) && step < n_steps, &mut ene_writer) {
             let scales = thermostat_scales(&mut md_sequence);
+            if let Some(rows) = gamd_rows(&mut md_sequence) {
+                ew.set_gamd_rows(&rows);
+            }
             let vp = volume_pressure(conf.old(), &topo, &summary.baths, &scales, k_boltzmann);
             if let Err(e) = ew.write_energy(step, time, &conf.old().energies, &vp) {
                 eprintln!("Error writing energy: {}", e);
@@ -1254,34 +1350,10 @@ fn main() {
             }
         }
 
-        // Write forces (same frequency as trajectory)
-        if let Some(ref mut fw) = force_writer {
-            if due(step, nstxout) {
-                let forces = &conf.old().force;
-                let constraint_forces = if shake_forces {
-                    Some(conf.old().constraint_force.as_slice())
-                } else {
-                    None
-                };
-
-                // GROMOS out_configuration.cc::_print_forcered rotates
-                // FREEFORCERED/CONSFORCERED back into the original (cube)
-                // frame via truncoct_triclinic_rotmat(false) when
-                // boundary_type==truncoct (no ROTTRANS block here, so
-                // rmat(phi,theta,psi)=identity). P1.4.
-                if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
-                    let rot = truncoct_triclinic_rotmat(false);
-                    let rotated_forces: Vec<Vec3> = forces.iter().map(|f| rot * *f).collect();
-                    let rotated_constraints: Option<Vec<Vec3>> =
-                        constraint_forces.map(|cf| cf.iter().map(|f| rot * *f).collect());
-                    if let Err(e) =
-                        fw.write_frame(step, time, &rotated_forces, rotated_constraints.as_deref())
-                    {
-                        eprintln!("Error writing forces: {}", e);
-                    }
-                } else if let Err(e) = fw.write_frame(step, time, forces, constraint_forces) {
-                    eprintln!("Error writing forces: {}", e);
-                }
+        // Write forces (NTWF)
+        if let (true, Some(fw)) = (due(step, imd.ntwf), force_writer.as_mut()) {
+            if let Err(e) = write_forces(fw, &conf, shake_forces, step, time) {
+                eprintln!("Error writing forces: {}", e);
             }
         }
 
@@ -1347,25 +1419,6 @@ fn main() {
         }
     }
 
-    // Finalize GaMD writers if enabled
-    if let Some(ref mut writer) = gamd_stats_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize GaMD stats file: {}", e);
-            eprintln!("Error finalizing GaMD stats file: {}", e);
-        } else {
-            log::debug!("GaMD stats file finalized");
-        }
-    }
-
-    if let Some(ref mut writer) = gamd_boost_writer {
-        if let Err(e) = writer.finalize() {
-            log::error!("Failed to finalize GaMD boost file: {}", e);
-            eprintln!("Error finalizing GaMD boost file: {}", e);
-        } else {
-            log::debug!("GaMD boost file finalized");
-        }
-    }
-
     // Finalize free-energy trajectory if enabled
     if let Some(ref mut fw) = free_energy_writer {
         if let Err(e) = fw.flush() {
@@ -1391,14 +1444,18 @@ fn main() {
         });
         let positions = rotated_pos.as_ref().unwrap_or(&conf.current().pos);
         let velocities = rotated_vel.as_ref().unwrap_or(&conf.current().vel);
-        let box_vec = conf.current().box_config.dimensions();
+        let genbox = genbox_of(imd.ntb, conf.current());
         let vels = if velocities.iter().any(|v| *v != Vec3::ZERO) {
             Some(velocities.as_slice())
         } else {
             None
         };
-        let box_opt = if box_vec.x > 0.0 { Some(box_vec) } else { None };
-        let title = format!("Final configuration after {} steps", actual_steps);
+        // gromosXX `final_configuration` + `_print_title`: the run title, then the file's name
+        let title = format!("\t{}\n\n\tfinal configuration", imd.title);
+        // gromosXX `_print_timestep` (`out_configuration.cc:519`): the step counter and time
+        // after the loop — NSTLIM, or the step the minimiser stopped at
+        let final_step = final_step(n_steps, minimization_converged.then_some(actual_steps));
+        let final_time = sim_state.time_of(final_step);
         // gromosXX `out_configuration.cc:540-546`: a perturbed run (NTG=1) adds PERTDATA, the λ
         // a run with NRDGL=1 continues from; time-averaged distance restraints (NTDIR < 0) add
         // their ⟨r⁻³⟩ (DISRESEXPAVE).
@@ -1409,6 +1466,20 @@ fn main() {
             .as_ref()
             .filter(|a| a.enabled && a.form != 1)
             .and(conf.aeds.as_ref());
+        // the Nosé–Hoover variables (NHCVARIABLES), what a run with NTINHT = 0 continues from;
+        // plain Nosé–Hoover included (D41)
+        let nose_hoover = recipe.ensemble.thermostat.as_ref().and_then(|t| {
+            let nhc = match t.algorithm {
+                newen_run::recipe::ThermostatAlgorithm::Berendsen => return None,
+                newen_run::recipe::ThermostatAlgorithm::NoseHoover => 1,
+                newen_run::recipe::ThermostatAlgorithm::NoseHooverChain(n) => n.max(2),
+            };
+            Some(
+                conf.nose_hoover
+                    .clone()
+                    .unwrap_or_else(|| vec![vec![0.0; nhc]; t.baths.len().max(1)]),
+            )
+        });
         let disres_averages = if imd.ntdir < 0 {
             md_sequence
                 .find_mut::<newen_integrators::algorithms::Forcefield>()
@@ -1416,15 +1487,26 @@ fn main() {
         } else {
             None
         };
+        // gromosXX `out_configuration.cc:619-621`: a GaMD search adds its statistics (GAMDSTAT),
+        // what a run with NTIGAMDS = 0 continues from
+        let gamd_stat = md_sequence
+            .find_mut::<newen_integrators::algorithms::Forcefield>()
+            .and_then(|ff| ff.gamd.as_ref())
+            .filter(|g| g.settings.search != newen_integrators::gamd::SearchMode::NoSearch)
+            .map(|g| GamdStat {
+                stepsdone: g.stepsdone,
+                rows: g.stats.iter().map(|s| s.to_row()).collect(),
+            });
         let write = || -> Result<(), String> {
             let mut w = newen::io::g96::G96Writer::new(fin_path)?;
             w.write_title(&title)?;
+            w.write_timestep(final_step, final_time)?;
             w.write_positions(positions, Some(&topo))?;
             if let Some(v) = vels {
                 w.write_velocities(v)?;
             }
-            if let Some(b) = box_opt {
-                w.write_box(b)?;
+            if let Some((ntb, vectors)) = genbox {
+                w.write_genbox(ntb, vectors)?;
             }
             if imd.ntg != 0 {
                 w.write_pertdata(topo.lambda)?;
@@ -1432,10 +1514,17 @@ fn main() {
             if let Some(averages) = &disres_averages {
                 w.write_disresexpave(averages)?;
             }
+            if let Some(zeta) = &nose_hoover {
+                w.write_nhcvariables(zeta)?;
+            }
             if let Some(s) = aeds_search {
                 w.write_aedssearch(s)?;
             }
-            w.close()
+            w.close()?;
+            if let Some(stat) = &gamd_stat {
+                stat.append_to(fin_path)?;
+            }
+            Ok(())
         };
         if let Err(e) = write() {
             eprintln!("Error writing final configuration: {}", e);
@@ -1666,5 +1755,42 @@ mod mpi_support {
                 }
             }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use newen::configuration::{Box as SimBox, State};
+    use newen::math::Mat3;
+
+    /// The frame of a truncated octahedron holds `R·x` (gromosXX's cube frame), whichever buffer
+    /// it comes from: the in-loop frames and the minimisation stop frame share the writer.
+    #[test]
+    fn a_truncated_octahedron_frame_is_written_in_the_cube_frame() {
+        let dir = std::env::temp_dir();
+        let path = |name: &str| dir.join(format!("newen_md_{}_{name}.trc", std::process::id()));
+        let mut state = State::new(2, 1, 1);
+        state.pos = vec![Vec3::new(0.1, 0.2, 0.3), Vec3::new(-0.4, 0.5, 0.6)];
+        state.box_config = SimBox::truncated_octahedral(Mat3::from_diagonal(Vec3::splat(3.0)));
+
+        let mut tw = TrajectoryWriter::new(path("helper"), "t", false, false).unwrap();
+        write_positions(&mut tw, 7, 0.014, &state, -1).unwrap();
+        drop(tw);
+
+        let rot = truncoct_triclinic_rotmat(false);
+        let rotated: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
+        let mut expected = TrajectoryWriter::new(path("expected"), "t", false, false).unwrap();
+        expected
+            .write_trc_frame_genbox(7, 0.014, &rotated, Some((-1, state.box_config.vectors)))
+            .unwrap();
+        drop(expected);
+
+        let read = |name: &str| std::fs::read_to_string(path(name)).unwrap();
+        assert!(read("helper").contains("POSITIONRED"));
+        assert_eq!(read("helper"), read("expected"));
+        assert_ne!(rotated[0], state.pos[0], "the rotation is not the identity");
+        let _ = std::fs::remove_file(path("helper"));
+        let _ = std::fs::remove_file(path("expected"));
     }
 }

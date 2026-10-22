@@ -1,0 +1,54 @@
+diff --git a/md++/src/io/configuration/in_configuration.cc b/md++/src/io/configuration/in_configuration.cc
+index 0c2dff36..c0bb7a14 100644
+--- a/md++/src/io/configuration/in_configuration.cc
++++ b/md++/src/io/configuration/in_configuration.cc
+@@ -1153,7 +1153,7 @@ bool io::In_Configuration::read_nose_hoover_chains
+  std::ostream & os)
+ {
+   std::vector<std::string> buffer;
+-  if (sim.param().multibath.algorithm > 1){
++  if (sim.param().multibath.algorithm >= 1){
+ 
+     buffer = m_block["NHCVARIABLES"];
+     if (buffer.size()){
+@@ -1161,8 +1161,13 @@ bool io::In_Configuration::read_nose_hoover_chains
+       if (!quiet)
+ 	os << "\treading NHCVARIABLES...\n";
+ 
+-      if (sim.param().start.read_nosehoover_chains)
++      if (sim.param().start.read_nosehoover_chains) {
++        // the whole chain of every bath (NoseHoover_Thermostat::init sizes it later)
++        for (simulation::Multibath::iterator b_it = sim.multibath().begin(),
++             b_to = sim.multibath().end(); b_it != b_to; ++b_it)
++          b_it->zeta.resize(sim.param().multibath.algorithm, 0.0);
+         _read_nose_hoover_chain_variables(buffer, sim.multibath());
++      }
+       else
+         io::messages.add("Nose-Hoover-Chains variables found but not read.",
+                          "In_Configuration",
+diff --git a/md++/src/io/configuration/out_configuration.cc b/md++/src/io/configuration/out_configuration.cc
+index 7d8db3e6..c131e27a 100644
+--- a/md++/src/io/configuration/out_configuration.cc
++++ b/md++/src/io/configuration/out_configuration.cc
+@@ -603,7 +603,7 @@ void io::Out_Configuration::write(configuration::Configuration &conf,
+       _print_pscale_jrest(conf, topo, m_final_conf);
+     }
+ 
+-    if (sim.param().multibath.algorithm > 1) {
++    if (sim.param().multibath.algorithm >= 1) {
+       _print_nose_hoover_chain_variables(sim.multibath(), m_final_conf);
+     }
+     if (conf.special().shake_failure_occurred) {
+diff --git a/md++/src/io/parameter/check_parameter.cc b/md++/src/io/parameter/check_parameter.cc
+index 63d2458b..bd3fc333 100644
+--- a/md++/src/io/parameter/check_parameter.cc
++++ b/md++/src/io/parameter/check_parameter.cc
+@@ -89,7 +89,7 @@ int io::simple_crosschecks(simulation::Simulation & sim) {
+ 
+   // generating nose-hoover chain thermostat variables not allowed when not using
+   // the corresponding algorithm
+-  if (!param.start.read_nosehoover_chains && param.multibath.algorithm<2)
++  if (!param.start.read_nosehoover_chains && param.multibath.algorithm<1)
+       io::messages.add("MULTIBATH block: NTINHT must be 0 when not using Nose-Hoover chains for temperature coupling",
+                        "In_Parameter", io::message::error);
+ 

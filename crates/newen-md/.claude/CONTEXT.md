@@ -12,6 +12,21 @@ All lower crates (newen-core, newen-forces, newen-integrators, newen-io).
 matching gromosXX to reference tolerances.
 
 ## Status
+- **Nosé–Hoover restart (0.0.69, D41):** the final configuration carries NHCVARIABLES (the ζ of
+  every bath, `G96Writer::write_nhcvariables`, from `Configuration::nose_hoover`) for a chain and
+  for plain Nosé–Hoover. References `water_216_nvt_{nosehoover,nhc}_cont_fixed` (D41 patch; the
+  released-binary reproducer lives in gromos-divergences); `tests/nh_restart.rs`: 100 + 100 steps
+  follow 200 as closely as weak coupling does.
+- **Output times and schedules (0.0.68):** every written time is T + step·DT
+  (`SimulationState::time_of`, STEP T from the recipe); forces follow NTWF; a converged
+  minimisation repeats the previous step's force, energy and dH/dλ frame on that step's
+  NTWF/NTWE/NTWG schedule and writes the stopping step's positions only on the NTWX schedule; the
+  final configuration has gromosXX's TIMESTEP block and title layout. The comparator checks every
+  TIMESTEP block and the force frame count. References `aladip_vacuum_fep_slowgrowth_t10`,
+  `aladip_vacuum_em_ntw5`. Since 2026-10-22 the decisions are `newen_logic::schedule::output`
+  (`due`, `minimisation_stop`, `final_step`; proven to write gromosXX's top-of-loop and final
+  frames), and NTWV ≠ 0 in a minimisation is refused as gromosXX refuses it
+  (`check_parameter.cc:62-65`), so a minimisation writes no velocity frames.
 - **Slow growth (1.8, 0.0.61):** `md` calls `newen_run::advance_lambda` after each step (not on
   the step the minimiser stops at), writes the λ the step ran at into the `.trg` (`old_lambda`)
   and, on a converged minimisation, the repeated `.trg` frame next to the repeated `.tre` one.
@@ -30,8 +45,8 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **120 reference tests registered, 119 passing** in `tests/test_gromosXX_references.rs` (1
-  ignored: `aladip_gamd`, the GaMD boost is unvalidated — the matrix is below)
+- **118 reference tests registered, all passing** in `tests/test_gromosXX_references.rs`
+  (GaMD: `aladip_gamd`, `_dual`, `_cmd_search`; the matrix is below)
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
   every active reference system uses `standard` except `water_1000_spc_gridcell`.
@@ -66,10 +81,10 @@ matching gromosXX to reference tolerances.
 - **A-EDS through the recipe (1.8, 0.0.60).** The `AEDS` block runs (FORMS 1-6); `md` writes the
   search state as the final configuration's `AEDSSEARCH` block (FORMS 2-6) and a run with
   NTIAEDSS = 0 continues it. References `aladip_vacuum_aeds_*`; `tests/aeds_runs.rs` checks a
-  two-job search against one job and the refused inputs. Since 0.0.63 the defaults correct D16,
-  D25, D32 (`aladip_vacuum_aeds_*_fixed`, the patched oracle); the native search references set
-  the reproducing `[recipe_overrides]`; `aeds_runs.rs` also checks that a frame's V_mix/V_R*
-  follow from its own columns and that the E_min target is a sampled state.
+  two-job search against one job and the refused inputs. Since 0.0.63 D16, D25, D32 are
+  corrected; the searches are pinned by `aladip_vacuum_aeds_*_fixed` (the patched oracle; the
+  released-binary reproducers live in gromos-divergences); `aeds_runs.rs` also checks that a
+  frame's V_mix/V_R* follow from its own columns and that the E_min target is a sampled state.
 
 ## Key files
 ```
@@ -92,7 +107,7 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 
 ## Reference systems
 
-The per-system status matrix — which of the 120 registered systems pass and what each isolates —
+The per-system status matrix — which of the 123 registered systems pass and what each isolates —
 lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test

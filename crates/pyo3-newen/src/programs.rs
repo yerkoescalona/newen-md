@@ -502,10 +502,9 @@ fn _ext_ti_ana(
 }
 
 /// `bar` in process (`newen_analysis::programs::bar::bar`) on `ext_ti_ana @bar_data` files:
-/// per interval and in total, kJ/mol, with the table the program prints. `parity` is `@parity`
-/// (`"gromospp"` reproduces gromos++ 9cd9f6b3's error; `None` the corrected one).
+/// per interval and in total, kJ/mol, with the table the program prints.
 #[pyfunction]
-#[pyo3(signature = (files, temperature, *, max_iterations = 500, convergence = 1e-5, bootstrap = 0, seed = None, printdist = None, parity = None))]
+#[pyo3(signature = (files, temperature, *, max_iterations = 500, convergence = 1e-5, bootstrap = 0, seed = None, printdist = None))]
 #[allow(clippy::too_many_arguments)]
 fn _bar(
     py: Python<'_>,
@@ -516,15 +515,9 @@ fn _bar(
     bootstrap: usize,
     seed: Option<u32>,
     printdist: Option<String>,
-    parity: Option<String>,
 ) -> PyResult<Bound<'_, PyDict>> {
     use newen_analysis::programs::bar;
-    use newen_analysis::programs::free_energy::Parity;
 
-    let parity = parity
-        .as_deref()
-        .map_or(Ok(Parity::default()), Parity::parse)
-        .map_err(|e| program_error(py, e, String::new()))?;
     let result = py.allow_threads(|| -> Result<_, (String, String)> {
         let data = files
             .iter()
@@ -538,7 +531,6 @@ fn _bar(
             bootstrap,
             seed,
             printdist: printdist.map(std::path::PathBuf::from),
-            parity,
         };
         let mut buf: Vec<u8> = Vec::new();
         let r = bar::bar(&data, &opts, &mut buf);
@@ -563,7 +555,6 @@ fn bar_result_dict<'py>(
     d.set_item("lam_j", col(|i| i.lam_j))?;
     d.set_item("dg", col(|i| i.dg))?;
     d.set_item("error", col(|i| i.error))?;
-    d.set_item("error_corrected", col(|i| i.error_corrected))?;
     d.set_item(
         "bootstrap",
         r.intervals.iter().map(|i| i.bootstrap).collect::<Vec<_>>(),
@@ -575,7 +566,6 @@ fn bar_result_dict<'py>(
     )?;
     d.set_item("dg_total", r.dg_total)?;
     d.set_item("error_total", r.error_total)?;
-    d.set_item("error_total_corrected", r.error_total_corrected)?;
     d.set_item("bootstrap_total", r.bootstrap_total)?;
     d.set_item("stdout", stdout)?;
     Ok(d)
@@ -608,7 +598,6 @@ fn _ext_ti_merge(py: Python<'_>, argv: Vec<String>) -> PyResult<Bound<'_, PyDict
     }
     d.set_item("integral", m.integral)?;
     d.set_item("integral_error", m.integral_error)?;
-    d.set_item("integral_error_corrected", m.integral_error_corrected)?;
     d.set_item("stdout", stdout)?;
     Ok(d)
 }
@@ -903,7 +892,6 @@ fn _precalc_bar<'py>(
         bootstrap: 0,
         seed: None,
         printdist: None,
-        parity: Default::default(),
     };
     let result = py.allow_threads(|| {
         let mut buf: Vec<u8> = Vec::new();

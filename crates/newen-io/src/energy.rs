@@ -273,13 +273,14 @@ pub struct VolumePressure {
 /// gromosXX's `_print_energyred_helper` (`out_configuration.cc:3068-3267`): the body of one
 /// `ENERGY03` (energies) or `FREEENERDERIVS03` (λ derivatives) block, from `# totals` to the
 /// `# ABdih` row. The section sizes are the record's: its baths (`kinetic_energy`) and energy
-/// groups (`bond_energy`). `n_accel_groups` is the GaMD acceleration-group count of the record:
-/// gromosXX sizes the energies for its default IGROUPS = 1 even without GaMD (one zero row in
-/// every `.tre`) and never sizes the derivatives (none in a `.trg`).
+/// groups (`bond_energy`). `gamd` holds the record's GaMD rows (ED, ET, KD, KT, ΔV) per
+/// interaction group, group 0 included; their ΔV sum is ENER[51]. gromosXX sizes the energies for
+/// IGROUPS + 1 groups whenever it reads a GAMD block, and for its default (one zero row) without
+/// one, and never sizes the derivatives (none in a `.trg`).
 pub fn write_energyred_body<W: Write>(
     w: &mut W,
     e: &Energy,
-    n_accel_groups: usize,
+    gamd: &[[f64; 5]],
 ) -> std::io::Result<()> {
     fn row<W: Write>(w: &mut W, vals: &[f64]) -> std::io::Result<()> {
         for v in vals {
@@ -322,13 +323,23 @@ pub fn write_energyred_body<W: Write>(
     totals[6] = e.improper_total;
     totals[7] = e.dihedral_total;
     totals[8] = e.cross_dihedral_total;
-    totals[9] = e.lj_total + e.crf_total + e.ls_realspace_total + e.ls_kspace_total;
+    // gromosXX `nonbonded_total` (energy.cc:586-588)
+    totals[9] = e.lj_total
+        + e.crf_total
+        + e.ls_realspace_total
+        + e.ls_kspace_total
+        + e.ls_self_total
+        + e.ls_surface_total
+        + e.ls_a_term_total;
     totals[10] = e.lj_total;
     totals[11] = e.crf_total;
     totals[12] = e.ls_total;
-    totals[13] = e.ls_realspace_total + e.ls_kspace_total;
+    totals[13] = e.ls_pair_total;
     totals[14] = e.ls_realspace_total;
     totals[15] = e.ls_kspace_total;
+    totals[16] = e.ls_a_term_total;
+    totals[17] = e.ls_self_total;
+    totals[18] = e.ls_surface_total;
     totals[20] = e.special_total + e.distanceres_total;
     totals[21] = e.sasa_total;
     totals[23] = e.constraint_total;
@@ -344,6 +355,7 @@ pub fn write_energyred_body<W: Write>(
     totals[39] = e.entropy_term;
     totals[46] = total + folded_total(&e.shift_extra_orig);
     totals[47] = total + folded_total(&e.shift_extra_phys);
+    totals[50] = gamd.iter().map(|r| r[4]).sum();
     writeln!(w, "# totals")?;
     for v in totals {
         row(w, &[v])?;
@@ -430,13 +442,13 @@ pub fn write_energyred_body<W: Write>(
         let special = at(&e.eds_vi_special, k);
         row(w, &[v, v - special, special, at(&e.eds_eir, k), v, v])?;
     }
-    writeln!(w, "# gamd\n# numaccelgroups\n{n_accel_groups}")?;
+    writeln!(w, "# gamd\n# numaccelgroups\n{}", gamd.len())?;
     writeln!(
         w,
         "      # E_dihedral       E_potential        K_dihedral       K_potential         dV_group"
     )?;
-    for _ in 0..n_accel_groups {
-        row(w, &[0.0; 5])?;
+    for r in gamd {
+        row(w, r)?;
     }
     let pc = &e.precalc;
     let n_lambdas = pc.nr_lambdas();
@@ -458,6 +470,8 @@ pub struct EnergyWriter {
     frame_count: usize,
     n_baths: usize,
     n_groups: usize,
+    /// The `# gamd` rows of the next frame (see [`write_energyred_body`]).
+    gamd: Vec<[f64; 5]>,
 }
 
 /// The gromosXX layout this writer emits; the `ENEVERSION` block and the built-in schema
@@ -490,7 +504,15 @@ impl EnergyWriter {
             frame_count: 0,
             n_baths: 1,
             n_groups: 1,
+            gamd: vec![[0.0; 5]],
         })
+    }
+
+    /// The GaMD rows (ED, ET, KD, KT, ΔV per interaction group, group 0 included) the frames
+    /// from now on print; one zero row until set (gromosXX's default IGROUPS).
+    pub fn set_gamd_rows(&mut self, rows: &[[f64; 5]]) {
+        self.gamd.clear();
+        self.gamd.extend_from_slice(rows);
     }
 
     /// Record what the run was (`# energy-provenance` lines). Must precede the first frame.
@@ -539,7 +561,7 @@ impl EnergyWriter {
         writeln!(w, "END")?;
 
         writeln!(w, "ENERGY03")?;
-        write_energyred_body(w, energy, 1)?;
+        write_energyred_body(w, energy, &self.gamd)?;
         writeln!(w, "END")?;
 
         writeln!(w, "VOLUMEPRESSURE03")?;
@@ -900,7 +922,8 @@ mod tests {
     use super::*;
 
     /// The shared body prints gromosXX's layout: folded group pairs, the global lattice-sum
-    /// total in column 3, `total + shift_extra` in slots 47/48, the GaMD count it is given.
+    /// total in column 3, `total + shift_extra` in slots 47/48, the GaMD rows it is given
+    /// with their ΔV sum in slot 51.
     #[test]
     fn the_energyred_body_is_gromosxx_layout() {
         let mut e = Energy::new(2, 2);
@@ -914,7 +937,7 @@ mod tests {
         e.ir_kinetic_energy = vec![5.0, 3.5];
         e.posrest_energy[1] = 0.25;
         let mut out = Vec::new();
-        write_energyred_body(&mut out, &e, 1).unwrap();
+        write_energyred_body(&mut out, &e, &[[0.0; 5]]).unwrap();
         let text = String::from_utf8(out).unwrap();
         let rows = |section: &str| -> Vec<Vec<f64>> {
             text.lines()
@@ -940,10 +963,31 @@ mod tests {
         assert_eq!(rows("# special")[1][1], 0.25);
         assert!(text.contains("# numaccelgroups\n1\n"));
         let mut out = Vec::new();
-        write_energyred_body(&mut out, &e, 0).unwrap();
+        write_energyred_body(&mut out, &e, &[]).unwrap();
         assert!(String::from_utf8(out)
             .unwrap()
             .contains("# numaccelgroups\n0\n"));
+        let mut out = Vec::new();
+        let gamd = [[0.0; 5], [30.0, -100.0, 0.005, 0.0005, 1.25]];
+        write_energyred_body(&mut out, &e, &gamd).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("# numaccelgroups\n2\n"));
+        let totals: Vec<f64> = text
+            .lines()
+            .skip(1)
+            .take(52)
+            .map(|l| l.trim().parse().unwrap())
+            .collect();
+        assert_eq!(totals[50], 1.25);
+        let last: Vec<f64> = text
+            .lines()
+            .skip_while(|l| l.trim() != "# numaccelgroups")
+            .nth(4)
+            .unwrap()
+            .split_whitespace()
+            .map(|x| x.parse().unwrap())
+            .collect();
+        assert_eq!(last, gamd[1]);
     }
 
     /// gromosXX `out_configuration.cc:3182-3200`: the number of end states, then per state V_i,
@@ -954,7 +998,7 @@ mod tests {
         let mut e = Energy::new(1, 1);
         assert!(String::from_utf8({
             let mut out = Vec::new();
-            write_energyred_body(&mut out, &e, 1).unwrap();
+            write_energyred_body(&mut out, &e, &[[0.0; 5]]).unwrap();
             out
         })
         .unwrap()
@@ -970,7 +1014,7 @@ mod tests {
         e.eds_globmin = -3.0;
         e.eds_globminfluc = 0.5;
         let mut out = Vec::new();
-        write_energyred_body(&mut out, &e, 1).unwrap();
+        write_energyred_body(&mut out, &e, &[[0.0; 5]]).unwrap();
         let text = String::from_utf8(out).unwrap();
         let rows: Vec<Vec<f64>> = text
             .lines()

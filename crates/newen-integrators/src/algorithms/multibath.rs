@@ -1,34 +1,19 @@
 //! The atom → temperature-bath mapping of a `MULTIBATH` block (gromosXX `simulation/multibath.h`).
 //!
 //! The kinetic energy per bath, its centre-of-mass / internal split, the kinetic dH/dλ, every
-//! thermostat's scaling and the degrees of freedom all read this one mapping.
+//! thermostat's scaling and the degrees of freedom all read this one mapping. It is defined, with
+//! its Lean proof, in `newen_logic::thermo::bath`.
 
-/// One DOFSET line of a `MULTIBATH` block (gromosXX `bath_index_struct`): the atoms after the
-/// previous line's `last_atom` up to this one couple their centre-of-mass motion to `com_bath`
-/// and their internal and rotational motion to `ir_bath`. Lines are in file order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(deny_unknown_fields)
-)]
-pub struct BathRange {
-    /// last atom of the range (0-based, inclusive)
-    pub last_atom: usize,
-    /// bath index that takes the centre-of-mass degrees of freedom of the range
-    pub com_bath: usize,
-    /// bath index that takes the internal/rotational degrees of freedom
-    pub ir_bath: usize,
-}
+pub use newen_logic::thermo::bath::DofRange as BathRange;
+
+/// The temperature (K) below which a bath is treated as having none (gromosXX `math::epsilon`).
+pub const ZERO_TEMPERATURE: f64 = 1e-12;
 
 /// gromosXX `Multibath::in_bath` (`multibath.h:159-171`): the `(com, ir)` baths of `atom`, those
 /// of the first range whose `last_atom` reaches it. Bath 0 when no range does (gromosXX asserts;
 /// plan validation guarantees the last range ends at the last atom).
 pub fn in_bath(ranges: &[BathRange], atom: usize) -> (usize, usize) {
-    ranges
-        .iter()
-        .find(|r| r.last_atom >= atom)
-        .map_or((0, 0), |r| (r.com_bath, r.ir_bath))
+    newen_logic::thermo::bath::baths_of(ranges, atom).unwrap_or((0, 0))
 }
 
 #[cfg(test)]

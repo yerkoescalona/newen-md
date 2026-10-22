@@ -11,7 +11,7 @@ use newen_core::topology::{PairInteraction, PerturbedAtomPair};
 
 /// Lambda-dependent parameters for perturbed nonbonded interactions
 ///
-/// Direct translation from GROMOS++ perturbed_nonbonded_term.h/.cc
+/// Direct translation from gromosXX perturbed_nonbonded_term.h/.cc
 #[derive(Debug, Clone)]
 pub struct PerturbedLambdaParams {
     /// Lambda for LJ interaction, state A: (1-λ)^n
@@ -23,31 +23,31 @@ pub struct PerturbedLambdaParams {
     /// Lambda for CRF interaction, state B: λ^n
     pub b_crf_lambda_n: f64,
 
-    /// Lambda derivative for LJ, state A: (1-λ)^(n-1) * dλ/dt
+    /// Lambda derivative for LJ, state A: (1-λ)^(n-1) · dΛ/dλ (the individual-λ slope)
     pub a_lj_lambda_n_1: f64,
-    /// Lambda derivative for LJ, state B: λ^(n-1) * dλ/dt
+    /// Lambda derivative for LJ, state B: λ^(n-1) · dΛ/dλ
     pub b_lj_lambda_n_1: f64,
-    /// Lambda derivative for CRF, state A: (1-λ)^(n-1) * dλ/dt
+    /// Lambda derivative for CRF, state A: (1-λ)^(n-1) · dΛ/dλ
     pub a_crf_lambda_n_1: f64,
-    /// Lambda derivative for CRF, state B: λ^(n-1) * dλ/dt
+    /// Lambda derivative for CRF, state B: λ^(n-1) · dΛ/dλ
     pub b_crf_lambda_n_1: f64,
 
-    /// Soft-core lambda for state A: (1-λ_soft)
+    /// (1-λ_ljs) · dΛ_ljs/dλ: the slope of state B's LJ softness
     pub a_ljs_lambda: f64,
-    /// Soft-core lambda for state B: λ_soft
+    /// λ_ljs · dΛ_ljs/dλ: the slope of state A's LJ softness
     pub b_ljs_lambda: f64,
-    /// Soft-core lambda squared for state A: (1-λ_soft)²
+    /// (1-λ_ljs)²: the LJ softness of state B
     pub a_ljs_lambda2: f64,
-    /// Soft-core lambda squared for state B: λ_soft²
+    /// λ_ljs²: the LJ softness of state A
     pub b_ljs_lambda2: f64,
 
-    /// Soft-core CRF lambda for state A: (1-λ_soft)
+    /// (1-λ_crfs) · dΛ_crfs/dλ: the slope of state B's CRF softness
     pub a_crfs_lambda: f64,
-    /// Soft-core CRF lambda for state B: λ_soft
+    /// λ_crfs · dΛ_crfs/dλ: the slope of state A's CRF softness
     pub b_crfs_lambda: f64,
-    /// Soft-core CRF lambda squared for state A: (1-λ_soft)²
+    /// (1-λ_crfs)²: the CRF softness of state B
     pub a_crfs_lambda2: f64,
-    /// Soft-core CRF lambda squared for state B: λ_soft²
+    /// λ_crfs²: the CRF softness of state A
     pub b_crfs_lambda2: f64,
 
     /// Lambda exponent (n)
@@ -57,6 +57,8 @@ pub struct PerturbedLambdaParams {
 impl PerturbedLambdaParams {
     /// gromosXX `set_lambda` (`perturbed_nonbonded_term.cc:322-347`), whose `pow(x, n)` is the
     /// double-precision `pow`: `powf`, not `powi` (they differ in the last bits for n ≥ 2).
+    ///
+    /// spec: nonbonded.perturbed_lambda_params
     pub fn from_lambda(
         lj_lambda: f64,
         ljs_lambda: f64,
@@ -77,19 +79,19 @@ impl PerturbedLambdaParams {
             b_lj_lambda_n: lj_lambda.powf(n as f64),
             b_crf_lambda_n: crf_lambda.powf(n as f64),
 
-            // Derivatives: (1-λ)^(n-1) * dλ/dt
+            // Derivatives: (1-λ)^(n-1) · dΛ/dλ
             a_lj_lambda_n_1: (1.0 - lj_lambda).powf((n - 1) as f64) * lj_lambda_derivative,
             a_crf_lambda_n_1: (1.0 - crf_lambda).powf((n - 1) as f64) * crf_lambda_derivative,
 
-            // Derivatives: λ^(n-1) * dλ/dt
+            // Derivatives: λ^(n-1) · dΛ/dλ
             b_lj_lambda_n_1: lj_lambda.powf((n - 1) as f64) * lj_lambda_derivative,
             b_crf_lambda_n_1: crf_lambda.powf((n - 1) as f64) * crf_lambda_derivative,
 
-            // Soft-core lambdas: (1-λ) * dλ/dt for state A
+            // Softness slopes: (1-λ_s) · dΛ_s/dλ
             a_ljs_lambda: (1.0 - ljs_lambda) * ljs_lambda_derivative,
             a_crfs_lambda: (1.0 - crfs_lambda) * crfs_lambda_derivative,
 
-            // Soft-core lambdas: λ * dλ/dt for state B
+            // Softness slopes: λ_s · dΛ_s/dλ
             b_ljs_lambda: ljs_lambda * ljs_lambda_derivative,
             b_crfs_lambda: crfs_lambda * crfs_lambda_derivative,
 
@@ -208,41 +210,64 @@ pub fn perturbed_lj_crf_interaction_scaled(
     four_pi_eps_i: f64,
     coulomb_scaling: f64,
 ) -> (f64, f64, f64, f64, f64) {
-    let r2 = r.length_squared();
+    perturbed_lj_crf_pair(
+        r.length_squared(),
+        a_c6,
+        a_c12,
+        b_c6,
+        b_c12,
+        a_q,
+        b_q,
+        alpha_lj,
+        alpha_crf,
+        lambda_params,
+        crf,
+        four_pi_eps_i,
+        coulomb_scaling,
+    )
+}
 
-    // Early exit for zero distance
-    if r2 < 1e-10 {
-        return (0.0, 0.0, 0.0, 0.0, 0.0);
-    }
-
+/// One perturbed LJ + CRF pair with soft-core at squared distance `r2`: the kernel of
+/// [`perturbed_lj_crf_interaction_scaled`]. Returns `(force, e_lj, e_crf, de_lj, de_crf)`, the
+/// force a scalar along the pair vector.
+///
+/// spec: nonbonded.perturbed_lj_crf_pair
+#[inline]
+pub fn perturbed_lj_crf_pair(
+    r2: f64,
+    a_c6: f64,
+    a_c12: f64,
+    b_c6: f64,
+    b_c12: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    lambda_params: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    coulomb_scaling: f64,
+) -> (f64, f64, f64, f64, f64) {
     let r6 = r2 * r2 * r2;
     let r4 = r2 * r2;
 
-    // Calculate C12/C6 ratios for soft-core
-    let a_c126 = if a_c6.abs() > 1e-10 {
-        a_c12 / a_c6
-    } else {
-        0.0
-    };
-    let b_c126 = if b_c6.abs() > 1e-10 {
-        b_c12 / b_c6
-    } else {
-        0.0
-    };
+    // C12/C6 of the soft-core length; 0 for C6 = 0, as gromosXX
+    let a_c126 = if a_c6 != 0.0 { a_c12 / a_c6 } else { 0.0 };
+    let b_c126 = if b_c6 != 0.0 { b_c12 / b_c6 } else { 0.0 };
 
     // ===== STATE A SOFT-CORE DISTANCES =====
-    // For state A, we use (1-λ) for softness
-    // Electrostatics: r_soft² = r² + α_crf * (1-λ_crf)²
+    // State A is softened by λ_soft² (it vanishes as λ → 1)
+    // Electrostatics: r_soft² = r² + α_crf · λ_crfs²
     let a_dist2soft = r2 + alpha_crf * lambda_params.b_crfs_lambda2;
     let a_distisoft = 1.0 / a_dist2soft.sqrt();
     let a_dist3isoft = a_distisoft / a_dist2soft;
 
-    // LJ: r⁶_soft = r⁶ + α_lj * (1-λ_lj)² * C12/C6
+    // LJ: r⁶_soft = r⁶ + α_lj · λ_ljs² · C12/C6
     let a_dist6soft = r6 + alpha_lj * lambda_params.b_ljs_lambda2 * a_c126;
     let a_dist6isoft = 1.0 / a_dist6soft;
 
     // ===== STATE B SOFT-CORE DISTANCES =====
-    // For state B, we use λ for softness
+    // State B is softened by (1 − λ_soft)² (it vanishes as λ → 0)
     let b_dist2soft = r2 + alpha_crf * lambda_params.a_crfs_lambda2;
     let b_distisoft = 1.0 / b_dist2soft.sqrt();
     let b_dist3isoft = b_distisoft / b_dist2soft;
@@ -251,7 +276,7 @@ pub fn perturbed_lj_crf_interaction_scaled(
     let b_dist6isoft = 1.0 / b_dist6soft;
 
     // ===== SOFT-CORE CUTOFF MODIFICATIONS =====
-    let cut2 = crf.cutoff_sq; // actual cutoff², NOT crf_cut²
+    let cut2 = crf.cutoff_sq; // RCRF², the soft-core reaction-field radius
     let a_cut2soft = cut2 + alpha_crf * lambda_params.b_crfs_lambda2;
     let b_cut2soft = cut2 + alpha_crf * lambda_params.a_crfs_lambda2;
 
@@ -353,6 +378,8 @@ pub fn perturbed_lj_crf_interaction_scaled(
 /// 1-4 one included).
 ///
 /// Returns `([A_e_lj, B_e_lj, A_e_crf, B_e_crf], [A_de_lj, B_de_lj, A_de_crf, B_de_crf])`.
+///
+/// spec: nonbonded.lj_crf_soft_interaction_ext
 #[inline]
 pub fn lj_crf_soft_interaction_ext(
     r2: f64,
@@ -426,6 +453,8 @@ pub fn lj_crf_soft_interaction_ext(
 ///
 /// Returns `([A_e_rf, B_e_rf], [A_de_rf, B_de_rf])`, the derivatives in the sign convention of
 /// [`lj_crf_soft_interaction_ext`].
+///
+/// spec: nonbonded.rf_soft_interaction_ext
 #[inline]
 pub fn rf_soft_interaction_ext(
     r2: f64,
@@ -813,23 +842,11 @@ fn self_energy_correction_impl<const GROUPS: bool>(
     {
         // the self term takes the individual λ of the atom's own group (innerloop.cc:3367-3377)
         let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, i);
-        let n = lp.lambda_exp as f64;
         let qa2 = pi.a_charge * pi.a_charge;
         let qb2 = pi.b_charge * pi.b_charge;
 
-        // GROMOS rf_soft_interaction at r=0 with selfterm_correction=true:
-        //   e_rf = [-(1-λ)^n*qa2 - λ^n*qb2 + qa2] * crf_cut * FPEPSI
-        let e_rf = (-(lp.a_crf_lambda_n * qa2) - lp.b_crf_lambda_n * qb2 + qa2)
-            * crf.crf_cut
-            * four_pi_eps_i;
+        let (e_rf, de_rf) = perturbed_rf_self_term(qa2, qb2, lp, crf, four_pi_eps_i);
         delta_e += 0.5 * e_rf;
-
-        // de_rf from lines 756-759 with dist2=0 (soft terms vanish):
-        //   de_rf = n*((1-λ)^(n-1)*qa2 - λ^(n-1)*qb2) * crf_cut * FPEPSI
-        let de_rf = n
-            * (lp.a_crf_lambda_n_1 * qa2 - lp.b_crf_lambda_n_1 * qb2)
-            * crf.crf_cut
-            * four_pi_eps_i;
         dhdl += 0.5 * de_rf;
         if GROUPS {
             sink.book(k, 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
@@ -839,6 +856,76 @@ fn self_energy_correction_impl<const GROUPS: bool>(
         }
     }
     (delta_e, dhdl)
+}
+
+/// The reaction-field self term of a perturbed atom with squared charges `qa2`, `qb2`, as the
+/// change from the state-A self term the unperturbed loop booked: gromosXX `rf_soft_interaction`
+/// at r = 0 with `selfterm_correction` (`perturbed_nonbonded_term.cc:718-765`), where the soft
+/// terms vanish. Returns `(e_rf, de_rf)`; the caller books half of each.
+///
+/// spec: nonbonded.perturbed_rf_self_term
+#[inline]
+pub fn perturbed_rf_self_term(
+    qa2: f64,
+    qb2: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+) -> (f64, f64) {
+    let n = lp.lambda_exp as f64;
+    // e_rf = [-(1-λ)^n*qa2 - λ^n*qb2 + qa2] * crf_cut * FPEPSI
+    let e_rf =
+        (-(lp.a_crf_lambda_n * qa2) - lp.b_crf_lambda_n * qb2 + qa2) * crf.crf_cut * four_pi_eps_i;
+    // de_rf = n*((1-λ)^(n-1)*qa2 - λ^(n-1)*qb2) * crf_cut * FPEPSI
+    let de_rf =
+        n * (lp.a_crf_lambda_n_1 * qa2 - lp.b_crf_lambda_n_1 * qb2) * crf.crf_cut * four_pi_eps_i;
+    (e_rf, de_rf)
+}
+
+/// The soft reaction-field term of an excluded perturbed pair at squared distance `r2`, as the
+/// excluded-pair correction computes it: gromosXX `rf_soft_interaction` without the self-term
+/// correction, with the softened `crf/2 / sqrt(cut2soft³)` formed as
+/// `crf_2cut3i · sqrt((cut2/cut2soft)³)`. Returns `(force, e_crf, de_crf)`, the force a scalar
+/// along the pair vector.
+///
+/// spec: nonbonded.perturbed_rf_excluded_pair
+#[inline]
+pub fn perturbed_rf_excluded_pair(
+    r2: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_crf: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+) -> (f64, f64, f64) {
+    // only the quadratic crf_2cut3i term is softened, not the crf_cut constant
+    let cut2 = crf.cutoff_sq;
+    let a_cut2soft = cut2 + alpha_crf * lp.b_crfs_lambda2;
+    let b_cut2soft = cut2 + alpha_crf * lp.a_crfs_lambda2;
+    let a_crf_2cut3i = crf.crf_2cut3i * (cut2 / a_cut2soft).powi(3).sqrt();
+    let b_crf_2cut3i = crf.crf_2cut3i * (cut2 / b_cut2soft).powi(3).sqrt();
+    let a_crf_cut3i = 2.0 * a_crf_2cut3i;
+    let b_crf_cut3i = 2.0 * b_crf_2cut3i;
+    let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
+    let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
+
+    // no 1/r term for excluded pairs
+    let a_e_crf = a_q * (-a_crf_2cut3i * r2 - crf.crf_cut);
+    let b_e_crf = b_q * (-b_crf_2cut3i * r2 - crf.crf_cut);
+
+    let e_crf = (lp.a_crf_lambda_n * a_e_crf + lp.b_crf_lambda_n * b_e_crf) * four_pi_eps_i;
+    let force = (lp.a_crf_lambda_n * a_q * a_crf_cut3i + lp.b_crf_lambda_n * b_q * b_crf_cut3i)
+        * four_pi_eps_i;
+
+    let n_exp = lp.lambda_exp as f64;
+    let de_crf = ((lp.a_crf_lambda_n * a_q * lp.b_crfs_lambda * a_crf_pert
+        - lp.b_crf_lambda_n * b_q * lp.a_crfs_lambda * b_crf_pert)
+        * r2
+        * alpha_crf
+        + n_exp * (lp.b_crf_lambda_n_1 * b_e_crf - lp.a_crf_lambda_n_1 * a_e_crf))
+        * four_pi_eps_i;
+    (force, e_crf, de_crf)
 }
 
 /// Correct excluded-pair RF for pairs where ≥1 atom is perturbed.
@@ -925,40 +1012,12 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             let a_q = a_q_i * a_q_j;
             let b_q = b_q_i * b_q_j;
 
-            // Soft cutoff (GROMOS rf_soft_interaction: only modifies the quadratic
-            // crf_2cut3i term, NOT the crf_cut constant; uses actual cutoff², not crf_cut²)
-            let cut2 = crf.cutoff_sq;
-            let a_cut2soft = cut2 + alpha_crf * lp.b_crfs_lambda2;
-            let b_cut2soft = cut2 + alpha_crf * lp.a_crfs_lambda2;
-            let a_crf_2cut3i = crf.crf_2cut3i * (cut2 / a_cut2soft).powi(3).sqrt();
-            let b_crf_2cut3i = crf.crf_2cut3i * (cut2 / b_cut2soft).powi(3).sqrt();
-            let a_crf_cut3i = 2.0 * a_crf_2cut3i;
-            let b_crf_cut3i = 2.0 * b_crf_2cut3i;
-            let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
-            let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
-
-            // NO 1/r term for excluded pairs (GROMOS rf_soft_interaction lines 742-743)
-            let a_e_crf = a_q * (-a_crf_2cut3i * r2 - crf.crf_cut);
-            let b_e_crf = b_q * (-b_crf_2cut3i * r2 - crf.crf_cut);
-
-            let e_crf_p =
-                (lp.a_crf_lambda_n * a_e_crf + lp.b_crf_lambda_n * b_e_crf) * four_pi_eps_i;
-            let f_p = (lp.a_crf_lambda_n * a_q * a_crf_cut3i
-                + lp.b_crf_lambda_n * b_q * b_crf_cut3i)
-                * four_pi_eps_i;
+            let (f_p, e_crf_p, de_crf) =
+                perturbed_rf_excluded_pair(r2, a_q, b_q, alpha_crf, lp, crf, four_pi_eps_i);
 
             // State-A: what the regular excluded loop computed (same formula, no 1/r)
             let e_crf_a = a_q * four_pi_eps_i * (-crf.crf_2cut3i * r2 - crf.crf_cut);
             let f_a = a_q * four_pi_eps_i * crf.crf_cut3i;
-
-            // dH/dλ (GROMOS lines 756-759, no dist3isoft term for excluded)
-            let n_exp = lp.lambda_exp as f64;
-            let de_crf = ((lp.a_crf_lambda_n * a_q * lp.b_crfs_lambda * a_crf_pert
-                - lp.b_crf_lambda_n * b_q * lp.a_crfs_lambda * b_crf_pert)
-                * r2
-                * alpha_crf
-                + n_exp * (lp.b_crf_lambda_n_1 * b_e_crf - lp.a_crf_lambda_n_1 * a_e_crf))
-                * four_pi_eps_i;
 
             let df = r * (f_p - f_a);
             out.forces[i] += df;
@@ -1141,6 +1200,8 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 /// `r2` is the squared distance.
 ///
 /// Returns `(force, e_rf, de_rf)`, the force a scalar along the pair vector.
+///
+/// spec: nonbonded.rf_soft_interaction
 #[inline]
 pub fn rf_soft_interaction(
     r2: f64,
@@ -1176,24 +1237,6 @@ pub fn rf_soft_interaction(
     (force, e_rf, de_rf)
 }
 
-/// How [`perturbed_atom_pair_interactions`] computes a normal or 1-4 state of a `PERTATOMPAIR`
-/// pair with a perturbed atom (1.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "kebab-case")
-)]
-pub enum AtomPairKernel {
-    /// The soft-core kernel with its outputs in their own slots, Coulomb scaling 1 for a normal
-    /// and the 1-4 scaling for a 1-4 state: what `perturbed_nonbonded_pair.cc:469, 677, 992,
-    /// 1200` intend.
-    #[default]
-    Intended,
-    /// gromosXX 247c95c4 as it runs: the kernel's outputs shifted by one slot (`atom_pair_state`).
-    GromosxxShifted,
-}
-
 /// The `PERTATOMPAIR` pairs (gromosXX `Perturbed_Nonbonded_Pair`,
 /// `perturbed_nonbonded_pair.cc:118-1612`). [`Topology::apply_perturbation`] took them out of
 /// the exclusion and 1-4 lists and off the pairlist, so this is the only place they are
@@ -1204,8 +1247,7 @@ pub enum AtomPairKernel {
 /// The force, the energies and the dH/dλ go to `out`; with more than one energy group also to
 /// cell `[eg(i)][eg(j)]` of `sink` (`:1583-1611`); with `precalc` the pair's ext energies at
 /// every λ_k (`:343-365, 410-420, 479-525, 600-612, 685-731, 803-815` and the B mirrors).
-/// `kernel` selects the normal and 1-4 states of pairs with a perturbed atom; `coulomb_scaling`
-/// is the 1-4 Coulomb scaling the [`AtomPairKernel::Intended`] kernel gives a 1-4 state.
+/// `coulomb_scaling` is the 1-4 Coulomb scaling of a 1-4 state with a perturbed atom.
 ///
 /// [`Topology::apply_perturbation`]: newen_core::Topology::apply_perturbation
 pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
@@ -1220,7 +1262,6 @@ pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
     bc: &BC,
     four_pi_eps_i: f64,
     rf_excluded: bool,
-    kernel: AtomPairKernel,
     coulomb_scaling: f64,
     out: &mut PertNBCorrection,
     egroups: EnergyGroups<'_>,
@@ -1229,32 +1270,24 @@ pub fn perturbed_atom_pair_interactions<BC: BoundaryCondition>(
 ) {
     let mut none = PrecalcNonbonded::default();
     let pc = precalc.unwrap_or(&mut none);
-    macro_rules! run {
-        ($shifted:literal) => {
-            with_groups!(egroups, G => atom_pair_impl::<BC, G, $shifted>(
-                atom_pairs,
-                pos,
-                pert,
-                charges,
-                iac,
-                lj,
-                crf,
-                lps,
-                bc,
-                four_pi_eps_i,
-                rf_excluded,
-                coulomb_scaling,
-                out,
-                &egroups,
-                sink,
-                pc,
-            ))
-        };
-    }
-    match kernel {
-        AtomPairKernel::Intended => run!(false),
-        AtomPairKernel::GromosxxShifted => run!(true),
-    }
+    with_groups!(egroups, G => atom_pair_impl::<BC, G>(
+        atom_pairs,
+        pos,
+        pert,
+        charges,
+        iac,
+        lj,
+        crf,
+        lps,
+        bc,
+        four_pi_eps_i,
+        rf_excluded,
+        coulomb_scaling,
+        out,
+        &egroups,
+        sink,
+        pc,
+    ))
 }
 
 /// The parameters of one end state of a perturbed atom pair.
@@ -1269,10 +1302,9 @@ struct PairState {
 /// One end state of a `PERTATOMPAIR` pair — the body of gromosXX's `switch (A_type)` /
 /// `switch (B_type)` for `lj_crf_func` (`perturbed_nonbonded_pair.cc:328-868`, `:875-1414`).
 /// Returns `[force, e_lj, e_crf, de_lj, de_crf]`, the force a scalar along `r`, already
-/// λ-weighted. `SHIFTED` selects [`AtomPairKernel::GromosxxShifted`] for the normal and 1-4
-/// states with a perturbed atom.
+/// λ-weighted.
 #[inline]
-fn atom_pair_state<const SHIFTED: bool>(
+fn atom_pair_state(
     s: &PairState,
     perturbed: bool,
     r: Vec3,
@@ -1359,55 +1391,28 @@ fn atom_pair_state<const SHIFTED: bool>(
                     four_pi_eps_i,
                 );
             }
-            if SHIFTED {
-                // gromosXX defect, reproduced on request (1.8): perturbed_nonbonded_pair.cc:469,
-                // 677, 992, 1200 pass the outputs of an older `eds_pert_lj_crf_interaction(…,
-                // f1, f6, f12, e_lj, e_crf, de_lj, de_crf)`, shifted by one slot against today's
-                // signature (`…, force, e_lj, e_crf, de_lj, de_crf, eps, coulomb_scaling`,
-                // perturbed_nonbonded_term.h:65-72): the zero `X_de_lj` and `X_de_crf` become
-                // `eps` and `coulomb_scaling` = 0 (no 1/r Coulomb), the state's force is
-                // (force + e_lj + e_crf)·r, its energies are the kernel's dH/dλ and its dH/dλ
-                // is 0.
-                let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
-                    r,
-                    a_lj.0,
-                    a_lj.1,
-                    b_lj.0,
-                    b_lj.1,
-                    a_q,
-                    b_q,
-                    alpha_lj,
-                    alpha_crf,
-                    lp,
-                    crf,
-                    four_pi_eps_i,
-                    0.0,
-                );
-                [f + e_lj + e_crf, de_lj, de_crf, 0.0, 0.0]
-            } else {
-                // the outputs in their own slots, Coulomb scaling 1 for a normal state and the
-                // 1-4 one for a 1-4 state (perturbed_nonbonded_innerloop.cc:2102)
-                let scaling = match kind {
-                    PairInteraction::OneFour => coulomb_scaling,
-                    _ => 1.0,
-                };
-                let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
-                    r,
-                    a_lj.0,
-                    a_lj.1,
-                    b_lj.0,
-                    b_lj.1,
-                    a_q,
-                    b_q,
-                    alpha_lj,
-                    alpha_crf,
-                    lp,
-                    crf,
-                    four_pi_eps_i,
-                    scaling,
-                );
-                [f, e_lj, e_crf, de_lj, de_crf]
-            }
+            // the outputs in their own slots (D1), Coulomb scaling 1 for a normal state and the
+            // 1-4 one for a 1-4 state (perturbed_nonbonded_innerloop.cc:2102)
+            let scaling = match kind {
+                PairInteraction::OneFour => coulomb_scaling,
+                _ => 1.0,
+            };
+            let (f, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_interaction_scaled(
+                r,
+                a_lj.0,
+                a_lj.1,
+                b_lj.0,
+                b_lj.1,
+                a_q,
+                b_q,
+                alpha_lj,
+                alpha_crf,
+                lp,
+                crf,
+                four_pi_eps_i,
+                scaling,
+            );
+            [f, e_lj, e_crf, de_lj, de_crf]
         },
         (kind, false) => {
             // pair.cc:582-612, 788-815, 1105-1131, 1319-1345
@@ -1431,7 +1436,7 @@ fn atom_pair_state<const SHIFTED: bool>(
     }
 }
 
-fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool, const SHIFTED: bool>(
+fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool>(
     atom_pairs: &[PerturbedAtomPair],
     pos: &[Vec3],
     pert: &[Option<PertAtomInfo>],
@@ -1474,7 +1479,7 @@ fn atom_pair_impl<BC: BoundaryCondition, const GROUPS: bool, const SHIFTED: bool
 
         let r = bc.nearest_image(pos[i], pos[j]);
         let state = |s: PairState, precalc: &mut PrecalcNonbonded| {
-            atom_pair_state::<SHIFTED>(
+            atom_pair_state(
                 &s,
                 perturbed,
                 r,
@@ -1727,7 +1732,6 @@ mod tests {
     }
 
     fn one_pair(
-        kernel: AtomPairKernel,
         types: (PairInteraction, PairInteraction),
         pos0: Vec3,
         lam: f64,
@@ -1769,7 +1773,6 @@ mod tests {
             &newen_core::math::Vacuum,
             newen_core::units::four_pi_eps_i,
             true,
-            kernel,
             coulomb_scaling,
             &mut out,
             EnergyGroups::single(),
@@ -1839,7 +1842,7 @@ mod tests {
             ),
         ];
         for (types, lam, c6, c12, q0) in cases {
-            let got = one_pair(AtomPairKernel::Intended, types, PAIR_POS, lam, 1, 1.0);
+            let got = one_pair(types, PAIR_POS, lam, 1, 1.0);
             let (f, e_lj, e_crf) = lj_crf_interaction(PAIR_POS, c6, c12, q0 * PAIR_Q.2 * fpe, &crf);
             let want = PAIR_POS * f;
             let tag = format!("{types:?} at λ = {lam}");
@@ -1879,9 +1882,7 @@ mod tests {
             for scaling in [1.0, 0.5] {
                 for n in [1, 2] {
                     for lam in [0.25, 0.5, 0.75] {
-                        let run = |p: Vec3, l: f64| {
-                            one_pair(AtomPairKernel::Intended, types, p, l, n, scaling)
-                        };
+                        let run = |p: Vec3, l: f64| one_pair(types, p, l, n, scaling);
                         let tag = format!("{types:?} scaling {scaling} n {n} λ {lam}");
                         let at = run(PAIR_POS, lam);
                         let h = 1e-6;
@@ -1906,31 +1907,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// The switch selects the reproduced defect: a normal state then books no dH/dλ and other
-    /// energies.
-    #[test]
-    fn shifted_atom_pair_kernel_differs_from_the_intended_one() {
-        use PairInteraction::{Normal, OneFour};
-        let i = one_pair(
-            AtomPairKernel::Intended,
-            (Normal, OneFour),
-            PAIR_POS,
-            0.5,
-            1,
-            1.0,
-        );
-        let s = one_pair(
-            AtomPairKernel::GromosxxShifted,
-            (Normal, OneFour),
-            PAIR_POS,
-            0.5,
-            1,
-            1.0,
-        );
-        assert_eq!(s.dhdl, 0.0);
-        assert!(i.dhdl != 0.0 && (i.e_crf - s.e_crf).abs() > 1.0);
     }
 
     #[test]
@@ -2226,5 +2202,53 @@ mod tests {
         println!("Lambda exponent comparison at λ=0.5:");
         println!("  n=1: E_lj={:.6}, dE_lj/dλ={:.6}", e_lj_n1, de_lj_n1);
         println!("  n=2: E_lj={:.6}, dE_lj/dλ={:.6}", e_lj_n2, de_lj_n2);
+    }
+
+    /// Two perturbed atoms on top of each other: with α > 0 and C6 ≠ 0 in both states the
+    /// soft-core pair has a finite energy and dV/dλ at r = 0 (a state with C6 = 0 has no
+    /// soft-core length, so there it diverges, as in gromosXX), and at NLAM = 1 it is the λ-mix
+    /// of the ext kernel's end states.
+    #[test]
+    fn overlapping_soft_core_pair_is_finite() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let fpe = newen_core::units::four_pi_eps_i;
+        let (a_c6, a_c12, b_c6, b_c12, a_q, b_q) = (2.6e-3, 2.7e-6, 1.1e-3, 0.9e-6, -0.3, 0.2);
+        let (alpha_lj, alpha_crf, lam) = (0.5, 0.5, 0.4);
+        let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, 1);
+        for r2 in [0.0, 1e-12, 9e-11] {
+            let (force, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_pair(
+                r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, alpha_crf, &lp, &crf, fpe, 1.0,
+            );
+            for v in [force, e_lj, e_crf, de_lj, de_crf] {
+                assert!(v.is_finite(), "r2 = {r2}: {v}");
+            }
+            assert!(
+                e_lj != 0.0 && e_crf != 0.0,
+                "r2 = {r2}: the pair is not dropped"
+            );
+            let (e, _) = lj_crf_soft_interaction_ext(
+                r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, alpha_crf, &crf, fpe, lam,
+            );
+            assert_relative_eq!(e_lj, (1.0 - lam) * e[0] + lam * e[1], max_relative = 1e-12);
+            assert_relative_eq!(e_crf, (1.0 - lam) * e[2] + lam * e[3], max_relative = 1e-12);
+        }
+    }
+
+    /// Any nonzero C6 enters the soft-core length through C12/C6, as in gromosXX: a C6 of
+    /// 1e-12 is softened, not treated as zero.
+    #[test]
+    fn a_tiny_c6_is_softened() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let (c6, c12, alpha_lj, lam, r2) = (1e-12, 1e-6, 0.5, 0.5, 0.09);
+        let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, 1);
+        let (_, e_lj, _, _, _) = perturbed_lj_crf_pair(
+            r2, c6, c12, 0.0, 0.0, 0.0, 0.0, alpha_lj, 0.0, &lp, &crf, 1.0, 1.0,
+        );
+        let dist6 = r2 * r2 * r2 + alpha_lj * lam * lam * (c12 / c6);
+        let softened = (1.0 - lam) * (c12 / dist6 - c6) / dist6;
+        assert_relative_eq!(e_lj, softened, max_relative = 1e-12);
+        let r6 = r2 * r2 * r2;
+        let plain = (1.0 - lam) * (c12 / r6 - c6) / r6;
+        assert!(e_lj < 1e-6 * plain, "{e_lj} vs unsoftened {plain}");
     }
 }

@@ -1,48 +1,8 @@
 //! What `ext_ti_ana`, `bar`, `ext_ti_merge` and `mbar` share: gromos++'s argument getters, its
-//! random numbers, its `std::max`/`std::min`, and the [`Parity`] switch.
+//! random numbers and its `std::max`/`std::min`.
 
 use newen_io::args::Arguments;
 use std::str::FromStr;
-
-/// What `bar`, `ext_ti_merge` and `ext_ti_ana` print where gromos++ 9cd9f6b3 has a defect
-/// (item 1.8): the corrected value (the default), or the released gromos++ value
-/// (`@parity gromospp`), kept for the byte-for-byte parity tests against that release.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Parity {
-    /// The defect corrected, as the patched gromos++ prints it.
-    #[default]
-    Corrected,
-    /// The defect reproduced, as gromos++ 9cd9f6b3 prints it.
-    GromosppReleased,
-}
-
-impl Parity {
-    /// The program argument (`@parity gromospp`).
-    pub const KEY: &'static str = "parity";
-
-    /// `gromospp` or `corrected`.
-    pub fn parse(value: &str) -> Result<Parity, String> {
-        match value {
-            "gromospp" => Ok(Parity::GromosppReleased),
-            "corrected" => Ok(Parity::Corrected),
-            v => Err(format!(
-                "@parity: '{v}' is neither 'gromospp' (reproduce gromos++ 9cd9f6b3) nor \
-                 'corrected' (the default)"
-            )),
-        }
-    }
-
-    /// `@parity` of a program's arguments: absent is [`Parity::Corrected`]; exactly one value.
-    pub(crate) fn from_args(args: &Arguments) -> Result<Parity, String> {
-        if !args.has(Self::KEY) {
-            return Ok(Parity::Corrected);
-        }
-        match args.values(Self::KEY) {
-            [v] => Parity::parse(v),
-            _ => Err("@parity takes one value: gromospp or corrected".into()),
-        }
-    }
-}
 
 /// gromos++ `Arguments::getValue<T>(key, required, default)` (`Arguments.h:196-221`): absent →
 /// the default (an error when there is none); given without a value, or with one that does not

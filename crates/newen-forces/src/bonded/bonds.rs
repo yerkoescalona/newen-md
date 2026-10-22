@@ -3,8 +3,49 @@
 use newen_core::configuration::Configuration;
 use newen_core::topology::Topology;
 
-use super::ForceEnergy;
-use newen_core::math::Periodicity;
+use super::{ForceEnergy, ZERO_DISTANCE};
+use newen_core::math::{Periodicity, Vec3};
+
+/// One quartic bond `V = K/4 · (b² − b0²)²` at `r = x_i − x_j`: `(energy, f_i)`, with
+/// `f_j = −f_i`. In this order:
+///
+/// ```text
+/// r2     = r · r
+/// dr2    = r2 − b0 · b0
+/// energy = 0.25 · k · dr2 · dr2
+/// f_i    = r · (−k · dr2)          −dV/db · r/b
+/// ```
+///
+/// spec: bonded.quartic_bond
+#[inline]
+pub fn quartic_bond(r: Vec3, k: f64, b0: f64) -> (f64, Vec3) {
+    let r2 = r.length_squared();
+    let dr2 = r2 - b0 * b0;
+    let energy = 0.25 * k * dr2 * dr2;
+    (energy, r * (-k * dr2))
+}
+
+/// One harmonic bond `V = K/2 · (b − b0)²` at `r = x_i − x_j`: `(energy, f_i)`, with
+/// `f_j = −f_i`; nothing below [`ZERO_DISTANCE`]. In this order:
+///
+/// ```text
+/// b      = sqrt(r · r)
+/// dr     = b − b0
+/// energy = 0.5 · k · dr · dr
+/// f_i    = r · (−k · dr / b)       −dV/db · r/b
+/// ```
+///
+/// spec: bonded.harmonic_bond
+#[inline]
+pub fn harmonic_bond(r: Vec3, k: f64, b0: f64) -> (f64, Vec3) {
+    let b = r.length();
+    if b < ZERO_DISTANCE {
+        return (0.0, Vec3::ZERO);
+    }
+    let dr = b - b0;
+    let energy = 0.5 * k * dr * dr;
+    (energy, r * (-k * dr / b))
+}
 
 /// Calculate quartic bond forces and energies (GROMOS standard)
 ///
@@ -43,14 +84,7 @@ pub(crate) fn calculate_bond_forces_quartic_grouped<const GROUPS: bool>(
         // GROMOS convention: v = pos(i) - pos(j)
         let r_vec = pbc.nearest_image(conf.current().pos[bond.i], conf.current().pos[bond.j]);
 
-        // Energy: V = (1/4) * k * (r^2 - r0^2)^2
-        let r2 = r_vec.length_squared();
-        let r0_2 = params.r0 * params.r0;
-        let dr2 = r2 - r0_2;
-        let energy = 0.25 * params.k_quartic * dr2 * dr2;
-
-        // Force: f = -K * (r^2 - r0^2) * v  (GROMOS convention)
-        let force = r_vec * (-params.k_quartic * dr2);
+        let (energy, force) = quartic_bond(r_vec, params.k_quartic, params.r0);
 
         result.energy += energy;
         if GROUPS {
@@ -108,18 +142,7 @@ pub(crate) fn calculate_bond_forces_harmonic_grouped<const GROUPS: bool>(
         let params = &topo.bond_parameters[bond.bond_type];
         // GROMOS convention: v = pos(i) - pos(j)
         let r_vec = pbc.nearest_image(conf.current().pos[bond.i], conf.current().pos[bond.j]);
-        let r = r_vec.length();
-
-        if r < 1e-10 {
-            continue;
-        }
-
-        // Energy: V = (1/2) * k * (r - r0)^2
-        let dr = r - params.r0;
-        let energy = 0.5 * params.k_harmonic * dr * dr;
-
-        // Force: f = -k * (r - r0) * v/|v|  (GROMOS convention)
-        let force = r_vec * (-params.k_harmonic * dr / r);
+        let (energy, force) = harmonic_bond(r_vec, params.k_harmonic, params.r0);
 
         result.energy += energy;
         if GROUPS {

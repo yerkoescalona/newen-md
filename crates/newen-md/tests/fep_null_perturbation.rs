@@ -247,7 +247,7 @@ fn numbers(text: &str) -> Vec<f64> {
 /// `PERTATOMPAIR` rows on a perturbed atom whose A and B types are the pair's topology type
 /// (4-10 a 1-4 pair, 4-11 a normal one, both charged) take the pair out of the regular loops
 /// into the atom-pair term: with equal end states and α = 0 that is still the unperturbed
-/// system, to rounding, under the intended kernel. gromosXX's shifted call is not.
+/// system, to rounding (D1).
 #[test]
 fn pertatompair_rows_with_equal_states_keep_the_null_perturbation_a_no_op() {
     let dir = std::env::temp_dir().join(format!("newen_fep_null_pair_{}", std::process::id()));
@@ -276,18 +276,4 @@ fn pertatompair_rows_with_equal_states_keep_the_null_perturbation_a_no_op() {
             "force {a} vs {b} with null PERTATOMPAIR rows"
         );
     }
-
-    let (shifted, _) = run_with(
-        Some(&null),
-        &input,
-        "pair_null_shifted",
-        &[
-            "@recipe_set",
-            "perturbation.atom_pair_kernel=gromosxx-shifted",
-        ],
-    );
-    assert!(
-        (shifted[8] - reference[8]).abs() > 1e-3,
-        "the shifted kernel left the Coulomb energy unchanged"
-    );
 }

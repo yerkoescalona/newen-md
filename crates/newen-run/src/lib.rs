@@ -67,7 +67,7 @@ pub use plan::{
     build_plan, plan_from_json, plan_to_json, validate_plan, AedsPlan, AlgorithmSpec, EdsPlan,
 };
 pub use prepare::{
-    precalclam_longrange_gaps, precalclam_longrange_warning, prepare_system, Coordinates,
-    PrepareNote, Prepared,
+    nose_hoover_missing_warning, precalclam_longrange_gaps, precalclam_longrange_warning,
+    prepare_system, Coordinates, PrepareNote, Prepared,
 };
 pub use recipe::{Aeds, Diagnostics, Eds, PassthroughPolicy, RunRecipe, TermSpec, RECIPE_VERSION};

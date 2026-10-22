@@ -65,6 +65,8 @@ struct Parts {
     pertdata: Option<f64>,
     /// The configuration file's AEDSSEARCH block (NTIAEDSS = 0).
     aedssearch: Option<Vec<String>>,
+    /// The file's NHCVARIABLES block (a Nosé–Hoover run with NTINHT = 0 starts from it).
+    nhcvariables: Option<Vec<String>>,
 }
 
 impl Parts {
@@ -77,6 +79,7 @@ impl Parts {
             box_dims: conf.box_dims,
             pertdata: conf.pertdata,
             aedssearch: conf.aedssearch.clone(),
+            nhcvariables: conf.nhcvariables.clone(),
         }
     }
 
@@ -107,6 +110,7 @@ impl Parts {
             box_dims: coord_data.box_dims,
             pertdata: coord_data.pertdata,
             aedssearch: coord_data.aedssearch,
+            nhcvariables: coord_data.nhcvariables,
         })
     }
 
@@ -115,8 +119,11 @@ impl Parts {
             positions: self.positions,
             velocities: self.velocities,
             box_dims: self.box_dims,
+            box_angles: Vec3::splat(90.0),
+            box_euler: Vec3::ZERO,
             pertdata: self.pertdata,
             aedssearch: self.aedssearch,
+            nhcvariables: self.nhcvariables,
         };
         (self.topo, self.physical_constants, coords)
     }
@@ -260,6 +267,11 @@ fn build_from_recipe(
                     warn_user(py, &newen_run::precalclam_longrange_warning(*nsnb, *ntwg))
                 })?
             },
+            newen_run::PrepareNote::NoseHooverVariablesMissing => {
+                if let Some(w) = newen_run::nose_hoover_missing_warning(&recipe) {
+                    Python::with_gil(|py| warn_user(py, &w))?
+                }
+            },
             _ => {},
         }
     }
@@ -283,7 +295,8 @@ fn build_from_recipe(
     let n_atoms = topo.num_atoms();
     let dt = recipe.control.dt;
 
-    let mut sim_state = SimulationState::new(dt, recipe.control.steps);
+    let mut sim_state =
+        SimulationState::new(dt, recipe.control.steps).with_start_time(recipe.control.t0);
     start(&mut md_sequence, &topo, &mut conf, &sim_state).map_err(run_err)?;
     if let Some(lambda) = advance_lambda(&recipe, &mut topo) {
         Python::with_gil(|py| warn_lambda(py, Some(sim_state.step), lambda))?;
@@ -904,14 +917,14 @@ impl PySimulation {
     ///
     /// The energies are those of the step just taken, evaluated at the positions that step
     /// started from, so the row is stamped with that step's time: `sim_state` has already
-    /// advanced past it. gromosXX's `.tre` stamps step 0 with t = 0 the same way.
+    /// advanced past it. gromosXX's `.tre` stamps step 0 with t = T the same way.
     fn energy_row(&self) -> Vec<f64> {
         let state = self.configuration.old();
         let volume = state.box_config.volume();
         let pressure = state.pressure();
         let frame = newen_io::energy::EnergyFrame::from_energy(
             &state.energies,
-            (self.sim_state.step - 1) as f64 * self.dt,
+            self.sim_state.time_of(self.sim_state.step - 1),
             0.0,
             volume,
             pressure,

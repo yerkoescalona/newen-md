@@ -33,19 +33,26 @@ mod shake_algorithm;
 mod steepest_descent;
 mod temperature;
 
-pub use berendsen_barostat::{BerendsenBarostat, BerendsenBarostatParams};
-pub use berendsen_thermostat::{BerendsenThermostat, BerendsenThermostatParams};
+pub use berendsen_barostat::{
+    berendsen_barostat_scale, BerendsenBarostat, BerendsenBarostatParams,
+};
+pub use berendsen_thermostat::{berendsen_scale, BerendsenThermostat, BerendsenThermostatParams};
 pub use energy::EnergyCalculation;
 pub use forcefield::Forcefield;
 pub use lattice_shift::LatticeShift;
-pub use leap_frog::{LeapFrogPosition, LeapFrogVelocity};
+pub use leap_frog::{leap_frog_position, leap_frog_velocity, LeapFrogPosition, LeapFrogVelocity};
 pub use lincs_algorithm::LincsAlgorithm;
-pub use multibath::{in_bath, BathRange};
-pub use nosehoover_thermostat::{NoseHooverThermostat, NoseHooverThermostatParams};
-pub use pressure_calculation::{PressureCalculation, VirialType};
+pub use multibath::{in_bath, BathRange, ZERO_TEMPERATURE};
+pub use nosehoover_thermostat::{
+    nose_hoover_scale, restored_zeta, NoseHooverThermostat, NoseHooverThermostatParams,
+};
+pub use pressure_calculation::{pressure_tensor, scalar_pressure, PressureCalculation, VirialType};
 pub use remove_com_motion::RemoveCOMMotion;
 pub use rottrans::RottransConstraints;
 pub use settle_algorithm::SettleAlgorithm;
 pub use shake_algorithm::ShakeAlgorithm;
 pub use steepest_descent::SteepestDescentAlgorithm;
-pub use temperature::TemperatureCalculation;
+pub use temperature::{
+    group_kinetic_energy, kinetic_energy, kinetic_temperature, GroupKineticEnergy,
+    TemperatureCalculation,
+};

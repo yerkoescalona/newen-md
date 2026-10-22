@@ -189,7 +189,7 @@ def _recipe_for(system_dir):
 
 def _apply_recipe_overrides(recipe, system_dir):
     """The `[recipe_overrides]` of input.toml (dotted keys, e.g.
-    `"perturbation.atom_pair_kernel"`): recipe fields no `.imd` block carries, what the Rust
+    `"execution.parallel"`): recipe fields no `.imd` block carries, what the Rust
     runner passes as `md @recipe_set key=value`. Only that table is parsed: not every
     input.toml is valid TOML as a whole."""
     section = re.search(
@@ -244,15 +244,7 @@ AEDS_SYSTEMS = [
     "aladip_vacuum_aeds_below",
     "aladip_vacuum_aeds_inside",
     "aladip_vacuum_aeds_above",
-    "aladip_vacuum_aeds_f2",
-    "aladip_vacuum_aeds_f4",
-    "aladip_vacuum_aeds_f5",
-    "aladip_vacuum_aeds_f6",
-    "aladip_vacuum_aeds_sigma0",
-    "aladip_vacuum_aeds_cont1",
-    "aladip_vacuum_aeds_cont2",
-    "aladip_vacuum_aeds_f6_ovf",
-    # the same against gromosXX with D16, D25 and D32 patched (patches/): newen's defaults
+    # the searches against gromosXX with D16, D25 and D32 patched (patches/)
     "aladip_vacuum_aeds_f2_fixed",
     "aladip_vacuum_aeds_f4_fixed",
     "aladip_vacuum_aeds_f5_fixed",
@@ -273,7 +265,10 @@ REFERENCE_SYSTEMS = [
     "water_single_genvel",
     "benzene_vacuum",
     "nacl_pair_box",
+    "nacl_pair_box_ewald",
+    "nacl_pair_box_p3m_fixed",
     "butane_vacuum",
+    "butane_vacuum_ntbdn1",
     "aladip_vacuum",
     # Level 2: Small solvated
     "water_3_box",
@@ -295,9 +290,16 @@ REFERENCE_SYSTEMS = [
     "water_216_nve_nobath",
     "water_216_box_com",
     "water_216_box_com_rot",
+    "water_216_box_ewald",
+    "water_216_box_ewald_epsls",
+    "water_216_box_p3m_fixed",
+    "water_216_box_p3m_gauss_fixed",
     "water_216_nvt",
     "water_216_nvt_nosehoover",
     "water_216_nvt_nhc_chain",
+    # Nosé–Hoover continued from a first half (NHCVARIABLES, NTINHT 0) against the D41 patch
+    "water_216_nvt_nosehoover_cont_fixed",
+    "water_216_nvt_nhc_cont_fixed",
     "water_216_npt",
     # Level 4: Full system
     "aladip_solvated",
@@ -306,6 +308,7 @@ REFERENCE_SYSTEMS = [
     "nacl_1water_distres",
     # Steepest-descent energy minimization
     "aladip_vacuum_em",
+    "aladip_vacuum_em_ntw5",
     "aladip_vacuum_em_shake",
     "aladip_solvated_em_noshake",
     "aladip_solvated_em_shake",
@@ -344,6 +347,12 @@ REFERENCE_SYSTEMS = [
     # Barostat with SHAKE (constraint virial) and ROTTRANS degrees of freedom (1.8)
     "aladip_solvated_npt_shake",
     "aladip_multibath_rottrans",
+    # Two Nose-Hoover baths, plain and chain, with different TEMP0 and TAU
+    "aladip_multibath_nosehoover",
+    "aladip_multibath_nhc",
+    # NDFMIN over two baths with integer degrees of freedom, and half-integer ones (D40 patched)
+    "aladip_vacuum_multibath_ndfmin3",
+    "aladip_vacuum_multibath_ndfmin3_half_fixed",
     # Extended TI (PRECALCLAM) and the reaction-field constant from RCRF / EPSRF = 0 (1.8)
     "ch4_water_fep_precalc",
     "meoh_water_fep_precalc",
@@ -351,7 +360,6 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_lambdas_precalc",
     "aladip_vacuum_fep_shake_precalc",
     "aladip_vacuum_fep_distres_precalc",
-    "aladip_vacuum_fep_pairpert_precalc",
     "aladip_vacuum_fep_pairpert_precalc_fixed",
     "ch4_water_fep_precalc_twinrange",
     # A charge change (Na+ -> neutral dummy, dQ = -1) under reaction field: the perturbed RF self
@@ -366,6 +374,7 @@ REFERENCE_SYSTEMS = [
     "aladip_vacuum_fep_slowgrowth",
     "aladip_vacuum_fep_slowgrowth_shake",
     "aladip_vacuum_fep_slowgrowth_cont",
+    "aladip_vacuum_fep_slowgrowth_t10",
     "ch4_water_fep_slowgrowth",
     "aladip_vacuum_em_slowgrowth",
     "aladip_solvated_epsrf0",
@@ -589,7 +598,7 @@ def test_reference_aeds_search(system_name):
 def test_aeds_continuation_needs_the_aedssearch_block():
     """NTIAEDSS = 0 without an AEDSSEARCH block in the configuration is refused, as gromosXX
     does."""
-    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2"
+    system_dir = REF_DIR / "aladip_vacuum_aeds_cont2_fixed"
     inputs = _parse_input_toml(system_dir)
     system = System.from_files(
         str((system_dir / inputs["topology"]).resolve()),
@@ -1040,6 +1049,18 @@ def test_run_matches_step_loop():
     manual = np.array(manual)
 
     assert np.allclose(frames[:, energy_cols], manual)
+
+
+def test_start_time_stamps_every_row():
+    """STEP T = 10 ps: `Simulation.time` and the energy rows carry T + step*DT, the times of
+    gromosXX's `.tre` (`md.cc:241`)."""
+    system_dir = REF_DIR / "aladip_vacuum_fep_slowgrowth_t10"
+    lines = (system_dir / "expected" / "energies.tre").read_text().splitlines()
+    expected = [float(lines[i + 1].split()[1]) for i, x in enumerate(lines) if x == "TIMESTEP"]
+    sim = _create_simulation(system_dir)
+    assert sim.time == expected[1]
+    frames = sim.run(4, ene_freq=1)
+    assert np.allclose(frames[:, 0], expected[:5], rtol=0, atol=1e-12)
 
 
 def test_energy_timeseries():

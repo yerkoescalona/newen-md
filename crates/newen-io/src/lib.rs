@@ -42,8 +42,8 @@ pub mod trajectory_binary;
 // Re-export commonly used types
 pub use args::{run_main, Arguments, Program, Status};
 pub use coordinate::{
-    parse_aedssearch, parse_coordinates, parse_g96_labeled, read_coordinates, read_g96_labeled,
-    CoordinateData, G96Atom, LabeledCoordinateData,
+    parse_aedssearch, parse_coordinates, parse_g96_labeled, parse_nhcvariables, read_coordinates,
+    read_g96_labeled, CoordinateData, G96Atom, LabeledCoordinateData,
 };
 pub use dlg::{DlgWriter, LambdaDerivativeFrame};
 pub use energy::read_energy_trajectory_native;

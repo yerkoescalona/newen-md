@@ -5,6 +5,494 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.75] (2026-10-22)
+
+### Added (lattice-sum electrostatics, specification first)
+
+- **Ewald (NLRELE 2) and P3M (NLRELE 3) run.** The GROMOS lattice sum with its twelve
+  charge-shaping functions, the real-space, k-space, self, A and surface terms, ENERGY03 rows
+  13–19; P3M with the Hockney–Eastwood influence function, ik or finite-difference forces, Ã2 from
+  the squared-charge grid and the FACCUR quality check, on PhastFT (grids must be powers of two).
+  Lean: `NewenTheory/Interactions/{LatticeSum,P3M}.lean` (shapes with their derivatives, erfc by its
+  integral, forces as minus the gradient of every term, the symmetric k set, the partition of
+  unity of the assignment functions, the discrete Fourier transform and its inverse, the
+  finite-difference stencils exact on polynomials, the P3M energy real), 70 theorems; models and
+  bit-exact tests for every per-point kernel, a tolerance layer for the transform. References:
+  three Ewald (gromosXX with `@develop`), three P3M and one NPT and one triclinic `_fixed` on the
+  patched oracle, gromosXX's `aladip_ls` check for twelve shapes. 131 references, none ignored.
+- **Triclinic boxes** are read from GENBOX's angles (they were run as rectangular before) and
+  written back as gromosXX does; reference `nacl_water_box_triclinic`. Cutoffs reaching half the
+  smallest cell height are refused for every box type.
+
+### Fixed (corrected in newen, patched in the oracle: LS1–LS3, dossier ids pending)
+
+- gromosXX freezes the self and A terms of an NVT run at step 0 (wrong for P3M), stores the
+  surface virial without the factor every other lattice-sum virial has, and builds triclinic
+  k vectors from the transposed reciprocal matrix. Also corrected without a patch yet: the
+  finite-difference field's lattice-axis spacing assigned to Cartesian components, and the box
+  correction applied relative to the old box on a recompute step.
+
+### Removed
+
+- The unwired SPME code of newen-forces and its FFTW feature; `fftw` leaves the workspace.
+
+## [0.0.74] (2026-10-22)
+
+### Added
+
+- **The bonded terms checked against a Lean model, bit for bit.** Seven pure kernels in
+  newen-forces (`quartic_bond`, `harmonic_bond`, `cosine_angle`, `harmonic_angle`,
+  `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral`), called by the topology walks, which
+  keep the energy-group and virial booking. Lean: `NewenTheory/Interactions/Bonded.lean` proves
+  that the bond forces are minus the energy gradient, that the quartic bond's curvature at `b0`
+  is the harmonic constant `2·K·b0²`, that the dihedral's polynomials in `cos φ` are `cos(mφ)`
+  (`m ≤ 6`) with the matching derivatives, that the two dihedral forms agree for `δ ∈ {0, π}`,
+  that every angle and dihedral kernel's forces sum to zero and exert no net torque, and that the
+  cosine-harmonic angle's forces are minus the energy gradient on all three atoms;
+  `NewenSpec/Bonded.lean` transcribes each kernel once, polymorphic in the number type, proven
+  equal to the theory at ℝ and executed at `Float`. `spec/vectors/bonded.json` (1 482 bond,
+  1 000 angle and 710 dihedral rows, every row through every kernel of its kind) and
+  `crates/newen-forces/tests/bonded_spec.rs` require the compiled Rust to return the same bits in
+  dev, release and `target-cpu=generic` builds, `acos`, `cos` and `sin` included (both sides call
+  the platform libm); a finite-difference check compares every kernel's forces with its energy.
+- **Reference `butane_vacuum_ntbdn1`** (COVALENTFORM 0 0 1): the Chebyshev dihedral form
+  against the released gromosXX; no reference used NTBDN = 1 before. 122 references, none ignored.
+- **Pair kinds and group lookups verified against the theory** (`newen-logic::topology`:
+  `contains_sorted`, `pair_kind`, `group_of`, `check_last_atoms`, `energy_cell`, with Aeneas
+  proofs). A pair is excluded, 1-4, an owned PERTATOMPAIR/EDS pair, or normal, decided from one
+  atom's ascending partner lists; the energy group of an atom is the first NRE group whose last
+  atom reaches it, the same rule as the atom-to-bath mapping (`bathsOf_eq_groupOf`); the energy
+  matrix cell is injective. `Topology::is_excluded_or_14`, `assign_energy_groups` and
+  `EnergyGroups::cell` call them; `one_four_pairs` is now sorted like `exclusions`.
+
+- **Dynamics kernels checked against a Lean model, bit for bit**: `leap_frog_velocity`,
+  `leap_frog_position`, `kinetic_energy`, `group_kinetic_energy`, `kinetic_temperature`,
+  `pressure_tensor`, `scalar_pressure` and `berendsen_barostat_scale` are pure functions called by
+  the integrator, the temperature calculation, the pressure calculation, the barostat and the
+  temperatures `md` writes. Lean (`NewenTheory/Dynamics/{Integration,Pressure}.lean`): the leap-frog
+  map is time-reversible, exact for constant acceleration and has unit Jacobian; the half-step
+  kinetic-energy average equals the velocity-Verlet energy plus exactly `m·dt²·|a|²/8`; König's
+  theorem for the centre-of-mass split; the virial form of the pressure; the barostat's fixed point
+  and relaxation. `spec/vectors/dynamics.json` and `crates/newen-integrators/tests/dynamics_spec.rs`,
+  bit-exact in dev, release and generic builds (the barostat's `powf` included).
+
+- **Periodic-boundary kernels checked against a Lean model, bit for bit**: the nearest image and
+  put-into-box of the vacuum, rectangular and triclinic boxes and the two box constructors are pure
+  functions in newen-core. Lean (`NewenTheory/Space/Periodicity.lean`): every image is a lattice
+  translate, lies in the cell and is idempotent; the rectangular image is the shortest one; the
+  triclinic image, gromosXX's loop for loop, is not always the shortest (a skewed counter-example
+  is proven). `rint` is bound as the C function on both sides. `spec/vectors/periodicity.json` and
+  `crates/newen-core/tests/periodicity_spec.rs`.
+
+- **Run schedule and empty baths proven against the theory** (`newen-logic::schedule::{output,com}`,
+  `thermo::bath::empty_baths`, Aeneas): which steps write which frames (`due`, `frames_in`), the
+  frames a converged minimisation writes (`minimisation_stop`: newen's end-of-step writer plus the
+  stop frames equals gromosXX's top-of-loop writer plus its final branch, proven), the final
+  configuration's step, the centre-of-mass removal rule, and which baths have no degrees of freedom.
+  `md`, `RemoveCOMMotion` and `PrecalcLambdas` call them.
+- **Two refusals and one decoupling, as gromosXX**: NTWV ≠ 0 under ENERGYMIN is refused
+  ("WRITETRAJ: NTWV has to be 0 for energy minimization", `check_parameter.cc:62-65`); an NDFMIN
+  that removes every degree of freedom is refused instead of producing NaN; a bath with no degrees
+  of freedom before the NDFMIN spread is decoupled with a warning (`topology.cc:1404-1411`).
+
+- **Soft-core and perturbed kernels checked against a Lean model, bit for bit**: seven nonbonded
+  (the perturbed LJ + reaction-field pair, the λ tables, the soft reaction field, the excluded and
+  self corrections and the two `_ext` kernels) and six perturbed bonded kernels (quartic bond,
+  angle, improper with its ζ wrap, Chebyshev dihedral, the soft bonded term) are pure functions.
+  Lean (`NewenTheory/Interactions/{SoftCore,PerturbedBonded}.lean`): **the kernel's dV/dλ is the
+  derivative of its V(λ)** for the LJ, reaction-field, excluded and self terms and for every
+  perturbed bonded term, with the chain rule for individual λ; the end states are the plain
+  kernels; the soft-core force is minus the gradient. `spec/vectors/{softcore,perturbed_bonded}.json`,
+  `crates/newen-forces/tests/{softcore_spec,perturbed_bonded_spec}.rs`, with finite-difference
+  checks of dV/dλ and of the forces. Every FEP reference byte-identical before and after.
+
+### Changed
+
+- The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order
+  instead of `powi` (whose expansion rounds differently for `m ≥ 3`); `cos θ0` of the
+  cosine-harmonic angle is computed once per angle type instead of once per term. Last-bit
+  differences only; every reference unchanged.
+- The exclusion lookup scans linearly after the `last < j` early-out, as gromosXX does, instead of
+  binary-searching.
+
+### Fixed (review of the verified kernels)
+
+- The perturbed pair kernel no longer zeroes an overlapping soft-core pair (gromosXX and the
+  PRECALCLAM kernel compute its finite energy); its soft-core length test is gromosXX's `C6 ≠ 0`.
+  The minimisation stop frame gets the truncated-octahedron rotation. The one-bath thermostat path
+  counts through the same kernel as several baths.
+- Refused, as gromosXX or because newen does not implement it: `LJEXCEPTIONS` with NEX > 0 (it
+  was silently ignored, in the analysis programs too), roto-translationally constrained solute
+  across bath pairs, duplicate DOFSET LAST, NTICOM outside 0..2, NTWSE ≠ 0, NLAM ≤ 0, RCRF ≤ 0
+  in a perturbed run.
+- Lean: the improper wrap is characterised (`wrapZeta`) and the improper bridges hold for every
+  ζ; the conducting-boundary limit for every κ; minus-gradient theorems for the soft-core excluded
+  term, the harmonic angle and the Chebyshev dihedral on atoms i and l; the Berendsen bridges state
+  their radicand hypothesis; the docs say exactly which gradients are proven and that the
+  finite-difference checks compare the Rust with itself.
+
+## [0.0.73] (2026-10-22)
+
+### Added
+
+- **The Lennard-Jones and reaction-field pair term checked against a Lean model, bit for bit**,
+  which closes the "floating-point kernels" item of the verification roadmap. Pure kernels
+  `lj_crf_pair` (the scalar pair term, `lj_crf_interaction` now a wrapper over `r²`),
+  `rf_excluded_pair`, `rf_self_term` and `CRFParameters::new`. Lean:
+  `NewenTheory/Interactions/LennardJones.lean` and `ReactionField.lean` prove that the kernels'
+  force is minus the energy gradient (`lj_force_is_minus_grad`, `crf_force_is_minus_grad`,
+  `rf_excluded_force_is_minus_grad`), the Lennard-Jones zero at σ and minimum
+  (`−C6²/(4·C12)` at `r⁶ = 2·C12/C6`), the reaction-field energy vanishing at the cutoff,
+  `ε_rf = ε` giving a shifted Coulomb, the excluded-pair term being the reaction-field energy minus
+  bare Coulomb, the self term half of it, and the conducting-boundary sentinel `C_RF = −1` being the
+  `ε_rf → ∞` limit (`crf_conducting_limit`); `NewenSpec/Nonbonded.lean` transcribes each kernel
+  once, polymorphic in the number type, proven equal to the theory at ℝ and executed at `Float`.
+  `spec/vectors/nonbonded.json` (600 reaction-field constant rows, 6 000 pair rows, 1 500
+  excluded-pair rows, 300 self-term rows) and `crates/newen-forces/tests/nonbonded_spec.rs`
+  require the compiled Rust to return the same bits, in dev, release and `target-cpu=generic`
+  builds; a unit test requires every lane of the 4-wide SIMD kernel to return the scalar kernel's
+  bits (its claim of lane-wise identity was never tested before). Moving one parenthesis in either
+  kernel fails the test.
+- **Several temperature baths under Nosé–Hoover coupling.** Plan validation refused a MULTIBATH
+  block with Nosé–Hoover coupling and more than one bath; now every bath keeps its own ζ chain as
+  gromosXX does (`NoseHooverThermostat::new`). References `aladip_multibath_nosehoover` and
+  `aladip_multibath_nhc` (two baths at 300 K / 0.1 ps and 350 K / 0.2 ps, D41-patched oracle).
+  121 references, none ignored.
+
+### Fixed
+
+- The test-only legacy builder passed RCUTL where RCRF belongs when building the reaction-field
+  constants; every compared input had the two equal.
+
+### Documented
+
+- Thermostat edge inputs where newen and gromosXX differ (`.claude/porting.md`): gromosXX couples
+  whenever `tau != -1`, newen for `tau >= 0`; gromosXX divides by a zero dof, newen falls back to
+  `T₀`. Both are in the Lean models; no reference reaches either.
+
+## [0.0.72] (2026-10-22)
+
+### Added
+
+- **Thermostat kernels checked against a Lean model, bit for bit** (the next item of the
+  verification roadmap: floating-point kernels). `berendsen_scale` and `nose_hoover_scale` are
+  pure functions in newen-integrators, called by the thermostats' `apply`. Lean:
+  `NewenTheory/Dynamics/Thermostats.lean` states what they mean over ℝ (`berendsen_relax`: the
+  temperature moves the fraction `dt/τ` towards `T₀`; `berendsen_between`: no overshoot for
+  `dt ≤ τ`; `berendsen_fixed`, `berendsen_contraction`; `nh_feedback`: the Nosé–Hoover friction
+  grows exactly when the bath is hotter than `T₀`; `nh_fixed`, `nh_scale_lt_one_iff`);
+  `NewenSpec/Thermostat.lean` transcribes each kernel once, polymorphic in the number type, proven
+  equal to the meaning at ℝ and executed at `Float` (the LeanLJ pattern). `lake exe spec-vectors`
+  writes `spec/vectors/thermostat.json` (6 840 Berendsen and 3 036 Nosé–Hoover rows, chains of
+  1–5 links iterated over 1–8 steps, inputs and outputs as 64-bit patterns), and
+  `crates/newen-integrators/tests/thermostat_spec.rs` requires the compiled Rust to return the
+  same bits on every row, the Cedar approach; `k_B` and the zero-temperature threshold enter the
+  Lean model as bit patterns the test checks against the Rust constants. Reordering one
+  multiplication in either kernel fails the test.
+
+### Changed
+
+- One zero-temperature threshold, `ZERO_TEMPERATURE = 1e-12` (gromosXX `math::epsilon`), in both
+  thermostats; Berendsen used `1e-10` and Nosé–Hoover `f64::EPSILON`. Every gromosXX reference
+  unchanged.
+
+## [0.0.71] (2026-10-22)
+
+### Added
+
+- **Per-bath degrees of freedom and the atom-to-bath mapping, verified against the theory**
+  (`newen-logic::thermo::bath`: `baths_of`, `groups_starting_in`, `bath_half_dof`,
+  `bath_half_dofs`, `ndfmin_spread`; the next item of the roadmap in
+  `docs/src/verification/index.md`). The counts are in half degrees of freedom, so a constraint
+  shared between two baths (½ to each) stays an integer, and NDFMIN is spread as an exact rational
+  (numerators over one denominator). Lean: the meaning atom by atom (`BathSystem`, `comHalf`,
+  `irHalf`), the partition theorem (the baths share out `3N − C`), the single-bath corollary tied
+  to `total_dof`, and that the spread removes exactly NDFMIN; the range-by-range model equals the
+  meaning whenever the DOFSET ranges cover the atoms (`Covers`); Aeneas proofs that the Rust
+  computes the model; 1722 Lean vectors and an atom-by-atom brute force in `tests/bath_spec.rs`.
+  `newen-run::bath_dofs` and newen-integrators' `in_bath` call these; `BathRange` is now
+  `newen_logic::thermo::bath::DofRange`.
+- **Reference `aladip_vacuum_multibath_ndfmin3_half_fixed`** (D40): NDFMIN 3 over two baths with
+  half-integer degrees of freedom (14.5 and 10.5), expected output from gromosXX 247c95c4 +
+  `patches/D40_ndfmin_total.patch` (the NDFMIN total summed in a `double`, no spread when it is
+  not positive): 12.76 and 9.24 instead of the released binary's 12.6875 and 9.1875. The integer
+  case stays `aladip_vacuum_multibath_ndfmin3` on the released binary. 119 references, none
+  ignored.
+
+### Changed
+
+- Solvent constraints take ½ from the IR bath of each end atom, as gromosXX does
+  (`topology.cc:1154-1155`); before, all of a molecule's constraints came off its first atom's
+  bath. Identical unless a solvent molecule straddles two baths.
+- A bath's `dof` is `numerator / denominator` of the exact spread instead of
+  `dof − NDFMIN·dof/total`: last-bit differences at most, every reference unchanged.
+- `newen-logic` has an optional `serde` feature (off in the build Charon translates) so the run
+  plan's JSON carries `BathRange` as before.
+
+## [0.0.70] (2026-10-18)
+
+### Changed: one behaviour per feature
+
+newen no longer carries options that reproduce known gromosXX defects. A defect is corrected in
+newen and gated on gromosXX with that defect patched (`tests/gromosXX_references/patches/`); the
+released-binary reproducer lives in gromos-divergences. The rule is in `.claude/porting.md`
+("One behaviour per feature") and is prime directive 5 in `.claude/overview.md`. Each switch
+doubled the behaviours the code could have, and agents copied the pattern from one defect to the
+next.
+
+### Removed (breaking)
+
+- **`ensemble.thermostat.nh_restart`** (D41). Every Nosé–Hoover run writes `NHCVARIABLES`, plain
+  NH included, and NTINHT = 0 restores every link. `NhRestart` and `check_nh_restart` are gone.
+- **`perturbation.atom_pair_kernel`** (D1). `AtomPairKernel` and the shifted kernel are gone;
+  PERTATOMPAIR pairs with a perturbed atom always use the intended kernel.
+- **`aeds.energy_columns`** (D16), **`aeds.prevalence`** (D25), **`aeds.target_state`** (D32).
+  `AedsColumns`, `AedsPrevalence` and `AedsTarget` are gone: A-EDS writes the parameters the
+  frame's V_R* used, sums FORMS 5/6 prevalences as a log-sum-exp and takes the E_min target
+  among the states visited more than once.
+- A saved recipe or plan that still sets one of these keys is rejected (unknown field). Recipes
+  that never set them are unchanged.
+- **`@parity gromospp`** in `bar` (D4), `ext_ti_ana` (D5) and `ext_ti_merge` (D8), and Python's
+  `parity=` on `newen.analysis.bar`, `ext_ti_ana` and `ext_ti_merge`. The programs always print
+  the corrected values (their default output is unchanged), and `@parity` is now refused as an
+  unknown argument. Python: the keys `error_corrected`, `error_total_corrected` (bar) and
+  `integral_error_corrected` (ext_ti_merge) are gone; `error`, `error_total` and `integral_error`
+  hold the corrected values, as they already did by default. Rust: `Parity` is gone,
+  `BarStep.error` is `Option<f64>`, `ext_ti_merge::merge` and `integrate_error` lose their mode
+  arguments.
+
+### References
+
+- Removed the eleven released-binary references that pinned a defect under a switch:
+  `water_216_nvt_nosehoover_cont`, `water_216_nvt_nhc_cont`, `aladip_vacuum_fep_pairpert_precalc`
+  and `aladip_vacuum_aeds_{f2,f4,f5,f6,f6_ovf,sigma0,cont1,cont2}`. Each has a `_fixed` twin
+  from the patched binary, which stays; the tests that read their `.in` files now read the twin's.
+- `water_216_nvt_nosehoover` starts fresh (NTINHT 1, it was 0 with no block to read) and is
+  regenerated with the D41-patched binary: energies and trajectory byte-identical, `final.conf`
+  gains plain NH's `NHCVARIABLES`.
+- 118 references, all passing.
+
+### Tests
+
+- Removed the tests that only exercised a gromosXX mode (the shifted pair kernel, the
+  gromosXX NH restart, six released A-EDS replays, the two recipe-path tests of the switches);
+  the others keep the intended case. The D15 refusal (zero-variance E_min target) is now pinned
+  by its unit test only: the `md` input that reached it needed D32's never-visited target.
+- `RunRecipe::set` keeps a test of its own (`set_takes_a_dotted_path`); `[recipe_overrides]`
+  and `md @recipe_set` stay, with no reference using them now.
+- gromos++: the A1, A3 and A4 `ext_ti_ana` cases, which D4/D5/D8 do not touch, still run against
+  released 9cd9f6b3. The released-output tests for A2 and for the `bar`/`ext_ti_merge` chain are
+  removed with their data (`ext_ti_ana/A2/`, `chain/bar.stdout`, `chain/merge.stdout`); the
+  patched `A2_fixed` and `chain_fixed` stay.
+
+## [0.0.69] (2026-10-18)
+
+### Fixed (GaMD)
+
+**GaMD reads gromosXX's GAMD block and runs gromosXX's algorithm.** A one-parameter toggle sweep
+found that newen read the `GAMD` block in a layout of its own (`SEARCH FORM THRESH` /
+`SIGMA0 ×2` / `K, E ×4`, FORM 1 = dihedral, 3 = dual): on a real gromosXX input no line matched,
+the run went on with newen's defaults, and no boost was applied. Its boost, applied after the
+step, was not gromosXX's either.
+
+### Fixed
+
+- **The GAMD block** (`GamdBlock::from_lines`, `newen-io/src/input/gamd_block.rs`) is read as
+  gromosXX's `read_GAMD` reads it (`in_parameter.cc:4148-4320`): one token stream, GAMD,
+  SEARCH FORM THRESH NTIGAMDS, AGROUPS, IGROUPS, DIHSTD TOTSTD, then IGROUPS values each of ED,
+  ET, KD, KT, then EQSTEPS and GWINDOW, every parameter with its range and gromosXX's message
+  (`GAMD block: FORM parameter is 4, should be:  one of: 1,2,3`, "reached END before",
+  "Left-over parameters"). FORM 1 = dual boost, 2 = potential-energy boost, 3 = dihedral boost;
+  SEARCH 0 = fixed parameters, 1 = cMD search, 2 = GaMD search; THRESH 1 = lower, 2 = upper bound.
+  A malformed block now stops `md` (it was a warning, and the run went on without GaMD). `md`
+  reads it from the parsed `.imd` (`raw_blocks`), not by re-reading the file. `render` writes
+  gromosXX's layout and parses back unchanged, also through `write_imd`.
+- **The `@gamd` file** (`GamdGroups::parse`): GAMDATOMS and GAMDGROUPS with gromosXX's checks and
+  messages (`in_gamd.cc:76-238`); a repeated GAMDGROUPS pair keeps its first entry, as
+  `std::map::insert` does.
+- **The algorithm** (`newen_integrators::gamd::Gamd`, run at the end of `Forcefield::apply`
+  through `Forcefield::gamd`, gromosXX's place right after the force field,
+  `create_md_sequence.cc:143-146`): gromosXX's `GAMD::init` and `GAMD::apply` (`gamd.cc`). V_D is
+  the proper and improper dihedral energy, V_T the bond, angle and nonbonded energy; the
+  statistics (Welford over `stepsdone`, EQSTEPS, GWINDOW resets) for SEARCH 1/2, E and k from
+  them for SEARCH 2 and for KD = KT = 0 at start, then except in a cMD search the boost
+  ΔV = k(V − E)²/2 for V < E with F += k(V − E)·F_term and the same scaling of the term's virial
+  (the nonbonded part only with a virial, `nonbonded_set.cc:431-441`). ΔV is booked in the
+  special energy, ENER[51] and the `# gamd` rows. The old after-step boost in `md` (and its
+  `gamd_stats.dat` / `gamd_boost.dat`) is gone.
+- **The `# gamd` section** of the `.tre`: IGROUPS + 1 rows of ED, ET, KD, KT, ΔV per interaction
+  group (`out_configuration.cc:3202-3218`) whenever a GAMD block is read, GAMD on or off
+  (`configuration.cc:422-444`); it was always one zero row. `write_energyred_body` takes the
+  rows (`EnergyWriter::set_gamd_rows`) and prints their ΔV sum as ENER[51].
+- **GAMDSTAT**: a search (SEARCH 1/2) appends the statistics to the final configuration
+  (`out_configuration.cc:619-621, 4013-4034`, `%15.9f`), and with NTIGAMDS = 0 starts from the
+  input configuration's block (`in_configuration.cc:1458-1507`): "no GAMDSTAT block in
+  configuration." without one, as gromosXX.
+
+### Reproduced gromosXX defects (flagged, not corrected)
+
+- **FORM 1 reports the dihedral ΔV only.** `GAMD::apply` assigns `gamd_DV` for the potential
+  boost and then again for the dihedral boost (`gamd.cc:364, 381`): when both act, both scale the
+  forces but ΔV (special energy, ENER[51], `# gamd`) is the dihedral one, so the reported energy
+  is not the one whose gradient the forces are. Pinned by `aladip_gamd_dual`.
+- **The reaction-field excluded solute pairs leave the accelerated group.**
+  `RF_excluded_interaction_innerloop` declares `gamdi = 0` and sets a shadowing `gamdi` inside the
+  `if (gamd)` of the self term (`nonbonded_innerloop.cc:1694, 1711`), so every excluded pair is
+  looked up with the key (0, group of j) (`:1721-1724`): with GAMDGROUPS not listing (0, g) its
+  energy and forces go to the never-boosted group 0, while the self term stays in g. On
+  `aladip_gamd_dual` this moves 50.19 kJ/mol out of V_T (−85.78 instead of −35.59 kJ/mol), a
+  2.41× larger potential boost. newen books those pairs to the group gromosXX does
+  (`Gamd::excluded_group`, `GamdGroups::excluded_pair_group`).
+
+### Changed
+
+- **Refused instead of run wrongly** (`md`, `gamd_setup`): GAMD = 1 with a GAMDATOMS/GAMDGROUPS
+  assignment that books the interactions to more than one interaction group (the nonbonded
+  pair terms are not split by group), with a perturbation (NTG = 1), with NLRELE ≠ 1, or with
+  QM/ML terms; gromosXX runs them. An `@gamd` atom range past the last atom is refused
+  (gromosXX's `iatom > num_atoms` check after the 0-based shift lets FINATOM = N + 1 through and
+  writes past the array, `in_gamd.cc:138`).
+
+### Added
+
+- References (native gromosXX): `aladip_gamd` is no longer ignored (FORM 3, the dihedral boost);
+  `aladip_gamd_dual` (FORM 1, ET 0: both boosts act) and `aladip_gamd_cmd_search` (SEARCH 1,
+  NTIGAMDS 1: statistics, no boost, `GAMDSTAT`). The comparator checks the final
+  configuration's GAMDSTAT block (to 1e-8). 125 of 125 pass.
+
+
+**Nosé–Hoover state carried over to a continued run** (D41). newen wrote and read no
+NHCVARIABLES block, so every Nosé–Hoover run started from ζ = 0; gromosXX keeps a chain's first
+link only and nothing of plain Nosé–Hoover. newen now restores every variable by default, and a
+recipe switch reproduces gromosXX.
+
+### Fixed
+
+- **newen lost all Nosé–Hoover state between runs.** The final configuration now ends with an
+  NHCVARIABLES block for every Nosé–Hoover run, plain (ALGORITHM 1) included: the ζ chain of each
+  bath on one line, gromosXX's format (`_print_nose_hoover_chain_variables`,
+  `out_configuration.cc:3426-3443`, `%15.9f` without separator; `G96Writer::write_nhcvariables`).
+  With NTINHT = 0 a run restores it (`parse_nhcvariables` → `Configuration::nose_hoover` →
+  `NoseHooverThermostat::init`); NTINHT = 1 starts from zero, and a block it does not read is
+  reported (`PrepareNote::NoseHooverVariablesIgnored`, gromosXX's warning). NTINHT was parsed
+  and stored but never used. NTINHT = 0 without a block starts from zero (gromosXX refuses
+  that for a chain, `in_configuration.cc:1171-1175`) with a warning under the intended restart
+  (`PrepareNote::NoseHooverVariablesMissing`; `md` logs it, Python raises a UserWarning; the
+  education `with_bath` Nosé–Hoover chain now starts with NTINHT 1); a block whose line or
+  value count does not match the baths and the chain is refused. The Python
+  `Configuration`/`System`/`Simulation` carry the block from the file to the run.
+
+### Added
+
+- **`ensemble.thermostat.nh_restart`** (`"intended"` by default; no `.imd` token, set by
+  `md @recipe_set ensemble.thermostat.nh_restart=gromosxx` or `Recipe.update`):
+  `"gromosxx"` reproduces gromosXX 247c95c4's restart (below). The plan's `Thermostat` carries
+  it with `read_variables` (NTINHT = 0); `NhRestart`, `restored_zeta` in newen-integrators.
+- References: `water_216_nvt_nosehoover_cont` and `water_216_nvt_nhc_cont`, steps 100-199 of a
+  100 + 100 run (NTINHT 0, NTISHI 0, T = 0.2 ps) from the native first half's final
+  configuration (`gromos-divergences/sims/e6_nh_restart`), run with the switch: newen's output
+  equals gromosXX's to every printed digit (ENERGY03 and VOLUMEPRESSURE03 max relative
+  difference 0). `water_216_nvt_nosehoover_cont_fixed` and `water_216_nvt_nhc_cont_fixed`: the
+  same from the patched first half, against gromosXX with
+  `patches/D41_nh_restart.patch` (write and read for ALGORITHM ≥ 1, size the chain before
+  reading, NTINHT = 1 allowed for plain NH), with newen's default.
+- `newen-md/tests/nh_restart.rs`: with the default, 100 + 100 steps follow the 200-step run
+  frame by frame for plain NH and the 3-link chain at least as closely as weak coupling (no
+  thermostat state) does — what is left is the 9-decimal restart grown over 100 steps
+  (largest relative differences: ENERGY03 4.1·10⁻⁸, final positions 4.6·10⁻⁸, ζ 1.2·10⁻⁸; weak
+  coupling 4.3·10⁻⁸ and 1.1·10⁻⁷). The reference comparator compares the final NHCVARIABLES block
+  value by value (presence and count included).
+
+### Reproduced gromosXX defects
+
+- **Nosé–Hoover variables not carried over to a continued run** (A, D41), under
+  `nh_restart = "gromosxx"`: plain Nosé–Hoover neither writes nor reads NHCVARIABLES
+  (`out_configuration.cc:606`, `in_configuration.cc:1156`: `algorithm > 1`) and refuses NTINHT = 1
+  (`check_parameter.cc:92`), so a continued run restarts from ζ = 0 (frame 100 of the e6 run:
+  |ΔT| up to 67 K, |ΔE_tot| up to 1104 kJ/mol over the next 100 steps); a chain writes every link
+  but restores only the first (`in_configuration.cc:3444` reads `zeta.size()` = 1 value before
+  `nosehoover_thermostat.cc:69` sizes the chain), a chain asked to read without a block is
+  refused. Pinned by the two `_cont` references. With the default, the continued run follows the
+  single run: |ΔE_tot| ≤ 2.3·10⁻⁵ (plain NH) and 8·10⁻⁶ kJ/mol (chain) against the native
+  200-step run, as gromosXX patched with D41 does.
+
+### Changed
+
+- `water_216_nvt_nosehoover` runs with `nh_restart = "gromosxx"`: gromosXX's final configuration
+  has no NHCVARIABLES block for plain Nosé–Hoover. Its run is the same under both settings.
+
+### Verified
+
+- References: 126 passed, 1 ignored (`aladip_gamd`); the twelve earlier `_fixed` references
+  regenerated with the rebuilt patched binary are byte-identical. `nh_restart` 3 passed;
+  integrators, io, run: 349 tests green (new: restart modes, `init`, NHCVARIABLES write/read, the
+  NTINHT refusal through both build paths, the missing-variables note); clippy no new
+  warnings; `cargo fmt --check` clean; `pytest` 1383 passed / 93 skipped (new: the four NH
+  continuation references).
+
+## [0.0.68] (2026-10-18)
+
+**Small newen defects a one-parameter toggle sweep against gromosXX found** (newen's own, not
+gromosXX's, so corrected without a reproduce switch): the start time, the output schedule of a
+converged minimisation, the final configuration's TIMESTEP block, and two inputs gromosXX refuses
+that newen ran.
+
+### Fixed
+
+- **STEP T was parsed and never used**: every written time was step·DT. `.tre`, `.trg`, `.trf`,
+  `.trc`, `.trv` and the final configuration now carry T + step·DT, as gromosXX
+  (`md.cc:241`, `read_input.cc:328`), and so do `Simulation.time` and the time column of
+  `Simulation.run`. `SimulationState` carries `t0` (`with_start_time`, `time_of`). Only time
+  columns move: nothing in the engine depends on t.
+- **Forces were written on the NTWX schedule**, not NTWF (`out_configuration.cc:349`). Every
+  reference has NTWF = NTWX, so no reference output moves.
+- **A converged minimisation's output schedule**: gromosXX writes the forces of the step before
+  the stopping one once more, like the energies (`out_configuration.cc:624-630`); `md` left the
+  force frame out (one `.trf` frame short). The repeated force, energy and dH/dλ frames follow
+  the NTWF/NTWE/NTWG schedule of that step, and the stopping step's positions the NTWX schedule;
+  `md` wrote the positions and energies whatever the schedule.
+- **The final configuration** has gromosXX's TIMESTEP block after the title (step counter and
+  time after the loop: NSTLIM, or the step a minimisation stopped at; `_print_timestep`,
+  `out_configuration.cc:519, 879-888`) and the title layout of the other files (run title, then
+  `final configuration`); it said "Final configuration after N−1 steps". The coordinate reader
+  skips the block, so a continuation from it runs as before.
+
+### Changed
+
+- **Refused, as gromosXX refuses** (`check_start_time`, `check_pairlist`,
+  `check_dihedral_phases` in `plan.rs`, run by `build_plan` and `build_sequence_from_plan`):
+  - PAIRLIST ALGORITHM 1 (grid) with NTB = −1: "truncated octahedral PBC does not work with
+    grid-based pairlist algorithm" (gromosXX FeatureChecker: `pbc_t` is never unlocked against
+    `pairlist_grid`, `check_parameter.cc:383, 416`; message `util/feature.cc:93`). newen ran it
+    with its standard pairlist. The grid-cell pairlist stays allowed (`check_parameter.cc:3814`).
+  - COVALENTFORM NTBDN = 1 with the dihedral term on and a TORSDIHEDRALTYPE phase other than 0°
+    or 180°: "TORSDIHEDRALTYPE block: dihedral neither 0 nor 180, this is not allowed if NTBDN=1"
+    (`in_topology.cc:960-962`, `if (pdl != 0 && pdl != 180)` over every type). newen ran the
+    limited-phase form on it.
+  - STEP T outside gromosXX's range (">=0" or −1, `in_parameter.cc:298`), and T = −1 (the start
+    time from the configuration's TIMESTEP block, `in_configuration.cc:1354-1363`), which newen
+    does not read.
+- **Reference comparator** (`test_gromosXX_references.rs`): it compared the TIMESTEP time of the
+  `.trg` frames only, and force frames pairwise without their count. It now compares the step and
+  time of every TIMESTEP block of the `.tre`, `.trf`, `.trc`, `.trg` and final configuration
+  against gromosXX's (time to 1e-9), and the FREEFORCERED/CONSFORCERED frame counts.
+- References (native gromosXX): `aladip_vacuum_fep_slowgrowth_t10` (`_slowgrowth` from T = 10 ps;
+  gromosXX's output differs from the T = 0 run in the times and the title only) and
+  `aladip_vacuum_em_ntw5` (`aladip_vacuum_em` with NTWX = NTWF = NTWE = 5, converging at step 6:
+  no position frame for step 6, the repeated force and energy frame of step 5).
+
+### Verified
+
+- References: 122 passed, 1 ignored (`aladip_gamd`). Every other reference's output is
+  byte-identical to the previous binary's except the final configuration (its title and the
+  added TIMESTEP block) and, for the two converged minimisations `aladip_vacuum_em` and
+  `aladip_vacuum_em_slowgrowth`, the `.trf` (the repeated frame).
+- A ten-step run continued from its own final configuration ends where a twenty-step run does
+  (to the printed 9 decimals); `aeds_runs`, `fep_null_perturbation`, `test_pairlist_margin` pass.
+- core, io, run: 373 tests green (new: the three refusals through both build paths, the start
+  time); clippy no new warnings; `cargo fmt --check` clean; `pytest` 1339 passed / 89 skipped
+  (new: `test_start_time_stamps_every_row`).
+
 ## [0.0.67] (2026-10-18)
 
 **gromos-rs is now newen.** *Newen* is Mapudungun for force. The project reimplements GROMOS

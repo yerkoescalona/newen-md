@@ -30,8 +30,8 @@ use newen_integrators::{
     algorithms::{
         BathRange, BerendsenBarostat, BerendsenBarostatParams, BerendsenThermostat,
         BerendsenThermostatParams, EnergyCalculation, Forcefield, LatticeShift, LeapFrogPosition,
-        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, PressureCalculation,
-        RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
+        LeapFrogVelocity, LincsAlgorithm, NoseHooverThermostat, NoseHooverThermostatParams,
+        PressureCalculation, RemoveCOMMotion, RottransConstraints, SettleAlgorithm, ShakeAlgorithm,
         SteepestDescentAlgorithm, TemperatureCalculation, VirialType,
     },
     constraints::ShakeParameters,
@@ -51,6 +51,9 @@ use crate::recipe::{
     ConstraintAlgorithm, Diagnostics, RunRecipe, TermSpec, ThermostatAlgorithm, VirialKind,
 };
 use crate::{total_dof, ConstraintSelection, Prepared, RunError, RunInputs, RunOptions};
+use newen_forces::nonbonded::ewald::{EwaldSum, LatticeSum, LatticeSumParams};
+use newen_forces::nonbonded::lattice_sum::ChargeShape;
+use newen_forces::nonbonded::p3m::{P3m, P3mParams};
 
 /// What the thermostat was built as — for the binary's report and the Python getters.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,11 +116,12 @@ pub struct Built {
     pub summary: BuildSummary,
 }
 
-/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box,
+/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box or a
+/// GENBOX box with an angle other than 90°,
 /// vacuum for an all-zero box, rectangular otherwise.
 pub fn periodicity_of(prepared: &Prepared) -> Periodicity {
     let b = prepared.box_dims;
-    if let Some(triclinic_box) = prepared.truncoct_box {
+    if let Some(triclinic_box) = prepared.truncoct_box.or(prepared.triclinic_box) {
         Periodicity::Triclinic(Triclinic::new(triclinic_box))
     } else if b.x == 0.0 && b.y == 0.0 && b.z == 0.0 {
         Periodicity::Vacuum(Vacuum)
@@ -268,6 +272,61 @@ fn instantiate_forcefield(
     forcefield.parallel_nonbonded = ff.parallel;
     forcefield.atoms_per_solvent = ff.atoms_per_solvent;
     forcefield.virial_type = virial_type(ff.virial);
+    if let Some(ls) = &ff.lattice_sum {
+        let shape = ChargeShape::from_nshape(ls.nshape).ok_or_else(|| {
+            RunError::Recipe(format!(
+                "NONBONDED block: NSHAPE parameter is {}, should be: >=-1 && <=10",
+                ls.nshape
+            ))
+        })?;
+        let nk = ls.nk.map(|n| n as i64);
+        let params = LatticeSumParams {
+            shape,
+            width: ls.ashape,
+            nk,
+            kcut: ls.kcut,
+            na2clc: ls.na2clc,
+            tola2: ls.tola2,
+            eps_ls: ls.epsls,
+            // gromosXX sets `eps0_i = four_pi_eps0_i * 4.0 * Pi` from the topology's
+            // PHYSICALCONSTANTS (`in_topology.cc:1405-1409`)
+            eps0_inv: ff.four_pi_eps_i * 4.0 * std::f64::consts::PI,
+            four_pi_eps_i: ff.four_pi_eps_i,
+        };
+        forcefield.lattice_sum = Some(match &ls.p3m {
+            None => LatticeSum::Ewald(Box::new(EwaldSum::new(params))),
+            Some(m) => {
+                let order = |name: &str, v: i32, range: std::ops::RangeInclusive<i32>| {
+                    if range.contains(&v) {
+                        Ok(v as u8)
+                    } else {
+                        Err(RunError::Recipe(format!(
+                            "NONBONDED block: {name} parameter is {v}, should be in {range:?}"
+                        )))
+                    }
+                };
+                let positive = m.nalias > 0 && m.nqeval >= 0 && m.faccur > 0.0;
+                if !positive || !m.grid.iter().all(|n| n.is_power_of_two()) {
+                    return Err(RunError::Recipe(format!(
+                        "NONBONDED P3M settings out of range (grid {:?} powers of two, NALIAS > \
+                         0, NQEVAL >= 0, FACCUR > 0): {m:?}",
+                        m.grid
+                    )));
+                }
+                LatticeSum::P3m(Box::new(P3m::new(
+                    params,
+                    P3mParams {
+                        grid: m.grid,
+                        order: order("NASORD", m.nasord, 1..=5)?,
+                        nfdord: order("NFDORD", m.nfdord, 0..=5)?,
+                        nalias: i64::from(m.nalias),
+                        nqeval: m.nqeval as usize,
+                        faccur: m.faccur,
+                    },
+                )))
+            },
+        });
+    }
 
     let mut position_restraints = 0;
     if let Some(plan) = &ff.position_restraints {
@@ -286,7 +345,6 @@ fn instantiate_forcefield(
         // λ, NLAM and the individual λ come with the topology (`prepare_system`)
         forcefield.global_alphlj = p.alpha_lj;
         forcefield.global_alphc = p.alpha_c;
-        forcefield.atom_pair_kernel = p.atom_pair_kernel;
     }
 
     Ok(ForcefieldBuilt {
@@ -468,9 +526,6 @@ pub fn instantiate(
                         bmax: a.bmax,
                         asteps: a.asteps,
                         bsteps: a.bsteps,
-                        columns: a.energy_columns,
-                        prevalence: a.prevalence,
-                        target: a.target_state,
                     };
                     seq.push(Box::new(Eds::accelerated(
                         params,
@@ -500,10 +555,11 @@ pub fn instantiate(
                 algorithm,
                 baths,
                 ranges,
+                read_variables,
             } => {
-                let first = baths
-                    .first()
-                    .ok_or_else(|| RunError::Recipe("thermostat without a bath".to_string()))?;
+                if baths.is_empty() {
+                    return Err(RunError::Recipe("thermostat without a bath".to_string()));
+                }
                 if ranges.last().map(|r| r.last_atom + 1) != Some(n_atoms)
                     || ranges
                         .iter()
@@ -527,25 +583,23 @@ pub fn instantiate(
                             .collect();
                         seq.push(Box::new(BerendsenThermostat::new(params, ranges.clone())))
                     },
-                    ThermostatAlgorithm::NoseHoover => {
-                        let mut alg = NoseHooverThermostat::new_single_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                        );
-                        alg.ranges.clone_from(ranges);
-                        seq.push(Box::new(alg))
-                    },
-                    ThermostatAlgorithm::NoseHooverChain(n) => {
-                        let mut alg = NoseHooverThermostat::new_chain_bath(
-                            first.temperature,
-                            first.tau,
-                            first.dof,
-                            n_atoms,
-                            (*n).max(2),
-                        );
-                        alg.ranges.clone_from(ranges);
+                    ThermostatAlgorithm::NoseHoover | ThermostatAlgorithm::NoseHooverChain(_) => {
+                        // one chain length for every bath, as gromosXX's MULTIBATH ALGORITHM
+                        let nhc = match algorithm {
+                            ThermostatAlgorithm::NoseHooverChain(n) => (*n).max(2),
+                            _ => 1,
+                        };
+                        let params = baths
+                            .iter()
+                            .map(|b| NoseHooverThermostatParams {
+                                temperature: b.temperature,
+                                tau: b.tau,
+                                dof: b.dof,
+                                nhc,
+                            })
+                            .collect();
+                        let mut alg = NoseHooverThermostat::new(params, ranges.clone());
+                        alg.read_variables = *read_variables;
                         seq.push(Box::new(alg))
                     },
                 }
@@ -763,7 +817,12 @@ pub fn build_sequence_from_plan(
     prepared: &Prepared,
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
+    crate::plan::check_start_time(recipe)?;
+    crate::plan::check_com_motion(recipe)?;
     crate::plan::check_electrostatics(recipe)?;
+    crate::plan::check_pairlist(recipe)?;
+    crate::plan::check_outputs(recipe)?;
+    crate::plan::check_dihedral_phases(recipe, &prepared.topology)?;
     crate::plan::check_perturbation(recipe)?;
     crate::plan::check_eds(recipe)?;
     crate::plan::check_plan_against_recipe(recipe, &plan)?;
@@ -1023,10 +1082,18 @@ mod tests {
                 );
                 continue;
             }
+            if matches!(loaded.imd.nlrele, 2 | 3) {
+                println!("{name}: skipped, the legacy builder does not model lattice sums");
+                continue;
+            }
             let steps = loaded.imd.nstlim.min(10);
             let dt = loaded.imd.dt;
 
             let p_legacy = (loaded.prepare)();
+            // Nor did it restore Nosé–Hoover variables (a continuation's NHCVARIABLES, D41).
+            if p_legacy.configuration.nose_hoover.is_some() {
+                continue;
+            }
             let legacy = legacy_build_sequence(&loaded.imd, &p_legacy, &loaded.inputs, &options)
                 .unwrap_or_else(|e| panic!("{name}: legacy builder: {e}"));
             let legacy_names: Vec<String> = legacy
@@ -1222,30 +1289,63 @@ mod tests {
     }
 
     #[test]
-    fn lattice_sum_electrostatics_are_refused_for_an_unperturbed_run() {
+    fn lattice_sums_run_with_an_atomic_pairlist() {
         let dir = refs().join("nacl_water_box");
         let loaded = load(&dir).expect("reference");
         let prepared = (loaded.prepare)();
         let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
         recipe.inputs = loaded.inputs.clone();
         assert_eq!(recipe.perturbation.enabled, 0);
-        let plan = build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
-        for nlrele in [2, 3] {
-            let mut ls = recipe.clone();
-            ls.forcefield.electrostatics.electrostatics = nlrele;
-            let err = build_plan(&ls, &prepared.topology, &prepared.physical_constants)
+        let rf_plan =
+            build_plan(&recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        let refused = |r: &RunRecipe, message: &str| {
+            let err = build_plan(r, &prepared.topology, &prepared.physical_constants)
                 .expect_err("refused");
-            assert!(
-                err.to_string()
-                    .contains(&format!("NLRELE = {nlrele}: lattice-sum")),
-                "{err}"
-            );
-            // a plan made from the reaction-field recipe does not get past it either
-            let err = build_sequence_from_plan(&ls, plan.clone(), &prepared)
+            assert!(err.to_string().contains(message), "{err}");
+            let err = build_sequence_from_plan(r, rf_plan.clone(), &prepared)
                 .err()
                 .expect("refused");
-            assert!(err.to_string().contains("lattice-sum"), "{err}");
-        }
+            assert!(err.to_string().contains(message), "{err}");
+        };
+        // P3M needs the atomic cutoff too
+        let mut p3m = recipe.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        refused(&p3m, "chargegroup based cutoff does not work with P3M");
+        // Ewald needs the atomic cutoff (gromosXX FeatureChecker)
+        let mut ewald = recipe.clone();
+        ewald.forcefield.electrostatics.electrostatics = 2;
+        refused(&ewald, "chargegroup based cutoff does not work with Ewald");
+        ewald.forcefield.pairlist.kind = crate::recipe::PairlistKind::Atomic;
+        refused(&ewald, "multiple energy groups does not work with Ewald");
+
+        // the Ewald reference builds; a plan made from its reaction-field variant does not run
+        // the reaction field in its place
+        let loaded = load(&refs().join("nacl_pair_box_ewald")).expect("reference");
+        let prepared = (loaded.prepare)();
+        let (mut ewald, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        ewald.inputs = loaded.inputs.clone();
+        let plan = build_plan(&ewald, &prepared.topology, &prepared.physical_constants).unwrap();
+        let mut rf = ewald.clone();
+        rf.forcefield.electrostatics.electrostatics = 1;
+        let rf_plan = build_plan(&rf, &prepared.topology, &prepared.physical_constants).unwrap();
+        let err = build_sequence_from_plan(&ewald, rf_plan, &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("lattice-sum"), "{err}");
+        let err = build_sequence_from_plan(&rf, plan.clone(), &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("lattice-sum"), "{err}");
+        assert!(build_sequence_from_plan(&ewald, plan, &prepared).is_ok());
+        // nor one lattice-sum method in place of the other
+        let mut p3m = ewald.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        let p3m_plan = build_plan(&p3m, &prepared.topology, &prepared.physical_constants).unwrap();
+        let err = build_sequence_from_plan(&ewald, p3m_plan.clone(), &prepared)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("has P3M lattice-sum"), "{err}");
+        assert!(build_sequence_from_plan(&p3m, p3m_plan, &prepared).is_ok());
         for nlrele in [-1, 0, 1] {
             let mut rf = recipe.clone();
             rf.forcefield.electrostatics.electrostatics = nlrele;
@@ -1254,6 +1354,118 @@ mod tests {
                 "NLRELE = {nlrele}"
             );
         }
+    }
+
+    /// Both build paths refuse what `refuse` makes of `recipe`, with `message`.
+    fn assert_refused_both_ways(
+        recipe: &RunRecipe,
+        prepare: &dyn Fn() -> Prepared,
+        refuse: &dyn Fn(&mut RunRecipe, &mut Prepared),
+        message: &str,
+    ) {
+        let prepared = prepare();
+        let plan = build_plan(recipe, &prepared.topology, &prepared.physical_constants).unwrap();
+        let (mut r, mut p) = (recipe.clone(), prepare());
+        refuse(&mut r, &mut p);
+        let err = build_plan(&r, &p.topology, &p.physical_constants).expect_err("refused");
+        assert!(err.to_string().contains(message), "{err}");
+        let err = build_sequence_from_plan(&r, plan, &p)
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains(message), "{err}");
+    }
+
+    #[test]
+    fn grid_pairlist_is_refused_in_a_truncated_octahedron() {
+        // gromosXX FeatureChecker: `pbc_t` is never unlocked against `pairlist_grid`
+        let dir = refs().join("aladip_trunc_oct");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_eq!(
+            recipe.boundary.kind,
+            crate::recipe::BoundaryKind::TruncatedOctahedron
+        );
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::Grid,
+            "truncated octahedral PBC does not work with grid-based pairlist algorithm",
+        );
+        let mut cell = recipe.clone();
+        cell.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::GridCell;
+        assert!(
+            crate::plan::check_pairlist(&cell).is_ok(),
+            "grid_cell is unlocked"
+        );
+        let mut rect = recipe.clone();
+        rect.forcefield.pairlist.algorithm = crate::recipe::PairlistAlgorithm::Grid;
+        rect.boundary.kind = crate::recipe::BoundaryKind::Rectangular;
+        assert!(crate::plan::check_pairlist(&rect).is_ok());
+    }
+
+    #[test]
+    fn ntbdn_1_refuses_a_dihedral_phase_other_than_0_or_180() {
+        // gromosXX in_topology.cc:960-962
+        let dir = refs().join("butane_vacuum");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        recipe.forcefield.covalent_form.limited_phase_shifts = true;
+        let phase = |p: &mut Prepared, deg: f64| {
+            let d = &mut p.topology.dihedral_parameters[0];
+            d.pd = deg * std::f64::consts::PI / 180.0;
+            d.cospd = d.pd.cos();
+        };
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|_, p| phase(p, 90.0),
+            "dihedral neither 0 nor 180, this is not allowed if NTBDN=1",
+        );
+        let mut p = (loaded.prepare)();
+        for deg in [0.0, 180.0] {
+            phase(&mut p, deg);
+            assert!(
+                crate::plan::check_dihedral_phases(&recipe, &p.topology).is_ok(),
+                "{deg}°"
+            );
+        }
+        phase(&mut p, 90.0);
+        let mut arbitrary = recipe.clone();
+        arbitrary.forcefield.covalent_form.limited_phase_shifts = false;
+        assert!(crate::plan::check_dihedral_phases(&arbitrary, &p.topology).is_ok());
+        let mut off = recipe.clone();
+        off.forcefield.dihedrals = false;
+        assert!(
+            crate::plan::check_dihedral_phases(&off, &p.topology).is_ok(),
+            "gromosXX checks only with the dihedral term on"
+        );
+    }
+
+    #[test]
+    fn step_t_outside_its_range_is_refused() {
+        // gromosXX in_parameter.cc:298: T >= 0, or -1 (time from the TIMESTEP block)
+        let dir = refs().join("aladip_vacuum");
+        let loaded = load(&dir).expect("reference");
+        let (mut recipe, _) = RunRecipe::from_imd(&loaded.imd).unwrap();
+        recipe.inputs = loaded.inputs.clone();
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.control.t0 = -1.0,
+            "STEP T = -1 (the start time from the configuration's TIMESTEP block) is not \
+             implemented",
+        );
+        assert_refused_both_ways(
+            &recipe,
+            &*loaded.prepare,
+            &|r, _| r.control.t0 = -0.5,
+            "STEP T = -0.5: must be >= 0",
+        );
+        let mut later = recipe.clone();
+        later.control.t0 = 10.0;
+        assert!(crate::plan::check_start_time(&later).is_ok());
     }
 
     #[test]

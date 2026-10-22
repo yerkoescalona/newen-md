@@ -36,6 +36,8 @@
 
 use crate::lambdas::{IndividualLambdas, InteractionLambda, PrecalcLambdas};
 use crate::math::Vec3;
+pub use newen_logic::topology::pairs::PairKind;
+use newen_logic::topology::pairs::{contains_sorted, pair_kind};
 
 // ─── instancing model ───────────────────────────────────────────────────────
 
@@ -522,30 +524,29 @@ impl Default for LJParameters {
 
 /// Exclusion list for an atom (atoms that don't interact via nonbonded forces)
 ///
-/// Uses a sorted Vec for fast binary-search lookups. Matches the GROMOS C++
-/// convention (sorted vector with binary search). For typical exclusion counts
-/// (2-6 per atom), this is much faster than HashSet due to cache locality.
+/// A sorted Vec, searched linearly after a `last < j` early-out, as gromosXX's
+/// `Exclusions::is_excluded` does (`topology/exclusions.h:79-90`). For typical
+/// exclusion counts (2-6 per atom), this is much faster than HashSet due to cache locality.
 pub type Exclusions = Vec<usize>;
 
-/// Membership test on one atom's sorted exclusion list.
+/// The three partner lists of atom `i` (`exclusions`, `one_four_pairs`,
+/// `atom_pair_exclusions`), empty where a list is not stored.
 ///
 /// Relies on two invariants every construction path maintains (the topology
-/// reader, [`Topology::build_exclusions`], and the solvent expansion):
-/// lists are **sorted** and **symmetric** — `j ∈ exclusions[i]` iff
-/// `i ∈ exclusions[j]` — which is what lets callers query one side only.
-/// Both are checked by `exclusion_invariants` in the newen-io tests.
-///
-/// The `last < j` early-out is gromosXX's (`topology/exclusions.h:79`,
-/// `Exclusions::is_excluded`): exclusions are intramolecular and the lists
-/// are short, so for a partner in another molecule the answer is usually
-/// settled by looking at the last element, with no search at all.
+/// reader, [`Topology::build_exclusions`], the perturbation merges and the solvent
+/// expansion): lists are **sorted** and **symmetric** — `j ∈ exclusions[i]` iff
+/// `i ∈ exclusions[j]`, likewise for the other two — which is what lets callers
+/// query one side only. Both are checked by `exclusion_invariants` in the newen-io tests.
 #[inline]
-fn exclusion_list_contains(list: &[usize], j: usize) -> bool {
-    match list.last() {
-        None => false,
-        Some(&last) if last < j => false,
-        _ => list.binary_search(&j).is_ok(),
+fn partner_lists(topo: &Topology, i: usize) -> (&[usize], &[usize], &[usize]) {
+    fn list(lists: &[Vec<usize>], i: usize) -> &[usize] {
+        lists.get(i).map_or(&[], Vec::as_slice)
     }
+    (
+        list(&topo.exclusions, i),
+        list(&topo.one_four_pairs, i),
+        list(&topo.atom_pair_exclusions, i),
+    )
 }
 
 /// Chargegroup - atoms whose charge sum is zero (or small)
@@ -1046,25 +1047,26 @@ impl Topology {
     /// (1-2 and 1-3 bonded pairs only — used for RF excluded interactions)
     ///
     /// One lookup suffices: exclusion lists are symmetric (see
-    /// [`exclusion_list_contains`]), so `j ∈ exclusions[i]` ⇔ `i ∈ exclusions[j]`.
+    /// [`partner_lists`]), so `j ∈ exclusions[i]` ⇔ `i ∈ exclusions[j]`.
     #[inline]
     pub fn is_excluded(&self, i: usize, j: usize) -> bool {
-        exclusion_list_contains(&self.exclusions[i], j)
+        contains_sorted(&self.exclusions[i], j)
+    }
+
+    /// The kind of the pair `(i, j)`: excluded, 1-4, an owned `PERTATOMPAIR`/EDS pair, or
+    /// normal. The lists are symmetric, so atom `i`'s lists decide it.
+    #[inline]
+    pub fn pair_kind_of(&self, i: usize, j: usize) -> PairKind {
+        let (exclusions, one_four, atom_pairs) = partner_lists(self, i);
+        pair_kind(exclusions, one_four, atom_pairs, j)
     }
 
     /// Check if atoms i and j are excluded, a 1-4 pair or a `PERTATOMPAIR` pair.
-    /// Used for pairlist exclusion (GROMOS: all_exclusion).
+    /// Used for pairlist exclusion (GROMOS: all_exclusion); one call per candidate pair
+    /// on every pairlist rebuild.
     #[inline]
     pub fn is_excluded_or_14(&self, i: usize, j: usize) -> bool {
-        // Both lists are symmetric, so each needs only one direction. This is
-        // the pairlist's innermost test — one call per candidate atom pair on
-        // every rebuild — which is why the second lookup was worth removing.
-        exclusion_list_contains(&self.exclusions[i], j)
-            || (!self.one_four_pairs.is_empty() && self.one_four_pairs[i].contains(&j))
-            || self
-                .atom_pair_exclusions
-                .get(i)
-                .is_some_and(|l| l.contains(&j))
+        self.pair_kind_of(i, j) != PairKind::Normal
     }
 
     /// Get chargegroup index for atom i
@@ -1359,10 +1361,10 @@ impl Topology {
             }
         }
 
-        // Sort and deduplicate for fast binary_search lookups
-        for excl in &mut self.exclusions {
-            excl.sort_unstable();
-            excl.dedup();
+        // Sorted and deduplicated: `contains_sorted` relies on the order
+        for list in self.exclusions.iter_mut().chain(&mut self.one_four_pairs) {
+            list.sort_unstable();
+            list.dedup();
         }
     }
 
@@ -1791,7 +1793,7 @@ impl Topology {
             }
         }
 
-        // Sort solvent exclusions for binary_search
+        // Sorted solvent exclusions: `contains_sorted` relies on the order
         for i in n_solute..n_total {
             self.exclusions[i].sort_unstable();
         }

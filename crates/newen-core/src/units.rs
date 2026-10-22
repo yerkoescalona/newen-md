@@ -52,10 +52,12 @@ pub const kB: f64 = 0.00831441;
 /// CODATA 2018 exact: 138.9354859.
 pub const four_pi_eps_i: f64 = 138.9354;
 
-/// ε₀⁻¹ in GROMOS units (kJ mol⁻¹ nm e⁻²).
+/// ε₀⁻¹ (kJ mol⁻¹ nm e⁻²) as gromosXX writes it, for the lattice-sum terms.
 ///
-/// Derived as 4π × `four_pi_eps_i`.
-pub const eps0_i: f64 = 4.0 * std::f64::consts::PI * four_pi_eps_i;
+/// gromosXX `math/math.cc`: `eps0_i = 1745.9137`, a literal, not `4π · 138.9354`
+/// (= 1745.9137278…, a different double). A run replaces it by `4π` times the topology's
+/// PHYSICALCONSTANTS value, as gromosXX does (`in_topology.cc:1405-1409`).
+pub const EPS0_INV: f64 = 1745.9137;
 
 /// Reduced Planck constant ħ (kJ ps mol⁻¹).
 ///

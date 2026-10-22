@@ -280,7 +280,7 @@ impl PrecalcLambdas {
     /// (`sim.steps() % sim.param().write.free_energy == 0`).
     #[inline(always)]
     pub fn active(&self, step: usize) -> bool {
-        self.every > 0 && step.is_multiple_of(self.every)
+        newen_logic::schedule::output::due(step, self.every)
     }
 }
 

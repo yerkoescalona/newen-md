@@ -16,3 +16,8 @@ the distance-restraint values are evaluated with it.
 λ: the same run with `LAMBDAS` on and off). Both inputs set NSCALE = 1 for the SCALEDINTERACTIONS
 block of `lambdas.pttopo`, which newen does not implement; the test evaluates them with NSCALE
 forced to 0, which leaves the bonded terms and the individual-λ loop it checks unchanged.
+
+`aladip_ls.in` is `check/aladip_ls.t.cc`'s input (P3M, NLRELE 3, the NonBonded total for NSHAPE
+−1 … 10). Its PAIRLIST TYPE is `chargegroup`, which gromosXX's `md` and newen both refuse with
+P3M; the test evaluates it with the atomic cutoff (`aladip_p3m_atomic_cutoff_matches_the_check_suite_for_every_shape`),
+and the twelve totals agree with the table to its five printed digits.

@@ -1,6 +1,7 @@
 //! LJ/CRF parameter types and force storage
 
 use newen_core::math::Vec3;
+use newen_logic::topology::groups::energy_cell;
 
 /// Lennard-Jones parameters for atom pair
 #[repr(C)]
@@ -64,7 +65,7 @@ pub struct CRFParameters {
     pub crf_cut: f64,    // (1 - crf/2) / cutoff  (energy shift constant)
     pub crf_2cut3i: f64, // crf / (2 * cutoff^3)  (energy quadratic term)
     pub crf_cut3i: f64,  // crf / cutoff^3         (force correction term)
-    pub cutoff_sq: f64,  // cutoff^2 for Heaviside truncation (GROMOS XXHEAVISIDE)
+    pub cutoff_sq: f64,  // RCRF^2: the reaction-field radius the soft-core kernels soften
 }
 
 impl CRFParameters {
@@ -80,6 +81,8 @@ impl CRFParameters {
     /// * `rf_kappa` - Debye-Hückel screening parameter in nm⁻¹
     ///
     /// RCRF = 0 switches the reaction field off: every constant is zero (plain Coulomb).
+    ///
+    /// spec: nonbonded.crf_parameters
     pub fn new(cutoff: f64, epsilon: f64, rf_epsilon: f64, rf_kappa: f64) -> Self {
         if cutoff <= 0.0 {
             return Self {
@@ -154,7 +157,8 @@ impl<'a> EnergyGroups<'a> {
     /// Row-major cell `[eg(i)][eg(j)]` of an `n_groups × n_groups` matrix.
     #[inline(always)]
     pub fn cell(&self, i: usize, j: usize) -> usize {
-        self.atom_group[i] * self.n_groups + self.atom_group[j]
+        energy_cell(self.atom_group[i], self.atom_group[j], self.n_groups)
+            .expect("energy groups cover every atom")
     }
 }
 

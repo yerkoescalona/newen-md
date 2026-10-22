@@ -1,3 +1,17 @@
 import NewenSpec.Schedule
+import NewenSpec.Thermo.Dof
+import NewenSpec.Thermo.Bath
+import NewenSpec.Topology.Pairs
+import NewenSpec.Topology.Groups
+import NewenSpec.Float
+import NewenSpec.Thermostat
+import NewenSpec.Nonbonded
+import NewenSpec.Bonded
+import NewenSpec.Dynamics
+import NewenSpec.Periodicity
+import NewenSpec.SoftCore
+import NewenSpec.PerturbedBonded
+import NewenSpec.LatticeSum
+import NewenSpec.P3M
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement

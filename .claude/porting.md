@@ -10,27 +10,32 @@ the discipline itself, not a summary of it.
 The gromosXX reference suite (`crates/newen-md/tests/gromosXX_references/`) is the oracle. For any
 **wired, tested** path:
 
-- Reproducing GROMOS output to full precision is the definition of correct. Tolerances are tight
+- Matching the oracle to full precision is the definition of correct. Tolerances are tight
   (force ~1e-6, energy ~1e-8) by design.
 - A change that alters that output is a **regression until proven otherwise** — never a silent
-  improvement. If gromosXX is genuinely wrong and you want the corrected behavior, that is a
-  *conscious, documented decision* (and a candidate for a `--gromos-compat` vs `--corrected` split),
-  not an undiscussed divergence.
+  improvement.
+- The oracle is gromosXX as released, except where a known defect has been corrected: there it is
+  gromosXX with that defect's patch applied (`tests/gromosXX_references/patches/`). newen is gated
+  on the patched binary and carries no mode that reproduces the defect (see "One behaviour per
+  feature" below).
 
 ## The oracle only covers wired paths
 
 This is the core risk. The reference suite catches divergence **only** for features that are wired
-and tested. Every *unwired* path (e.g. triclinic boundaries, grid pairlists, Nosé-Hoover, GaMD,
-lattice-sum/PME) is un-audited surface where two failure modes hide:
+and tested. Every *unwired* path (e.g. grid pairlists, GaMD) is un-audited surface where two
+failure modes hide:
 
 - **Inherited C++ bugs** — you faithfully port a defect.
 - **Silent divergence** — your "cleaner" reimplementation disagrees with GROMOS and nothing notices
   until the feature is wired.
 
-(A live example already in the tree: the triclinic nearest-image — see 1.4.)
+(A live example: the triclinic nearest image, ported from what gromosXX's code says rather than
+what it computes; see the list below.)
 
 FEP (fixed λ, `LAMBDAS`, `PRECALCLAM`, slow growth), EDS and A-EDS left this list in 1.8: they run
-through the recipe and are pinned by native and patched-oracle references.
+through the recipe and are pinned by native and patched-oracle references. Lattice sums (Ewald,
+P3M) and GENBOX triclinic boxes left it on 2026-10-22: audited against Vol. 2 and the C++, with
+Lean models of their kernels, native and patched-oracle references (LS1–LS3) and the entries below.
 
 So the standing rule: **write the gromosXX reference test *before* wiring an unwired path, not
 after.** The test is what converts un-audited surface into oracle-covered surface.
@@ -42,12 +47,14 @@ after.** The test is what converts un-audited surface into oracle-covered surfac
    The gromosXX developers annotate their own defects and uncertainties. Two minutes here catches the
    issues they already knew about.
 2. **Classify every suspicious thing you find** into one of three buckets, and treat each differently:
-   - **(A) Genuine bug** → reproduce it first, pinned by a native reference and flagged (CHANGELOG
-     "Reproduced gromosXX defects", an entry below, a code comment with file:line), so the divergence
-     is demonstrated bit-for-bit; correct it in a later, separate commit that keeps the reference as
-     documentation of the bug and gates the correction some other way. Where the defect is
-     mathematical, state it as a theorem in the `math` repository (`OAI.Physics.Gromos.Divergences`).
-     Never port one silently, and never skip straight to the correction.
+   - **(A) Genuine bug** → newen implements the intended behaviour, and only that. Write the
+     smallest patch to gromosXX (or gromos++) that corrects the defect, check that the patched and
+     released binaries differ only in what the defect touches, regenerate the reference with the
+     patched binary (`<system>_fixed`, the patch named in its `input.toml`) and gate newen on it.
+     Record the defect in the dossier in `~/Development/gromos-divergences` (the reproducer against
+     released gromosXX, the patch, a Lean theorem where the defect is mathematical) and add an
+     entry to the list below. Never port one silently, never correct one without a patched oracle,
+     and never add an option that reproduces it.
    - **(B) Intentional GROMOS quirk** → reproduce it *exactly* and **document it as a deliberate
      decision** (in the style of CHANGELOG's "BONDANGLETYPE intentionally unsupported" entries), so it
      is never later mistaken for a porting mistake.
@@ -57,7 +64,8 @@ after.** The test is what converts un-audited surface into oracle-covered surfac
 ## Second-source the subtle physics
 
 For anything the authors flagged as uncertain, or anything intrinsically delicate (reaction-field
-self-terms, virial, Ewald/lattice-sum, perturbed/soft-core terms): **derive it independently from
+self-terms, virial, Ewald/lattice-sum (done for both methods, 2026-10-22), perturbed/soft-core
+terms): **derive it independently from
 the GROMOS book / primary paper, implement to that, then diff against the C++.** Where they disagree,
 investigate — do not assume the C++ is right. Transcribing uncertain C++ line-by-line is how you
 inherit a bug you can't see.
@@ -66,12 +74,24 @@ Free leverage: gromosXX's own `check/*.t.cc` files hard-code per-term reference 
 perturbed/soft-core variants). They are a second source of truth independent of running the md
 binary — use them to validate the very terms you were told not to trust.
 
-## Reproduce-or-correct, made explicit
+## One behaviour per feature
 
-When GROMOS behavior and "physically correct" behavior diverge, you may eventually want both: a
-faithful compatibility mode and a corrected mode. Design so the two can coexist behind a flag rather
-than forcing an irreversible choice. Until then, **faithful is the default** and any deviation is
-named and documented.
+newen has one behaviour for every feature: the intended one. Where gromosXX is right, that is
+gromosXX's behaviour, its conventions and quirks included (bucket B). Where gromosXX is wrong, it is
+the corrected behaviour, gated by a patched oracle (bucket A). There is no compatibility mode, no
+`--gromos-compat` flag and no recipe value that selects a known defect. Each such switch doubles the
+behaviours the code can have, most combinations go untested, and the next reader — person or agent —
+can no longer tell which behaviour is intended, and copies the pattern.
+
+The proof that a defect exists (for the gromosXX maintainers) lives in `gromos-divergences`, which
+runs released gromosXX against the patched one. newen keeps only the patch and the `_fixed`
+reference. A released-binary reference stays in newen only for what the defect does not touch.
+
+Code comments explain the physics. A corrected defect is named by its dossier id (`D41`); the
+gromosXX file:line map belongs in the entry below and in the dossier, not in the code.
+
+Bucket-A entries below still marked "Reproduced" predate this rule: each is open work, to be
+corrected behind a patched oracle.
 
 ### The list
 
@@ -113,19 +133,18 @@ Each entry: what gromosXX does, which bucket, what newen does.
   (`nonbonded.rf_cutoff`, `in_parameter.cc:4606`) and accepts RCRF ≠ RCUTL silently
   (`check_parameter.cc` has no rule); newen built them from RCUTL. Now from RCRF, silently,
   pinned by `aladip_solvated_rcrf`.
-- **PERTATOMPAIR argument shift** (A; corrected in 0.0.56, the reference pins the defect under
-  `gromosxx-shifted`; patched oracle `tests/gromosXX_references/patches/D1_pair_kernel_args.patch`).
+- **PERTATOMPAIR argument shift** (A, D1; corrected in 0.0.56; patched oracle
+  `tests/gromosXX_references/patches/D1_pair_kernel_args.patch`).
   `perturbed_nonbonded_pair.cc:469, 677, 992, 1200` call `eds_pert_lj_crf_interaction` with the
   outputs shifted by one slot against `perturbed_nonbonded_term.h:65-72`: for a pair with a
   perturbed atom and a normal or 1-4 state type the energies receive the kernel's dH/dλ, the
   force is `(f + e_lj + e_crf)·r`, dH/dλ is 0, and `eps = 0`, `coulomb_scaling = 0` drop the 1/r
-  Coulomb term. newen computes the intended kernel by default (outputs in their slots,
-  Coulomb scaling 1, the 1-4 scaling for 1-4 states), pinned by
-  `aladip_vacuum_fep_pairpert_precalc_fixed` (native 247c95c4 + D1 patch); the recipe's
-  `perturbation.atom_pair_kernel = "gromosxx-shifted"` reproduces the defect
-  (`atom_pair_state`, `newen-forces/src/nonbonded/perturbed.rs`), pinned by
-  `aladip_vacuum_fep_pairpert_precalc`. Lean (`math`, `OAI.Physics.Gromos.Divergences`):
-  `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`, `crfSoftEnergy_shift`.
+  Coulomb term. newen computes the intended kernel (outputs in their slots, Coulomb scaling 1,
+  the 1-4 scaling for 1-4 states; `atom_pair_state`, `newen-forces/src/nonbonded/perturbed.rs`),
+  pinned by `aladip_vacuum_fep_pairpert_precalc_fixed` (native 247c95c4 + D1 patch). The
+  released-binary reproducer lives in `gromos-divergences`. Lean (`math`,
+  `OAI.Physics.Gromos.Divergences`): `shiftedPairForce_eq_pairForce_iff`, `shifted_ti_shortfall`,
+  `crfSoftEnergy_shift`.
 - **EDS multi-s / pair-s weights** (A; corrected without a reproducing mode, decided in 1.8:
   the released branch's forces are not the gradient of any energy it reports, and the patch
   reproduces it). gromosXX 247c95c4 seeds the per-state log-prefactors with 0 instead of −∞
@@ -159,24 +178,22 @@ Each entry: what gromosXX does, which bucket, what newen does.
   (unsigned `bsteps − asteps`, τ ≈ 4·10⁹ steps, offsets frozen, `eds.cc:186`; D13 — the pure
   `memory_time` reproduces the wrap); BMAXTYPE 2 with a target state without variance, unless
   the RESTREMIN clamp catches it (division by b_max = 0 at `eds.cc:314`, E_min = −∞, V_R* NaN;
-  D15). Pinned by unit tests and `newen-md/tests/aeds_runs.rs`.
-- **A-EDS defects corrected by default** (A; corrected in 0.0.63, each reproduced by a recipe
-  switch; patched oracle `tests/gromosXX_references/patches/D16_*`, `D25_*`, `D32_*`;
-  `newen-integrators/src/eds.rs`):
+  D15). Pinned by unit tests and `newen-md/tests/aeds_runs.rs` (D15 by the unit test only: the
+  `md` input that reached it needs D32's never-visited target, see below).
+- **A-EDS defects corrected** (A; corrected in 0.0.63; patched oracle
+  `tests/gromosXX_references/patches/D16_*`, `D25_*`, `D32_*`; `newen-integrators/src/eds.rs`):
   - the energy columns (`eds_emax`, `eds_emin`, the offsets) written after the search update, so
     a frame's `eds_vmix`/`eds_vr` belong to the previous frame's printed parameters
-    (`eds.cc:368-372`; D16). Default: the parameters the frame's V_R* used;
-    `aeds.energy_columns = "gromosxx-post-update"` reproduces.
+    (`eds.cc:368-372`; D16). newen writes the parameters the frame's V_R* used.
   - the FORMS 5/6 prevalences as plain exponentials (`:339-343`, NaN and frozen offsets once
-    −β(V_i − E_i^R) > 709.78; D25). Default: log-sum-exp; `aeds.prevalence =
-    "gromosxx-plain-exp"` reproduces (`aladip_vacuum_aeds_f6_ovf`).
+    −β(V_i − E_i^R) > 709.78; D25). newen uses a log-sum-exp (`aladip_vacuum_aeds_f6_ovf_fixed`).
   - a never-visited state 1 as the default E_min target (`:252-261`; D32, its mean 0 a fake G,
-    σ 0 the D15 division). Default: the lowest mean among the states visited more than once,
-    state 1 only when none is; `aeds.target_state = "gromosxx-state1-default"` reproduces.
-  The native search references set the reproducing switches; the `aladip_vacuum_aeds_*_fixed`
-  references pin the defaults against the patched binary; `newen-run/tests/aeds_replay.rs`
-  replays both. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md` (not yet
-  in `math`).
+    σ 0 the D15 division). newen takes the lowest mean among the states visited more than once,
+    state 1 only when none is.
+  The `aladip_vacuum_aeds_*_fixed` references pin them against the patched binary;
+  `newen-run/tests/aeds_replay.rs` replays them. The released-binary reproducers live in
+  `gromos-divergences`. Lean statements: `~/.cache/gromos-rs-item-1.8/lean_aeds_statements.md`
+  (not yet in `math`).
 - **A-EDS bookkeeping** (B, reproduced behaviour documented in GROMOS Vol. 2, not defects;
   `newen-integrators/src/eds.rs`): the FORMS 5/6 offset step is ASTEPS·Δt (`:355`; D33, not the
   dossier's D17, which is the extended-TI 1-4 scaling) — a
@@ -261,11 +278,56 @@ Each entry: what gromosXX does, which bucket, what newen does.
     plain pairs gated (`nonbonded_set.cc:428-430`);
   - SETTLE gated on the atomic virial with no vacuum split (`settle.cc:397`); LINCS adds no
     constraint virial.
+- **Thermostat coupling edge inputs** (C, ours, documented). gromosXX couples a bath whenever
+  `tau != -1` (`berendsen_thermostat.cc:99`, `nosehoover_thermostat.cc:123,179`), so any other
+  negative τ is coupled with a negative time constant; newen treats every `tau < 0` as uncoupled.
+  gromosXX has no guard on `dof` (`2·ekin/(dof·k_B)` is inf or NaN for a 0-dof bath, which it
+  decouples at setup, `topology.cc:1405-1411`; ported as `decouple_empty_baths`,
+  `newen-run/src/plan.rs`); newen's kernels take `T_free = 0` there and fall back to `T₀`, and
+  `kinetic_temperature` prints 0 for every `dof ≤ 0` (gromosXX `out_configuration.cc:3293`
+  tests `dof != 0`). Both are in the Lean models (`spec/NewenSpec/Thermostat.lean`); no
+  reference reaches either input.
+- **Multi-bath Nosé–Hoover** (C, ours, reconciled). newen built the thermostat from the first
+  bath only (`NoseHooverThermostat::new_single_bath`/`new_chain_bath` with bath 0's T₀, τ and
+  dof) and refused several Nosé–Hoover baths at plan validation; with the refusal lifted it
+  indexed a scale it never had for the second bath. Now one ζ chain per bath as gromosXX
+  (`nosehoover_thermostat.cc:120-230`); pinned by `aladip_multibath_nosehoover`,
+  `aladip_multibath_nhc`.
 - **Thermostat output quirks** (B), reproduced: `NDFMIN` not subtracted from the COM/IR dof
   (`multibath.cc:139-149`; `bath_dofs`, `newen-run/src/dof.rs`); a bath's `scale` printed 0
   without a thermostat (`multibath.h:48`, `berendsen_thermostat.cc:134`); the kinetic-tensor rows
   printed unrotated while the trace uses the rotated tensor (`out_configuration.cc:3331-3344`);
   the last two in `volume_pressure` (`newen-md/src/bin/md.rs`).
+- **Nosé–Hoover variables of a continued run** (A, D41; corrected in 0.0.69; patched oracle
+  `tests/gromosXX_references/patches/D41_nh_restart.patch`).
+  gromosXX writes and reads `NHCVARIABLES` for chains only (`out_configuration.cc:606`,
+  `in_configuration.cc:1156`) although plain Nosé–Hoover integrates `zeta[0]`
+  (`nosehoover_thermostat.cc:142-143`), and refuses NTINHT = 1 without a chain
+  (`check_parameter.cc:92`), so a continued plain-NH run restarts from ζ = 0; for a chain it reads
+  `zeta.size()` = 1 value per bath before `NoseHoover_Thermostat::init` sizes the chain
+  (`in_configuration.cc:3444`, `md.cc:150, 167`, `nosehoover_thermostat.cc:69`), so links 2..M
+  restart from 0. newen wrote and read nothing until 0.0.69 (NTINHT parsed, unused). newen
+  writes every variable of every bath in gromosXX's block format, plain NH included, and
+  restores them when NTINHT = 0 (`restored_zeta`,
+  `newen-integrators/src/algorithms/nosehoover_thermostat.rs`; `prepare_system` parses the block
+  into `Configuration::nose_hoover`); NTINHT = 1 starts from zero, plain NH included; NTINHT = 0
+  without a block starts from zero too, with a warning (gromosXX refuses that for a chain).
+  Pinned by `water_216_nvt_nosehoover_cont_fixed` / `water_216_nvt_nhc_cont_fixed` (patched);
+  `newen-md/tests/nh_restart.rs` checks that 100 + 100 steps follow the 200-step run as closely
+  as weak coupling does. The released-binary reproducer lives in `gromos-divergences`. Lean
+  (`gromos-divergences`): `nhScale_restart_eq_iff`, `nhScale_restart_sub`,
+  `nhcReadTranscribed_eq_iff`.
+- **NDFMIN spread over the baths through an `int` total** (A, D40; corrected; patched oracle
+  `tests/gromosXX_references/patches/D40_ndfmin_total.patch`). gromosXX removes NDFMIN from each
+  bath in proportion `dof/dof_total`, but sums `dof_total` in an `int` (`multibath.cc:145-152`);
+  a DOFSET boundary that cuts an odd number of constraints leaves half-integer baths (each
+  constraint takes ½ from the IR bath of each end, `topology.cc:1105-1106`), the total is
+  truncated and more than NDFMIN is removed (14.5 and 10.5 with NDFMIN 3: 12.69 and 9.19 instead
+  of 12.76 and 9.24). newen sums the total exactly and spreads nothing when it is not positive
+  (`bath_dofs`, `newen-run/src/dof.rs`). Pinned by `aladip_vacuum_multibath_ndfmin3_half_fixed`
+  (patched) next to `aladip_vacuum_multibath_ndfmin3` (integer baths, released binary). The
+  released-binary reproducer lives in `gromos-divergences`. Lean (`gromos-divergences`):
+  `dofTotalTranscribed_le_iff`, `ndfminSpread_removes_more`.
 - **Perturbed RF self term, "Chris: CHECK!"** (false alarm; not a quirk). The comment at
   `perturbed_nonbonded_term.cc:749-751` (`gromosXX-patched`; `:596-598` in the non-ext
   variant) worries that the `selfterm_correction` adds `+A_q·FPEPSI·crf_cut` with no B-state
@@ -276,12 +338,127 @@ Each entry: what gromosXX does, which bucket, what newen does.
   −½·FPEPSI·crf_cut·(q_B² − q_A²) (`perturbed_self_energy_correction` ↔
   `newen_analysis::free_energy::rf_self_energy`, test
   `rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term`). Reproduced as is.
+- **Soft improper ζ wrap** (C, ours, dossier candidate). newen's soft improper caller wraps ζ into
+  `[ζ0 − π, ζ0 + π]` before the soft kernel, as the plain and perturbed impropers do;
+  gromosXX's `perturbed_soft_improper_interaction.cc:134-138` does not wrap, so a ζ a turn away
+  from ζ0 gets the energy of the long way round there. newen keeps the wrap.
+- **LJEXCEPTIONS** (refused, not implemented). gromosXX moves each pair into `all_exclusion` and
+  gives it its own C6/C12 (`in_topology.cc:2111`); newen's topology reader refuses a block with
+  NEX > 0 ("LJEXCEPTIONS block is not implemented") instead of skipping it as an unknown block.
+- **ROTTRANS across baths** (ported). gromosXX refuses roto-translational constraints whose
+  atoms `1..=RTCLAST` span more than one (COM, IR) bath pair (`topology.cc:1370-1394`);
+  `thermostat_baths` (`newen-run/src/plan.rs`) does the same, with gromosXX's message.
+- **Triclinic nearest image** (C, reconciled; no switch). gromosXX's
+  `Boundary_Implementation<triclinic>::nearest_image` (`boundary_implementation.cc:277-318`) is
+  written to reduce the fractional coordinates (`nim_y = nim.y − m_box(2,1)/m_box(2,2)·nim.z`), but
+  `math::Box::operator()(i, j)` returns component `i` of edge `j` (`gmath.h:592-596`), so its skew
+  terms read `b_z`, `a_y`, `a_z`, all zero for GROMOS's lower-triangular box: it reduces the raw
+  `z` by `c`, `y` by `b`, `x` by `a`, into the brick `|x| < aₓ/2, |y| < b_y/2, |z| < c_z/2`. newen
+  reduces the fractional coordinates (`triclinic_nearest_image`, the centred parallelepiped).
+  Below half the smallest cell height both return the vector itself, the unique shortest image
+  (Lean `image_shortest_of_lt_half_height`, `spec/NewenTheory/Space/Periodicity.lean`); newen
+  refuses a cutoff (RCUTP, RCUTL, RCRF) that is not below that bound (`check_cutoffs_fit_box`,
+  `newen-run/src/prepare.rs`). They can differ beyond it, which a charge-group cutoff can reach:
+  in `nacl_water_box` in a 75/80/65° cell (smallest height 1.855 nm) with RCUTL 0.9 nm an H–H pair
+  of two waters 0.899 nm apart was 1.461 nm in newen, 1.277 nm in gromosXX and 1.055 nm at its
+  shortest. `nacl_water_box_triclinic` therefore runs with 0.7 nm cutoffs.
+- **Cutoffs beyond half the cell height** (note). gromosXX's `boundary_check_cutoff`
+  (`math/boundary_checks.cc:35-101`, from `configuration.cc:546`) checks `2·RCUTL` against the
+  edge lengths (rectangular) or the heights (triclinic, truncated octahedron), not RCUTP/RCRF and
+  not the charge-group extent; so with a charge-group cutoff atom pairs longer than half the height
+  are interacted, in an image that depends on the reduction (entry above). newen checks every
+  pair cutoff against the heights, for every box, and still lets a charge-group pair exceed the
+  bound by the groups' extent.
+- **GENBOX Euler angles** (refused). gromosXX stores φ, θ, ψ of the GENBOX third line without
+  rotating the box or the positions on input (`in_configuration.cc:1999-2029`, the rotation
+  commented out), but rotates box, positions and velocities by them on output
+  (`out_configuration.cc:1814-1823` and the `_print_*` functions), so a file with non-zero angles
+  does not read back as written. newen refuses non-zero Euler angles (`prepare_system`).
+- **`math::costest`** (note). `gmath.h:1061-1068` clamps an `acos` argument only when it is beyond
+  `1 + ε`; one in `(1, 1 + ε]` is returned as it is and `acos` gives NaN (the condition is
+  inverted). Used for the GENBOX angles on output; newen clamps (`genbox_lengths_angles`).
+- **Solvent images: per atom or per molecule** (note). With the standard solvent loops
+  (`special_loop_off`, "user request") gromosXX takes every solvent atom pair's own nearest image
+  (`nonbonded_outerloop.cc:272-283` → `lj_crf_innerloop`, `nonbonded_innerloop.cc:106`); its SPC
+  and generic solvent loops take the first atoms' image for all nine pairs
+  (`nonbonded_outerloop.cc:436-470`, `solvent_innerloop.cc:54`). newen's short-range solvent
+  kernel shares the first-atom image; its long-range list does so when that is provably the same
+  (`sentinel_long_range_is_exact`) and expands to per-atom images otherwise. Below half the cell
+  height all of these agree.
+- **KCUT compared with |k|²** (B, reproduced). gromosXX compares the KCUT read from NONBONDED
+  with `|k|²` (`kspace.cc:72, 90`: `k_cut2`, "k cutoff squared for faster comparison"; the column
+  was called NK2 in older inputs, and gromosXX's own inputs use values like 100 that only make
+  sense squared); Vol. 2 describes a cutoff on `|k|`. newen follows the code (`k_vectors`,
+  `newen-forces/src/nonbonded/ewald.rs`); the references choose KCUT so. A documentation note
+  for the dossier.
+- **NVT self and A terms frozen at step 0** (A, LS1; corrected; patched oracle
+  `tests/gromosXX_references/patches/LS1_p3m_nvt_a_term.patch`, dossier ID pending).
+  `configuration/energy.cc:576-580` reports the step-0 self and A terms every step of a run
+  without pressure scaling: exact for Ewald, stale for P3M, whose `Ã2` moves with the charges
+  (2.2·10⁻⁷ relative after 8 steps in `nacl_pair_box_p3m_fixed`). newen reports the step's terms.
+  Pinned by the four P3M `_fixed` references. (gromosXX also adds the self and A virials only on
+  the steps it computes them; newen every step. Not patched: no reference prints a virial there.)
+- **Triclinic wave vectors** (A, LS3; corrected; patched oracle `LS3_triclinic_kvectors.patch`,
+  dossier ID pending). gromosXX builds the reciprocal basis `M = 2π/V (b×c, c×a, a×b)` as columns
+  and applies it with `math::product`, which computes `Mᵀ·l` (`gmath.h:925-931`):
+  `kspace.cc:128-135` (`l_to_k_matrix`, also the P3M `Ã2` at `nonbonded_outerloop.cc:2390-2449`),
+  `influence_function.cc:390/424` and `latticesum.cc:538/566` (the `ik` field); and at
+  `influence_function.cc:130/164` `tL_0 = transpose(Matrix(box))` (box vectors as rows, by the
+  `Box(i, j)` convention), so `product(2π tL_0⁻¹, l) = 2π L⁻¹ l`, the same transposed product.
+  In a skewed cell these are not reciprocal-lattice vectors: `k·a/2π = −0.466` for `l = (0,1,0)` in
+  a 2.0/2.2/2.4 nm, 75/80/65° box, and the k-space energy of an Na⁺Cl⁻ pair goes from 127.28 to
+  237.71 kJ/mol when one ion moves by a lattice vector. newen takes `Σ l_i b_i` (`lattice_vector`;
+  Lean `latticeVector_reciprocal_dot`). Pinned by `nacl_water_box_triclinic_p3m_fixed` (released
+  binary: k-space 2021.89 instead of 2031.45 kJ/mol at step 0, forces up to 27.6 kJ mol⁻¹ nm⁻¹
+  apart).
+- **Surface virial without the −2** (A, LS2; corrected; patched oracle
+  `LS2_surface_virial.patch`, dossier ID pending). `nonbonded_outerloop.cc:2676-2686` adds the
+  diagonal of `Ξ = ½ p M⊗M − ¼ p |M|² 1` to the virial as it is, where every other lattice-sum
+  term adds `−2 Ξ` (`:2057, 2594, 2611`). newen stores `−2 Ξ`, whole tensor (`surface_term`,
+  `newen-forces/src/nonbonded/lattice_sum.rs`). Pinned by `water_216_npt_ewald_epsls_fixed`
+  (Ewald, EPSLS 61, Berendsen NPT: released step-0 pressure −305.43 instead of −296.61
+  kJ mol⁻¹ nm⁻³).
+- **Finite-difference field in a skewed cell** (A, corrected in newen; no patched oracle yet).
+  `latticesum.cc:626-641` divides the potential difference along grid axis `α` by
+  `2q·|box(α)/N_α|` (`box(α)` is edge `α`, `Box::operator()(int)`) and stores it as Cartesian
+  component `α`: the derivative along each lattice direction, the gradient only for orthogonal
+  edges. gromosXX's own influence function maps the per-axis operator through `H⁻¹`
+  (`influence_function.cc:186-190`, `product(H_inv_trans, D)`), which is correct. newen maps the
+  field the same way (`field_fd`, `newen-forces/src/nonbonded/p3m.rs`). Triclinic only; no
+  triclinic reference uses NFDORD > 0 until the oracle is patched.
+- **Box correction on a recompute step** (A, corrected; kernel test only). When the influence
+  function is recomputed at an NQEVAL step under pressure scaling, gromosXX keeps the box
+  deviation it set before the recomputation, so the new `Ĝ` is corrected by the deviation from
+  the old box on that step; newen measures it from the box the current `Ĝ` was computed in
+  (`influence_box_correction`). No reference (an NPT P3M reference with NQEVAL > 0 is open).
+- **Nyquist planes in ik differentiation** (B, reproduced). gromosXX keeps `l = N/2` in `−i k φ̂`;
+  the real part of the backward transform keeps only the Hermitian part, which is the usual
+  treatment with those components zero, so it is harmless. newen does the same (`field_ik`).
+- **NA2CLC 4 aliased to 3** (B, reproduced). gromosXX reads 4 as 3 (`in_parameter.cc:4718`), so
+  its averaged-grid `Ã2` branch is unreachable; newen stores 4 as 3 (`LatticeSumPlan`).
+- **NASORD 1 at a half-integer** (B, reproduced). `|x| < 1/2` (`latticesum.h:512`) gives a charge
+  exactly half-way between two grid points weight zero on both; newen alike
+  (`assignment_1d`; Lean `w1_half_integer`), a set of measure zero.
+- **gromosXX's check program bypasses its FeatureChecker** (note). `aladip_ls.t.cc` builds its
+  simulation without the checker that `md` runs, so its input's charge-group cutoff with P3M,
+  which `md` and newen refuse, runs there; the ported check (`gromos_check_suite`) uses the
+  atomic cutoff and matches the table to its printed digits.
+- **P3M grids are powers of two** (newen restriction, not a divergence). PhastFT transforms powers
+  of two only; newen refuses any other grid with a message, gromosXX accepts any even size.
+- **LJ-exception pairs under lattice sums** (note). gromosXX moves an LJEXCEPTIONS pair into the
+  exclusions and computes only its LJ (`nonbonded_set.cc:232`, `lj_exception_innerloop`), so under
+  a lattice sum it loses its real-space electrostatics while the k-space term keeps it. newen
+  refuses LJEXCEPTIONS with NEX > 0 anyway (entry above).
+- **Energy-output test precedence** (note, harmless). `nonbonded_set.cc:209` writes
+  `(write.energy && steps % |write.energy|) == 0`, true on every step when NTWE = 0 as well as on
+  output steps; it only decides when the lattice-sum self and A terms are recomputed (`:206-220`),
+  so with NTWE = 0 they are recomputed every step, which changes no printed number.
 - **Not ported, no reference**: position-restraint and distance/dihedral-restraint virials
-  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
-  dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).
+  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`).
 
 ## In one line
 
 Tests before wiring; derivation before transcription; grep before porting; document every deliberate
-quirk. Faithfulness and correctness are both required — the discipline above is how you get both
-instead of trading one for the other.
+quirk; one behaviour per feature — a gromosXX defect is corrected in newen and patched in the oracle,
+never kept behind a switch. Faithfulness and correctness are both required — the discipline above is
+how you get both instead of trading one for the other.

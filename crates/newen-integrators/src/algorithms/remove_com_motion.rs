@@ -26,13 +26,14 @@
 //! rotation removal when the boundary condition is not vacuum
 //! (`configuration.cc:555-560`, `param.centreofmass.remove_rot = false`). The
 //! *initial* removal at step 0 (controlled by NTICOM) is unaffected. We mirror
-//! this: when the box is periodic, `periodic_remove_rot` is forced to `false`
-//! regardless of the sign of NSCM.
+//! this: when the box is periodic, no rotation is removed after step 0, whatever
+//! the sign of NSCM. Which step removes what is `newen_logic::schedule::com::com_removal`.
 
 use newen_core::algorithm::{Algorithm, SimulationState};
 use newen_core::configuration::{BoxType, Configuration};
 use newen_core::math::{Mat3, Vec3};
 use newen_core::topology::Topology;
+use newen_logic::schedule::com::com_removal;
 
 /// GROMOS `math::epsilon` (gmath.h:689) — used for the inertia-tensor
 /// determinant singularity check (signed comparison, not `abs()`).
@@ -45,17 +46,8 @@ const EPSILON: f64 = 0.000000000001;
 pub struct RemoveCOMMotion {
     /// NTICOM from INITIALISE block: 0=off, 1=remove translation, 2=remove translation+rotation
     pub nticom: i32,
-    /// Step-0 removal flags, derived from NTICOM (`start.remove_com_{translation,rotation}`)
-    initial_remove_trans: bool,
-    initial_remove_rot: bool,
-    /// Periodic removal interval, derived from |NSCM| (`centreofmass.skip_step`, 0=off)
-    skip_step: usize,
-    /// Periodic removal flags, derived from the sign of NSCM
-    /// (`centreofmass.remove_trans`/`remove_rot`).
-    /// Note: `periodic_remove_rot` is overridden to `false` in PBC
-    /// (GROMOS `configuration.cc:555-560`).
-    periodic_remove_trans: bool,
-    periodic_remove_rot: bool,
+    /// NSCM from the COMTRANSROT block, with its sign (`in_parameter.cc:1305-1319`)
+    nscm: i32,
 }
 
 impl RemoveCOMMotion {
@@ -63,22 +55,7 @@ impl RemoveCOMMotion {
     /// `> 0` removes translation every `nscm` steps, `< 0` removes translation and
     /// rotation every `|nscm|` steps, `0` disables periodic removal.
     pub fn new(nticom: i32, nscm: i32) -> Self {
-        let (skip_step, periodic_remove_trans, periodic_remove_rot) = if nscm > 0 {
-            (nscm as usize, true, false)
-        } else if nscm < 0 {
-            ((-nscm) as usize, true, true)
-        } else {
-            (0, false, false)
-        };
-
-        Self {
-            nticom,
-            initial_remove_trans: nticom >= 1,
-            initial_remove_rot: nticom >= 2,
-            skip_step,
-            periodic_remove_trans,
-            periodic_remove_rot,
-        }
+        Self { nticom, nscm }
     }
 }
 
@@ -265,34 +242,18 @@ impl Algorithm for RemoveCOMMotion {
         conf: &mut Configuration,
         sim: &SimulationState,
     ) -> Result<(), String> {
-        // Dispatch logic mirrors `Remove_COM_Motion::apply` (remove_com_motion.cc:240-264):
-        // step 0 is governed by NTICOM-derived flags, step > 0 by the
-        // sign-derived periodic flags (gated on `skip_step`).
-        let (mut remove_trans, mut remove_rot) = if sim.step == 0 {
-            (self.initial_remove_trans, self.initial_remove_rot)
-        } else if self.skip_step > 0 && sim.step.is_multiple_of(self.skip_step) {
-            (true, true)
-        } else {
-            (false, false)
-        };
-
-        if sim.step != 0 {
-            remove_rot = remove_rot && self.periodic_remove_rot;
-            remove_trans = remove_trans && self.periodic_remove_trans;
-        }
-
-        // GROMOS `configuration.cc:555-560`: when PBC is active, periodic COM
-        // rotation removal is disabled (param.centreofmass.remove_rot = false).
-        // The initial removal at step 0 (from NTICOM) is still applied.
-        if sim.step != 0 {
-            let is_periodic = !matches!(
-                conf.current().box_config.box_type,
-                newen_core::configuration::BoxType::Vacuum
-            );
-            if is_periodic {
-                remove_rot = false;
-            }
-        }
+        // `Remove_COM_Motion::apply` (remove_com_motion.cc:240-264): NTICOM at step 0, NSCM
+        // after it, no periodic rotation removal in PBC (configuration.cc:555-560)
+        let periodic = !matches!(
+            conf.current().box_config.box_type,
+            newen_core::configuration::BoxType::Vacuum
+        );
+        let (remove_trans, remove_rot) = com_removal(
+            sim.step,
+            i64::from(self.nticom),
+            i64::from(self.nscm),
+            periodic,
+        );
 
         if !remove_trans && !remove_rot {
             return Ok(());

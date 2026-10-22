@@ -1,0 +1,39 @@
+# Expected output from native gromosXX 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` (built as in
+# `patches/BUILD.md`), generated with
+#   python3 scripts/regen_gromosXX_references.py --binary <patched md> water_216_box_p3m_gauss_fixed
+# The released binary freezes the A term of an NVT run at its step-0 value
+# (`configuration/energy.cc:576-580`), which is exact for Ewald but not for P3M, whose Ã2 (NA2CLC 3)
+# moves with the charges; the patch reports the A term of the step. With the released binary
+# every other block agrees (ENERGY03 rows 15, 14, 17, 18, the forces, the trajectory).
+# gromosXX v1.6.0, double precision. NSHAPE -1 (Gaussian) with ASHAPE 0.4 nm, grid 32^3, NASORD 3, NFDORD 0 (ik), NALIAS 3, NQEVAL 0, FACCUR 1.0, NA2CLC 3.
+# newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
+# within the standard tolerances, not byte for byte.
+
+[system]
+name = "water_216_box_p3m_gauss_fixed"
+description = "Level 3: 216 waters bulk, P3M (NLRELE 3), Gaussian shape, ik differentiation"
+level = 3
+natoms = 648
+isolates = "P3M with the Gaussian shape and ik differentiation (three backward transforms of the field)"
+
+[input]
+topology = "../water_216_box/water_216_box.topo"
+configuration = "../water_216_box/water_216_box.conf"
+parameters = "water_216_box_p3m_gauss_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

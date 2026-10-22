@@ -212,7 +212,7 @@ jobs:
 
       - name: Build Python wheel (all features)
         working-directory: py-newen
-        run: maturin build --release --features newen/use-fftw,newen/use-mpi
+        run: maturin build --release --features newen/use-mpi
         continue-on-error: true
 
       - name: Upload wheels

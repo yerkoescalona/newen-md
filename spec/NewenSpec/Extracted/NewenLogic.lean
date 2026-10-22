@@ -19,8 +19,32 @@ set_option maxRecDepth 2048
 
 namespace newen_logic
 
+/-- [newen_logic::schedule::com::com_removal]:
+    Source: 'crates/newen-logic/src/schedule/com.rs', lines 19:0-34:1
+    Visibility: public -/
+def schedule.com.com_removal
+  (step : Std.Usize) (nticom : Std.I64) (nscm : Std.I64) (periodic : Bool) :
+  Result (Bool × Bool)
+  := do
+  if step = 0#usize
+  then ok (nticom >= 1#i64, nticom >= 2#i64)
+  else
+    let every ← if nscm < 0#i64
+                  then -. nscm
+                  else ok nscm
+    if every = 0#i64
+    then ok (false, false)
+    else
+      let i ← lift (IScalar.hcast .Usize every)
+      let i1 ← step % i
+      if i1 != 0#usize
+      then ok (false, false)
+      else if nscm < 0#i64
+           then ok (true, ¬ periodic)
+           else ok (true, false)
+
 /-- [newen_logic::schedule::output_misses_longrange]:
-    Source: 'crates/newen-logic/src/schedule.rs', lines 18:0-23:1
+    Source: 'crates/newen-logic/src/schedule/mod.rs', lines 22:0-27:1
     Visibility: public -/
 def schedule.output_misses_longrange
   (nsnb : Std.Usize) (ntwg : Std.Usize) : Result Bool := do
@@ -35,5 +59,1348 @@ def schedule.output_misses_longrange
       then let i1 ← nsnb % ntwg
            ok (i1 != 0#usize)
       else ok false
+
+/-- [newen_logic::schedule::output::due]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 17:0-22:1
+    Visibility: public -/
+def schedule.output.due
+  (step : Std.Usize) (every : Std.Usize) : Result Bool := do
+  if every = 0#usize
+  then ok false
+  else let i ← step % every
+       ok (i = 0#usize)
+
+/-- [newen_logic::schedule::output::frames_in]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 28:0-38:1
+    Visibility: public -/
+def schedule.output.frames_in
+  (n_steps : Std.Usize) (every : Std.Usize) : Result Std.Usize := do
+  if every = 0#usize
+  then ok 0#usize
+  else
+    let whole ← n_steps / every
+    let i ← n_steps % every
+    if i = 0#usize
+    then ok whole
+    else whole + 1#usize
+
+/-- [newen_logic::schedule::output::StopFrames]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 42:0-51:1
+    Visibility: public -/
+structure schedule.output.StopFrames where
+  positions : Bool
+  forces : Bool
+  energies : Bool
+  free_energy : Bool
+
+/-- [newen_logic::schedule::output::{impl core::fmt::Debug for newen_logic::schedule::output::StopFrames}::fmt]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:9-41:14
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreFmtDebug.fmt
+  (self : schedule.output.StopFrames) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ core.fmt.DebugBool self.positions
+  let dyn1 := Dyn.mk _ core.fmt.DebugBool self.forces
+  let dyn2 := Dyn.mk _ core.fmt.DebugBool self.energies
+  let dyn3 :=
+    Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugBool) self.free_energy
+  core.fmt.Formatter.debug_struct_field4_finish f (toStr "StopFrames") (toStr
+    "positions") dyn (toStr "forces") dyn1 (toStr "energies") dyn2 (toStr
+    "free_energy") dyn3
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::fmt::Debug for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:9-41:14 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreFmtDebug : core.fmt.Debug
+  schedule.output.StopFrames := {
+  fmt := schedule.output.StopFrames.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::schedule::output::{impl core::clone::Clone for newen_logic::schedule::output::StopFrames}::clone]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:16-41:21
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCloneClone.clone
+  (self : schedule.output.StopFrames) : Result schedule.output.StopFrames := do
+  ok self
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::clone::Clone for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:16-41:21 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCloneClone : core.clone.Clone
+  schedule.output.StopFrames := {
+  clone := schedule.output.StopFrames.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::marker::Copy for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:23-41:27 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreMarkerCopy : core.marker.Copy
+  schedule.output.StopFrames := {
+  cloneInst := schedule.output.StopFrames.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::marker::StructuralPartialEq for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq schedule.output.StopFrames := {
+}
+
+/-- [newen_logic::schedule::output::{impl core::cmp::PartialEq<newen_logic::schedule::output::StopFrames> for newen_logic::schedule::output::StopFrames}::eq]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames.eq
+  (self : schedule.output.StopFrames) (other : schedule.output.StopFrames) :
+  Result Bool
+  := do
+  if self.positions = other.positions
+  then
+    if self.forces = other.forces
+    then
+      if self.energies = other.energies
+      then ok (self.free_energy = other.free_energy)
+      else ok false
+    else ok false
+  else ok false
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::cmp::PartialEq<newen_logic::schedule::output::StopFrames> for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:29-41:38 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames :
+  core.cmp.PartialEq schedule.output.StopFrames schedule.output.StopFrames := {
+  eq := schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames.eq
+}
+
+/-- [newen_logic::schedule::output::{impl core::cmp::Eq for newen_logic::schedule::output::StopFrames}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:40-41:42
+    Visibility: public -/
+def schedule.output.StopFrames.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : schedule.output.StopFrames) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::schedule::output::{impl core::cmp::Eq for newen_logic::schedule::output::StopFrames}]
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 41:40-41:42 -/
+@[reducible]
+def schedule.output.StopFrames.Insts.CoreCmpEq : core.cmp.Eq
+  schedule.output.StopFrames := {
+  partialEqInst := schedule.output.StopFrames.Insts.CoreCmpPartialEqStopFrames
+  assert_fields_are_eq :=
+    schedule.output.StopFrames.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::schedule::output::minimisation_stop]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 62:0-82:1
+    Visibility: public -/
+def schedule.output.minimisation_stop
+  (step : Std.Usize) (nmin : Std.Usize) (converged : Bool) (ntwx : Std.Usize)
+  (ntwf : Std.Usize) (ntwe : Std.Usize) (ntwg : Std.Usize) :
+  Result (Option schedule.output.StopFrames)
+  := do
+  if converged
+  then
+    if step <= nmin
+    then ok none
+    else
+      let last ← step - 1#usize
+      let b ← schedule.output.due step ntwx
+      let b1 ← schedule.output.due last ntwf
+      let b2 ← schedule.output.due last ntwe
+      let b3 ← schedule.output.due last ntwg
+      ok (some
+        { positions := b, forces := b1, energies := b2, free_energy := b3 })
+  else ok none
+
+/-- [newen_logic::schedule::output::final_step]:
+    Source: 'crates/newen-logic/src/schedule/output.rs', lines 88:0-93:1
+    Visibility: public -/
+def schedule.output.final_step
+  (n_steps : Std.Usize) (stopped_at : Option Std.Usize) :
+  Result Std.Usize
+  := do
+  match stopped_at with
+  | none => ok n_steps
+  | some step => ok step
+
+/-- [newen_logic::thermo::bath::DofRange]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 24:0-31:1
+    Visibility: public -/
+structure thermo.bath.DofRange where
+  last_atom : Std.Usize
+  com_bath : Std.Usize
+  ir_bath : Std.Usize
+
+/-- [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::DofRange}::fmt]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:9-18:14
+    Visibility: public -/
+def thermo.bath.DofRange.Insts.CoreFmtDebug.fmt
+  (self : thermo.bath.DofRange) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ core.fmt.DebugUsize self.last_atom
+  let dyn1 := Dyn.mk _ core.fmt.DebugUsize self.com_bath
+  let dyn2 := Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugUsize) self.ir_bath
+  core.fmt.Formatter.debug_struct_field3_finish f (toStr "DofRange") (toStr
+    "last_atom") dyn (toStr "com_bath") dyn1 (toStr "ir_bath") dyn2
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:9-18:14 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreFmtDebug : core.fmt.Debug
+  thermo.bath.DofRange := {
+  fmt := thermo.bath.DofRange.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::DofRange}::clone]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:16-18:21
+    Visibility: public -/
+def thermo.bath.DofRange.Insts.CoreCloneClone.clone
+  (self : thermo.bath.DofRange) : Result thermo.bath.DofRange := do
+  ok self
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:16-18:21 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreCloneClone : core.clone.Clone
+  thermo.bath.DofRange := {
+  clone := thermo.bath.DofRange.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::Copy for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:23-18:27 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreMarkerCopy : core.marker.Copy
+  thermo.bath.DofRange := {
+  cloneInst := thermo.bath.DofRange.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::StructuralPartialEq for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:29-18:38 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq thermo.bath.DofRange := {
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::DofRange> for newen_logic::thermo::bath::DofRange}::eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:29-18:38
+    Visibility: public -/
+def thermo.bath.DofRange.Insts.CoreCmpPartialEqDofRange.eq
+  (self : thermo.bath.DofRange) (other : thermo.bath.DofRange) :
+  Result Bool
+  := do
+  if self.last_atom = other.last_atom
+  then
+    if self.com_bath = other.com_bath
+    then ok (self.ir_bath = other.ir_bath)
+    else ok false
+  else ok false
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::DofRange> for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:29-18:38 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreCmpPartialEqDofRange : core.cmp.PartialEq
+  thermo.bath.DofRange thermo.bath.DofRange := {
+  eq := thermo.bath.DofRange.Insts.CoreCmpPartialEqDofRange.eq
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::DofRange}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:40-18:42
+    Visibility: public -/
+def thermo.bath.DofRange.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : thermo.bath.DofRange) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::DofRange}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 18:40-18:42 -/
+@[reducible]
+def thermo.bath.DofRange.Insts.CoreCmpEq : core.cmp.Eq thermo.bath.DofRange
+  := {
+  partialEqInst := thermo.bath.DofRange.Insts.CoreCmpPartialEqDofRange
+  assert_fields_are_eq :=
+    thermo.bath.DofRange.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::thermo::bath::Constraint]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 35:0-38:1
+    Visibility: public -/
+structure thermo.bath.Constraint where
+  i : Std.Usize
+  j : Std.Usize
+
+/-- [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::Constraint}::fmt]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:9-34:14
+    Visibility: public -/
+def thermo.bath.Constraint.Insts.CoreFmtDebug.fmt
+  (self : thermo.bath.Constraint) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ core.fmt.DebugUsize self.i
+  let dyn1 := Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugUsize) self.j
+  core.fmt.Formatter.debug_struct_field2_finish f (toStr "Constraint") (toStr
+    "i") dyn (toStr "j") dyn1
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:9-34:14 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreFmtDebug : core.fmt.Debug
+  thermo.bath.Constraint := {
+  fmt := thermo.bath.Constraint.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::Constraint}::clone]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:16-34:21
+    Visibility: public -/
+def thermo.bath.Constraint.Insts.CoreCloneClone.clone
+  (self : thermo.bath.Constraint) : Result thermo.bath.Constraint := do
+  ok self
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:16-34:21 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreCloneClone : core.clone.Clone
+  thermo.bath.Constraint := {
+  clone := thermo.bath.Constraint.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::Copy for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:23-34:27 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreMarkerCopy : core.marker.Copy
+  thermo.bath.Constraint := {
+  cloneInst := thermo.bath.Constraint.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::StructuralPartialEq for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:29-34:38 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq thermo.bath.Constraint := {
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::Constraint> for newen_logic::thermo::bath::Constraint}::eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:29-34:38
+    Visibility: public -/
+def thermo.bath.Constraint.Insts.CoreCmpPartialEqConstraint.eq
+  (self : thermo.bath.Constraint) (other : thermo.bath.Constraint) :
+  Result Bool
+  := do
+  if self.i = other.i
+  then ok (self.j = other.j)
+  else ok false
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::Constraint> for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:29-34:38 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreCmpPartialEqConstraint :
+  core.cmp.PartialEq thermo.bath.Constraint thermo.bath.Constraint := {
+  eq := thermo.bath.Constraint.Insts.CoreCmpPartialEqConstraint.eq
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::Constraint}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:40-34:42
+    Visibility: public -/
+def thermo.bath.Constraint.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : thermo.bath.Constraint) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::Constraint}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 34:40-34:42 -/
+@[reducible]
+def thermo.bath.Constraint.Insts.CoreCmpEq : core.cmp.Eq thermo.bath.Constraint
+  := {
+  partialEqInst := thermo.bath.Constraint.Insts.CoreCmpPartialEqConstraint
+  assert_fields_are_eq :=
+    thermo.bath.Constraint.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::thermo::bath::HalfDof]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 42:0-47:1
+    Visibility: public -/
+structure thermo.bath.HalfDof where
+  com : Std.I64
+  ir : Std.I64
+
+/-- [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::HalfDof}::fmt]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:9-41:14
+    Visibility: public -/
+def thermo.bath.HalfDof.Insts.CoreFmtDebug.fmt
+  (self : thermo.bath.HalfDof) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ core.fmt.DebugI64 self.com
+  let dyn1 := Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugI64) self.ir
+  core.fmt.Formatter.debug_struct_field2_finish f (toStr "HalfDof") (toStr
+    "com") dyn (toStr "ir") dyn1
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:9-41:14 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreFmtDebug : core.fmt.Debug thermo.bath.HalfDof
+  := {
+  fmt := thermo.bath.HalfDof.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::HalfDof}::clone]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:16-41:21
+    Visibility: public -/
+def thermo.bath.HalfDof.Insts.CoreCloneClone.clone
+  (self : thermo.bath.HalfDof) : Result thermo.bath.HalfDof := do
+  ok self
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:16-41:21 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreCloneClone : core.clone.Clone
+  thermo.bath.HalfDof := {
+  clone := thermo.bath.HalfDof.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::Copy for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:23-41:27 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreMarkerCopy : core.marker.Copy
+  thermo.bath.HalfDof := {
+  cloneInst := thermo.bath.HalfDof.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::StructuralPartialEq for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:29-41:38 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq thermo.bath.HalfDof := {
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::HalfDof> for newen_logic::thermo::bath::HalfDof}::eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:29-41:38
+    Visibility: public -/
+def thermo.bath.HalfDof.Insts.CoreCmpPartialEqHalfDof.eq
+  (self : thermo.bath.HalfDof) (other : thermo.bath.HalfDof) :
+  Result Bool
+  := do
+  if self.com = other.com
+  then ok (self.ir = other.ir)
+  else ok false
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::HalfDof> for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:29-41:38 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreCmpPartialEqHalfDof : core.cmp.PartialEq
+  thermo.bath.HalfDof thermo.bath.HalfDof := {
+  eq := thermo.bath.HalfDof.Insts.CoreCmpPartialEqHalfDof.eq
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::HalfDof}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:40-41:42
+    Visibility: public -/
+def thermo.bath.HalfDof.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : thermo.bath.HalfDof) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::HalfDof}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 41:40-41:42 -/
+@[reducible]
+def thermo.bath.HalfDof.Insts.CoreCmpEq : core.cmp.Eq thermo.bath.HalfDof := {
+  partialEqInst := thermo.bath.HalfDof.Insts.CoreCmpPartialEqHalfDof
+  assert_fields_are_eq :=
+    thermo.bath.HalfDof.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::thermo::bath::Spread]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 52:0-55:1
+    Visibility: public -/
+structure thermo.bath.Spread where
+  numerators : alloc.vec.Vec Std.I64
+  denominator : Std.I64
+
+/-- [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::Spread}::fmt]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:9-51:14
+    Visibility: public -/
+def thermo.bath.Spread.Insts.CoreFmtDebug.fmt
+  (self : thermo.bath.Spread) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  let dyn := Dyn.mk _ (core.fmt.DebugVec core.fmt.DebugI64) self.numerators
+  let dyn1 :=
+    Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugI64) self.denominator
+  core.fmt.Formatter.debug_struct_field2_finish f (toStr "Spread") (toStr
+    "numerators") dyn (toStr "denominator") dyn1
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::fmt::Debug for newen_logic::thermo::bath::Spread}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:9-51:14 -/
+@[reducible]
+def thermo.bath.Spread.Insts.CoreFmtDebug : core.fmt.Debug thermo.bath.Spread
+  := {
+  fmt := thermo.bath.Spread.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::Spread}::clone]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:16-51:21
+    Visibility: public -/
+def thermo.bath.Spread.Insts.CoreCloneClone.clone
+  (self : thermo.bath.Spread) : Result thermo.bath.Spread := do
+  let v ← alloc.vec.CloneVec.clone core.clone.CloneI64 self.numerators
+  let i ← lift (core.clone.impls.CloneI64.clone self.denominator)
+  ok { numerators := v, denominator := i }
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::clone::Clone for newen_logic::thermo::bath::Spread}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:16-51:21 -/
+@[reducible]
+def thermo.bath.Spread.Insts.CoreCloneClone : core.clone.Clone
+  thermo.bath.Spread := {
+  clone := thermo.bath.Spread.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::marker::StructuralPartialEq for newen_logic::thermo::bath::Spread}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:23-51:32 -/
+@[reducible]
+def thermo.bath.Spread.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq thermo.bath.Spread := {
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::Spread> for newen_logic::thermo::bath::Spread}::eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:23-51:32
+    Visibility: public -/
+def thermo.bath.Spread.Insts.CoreCmpPartialEqSpread.eq
+  (self : thermo.bath.Spread) (other : thermo.bath.Spread) : Result Bool := do
+  if self.denominator = other.denominator
+  then
+    alloc.vec.partial_eq.PartialEqVec.eq core.cmp.PartialEqI64 self.numerators
+      other.numerators
+  else ok false
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::PartialEq<newen_logic::thermo::bath::Spread> for newen_logic::thermo::bath::Spread}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:23-51:32 -/
+@[reducible]
+def thermo.bath.Spread.Insts.CoreCmpPartialEqSpread : core.cmp.PartialEq
+  thermo.bath.Spread thermo.bath.Spread := {
+  eq := thermo.bath.Spread.Insts.CoreCmpPartialEqSpread.eq
+}
+
+/-- [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::Spread}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:34-51:36
+    Visibility: public -/
+def thermo.bath.Spread.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : thermo.bath.Spread) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::thermo::bath::{impl core::cmp::Eq for newen_logic::thermo::bath::Spread}]
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 51:34-51:36 -/
+@[reducible]
+def thermo.bath.Spread.Insts.CoreCmpEq : core.cmp.Eq thermo.bath.Spread := {
+  partialEqInst := thermo.bath.Spread.Insts.CoreCmpPartialEqSpread
+  assert_fields_are_eq :=
+    thermo.bath.Spread.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::thermo::bath::baths_of]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 63:4-70:1
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.baths_of_loop.body
+  (ranges : Slice thermo.bath.DofRange) (atom : Std.Usize) (r : Std.Usize) :
+  Result (ControlFlow Std.Usize (Option (Std.Usize × Std.Usize)))
+  := do
+  let i := Slice.len ranges
+  if r < i
+  then
+    let dr ← Slice.index_usize ranges r
+    if atom <= dr.last_atom
+    then ok (done (some (dr.com_bath, dr.ir_bath)))
+    else let r1 ← r + 1#usize
+         ok (cont r1)
+  else ok (done none)
+
+/-- [newen_logic::thermo::bath::baths_of]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 63:4-70:1
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.baths_of_loop
+  (ranges : Slice thermo.bath.DofRange) (atom : Std.Usize) (r : Std.Usize) :
+  Result (Option (Std.Usize × Std.Usize))
+  := do
+  loop
+    (fun r1 => thermo.bath.baths_of_loop.body ranges atom r1)
+    r
+
+/-- [newen_logic::thermo::bath::baths_of]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 61:0-70:1
+    Visibility: public -/
+@[reducible]
+def thermo.bath.baths_of
+  (ranges : Slice thermo.bath.DofRange) (atom : Std.Usize) :
+  Result (Option (Std.Usize × Std.Usize))
+  := do
+  thermo.bath.baths_of_loop ranges atom 0#usize
+
+/-- [newen_logic::thermo::bath::groups_starting_in]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 79:4-84:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.groups_starting_in_loop.body
+  (group_firsts : Slice Std.Usize) (first : Std.Usize) (last : Std.Usize)
+  (count : Std.U64) (g : Std.Usize) :
+  Result (ControlFlow (Std.U64 × Std.Usize) Std.U64)
+  := do
+  let i := Slice.len group_firsts
+  if g < i
+  then
+    let i1 ← Slice.index_usize group_firsts g
+    let count1 ←
+      if first <= i1
+      then if i1 <= last
+           then count + 1#u64
+           else ok count
+      else ok count
+    let g1 ← g + 1#usize
+    ok (cont (count1, g1))
+  else ok (done count)
+
+/-- [newen_logic::thermo::bath::groups_starting_in]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 79:4-84:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.groups_starting_in_loop
+  (group_firsts : Slice Std.Usize) (first : Std.Usize) (last : Std.Usize)
+  (count : Std.U64) (g : Std.Usize) :
+  Result Std.U64
+  := do
+  loop
+    (fun (count1, g1) => thermo.bath.groups_starting_in_loop.body group_firsts
+      first last count1 g1)
+    (count, g)
+
+/-- [newen_logic::thermo::bath::groups_starting_in]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 76:0-86:1
+    Visibility: public -/
+@[reducible]
+def thermo.bath.groups_starting_in
+  (group_firsts : Slice Std.Usize) (first : Std.Usize) (last : Std.Usize) :
+  Result Std.U64
+  := do
+  thermo.bath.groups_starting_in_loop group_firsts first last 0#u64 0#usize
+
+/-- [newen_logic::thermo::bath::end_in_bath]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 158:0-165:1 -/
+def thermo.bath.end_in_bath
+  (ranges : Slice thermo.bath.DofRange) (atom : Std.Usize) (bath : Std.Usize) :
+  Result Std.I64
+  := do
+  let o ← thermo.bath.baths_of ranges atom
+  match o with
+  | none => ok 0#i64
+  | some p => let (_, ir) := p
+              if ir = bath
+              then ok 1#i64
+              else ok 0#i64
+
+/-- [newen_logic::thermo::bath::bath_half_dof]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 120:4-135:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.bath_half_dof_loop0.body
+  (bath : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (com : Std.I64) (ir : Std.I64)
+  (start : Std.Usize) (r : Std.Usize) :
+  Result (ControlFlow (Std.I64 × Std.I64 × Std.Usize × Std.Usize) (Std.I64
+    × Std.I64))
+  := do
+  let i := Slice.len ranges
+  if r < i
+  then
+    let dr ← Slice.index_usize ranges r
+    let atoms ←
+      if start <= dr.last_atom
+      then
+        do
+        let i1 ← dr.last_atom - start
+        let i2 ← i1 + 1#usize
+        ok (UScalar.hcast .I64 i2)
+      else ok 0#i64
+    let i1 ← thermo.bath.groups_starting_in group_firsts start dr.last_atom
+    let groups ← lift (UScalar.hcast .I64 i1)
+    let com1 ←
+      if dr.com_bath = bath
+      then do
+           let i2 ← 6#i64 * groups
+           com + i2
+      else ok com
+    let ir1 ←
+      if dr.ir_bath = bath
+      then
+        do
+        let i2 ← 6#i64 * atoms
+        let i3 ← 6#i64 * groups
+        let i4 ← i2 - i3
+        ir + i4
+      else ok ir
+    let start1 ← dr.last_atom + 1#usize
+    let r1 ← r + 1#usize
+    ok (cont (com1, ir1, start1, r1))
+  else ok (done (com, ir))
+
+/-- [newen_logic::thermo::bath::bath_half_dof]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 120:4-135:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.bath_half_dof_loop0
+  (bath : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (com : Std.I64) (ir : Std.I64)
+  (start : Std.Usize) (r : Std.Usize) :
+  Result (Std.I64 × Std.I64)
+  := do
+  loop
+    (fun (com1, ir1, start1, r1) => thermo.bath.bath_half_dof_loop0.body bath
+      ranges group_firsts com1 ir1 start1 r1)
+    (com, ir, start, r)
+
+/-- [newen_logic::thermo::bath::bath_half_dof]: loop body 1:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 138:4-142:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.bath_half_dof_loop1.body
+  (bath : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (constraints : Slice thermo.bath.Constraint) (ends : Std.I64) (c : Std.Usize)
+  :
+  Result (ControlFlow (Std.I64 × Std.Usize) Std.I64)
+  := do
+  let i := Slice.len constraints
+  if c < i
+  then
+    let c1 ← Slice.index_usize constraints c
+    let i1 ← thermo.bath.end_in_bath ranges c1.i bath
+    let ends1 ← ends + i1
+    let i2 ← thermo.bath.end_in_bath ranges c1.j bath
+    let ends2 ← ends1 + i2
+    let c2 ← c + 1#usize
+    ok (cont (ends2, c2))
+  else ok (done ends)
+
+/-- [newen_logic::thermo::bath::bath_half_dof]: loop 1:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 138:4-142:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.bath_half_dof_loop1
+  (bath : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (constraints : Slice thermo.bath.Constraint) (ends : Std.I64) (c : Std.Usize)
+  :
+  Result Std.I64
+  := do
+  loop
+    (fun (ends1, c1) => thermo.bath.bath_half_dof_loop1.body bath ranges
+      constraints ends1 c1)
+    (ends, c)
+
+/-- [newen_logic::thermo::bath::bath_half_dof]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 109:0-155:1
+    Visibility: public -/
+def thermo.bath.bath_half_dof
+  (bath : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (constraints : Slice thermo.bath.Constraint)
+  (rottrans : Bool) :
+  Result thermo.bath.HalfDof
+  := do
+  let (com, ir) ←
+    thermo.bath.bath_half_dof_loop0 bath ranges group_firsts 0#i64 0#i64
+      0#usize 0#usize
+  let ends ←
+    thermo.bath.bath_half_dof_loop1 bath ranges constraints 0#i64 0#usize
+  let ir1 ← ir - ends
+  if rottrans
+  then
+    let o ← thermo.bath.baths_of ranges 0#usize
+    match o with
+    | none => ok { com, ir := ir1 }
+    | some p =>
+      let (com_0, ir_0) := p
+      let com1 ← if com_0 = bath
+                   then com - 6#i64
+                   else ok com
+      if ir_0 = bath
+      then let ir2 ← ir1 - 6#i64
+           ok { com := com1, ir := ir2 }
+      else ok { com := com1, ir := ir1 }
+  else ok { com, ir := ir1 }
+
+/-- [newen_logic::thermo::bath::bath_half_dofs]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 179:4-188:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.bath_half_dofs_loop.body
+  (n_baths : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (constraints : Slice thermo.bath.Constraint)
+  (rottrans : Bool) (halves : alloc.vec.Vec thermo.bath.HalfDof)
+  (b : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec thermo.bath.HalfDof) × Std.Usize)
+    (alloc.vec.Vec thermo.bath.HalfDof))
+  := do
+  if b < n_baths
+  then
+    let hd ←
+      thermo.bath.bath_half_dof b ranges group_firsts constraints rottrans
+    let halves1 ← alloc.vec.Vec.push halves hd
+    let b1 ← b + 1#usize
+    ok (cont (halves1, b1))
+  else ok (done halves)
+
+/-- [newen_logic::thermo::bath::bath_half_dofs]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 179:4-188:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.bath_half_dofs_loop
+  (n_baths : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (constraints : Slice thermo.bath.Constraint)
+  (rottrans : Bool) (halves : alloc.vec.Vec thermo.bath.HalfDof)
+  (b : Std.Usize) :
+  Result (alloc.vec.Vec thermo.bath.HalfDof)
+  := do
+  loop
+    (fun (halves1, b1) => thermo.bath.bath_half_dofs_loop.body n_baths ranges
+      group_firsts constraints rottrans halves1 b1)
+    (halves, b)
+
+/-- [newen_logic::thermo::bath::bath_half_dofs]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 170:0-190:1
+    Visibility: public -/
+@[reducible]
+def thermo.bath.bath_half_dofs
+  (n_baths : Std.Usize) (ranges : Slice thermo.bath.DofRange)
+  (group_firsts : Slice Std.Usize) (constraints : Slice thermo.bath.Constraint)
+  (rottrans : Bool) :
+  Result (alloc.vec.Vec thermo.bath.HalfDof)
+  := do
+  thermo.bath.bath_half_dofs_loop n_baths ranges group_firsts constraints
+    rottrans (alloc.vec.Vec.new thermo.bath.HalfDof) 0#usize
+
+/-- [newen_logic::thermo::bath::ndfmin_spread]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 204:4-207:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.ndfmin_spread_loop0.body
+  (half_dofs : Slice Std.I64) (total : Std.I64) (b : Std.Usize) :
+  Result (ControlFlow (Std.I64 × Std.Usize) Std.I64)
+  := do
+  let i := Slice.len half_dofs
+  if b < i
+  then
+    let i1 ← Slice.index_usize half_dofs b
+    let total1 ← total + i1
+    let b1 ← b + 1#usize
+    ok (cont (total1, b1))
+  else ok (done total)
+
+/-- [newen_logic::thermo::bath::ndfmin_spread]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 204:4-207:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.ndfmin_spread_loop0
+  (half_dofs : Slice Std.I64) (total : Std.I64) (b : Std.Usize) :
+  Result Std.I64
+  := do
+  loop
+    (fun (total1, b1) => thermo.bath.ndfmin_spread_loop0.body half_dofs total1
+      b1)
+    (total, b)
+
+/-- [newen_logic::thermo::bath::ndfmin_spread]: loop body 1:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 216:4-219:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.ndfmin_spread_loop1.body
+  (half_dofs : Slice Std.I64) (factor : Std.I64)
+  (numerators : alloc.vec.Vec Std.I64) (k : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Std.I64) × Std.Usize) (alloc.vec.Vec
+    Std.I64))
+  := do
+  let i := Slice.len half_dofs
+  if k < i
+  then
+    let i1 ← Slice.index_usize half_dofs k
+    let i2 ← i1 * factor
+    let numerators1 ← alloc.vec.Vec.push numerators i2
+    let k1 ← k + 1#usize
+    ok (cont (numerators1, k1))
+  else ok (done numerators)
+
+/-- [newen_logic::thermo::bath::ndfmin_spread]: loop 1:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 216:4-219:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.ndfmin_spread_loop1
+  (half_dofs : Slice Std.I64) (factor : Std.I64)
+  (numerators : alloc.vec.Vec Std.I64) (k : Std.Usize) :
+  Result (alloc.vec.Vec Std.I64)
+  := do
+  loop
+    (fun (numerators1, k1) => thermo.bath.ndfmin_spread_loop1.body half_dofs
+      factor numerators1 k1)
+    (numerators, k)
+
+/-- [newen_logic::thermo::bath::ndfmin_spread]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 201:0-224:1
+    Visibility: public -/
+def thermo.bath.ndfmin_spread
+  (half_dofs : Slice Std.I64) (ndfmin : Std.I64) :
+  Result thermo.bath.Spread
+  := do
+  let total ← thermo.bath.ndfmin_spread_loop0 half_dofs 0#i64 0#usize
+  let (factor, denominator) ←
+    if total > 0#i64
+    then
+      do
+      let i ← 2#i64 * ndfmin
+      let factor1 ← total - i
+      let denominator1 ← 2#i64 * total
+      ok (factor1, denominator1)
+    else ok (1#i64, 2#i64)
+  let numerators ←
+    thermo.bath.ndfmin_spread_loop1 half_dofs factor (alloc.vec.Vec.new
+      Std.I64) 0#usize
+  ok { numerators, denominator }
+
+/-- [newen_logic::thermo::bath::empty_baths]: loop body 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 234:4-237:5
+    Visibility: public -/
+@[rust_loop_body]
+def thermo.bath.empty_baths_loop.body
+  (halves : Slice Std.I64) (empty : alloc.vec.Vec Bool) (b : Std.Usize) :
+  Result (ControlFlow ((alloc.vec.Vec Bool) × Std.Usize) (alloc.vec.Vec Bool))
+  := do
+  let i := Slice.len halves
+  if b < i
+  then
+    let i1 ← Slice.index_usize halves b
+    let empty1 ← alloc.vec.Vec.push empty (i1 <= 0#i64)
+    let b1 ← b + 1#usize
+    ok (cont (empty1, b1))
+  else ok (done empty)
+
+/-- [newen_logic::thermo::bath::empty_baths]: loop 0:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 234:4-237:5
+    Visibility: public -/
+@[rust_loop]
+def thermo.bath.empty_baths_loop
+  (halves : Slice Std.I64) (empty : alloc.vec.Vec Bool) (b : Std.Usize) :
+  Result (alloc.vec.Vec Bool)
+  := do
+  loop
+    (fun (empty1, b1) => thermo.bath.empty_baths_loop.body halves empty1 b1)
+    (empty, b)
+
+/-- [newen_logic::thermo::bath::empty_baths]:
+    Source: 'crates/newen-logic/src/thermo/bath.rs', lines 231:0-239:1
+    Visibility: public -/
+@[reducible]
+def thermo.bath.empty_baths
+  (halves : Slice Std.I64) : Result (alloc.vec.Vec Bool) := do
+  thermo.bath.empty_baths_loop halves (alloc.vec.Vec.new Bool) 0#usize
+
+/-- [newen_logic::thermo::dof::total_dof]:
+    Source: 'crates/newen-logic/src/thermo/dof.rs', lines 22:0-30:1
+    Visibility: public -/
+def thermo.dof.total_dof
+  (n_atoms : Std.U64) (solvent_constraints : Std.U64)
+  (solute_constraints : Std.U64) (ndfmin : Std.I64) :
+  Result Std.I64
+  := do
+  let i ← lift (UScalar.hcast .I64 n_atoms)
+  let coordinates ← 3#i64 * i
+  let i1 ← lift (UScalar.hcast .I64 solvent_constraints)
+  let i2 ← coordinates - i1
+  let i3 ← lift (UScalar.hcast .I64 solute_constraints)
+  let i4 ← i2 - i3
+  i4 - ndfmin
+
+/-- [newen_logic::topology::groups::group_of]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 18:4-25:1
+    Visibility: public -/
+@[rust_loop_body]
+def topology.groups.group_of_loop.body
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) (g : Std.Usize) :
+  Result (ControlFlow Std.Usize (Option Std.Usize))
+  := do
+  let i := Slice.len last_atoms
+  if g < i
+  then
+    let i1 ← Slice.index_usize last_atoms g
+    if atom <= i1
+    then ok (done (some g))
+    else let g1 ← g + 1#usize
+         ok (cont g1)
+  else ok (done none)
+
+/-- [newen_logic::topology::groups::group_of]: loop 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 18:4-25:1
+    Visibility: public -/
+@[rust_loop]
+def topology.groups.group_of_loop
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) (g : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  loop
+    (fun g1 => topology.groups.group_of_loop.body last_atoms atom g1)
+    g
+
+/-- [newen_logic::topology::groups::group_of]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 16:0-25:1
+    Visibility: public -/
+@[reducible]
+def topology.groups.group_of
+  (last_atoms : Slice Std.Usize) (atom : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  topology.groups.group_of_loop last_atoms atom 0#usize
+
+/-- [newen_logic::topology::groups::LastAtomsCheck]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 29:0-38:1
+    Visibility: public -/
+@[discriminant isize]
+inductive topology.groups.LastAtomsCheck where
+| Ok : topology.groups.LastAtomsCheck
+| Empty : topology.groups.LastAtomsCheck
+| NotIncreasing : Std.Usize → topology.groups.LastAtomsCheck
+| LastNotFinal : topology.groups.LastAtomsCheck
+
+/-- [newen_logic::topology::groups::{impl core::fmt::Debug for newen_logic::topology::groups::LastAtomsCheck}::fmt]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:9-28:14
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreFmtDebug.fmt
+  (self : topology.groups.LastAtomsCheck) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  match self with
+  | topology.groups.LastAtomsCheck.Ok =>
+    core.fmt.Formatter.write_str f (toStr "Ok")
+  | topology.groups.LastAtomsCheck.Empty =>
+    core.fmt.Formatter.write_str f (toStr "Empty")
+  | topology.groups.LastAtomsCheck.NotIncreasing __self_0 =>
+    let __self_01 :=
+      Dyn.mk _ (core.fmt.DebugShared core.fmt.DebugUsize) __self_0
+    core.fmt.Formatter.debug_tuple_field1_finish f (toStr "NotIncreasing")
+      __self_01
+  | topology.groups.LastAtomsCheck.LastNotFinal =>
+    core.fmt.Formatter.write_str f (toStr "LastNotFinal")
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::fmt::Debug for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:9-28:14 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreFmtDebug : core.fmt.Debug
+  topology.groups.LastAtomsCheck := {
+  fmt := topology.groups.LastAtomsCheck.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::topology::groups::{impl core::clone::Clone for newen_logic::topology::groups::LastAtomsCheck}::clone]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:16-28:21
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCloneClone.clone
+  (self : topology.groups.LastAtomsCheck) :
+  Result topology.groups.LastAtomsCheck
+  := do
+  ok self
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::clone::Clone for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:16-28:21 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCloneClone : core.clone.Clone
+  topology.groups.LastAtomsCheck := {
+  clone := topology.groups.LastAtomsCheck.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::marker::Copy for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:23-28:27 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreMarkerCopy : core.marker.Copy
+  topology.groups.LastAtomsCheck := {
+  cloneInst := topology.groups.LastAtomsCheck.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::marker::StructuralPartialEq for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq topology.groups.LastAtomsCheck := {
+}
+
+/-- [newen_logic::topology::groups::{impl core::cmp::PartialEq<newen_logic::topology::groups::LastAtomsCheck> for newen_logic::topology::groups::LastAtomsCheck}::eq]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck.eq
+  (self : topology.groups.LastAtomsCheck)
+  (other : topology.groups.LastAtomsCheck) :
+  Result Bool
+  := do
+  let self1 := read_discriminant self
+  let other1 := read_discriminant other
+  if self1 = other1
+  then
+    match self with
+    | topology.groups.LastAtomsCheck.Ok => ok true
+    | topology.groups.LastAtomsCheck.Empty => ok true
+    | topology.groups.LastAtomsCheck.NotIncreasing __self_0 =>
+      match other with
+      | topology.groups.LastAtomsCheck.Ok => ok true
+      | topology.groups.LastAtomsCheck.Empty => ok true
+      | topology.groups.LastAtomsCheck.NotIncreasing __arg1_0 =>
+        lift (core.cmp.impls.PartialEqUsize.eq __self_0 __arg1_0)
+      | topology.groups.LastAtomsCheck.LastNotFinal => ok true
+    | topology.groups.LastAtomsCheck.LastNotFinal => ok true
+  else ok false
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::cmp::PartialEq<newen_logic::topology::groups::LastAtomsCheck> for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:29-28:38 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck :
+  core.cmp.PartialEq topology.groups.LastAtomsCheck
+  topology.groups.LastAtomsCheck := {
+  eq := topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck.eq
+}
+
+/-- [newen_logic::topology::groups::{impl core::cmp::Eq for newen_logic::topology::groups::LastAtomsCheck}::assert_fields_are_eq]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:40-28:42
+    Visibility: public -/
+def topology.groups.LastAtomsCheck.Insts.CoreCmpEq.assert_fields_are_eq
+  (self : topology.groups.LastAtomsCheck) : Result Unit := do
+  ok ()
+
+/-- Trait implementation: [newen_logic::topology::groups::{impl core::cmp::Eq for newen_logic::topology::groups::LastAtomsCheck}]
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 28:40-28:42 -/
+@[reducible]
+def topology.groups.LastAtomsCheck.Insts.CoreCmpEq : core.cmp.Eq
+  topology.groups.LastAtomsCheck := {
+  partialEqInst :=
+    topology.groups.LastAtomsCheck.Insts.CoreCmpPartialEqLastAtomsCheck
+  assert_fields_are_eq :=
+    topology.groups.LastAtomsCheck.Insts.CoreCmpEq.assert_fields_are_eq
+}
+
+/-- [newen_logic::topology::groups::check_last_atoms]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 52:4-54:5
+    Visibility: public -/
+@[rust_loop_body]
+def topology.groups.check_last_atoms_loop.body
+  (last_atoms : Slice Std.Usize) (n : Std.Usize) (g : Std.Usize) :
+  Result (ControlFlow Std.Usize Std.Usize)
+  := do
+  if g < n
+  then
+    let i ← g - 1#usize
+    let i1 ← Slice.index_usize last_atoms i
+    let i2 ← Slice.index_usize last_atoms g
+    if i1 < i2
+    then let g1 ← g + 1#usize
+         ok (cont g1)
+    else ok (done g)
+  else ok (done g)
+
+/-- [newen_logic::topology::groups::check_last_atoms]: loop 0:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 52:4-54:5
+    Visibility: public -/
+@[rust_loop]
+def topology.groups.check_last_atoms_loop
+  (last_atoms : Slice Std.Usize) (n : Std.Usize) (g : Std.Usize) :
+  Result Std.Usize
+  := do
+  loop
+    (fun g1 => topology.groups.check_last_atoms_loop.body last_atoms n g1)
+    g
+
+/-- [newen_logic::topology::groups::check_last_atoms]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 45:0-65:1
+    Visibility: public -/
+def topology.groups.check_last_atoms
+  (last_atoms : Slice Std.Usize) (n_atoms : Std.Usize) :
+  Result topology.groups.LastAtomsCheck
+  := do
+  let n := Slice.len last_atoms
+  if n = 0#usize
+  then ok topology.groups.LastAtomsCheck.Empty
+  else
+    let g ← topology.groups.check_last_atoms_loop last_atoms n 1#usize
+    if g < n
+    then ok (topology.groups.LastAtomsCheck.NotIncreasing g)
+    else
+      if n_atoms = 0#usize
+      then ok topology.groups.LastAtomsCheck.LastNotFinal
+      else
+        let i ← n - 1#usize
+        let i1 ← Slice.index_usize last_atoms i
+        let i2 ← n_atoms - 1#usize
+        if i1 != i2
+        then ok topology.groups.LastAtomsCheck.LastNotFinal
+        else ok topology.groups.LastAtomsCheck.Ok
+
+/-- [newen_logic::topology::groups::energy_cell]:
+    Source: 'crates/newen-logic/src/topology/groups.rs', lines 72:0-77:1
+    Visibility: public -/
+def topology.groups.energy_cell
+  (eg_i : Std.Usize) (eg_j : Std.Usize) (n_groups : Std.Usize) :
+  Result (Option Std.Usize)
+  := do
+  if eg_i < n_groups
+  then
+    if eg_j < n_groups
+    then let i ← eg_i * n_groups
+         let i1 ← i + eg_j
+         ok (some i1)
+    else ok none
+  else ok none
+
+/-- [newen_logic::topology::pairs::PairKind]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 18:0-27:1
+    Visibility: public -/
+@[discriminant isize]
+inductive topology.pairs.PairKind where
+| Normal : topology.pairs.PairKind
+| Excluded : topology.pairs.PairKind
+| OneFour : topology.pairs.PairKind
+| AtomPair : topology.pairs.PairKind
+
+/-- [newen_logic::topology::pairs::{impl core::fmt::Debug for newen_logic::topology::pairs::PairKind}::fmt]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:9-17:14
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreFmtDebug.fmt
+  (self : topology.pairs.PairKind) (f : core.fmt.Formatter) :
+  Result ((core.result.Result Unit core.fmt.Error) × core.fmt.Formatter)
+  := do
+  match self with
+  | topology.pairs.PairKind.Normal =>
+    core.fmt.Formatter.write_str f (toStr "Normal")
+  | topology.pairs.PairKind.Excluded =>
+    core.fmt.Formatter.write_str f (toStr "Excluded")
+  | topology.pairs.PairKind.OneFour =>
+    core.fmt.Formatter.write_str f (toStr "OneFour")
+  | topology.pairs.PairKind.AtomPair =>
+    core.fmt.Formatter.write_str f (toStr "AtomPair")
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::fmt::Debug for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:9-17:14 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreFmtDebug : core.fmt.Debug
+  topology.pairs.PairKind := {
+  fmt := topology.pairs.PairKind.Insts.CoreFmtDebug.fmt
+}
+
+/-- [newen_logic::topology::pairs::{impl core::clone::Clone for newen_logic::topology::pairs::PairKind}::clone]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:16-17:21
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreCloneClone.clone
+  (self : topology.pairs.PairKind) : Result topology.pairs.PairKind := do
+  ok self
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::clone::Clone for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:16-17:21 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreCloneClone : core.clone.Clone
+  topology.pairs.PairKind := {
+  clone := topology.pairs.PairKind.Insts.CoreCloneClone.clone
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::marker::Copy for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:23-17:27 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreMarkerCopy : core.marker.Copy
+  topology.pairs.PairKind := {
+  cloneInst := topology.pairs.PairKind.Insts.CoreCloneClone
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::marker::StructuralPartialEq for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreMarkerStructuralPartialEq :
+  core.marker.StructuralPartialEq topology.pairs.PairKind := {
+}
+
+/-- [newen_logic::topology::pairs::{impl core::cmp::PartialEq<newen_logic::topology::pairs::PairKind> for newen_logic::topology::pairs::PairKind}::eq]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38
+    Visibility: public -/
+def topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind.eq
+  (self : topology.pairs.PairKind) (other : topology.pairs.PairKind) :
+  Result Bool
+  := do
+  let self1 := read_discriminant self
+  let other1 := read_discriminant other
+  ok (self1 = other1)
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::cmp::PartialEq<newen_logic::topology::pairs::PairKind> for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:29-17:38 -/
+@[reducible]
+def topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind : core.cmp.PartialEq
+  topology.pairs.PairKind topology.pairs.PairKind := {
+  eq := topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind.eq
+}
+
+/-- Trait implementation: [newen_logic::topology::pairs::{impl core::cmp::Eq for newen_logic::topology::pairs::PairKind}]
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 17:40-17:42 -/
+@[reducible]
+impl_def topology.pairs.PairKind.Insts.CoreCmpEq : core.cmp.Eq
+  topology.pairs.PairKind := {
+  partialEqInst := topology.pairs.PairKind.Insts.CoreCmpPartialEqPairKind
+  assert_fields_are_eq := core.cmp.Eq.assert_fields_are_eq.default
+    topology.pairs.PairKind.Insts.CoreCmpEq
+}
+
+/-- [newen_logic::topology::pairs::contains_sorted]: loop body 0:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 44:4-51:1
+    Visibility: public -/
+@[rust_loop_body]
+def topology.pairs.contains_sorted_loop.body
+  (list : Slice Std.Usize) (j : Std.Usize) (n : Std.Usize) (k : Std.Usize) :
+  Result (ControlFlow Std.Usize Bool)
+  := do
+  if k < n
+  then
+    let i ← Slice.index_usize list k
+    if i = j
+    then ok (done true)
+    else let k1 ← k + 1#usize
+         ok (cont k1)
+  else ok (done false)
+
+/-- [newen_logic::topology::pairs::contains_sorted]: loop 0:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 44:4-51:1
+    Visibility: public -/
+@[rust_loop]
+def topology.pairs.contains_sorted_loop
+  (list : Slice Std.Usize) (j : Std.Usize) (n : Std.Usize) (k : Std.Usize) :
+  Result Bool
+  := do
+  loop
+    (fun k1 => topology.pairs.contains_sorted_loop.body list j n k1)
+    k
+
+/-- [newen_logic::topology::pairs::contains_sorted]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 35:0-51:1
+    Visibility: public -/
+def topology.pairs.contains_sorted
+  (list : Slice Std.Usize) (j : Std.Usize) : Result Bool := do
+  let n := Slice.len list
+  if n = 0#usize
+  then ok false
+  else
+    let i ← n - 1#usize
+    let i1 ← Slice.index_usize list i
+    if i1 < j
+    then ok false
+    else topology.pairs.contains_sorted_loop list j n 0#usize
+
+/-- [newen_logic::topology::pairs::pair_kind]:
+    Source: 'crates/newen-logic/src/topology/pairs.rs', lines 59:0-75:1
+    Visibility: public -/
+def topology.pairs.pair_kind
+  (exclusions_i : Slice Std.Usize) (one_four_i : Slice Std.Usize)
+  (atom_pair_i : Slice Std.Usize) (j : Std.Usize) :
+  Result topology.pairs.PairKind
+  := do
+  let b ← topology.pairs.contains_sorted exclusions_i j
+  if b
+  then ok topology.pairs.PairKind.Excluded
+  else
+    let b1 ← topology.pairs.contains_sorted one_four_i j
+    if b1
+    then ok topology.pairs.PairKind.OneFour
+    else
+      let b2 ← topology.pairs.contains_sorted atom_pair_i j
+      if b2
+      then ok topology.pairs.PairKind.AtomPair
+      else ok topology.pairs.PairKind.Normal
 
 end newen_logic

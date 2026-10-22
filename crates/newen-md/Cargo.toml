@@ -18,6 +18,8 @@ newen-integrators = { workspace = true }
 newen-io = { workspace = true }
 # The one run builder (3.9): prepare_system / build_sequence_from_imd / start
 newen-run = { workspace = true }
+# Output steps and the minimisation stop, checked against a Lean model
+newen-logic = { workspace = true }
 
 # Logging
 log = { workspace = true }

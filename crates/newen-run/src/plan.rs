@@ -17,14 +17,16 @@ use std::path::PathBuf;
 use newen_core::{units::PhysicalConstants, Topology};
 use serde::{Deserialize, Serialize};
 
-use crate::dof::{bath_dof, rottrans_dof};
+use crate::dof::bath_dofs;
 use crate::recipe::{
-    BoundaryKind, ConstraintAlgorithm, Coupling, SoluteConstraints, ThermostatAlgorithm,
+    BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
+    ThermostatAlgorithm,
 };
 use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
-use crate::{total_dof, ConstraintSelection, RunError};
+use crate::{ConstraintSelection, RunError};
 use newen_integrators::algorithms::{in_bath, BathRange};
 use newen_integrators::constraints::NtcMode;
+use newen_logic::thermo::bath::{baths_of, empty_baths};
 
 /// Position restraints as the plan carries them: the input files, the force constant, and
 /// whether the reference positions are the start-up configuration (`reference: None`).
@@ -64,13 +66,6 @@ pub struct PerturbationPlan {
     /// `individual_lambdas`), as in gromosXX.
     #[serde(default)]
     pub individual_lambdas: bool,
-    /// `Perturbation::atom_pair_kernel`.
-    #[serde(default, skip_serializing_if = "is_intended")]
-    pub atom_pair_kernel: crate::recipe::AtomPairKernel,
-}
-
-fn is_intended(k: &crate::recipe::AtomPairKernel) -> bool {
-    *k == crate::recipe::AtomPairKernel::Intended
 }
 
 /// The EDS reference Hamiltonian, resolved (gromosXX `algorithm::EDS`).
@@ -112,15 +107,6 @@ pub struct AedsPlan {
     pub bmax: f64,
     pub asteps: u32,
     pub bsteps: u32,
-    /// `Aeds::energy_columns`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub energy_columns: crate::recipe::AedsColumns,
-    /// `Aeds::prevalence`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub prevalence: crate::recipe::AedsPrevalence,
-    /// `Aeds::target_state`.
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub target_state: crate::recipe::AedsTarget,
 }
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
@@ -162,6 +148,50 @@ pub struct ForcefieldPlan {
     pub position_restraints: Option<PositionRestraintsPlan>,
     pub distance_restraints: Option<DistanceRestraintsPlan>,
     pub perturbation: Option<PerturbationPlan>,
+    /// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) in place of the reaction field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lattice_sum: Option<LatticeSumPlan>,
+}
+
+/// The NONBONDED P3M settings (NLRELE 3, GROMOS Vol. 4).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct P3mPlan {
+    /// NGX, NGY, NGZ (powers of two in newen)
+    pub grid: [usize; 3],
+    /// NASORD, 1..=5
+    pub nasord: i32,
+    /// NFDORD, 0..=5 (0: ik differentiation)
+    pub nfdord: i32,
+    /// NALIAS
+    pub nalias: i32,
+    /// NQEVAL (0: the force error is checked at step 0 only)
+    pub nqeval: i32,
+    /// FACCUR (kJ mol⁻¹ nm⁻¹)
+    pub faccur: f64,
+}
+
+/// The NONBONDED lattice-sum settings of an Ewald or P3M run (GROMOS Vol. 4).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatticeSumPlan {
+    /// NSHAPE: −1 Gaussian, 0..=10 truncated polynomial
+    pub nshape: i32,
+    /// ASHAPE (nm)
+    pub ashape: f64,
+    /// NKX, NKY, NKZ
+    pub nk: [usize; 3],
+    /// KCUT (compared with |k|², as gromosXX does)
+    pub kcut: f64,
+    /// NA2CLC (4 is stored as 3, as gromosXX reads it)
+    pub na2clc: i32,
+    /// TOLA2
+    pub tola2: f64,
+    /// EPSLS
+    pub epsls: f64,
+    /// The grid of a P3M run (NLRELE 3); `None` for Ewald.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p3m: Option<P3mPlan>,
 }
 
 /// One algorithm of the MD step, fully resolved. One spec = one `Algorithm`.
@@ -204,6 +234,9 @@ pub enum AlgorithmSpec {
         /// The DOFSET ranges that assign the atoms to `baths` (gromosXX `bath_index`), in file
         /// order; the last one ends at the last atom.
         ranges: Vec<BathRange>,
+        /// Nosé–Hoover with NTINHT = 0: start from the configuration's `NHCVARIABLES`.
+        #[serde(default, skip_serializing_if = "is_default")]
+        read_variables: bool,
     },
     LeapFrogPosition,
     Shake {
@@ -375,6 +408,7 @@ impl AlgorithmSpec {
                 position_restraints: None,
                 distance_restraints: None,
                 perturbation: None,
+                lattice_sum: None,
             }),
             AlgorithmSpec::Orchestrator { terms: Vec::new() },
             AlgorithmSpec::Eds(EdsPlan {
@@ -399,6 +433,7 @@ impl AlgorithmSpec {
                     com_bath: 0,
                     ir_bath: 0,
                 }],
+                read_variables: false,
             },
             AlgorithmSpec::LeapFrogPosition,
             AlgorithmSpec::Shake {
@@ -622,34 +657,29 @@ fn thermostat_baths(
     sel: &ConstraintSelection,
     ntc_mode: NtcMode,
     ndfmin: i32,
-    total: f64,
-    rottrans: bool,
+    rottrans_last: Option<usize>,
 ) -> Result<(Vec<ThermostatBath>, Vec<BathRange>), RunError> {
     let n_baths = t.baths.len();
     let last_atom = topo.num_atoms().saturating_sub(1);
+    let rottrans = rottrans_last.is_some();
     if n_baths <= 1 {
-        let baths = t
+        let whole = vec![BathRange {
+            last_atom,
+            com_bath: 0,
+            ir_bath: 0,
+        }];
+        let dof = bath_dofs(topo, sel, ntc_mode, ndfmin, 1, &whole, rottrans);
+        let mut baths: Vec<ThermostatBath> = t
             .baths
             .iter()
             .map(|b| ThermostatBath {
                 temperature: b.temperature,
                 tau: b.tau,
-                dof: total,
+                dof: dof[0].dof,
             })
             .collect();
-        let whole = BathRange {
-            last_atom,
-            com_bath: 0,
-            ir_bath: 0,
-        };
-        return Ok((baths, vec![whole]));
-    }
-    if t.algorithm != ThermostatAlgorithm::Berendsen {
-        return Err(RunError::Recipe(format!(
-            "{n_baths} temperature baths with {:?} coupling: only weak coupling (Berendsen) is \
-             implemented for more than one bath",
-            t.algorithm
-        )));
+        decouple_empty_baths(&mut baths, &[dof[0].halves], ndfmin)?;
+        return Ok((baths, whole));
     }
     if t.dof_sets.is_empty() {
         return Err(RunError::Recipe(format!(
@@ -676,11 +706,12 @@ fn thermostat_baths(
                 topo.num_atoms()
             )));
         }
-        // gromosXX `Multibath::check_state` (multibath.cc:189-196) means to refuse this, but its
-        // running maximum is never updated; the DOF count and the thermostat's ranges assume it
+        // gromosXX `Multibath::check_state` (multibath.cc:189-196) means to refuse a decreasing
+        // LAST, but its running maximum is never updated; the DOF count and the thermostat's
+        // ranges assume strictly increasing ones (a repeated LAST is an empty range)
         if ranges
             .last()
-            .is_some_and(|r: &BathRange| last - 1 < r.last_atom)
+            .is_some_and(|r: &BathRange| last - 1 <= r.last_atom)
         {
             return Err(RunError::Recipe(format!(
                 "Multibath not sorted: DOFSET line with LAST {last} follows LAST {}",
@@ -715,18 +746,62 @@ fn thermostat_baths(
             )));
         }
     }
-    let dof = bath_dof(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
-    let baths = t
+    // gromosXX `topology.cc:1370-1394`: the constrained solute part must sit in one bath pair
+    if let Some(last) = rottrans_last.filter(|_| topo.num_solute_atoms() > 0) {
+        let first = baths_of(&ranges, 0);
+        if (1..last.min(topo.num_atoms())).any(|i| baths_of(&ranges, i) != first) {
+            return Err(RunError::Recipe(
+                "roto-translational constraints: roto-translationally-constrained solute part \
+                 has to be coupled to one ir and one com bath"
+                    .to_string(),
+            ));
+        }
+    }
+    let dof = bath_dofs(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
+    let mut baths: Vec<ThermostatBath> = t
         .baths
         .iter()
         .enumerate()
         .map(|(i, b)| ThermostatBath {
             temperature: b.temperature,
             tau: b.tau,
-            dof: dof[i],
+            dof: dof[i].dof,
         })
         .collect();
+    let halves: Vec<i64> = dof.iter().map(|d| d.halves).collect();
+    decouple_empty_baths(&mut baths, &halves, ndfmin)?;
     Ok((baths, ranges))
+}
+
+/// Decouple (`tau = -1`) every coupled bath with no degrees of freedom, as gromosXX does
+/// (`topology.cc:1404-1411`, "removing coupling of bath with 0 dof"). gromosXX decides on the
+/// count *before* NDFMIN is spread over the baths (`multibath.cc:139-153` runs after it), so
+/// `halves` are the per-bath half degrees of freedom before NDFMIN. An NDFMIN that removes every
+/// degree of freedom (`0 < total <= NDFMIN`) leaves every bath with none or fewer, which gromosXX
+/// computes NaN temperatures for; it is refused.
+fn decouple_empty_baths(
+    baths: &mut [ThermostatBath],
+    halves: &[i64],
+    ndfmin: i32,
+) -> Result<(), RunError> {
+    let total: i64 = halves.iter().sum();
+    if 0 < total && total <= 2 * i64::from(ndfmin) {
+        return Err(RunError::Recipe(format!(
+            "NDFMIN removes every degree of freedom (total {}, NDFMIN {ndfmin})",
+            total as f64 / 2.0
+        )));
+    }
+    for (i, (bath, empty)) in baths.iter_mut().zip(empty_baths(halves)).enumerate() {
+        if empty && bath.tau >= 0.0 {
+            log::warn!(
+                "removing coupling of bath {} with 0 dof ({} degrees of freedom before NDFMIN)",
+                i + 1,
+                halves[i] as f64 / 2.0
+            );
+            bath.tau = -1.0;
+        }
+    }
+    Ok(())
 }
 
 /// Whether a `LAMBDAS` block sets individual λ: NTIL on in a perturbed run (gromosXX ignores
@@ -1027,9 +1102,6 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
                 bmax: a.bmax,
                 asteps: a.asteps,
                 bsteps: a.bsteps,
-                energy_columns: a.energy_columns,
-                prevalence: a.prevalence,
-                target_state: a.target_state,
             }),
         });
     }
@@ -1049,15 +1121,273 @@ fn eds_plan(recipe: &RunRecipe, k_boltzmann: f64) -> Option<EdsPlan> {
     })
 }
 
-/// Lattice-sum electrostatics (NLRELE 2 Ewald, 3 P3M) for every run, perturbed or not: nothing
-/// in the build path calls newen-forces' `electrostatics.rs`/`pme.rs`, and the force field
-/// would run the reaction field in their place. Every build path runs it.
+/// NONBONDED electrostatics, every build path runs it:
+///
+/// * the lattice-sum parameters' ranges, which gromosXX checks for every NLRELE when it reads
+///   the block (`in_parameter.cc:4602-4625, 4693-4740`), with its messages: the P3M ones too
+///   (an odd grid, NRDGRD or NWRGRD = 1 are errors whatever the NLRELE);
+/// * NLRELE 3 (P3M) with a grid dimension that is not a power of two: newen's FFT (PhastFT)
+///   transforms powers of two only, where gromosXX (FFTW) accepts any even size;
+/// * NLRELE 2 (Ewald) and 3 (P3M) with the features gromosXX's FeatureChecker keeps locked
+///   against `ewald` and `p3m` (`check_parameter.cc:2726-2866`, the same list for both) and a
+///   recipe can express: the charge-group cutoff (both need PAIRLIST TYPE atomic), the
+///   grid-cell pairlist, vacuum, the truncated octahedron, more than one energy group,
+///   perturbation, EDS, A-EDS, GaMD, QM/ML terms, the conjugate-gradient minimiser, LINCS and
+///   SETTLE for the solvent.
 pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
-    let nlrele = recipe.forcefield.electrostatics.electrostatics;
-    if matches!(nlrele, 2 | 3) {
+    let nb = &recipe.forcefield.electrostatics;
+    let ls = &nb.lattice_sum;
+    let nlrele = nb.electrostatics;
+    let err = |m: String| Err(RunError::Recipe(m));
+    let range = |name: &str, value: String, should: &str| {
+        err(format!(
+            "NONBONDED block: {name} parameter is {value}, should be: {should}"
+        ))
+    };
+    if !(-1..=10).contains(&ls.nshape) {
+        return range("NSHAPE", ls.nshape.to_string(), ">=-1 && <=10");
+    }
+    if ls.ashape.is_nan() || ls.ashape <= 0.0 {
+        return range("ASHAPE", ls.ashape.to_string(), ">0");
+    }
+    if !(0..=4).contains(&ls.na2clc) {
+        return range("NA2CLC", ls.na2clc.to_string(), "one of: 0,1,2,3,4");
+    }
+    if ls.tola2.is_nan() || ls.tola2 <= 0.0 {
+        return range("TOLA2", ls.tola2.to_string(), ">0.0");
+    }
+    if !(ls.epsls >= 1.0 || ls.epsls == 0.0) {
+        return range("EPSLS", ls.epsls.to_string(), ">=1.0 or one of: 0.0");
+    }
+    for (name, n) in ["NKX", "NKY", "NKZ"].iter().zip(ls.nk) {
+        if n == 0 {
+            return range(name, n.to_string(), ">0");
+        }
+    }
+    if ls.nk2.is_nan() || ls.nk2 <= 0.0 {
+        return range("KCUT", ls.nk2.to_string(), ">0.0");
+    }
+    for (name, n) in ["NGX", "NGY", "NGZ"].iter().zip(ls.ng) {
+        if n == 0 {
+            return range(name, n.to_string(), ">0");
+        }
+    }
+    if !(1..=5).contains(&ls.nasord) {
+        return range("NASORD", ls.nasord.to_string(), "one of: 1,2,3,4,5");
+    }
+    if !(0..=5).contains(&ls.nfdord) {
+        return range("NFDORD", ls.nfdord.to_string(), "one of: 0,1,2,3,4,5");
+    }
+    if ls.nalias <= 0 {
+        return range("NALIAS", ls.nalias.to_string(), ">0");
+    }
+    if ls.nqeval < 0 {
+        return range("NQEVAL", ls.nqeval.to_string(), ">=0");
+    }
+    if ls.faccur.is_nan() || ls.faccur <= 0.0 {
+        return range("FACCUR", ls.faccur.to_string(), ">0.0");
+    }
+    if !(0..=1).contains(&ls.nrdgrd) {
+        return range("NRDGRD", ls.nrdgrd.to_string(), "one of: 0,1");
+    }
+    if !(0..=1).contains(&ls.nwrgdr) {
+        return range("NWRGRD", ls.nwrgdr.to_string(), "one of: 0,1");
+    }
+    if ls.na2clc == 1 && nlrele != 2 {
+        return err("NONBONDED block: exact A2~ calculation needs Ewald.".to_string());
+    }
+    if ls.na2clc == 4 && nlrele != 3 {
+        return err("NONBONDED block: averaged A2~ calculation needs P3M.".to_string());
+    }
+    if ls.ng.iter().any(|n| n % 2 != 0) {
+        return err("NONBONDED block: Illegal value for NGA, NGB or NGC (even)".to_string());
+    }
+    if ls.nrdgrd != 0 || ls.nwrgdr != 0 {
+        return err(
+            "NONBONDED block: Influence function IO not implemented. Set NRDGRD and NWRGRD \
+             to 0."
+                .to_string(),
+        );
+    }
+    if nlrele == 3 && !ls.ng.iter().all(|n| n.is_power_of_two()) {
+        return err(format!(
+            "NONBONDED NLRELE = 3: the P3M grid NGX, NGY, NGZ = {:?} must be powers of two in \
+             newen (its FFT, PhastFT, transforms powers of two only; gromosXX accepts any even \
+             size)",
+            ls.ng
+        ));
+    }
+    let method = match nlrele {
+        2 => "Ewald sum",
+        3 => "P3M",
+        _ => return Ok(()),
+    };
+    let refuse = |what: &str| {
+        err(format!(
+            "NONBONDED NLRELE = {nlrele}: {what} does not work with {method} electrostatics \
+             (gromosXX refuses this combination)"
+        ))
+    };
+    let ff = &recipe.forcefield;
+    if ff.pairlist.kind == crate::recipe::PairlistKind::ChargeGroup {
+        return err(format!(
+            "NONBONDED NLRELE = {nlrele}: chargegroup based cutoff does not work with {method} \
+             electrostatics (gromosXX refuses this combination); use PAIRLIST TYPE atomic"
+        ));
+    }
+    if ff.pairlist.algorithm == PairlistAlgorithm::GridCell {
+        return refuse("grid-cell-based pairlist algorithm");
+    }
+    match recipe.boundary.kind {
+        BoundaryKind::Vacuum => return refuse("vacuum simulation"),
+        BoundaryKind::TruncatedOctahedron => return refuse("truncated octahedral PBC"),
+        BoundaryKind::Rectangular | BoundaryKind::Triclinic => {},
+    }
+    if ff.energy_groups.count > 1 {
+        return refuse("multiple energy groups");
+    }
+    if recipe.perturbation.enabled != 0 {
+        return refuse("free energy perturbation");
+    }
+    if eds_on(recipe) {
+        return refuse("Enveloping distribution sampling");
+    }
+    if recipe.aeds.as_ref().is_some_and(|a| a.enabled) {
+        return refuse("Accelerated enveloping distribution sampling");
+    }
+    if recipe.passthrough.contains_key("GAMD") {
+        return refuse("gaussian accelerated MD");
+    }
+    if !ff.terms.is_empty() {
+        return refuse("QMMM multiscale simulation (QM/ML terms)");
+    }
+    if matches!(recipe.minimisation.method, 2 | 3) {
+        return refuse("Fletcher-Reeves or Polak-Ribiere conjugate gradient energy minimisation");
+    }
+    match recipe.constraints.solvent_algorithm {
+        Some(ConstraintAlgorithm::Lincs) => return refuse("LINCS for solvent"),
+        Some(ConstraintAlgorithm::Settle) => return refuse("SETTLE for solvent"),
+        _ => {},
+    }
+    Ok(())
+}
+
+/// The lattice-sum part of the force field (NLRELE 2, 3): `None` for every other NLRELE.
+fn lattice_sum_plan(recipe: &RunRecipe) -> Option<LatticeSumPlan> {
+    let nb = &recipe.forcefield.electrostatics;
+    matches!(nb.electrostatics, 2 | 3).then(|| {
+        let ls = &nb.lattice_sum;
+        LatticeSumPlan {
+            nshape: ls.nshape,
+            ashape: ls.ashape,
+            nk: ls.nk,
+            kcut: ls.nk2,
+            // gromosXX reads NA2CLC 4 (averaged Ã2) as 3 (`in_parameter.cc:4718`)
+            na2clc: if ls.na2clc == 4 { 3 } else { ls.na2clc },
+            tola2: ls.tola2,
+            epsls: ls.epsls,
+            p3m: (nb.electrostatics == 3).then_some(P3mPlan {
+                grid: ls.ng,
+                nasord: ls.nasord,
+                nfdord: ls.nfdord,
+                nalias: ls.nalias,
+                nqeval: ls.nqeval,
+                faccur: ls.faccur,
+            }),
+        }
+    })
+}
+
+/// STEP T: gromosXX reads it with the range ">=0" or −1 (`in_parameter.cc:298`); −1 takes the
+/// time from the configuration's TIMESTEP block (`in_configuration.cc:1354-1363`), which newen
+/// does not read. Every build path runs it.
+pub(crate) fn check_start_time(recipe: &RunRecipe) -> Result<(), RunError> {
+    let t0 = recipe.control.t0;
+    if t0 == -1.0 {
+        return Err(RunError::Recipe(
+            "STEP T = -1 (the start time from the configuration's TIMESTEP block) is not \
+             implemented; give the start time in ps"
+                .to_string(),
+        ));
+    }
+    if t0.is_nan() || t0 < 0.0 {
         return Err(RunError::Recipe(format!(
-            "NONBONDED NLRELE = {nlrele}: lattice-sum electrostatics (NLRELE 2/3) are not \
-             implemented (the reaction field would run in their place); use NLRELE 1"
+            "STEP T = {t0}: must be >= 0 (or -1)"
+        )));
+    }
+    Ok(())
+}
+
+/// The grid-based pairlist (PAIRLIST ALGORITHM 1) in a truncated octahedron: gromosXX's
+/// FeatureChecker never unlocks `pbc_t` against `pairlist_grid` (`check_parameter.cc:383`,
+/// `:416`; the grid-cell pairlist is unlocked, `:3814`) and refuses the run with the message
+/// built at `util/feature.cc:93`. Every build path runs it.
+pub(crate) fn check_pairlist(recipe: &RunRecipe) -> Result<(), RunError> {
+    if recipe.forcefield.pairlist.algorithm == PairlistAlgorithm::Grid
+        && recipe.boundary.kind == BoundaryKind::TruncatedOctahedron
+    {
+        return Err(RunError::Recipe(
+            "PAIRLIST ALGORITHM 1 (grid) with BOUNDCOND NTB = -1: truncated octahedral PBC does \
+             not work with grid-based pairlist algorithm (gromosXX refuses this combination); use \
+             ALGORITHM 0 (standard)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// WRITETRAJ NTWV > 0 in an energy minimisation: gromosXX refuses it (`check_parameter.cc:62-65`,
+/// a minimisation has no velocities to write). Every build path runs it.
+/// WRITETRAJ NTWSE ≠ 0 (the selection criterion of the coordinate trajectory) is parsed but
+/// nothing reads it, so it is refused instead of ignored.
+pub(crate) fn check_outputs(recipe: &RunRecipe) -> Result<(), RunError> {
+    if recipe.is_minimization() && recipe.outputs.velocities_every != 0 {
+        return Err(RunError::Recipe(
+            "WRITETRAJ: NTWV has to be 0 for energy minimization".to_string(),
+        ));
+    }
+    if recipe.outputs.ntwse != 0 {
+        return Err(RunError::Recipe(format!(
+            "WRITETRAJ NTWSE = {}: NTWSE is not implemented; use NTWSE = 0",
+            recipe.outputs.ntwse
+        )));
+    }
+    Ok(())
+}
+
+/// INITIALISE NTICOM: gromosXX reads it with the allowed values 0, 1, 2
+/// (`in_parameter.cc:1166`). Every build path runs it.
+pub(crate) fn check_com_motion(recipe: &RunRecipe) -> Result<(), RunError> {
+    let nticom = recipe.control.com_motion.initial;
+    if !(0..=2).contains(&nticom) {
+        return Err(RunError::Recipe(format!(
+            "INITIALISE block: NTICOM parameter is {nticom}, should be: one of: 0,1,2"
+        )));
+    }
+    Ok(())
+}
+
+/// COVALENTFORM NTBDN = 1 (phase shifts 0° or 180° only) with a dihedral type of another phase:
+/// gromosXX refuses the topology when the dihedral term is on (`in_topology.cc:960-962`,
+/// `if (pdl != 0 && pdl != 180)` over every TORSDIHEDRALTYPE entry). Every build path runs it.
+pub(crate) fn check_dihedral_phases(recipe: &RunRecipe, topo: &Topology) -> Result<(), RunError> {
+    let ff = &recipe.forcefield;
+    if !(ff.dihedrals && ff.covalent_form.limited_phase_shifts) {
+        return Ok(());
+    }
+    // the topology reader's degree → radian conversion, so 180° compares exactly
+    let half_turn = 180.0 * std::f64::consts::PI / 180.0;
+    let bad = topo
+        .dihedral_parameters
+        .iter()
+        .position(|d| d.pd != 0.0 && d.pd != half_turn);
+    if let Some(i) = bad {
+        return Err(RunError::Recipe(format!(
+            "COVALENTFORM NTBDN = 1 with TORSDIHEDRALTYPE {} of phase {}°: TORSDIHEDRALTYPE \
+             block: dihedral neither 0 nor 180, this is not allowed if NTBDN=1 (gromosXX \
+             refuses this topology); use NTBDN = 0",
+            i + 1,
+            topo.dihedral_parameters[i].pd.to_degrees()
         )));
     }
     Ok(())
@@ -1099,8 +1429,23 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
             p.dlamt
         )));
     }
+    // NLAM is read with the range ">0" whatever NTG says (`in_parameter.cc:882`)
+    if p.nlam <= 0 {
+        return Err(RunError::Recipe(format!(
+            "PERTURBATION block: NLAM parameter is {}, should be: >0",
+            p.nlam
+        )));
+    }
     if p.enabled == 0 {
         return Ok(());
+    }
+    // the soft-core reaction field divides by the softened cutoff RCRF² + α_C·s, NaN for 0
+    let rcrf = recipe.forcefield.electrostatics.rf_cutoff;
+    if rcrf.is_nan() || rcrf <= 0.0 {
+        return Err(RunError::Recipe(format!(
+            "NONBONDED RCRF = {rcrf} in a perturbed run: the soft-core reaction field needs \
+             RCRF > 0"
+        )));
     }
     if p.dlamt != 0.0 {
         check_slow_growth(recipe)?;
@@ -1237,6 +1582,29 @@ pub(crate) fn check_plan_against_recipe(
     let has_terms = plan
         .iter()
         .any(|a| matches!(a, AlgorithmSpec::Orchestrator { terms } if !terms.is_empty()));
+    // a plan built from another recipe must not run the reaction field in place of a lattice
+    // sum, nor one lattice-sum method in place of the other
+    let nlrele = recipe.forcefield.electrostatics.electrostatics;
+    for a in plan {
+        if let AlgorithmSpec::Forcefield(ff) = a {
+            let method = match &ff.lattice_sum {
+                None => "no",
+                Some(ls) if ls.p3m.is_some() => "P3M",
+                Some(_) => "Ewald",
+            };
+            let wanted = match nlrele {
+                2 => "Ewald",
+                3 => "P3M",
+                _ => "no",
+            };
+            if method != wanted {
+                return Err(RunError::Recipe(format!(
+                    "the plan's force field has {method} lattice-sum electrostatics but the \
+                     recipe has NONBONDED NLRELE = {nlrele}"
+                )));
+            }
+        }
+    }
     if ntil_on(recipe) && has_terms {
         return Err(RunError::Recipe(
             "LAMBDAS on (individual λ) together with QM/ML terms: gromosXX refuses this \
@@ -1264,9 +1632,6 @@ pub fn build_plan(
         has_solvent,
     );
     let ntc_mode = ConstraintSelection::ntc_mode_of(c.solute.ntc());
-    let rottrans = recipe.constraints.rottrans_last.is_some();
-    let dof =
-        total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin) - rottrans_dof(topo, rottrans);
 
     let ff = &recipe.forcefield;
     let position_restraints = if ff.restraints.position.mode > 0 {
@@ -1332,7 +1697,12 @@ pub fn build_plan(
     } else {
         None
     };
+    check_start_time(recipe)?;
+    check_com_motion(recipe)?;
     check_electrostatics(recipe)?;
+    check_pairlist(recipe)?;
+    check_outputs(recipe)?;
+    check_dihedral_phases(recipe, topo)?;
     check_perturbation(recipe)?;
     check_eds(recipe)?;
     let eds = eds_plan(recipe, constants.kB);
@@ -1340,7 +1710,6 @@ pub fn build_plan(
         alpha_lj: recipe.perturbation.alpha_lj,
         alpha_c: recipe.perturbation.alpha_c,
         individual_lambdas: individual_lambdas_on(recipe),
-        atom_pair_kernel: recipe.perturbation.atom_pair_kernel,
     });
 
     let is_minimization = recipe.is_minimization();
@@ -1355,7 +1724,10 @@ pub fn build_plan(
         rf_cutoff: ff.electrostatics.rf_cutoff,
         epsilon_rf: ff.electrostatics.epsilon_rf,
         kappa: ff.electrostatics.kappa,
-        rf_excluded: ff.electrostatics.self_exclusion != 0,
+        // gromosXX: NLRELE 2, 3 turn the reaction-field excluded and self terms off
+        // (`in_parameter.cc:4654-4667`)
+        rf_excluded: ff.electrostatics.self_exclusion != 0
+            && !matches!(ff.electrostatics.electrostatics, 2 | 3),
         four_pi_eps_i,
         bonds: ff.bonds,
         covalent_form: (
@@ -1380,6 +1752,7 @@ pub fn build_plan(
         position_restraints,
         distance_restraints,
         perturbation,
+        lattice_sum: lattice_sum_plan(recipe),
     });
 
     let mut plan = Vec::new();
@@ -1470,8 +1843,7 @@ pub fn build_plan(
                 &sel,
                 ntc_mode,
                 recipe.boundary.ndfmin,
-                dof,
-                rottrans,
+                recipe.constraints.rottrans_last,
             )?;
             if baths.len() > 1 {
                 kinetic = AlgorithmSpec::TemperatureCalculation {
@@ -1484,6 +1856,8 @@ pub fn build_plan(
                     algorithm: t.algorithm,
                     baths,
                     ranges,
+                    read_variables: t.algorithm != ThermostatAlgorithm::Berendsen
+                        && recipe.control.ntinht == 0,
                 });
             }
         }
@@ -1804,6 +2178,188 @@ mod tests {
 
     fn refusal(r: &RunRecipe) -> String {
         check_perturbation(r).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn nonbonded_lattice_sum_ranges_and_the_ewald_and_p3m_feature_matrix() {
+        let refused = |r: &RunRecipe, message: &str| {
+            let err = check_electrostatics(r).expect_err(message).to_string();
+            assert!(err.contains(message), "{err}");
+        };
+        let rf = RunRecipe::default();
+        assert!(check_electrostatics(&rf).is_ok());
+        // gromosXX's read ranges hold whatever NLRELE is (`in_parameter.cc:4602-4613`)
+        let cases: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nshape = 11,
+                "NSHAPE parameter is 11, should be: >=-1 && <=10",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ashape = 0.0,
+                "ASHAPE parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 5,
+                "NA2CLC parameter is 5",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.tola2 = 0.0,
+                "TOLA2 parameter is 0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.epsls = 0.5,
+                "EPSLS parameter is 0.5",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nk[1] = 0,
+                "NKY parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nk2 = -1.0,
+                "KCUT parameter is -1",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 1,
+                "exact A2~ calculation needs Ewald",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.na2clc = 4,
+                "averaged A2~ calculation needs P3M",
+            ),
+        ];
+        for (edit, message) in cases {
+            let mut r = rf.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+        let mut ewald = rf.clone();
+        ewald.forcefield.electrostatics.electrostatics = 2;
+        refused(&ewald, "chargegroup based cutoff does not work with Ewald");
+        ewald.forcefield.pairlist.kind = crate::recipe::PairlistKind::Atomic;
+        assert!(check_electrostatics(&ewald).is_ok());
+        let mut r = ewald.clone();
+        r.forcefield.electrostatics.lattice_sum.na2clc = 1;
+        assert!(check_electrostatics(&r).is_ok(), "NA2CLC 1 with Ewald");
+        let locked: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.boundary.kind = BoundaryKind::Vacuum,
+                "vacuum simulation",
+            ),
+            (
+                &|r| r.boundary.kind = BoundaryKind::TruncatedOctahedron,
+                "truncated octahedral",
+            ),
+            (
+                &|r| r.forcefield.pairlist.algorithm = PairlistAlgorithm::GridCell,
+                "grid-cell",
+            ),
+            (
+                &|r| r.forcefield.energy_groups.count = 2,
+                "multiple energy groups",
+            ),
+            (&|r| r.perturbation.enabled = 1, "free energy perturbation"),
+            (
+                &|r| r.eds = Some(eds_recipe(1, 2)),
+                "Enveloping distribution sampling",
+            ),
+            (
+                &|r| {
+                    r.passthrough.insert("GAMD".into(), vec![]);
+                },
+                "gaussian accelerated MD",
+            ),
+            (&|r| r.minimisation.method = 2, "conjugate gradient"),
+            (
+                &|r| r.constraints.solvent_algorithm = Some(ConstraintAlgorithm::Settle),
+                "SETTLE for solvent",
+            ),
+        ];
+        for (edit, message) in locked {
+            let mut r = ewald.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+        let mut r = ewald.clone();
+        r.boundary.kind = BoundaryKind::Triclinic;
+        assert!(
+            check_electrostatics(&r).is_ok(),
+            "triclinic PBC is unlocked"
+        );
+
+        // the P3M parameters' ranges, also checked whatever NLRELE is (`in_parameter.cc:4614-4740`)
+        let p3m_ranges: [(&dyn Fn(&mut RunRecipe), &str); 9] = [
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ng[0] = 0,
+                "NGX parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nasord = 6,
+                "NASORD parameter is 6",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nfdord = 6,
+                "NFDORD parameter is 6",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nalias = 0,
+                "NALIAS parameter is 0, should be: >0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nqeval = -1,
+                "NQEVAL parameter is -1",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.faccur = 0.0,
+                "FACCUR parameter is 0",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.ng[2] = 31,
+                "Illegal value for NGA, NGB or NGC (even)",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nrdgrd = 1,
+                "Influence function IO not implemented",
+            ),
+            (
+                &|r| r.forcefield.electrostatics.lattice_sum.nwrgdr = 1,
+                "Influence function IO not implemented",
+            ),
+        ];
+        for (edit, message) in p3m_ranges {
+            let mut r = rf.clone();
+            edit(&mut r);
+            refused(&r, message);
+        }
+
+        // P3M: the same locks as Ewald, NA2CLC 4 (read as 3) but not 1, and powers of two
+        let mut p3m = ewald.clone();
+        p3m.forcefield.electrostatics.electrostatics = 3;
+        assert!(check_electrostatics(&p3m).is_ok());
+        let mut r = p3m.clone();
+        r.forcefield.electrostatics.lattice_sum.na2clc = 4;
+        assert!(check_electrostatics(&r).is_ok(), "NA2CLC 4 with P3M");
+        assert_eq!(lattice_sum_plan(&r).map(|ls| ls.na2clc), Some(3));
+        r.forcefield.electrostatics.lattice_sum.na2clc = 1;
+        refused(&r, "exact A2~ calculation needs Ewald");
+        let mut r = p3m.clone();
+        r.forcefield.electrostatics.lattice_sum.ng = [32, 48, 32];
+        refused(&r, "must be powers of two in newen");
+        let mut r = p3m.clone();
+        r.forcefield.pairlist.kind = crate::recipe::PairlistKind::ChargeGroup;
+        refused(&r, "chargegroup based cutoff does not work with P3M");
+        for (edit, message) in locked {
+            let mut r = p3m.clone();
+            edit(&mut r);
+            refused(&r, message);
+            let err = check_electrostatics(&r).unwrap_err().to_string();
+            assert!(err.contains("with P3M electrostatics"), "{err}");
+        }
+        let plan = lattice_sum_plan(&p3m).expect("lattice sum");
+        assert_eq!(
+            plan.p3m.map(|m| (m.grid, m.nasord, m.nfdord, m.nalias)),
+            Some(([32, 32, 32], 3, 2, 3))
+        );
+        assert!(lattice_sum_plan(&ewald).expect("lattice sum").p3m.is_none());
     }
 
     #[test]
@@ -2147,7 +2703,7 @@ mod tests {
     }
 
     // ── AEDS refusals (gromosXX read_AEDS, check_parameter.cc:146-175, the aeds locks) ───────
-    /// An AEDS run gromosXX accepts (`aladip_vacuum_aeds_f4`'s settings): no solvent
+    /// An AEDS run gromosXX accepts (`aladip_vacuum_aeds_f4_fixed`'s settings): no solvent
     /// constraints needed, unlike EDS.
     fn aeds_run(form: i32) -> RunRecipe {
         let mut r = eds_run(1, 3);
@@ -2166,9 +2722,6 @@ mod tests {
             bmax: 0.1,
             asteps: 20,
             bsteps: 20,
-            energy_columns: Default::default(),
-            prevalence: Default::default(),
-            target_state: Default::default(),
         });
         r
     }
@@ -2321,7 +2874,6 @@ mod tests {
             alpha_lj: 0.5,
             alpha_c: 0.5,
             individual_lambdas: true,
-            atom_pair_kernel: Default::default(),
         });
         let err = validate_plan(&plan).unwrap_err().to_string();
         assert!(err.contains("individual λ"), "{err}");
@@ -2345,5 +2897,185 @@ mod tests {
         }
         let row: Row = toml::from_str("kind = 12").unwrap();
         assert_eq!(row.kind.0, newen_core::lambdas::InteractionLambda::Mass);
+    }
+
+    #[test]
+    fn velocity_frames_are_refused_in_a_minimisation() {
+        let mut r = RunRecipe::default();
+        r.outputs.velocities_every = 5;
+        assert!(check_outputs(&r).is_ok(), "MD may write velocities");
+        r.minimisation.method = 1;
+        let e = check_outputs(&r).unwrap_err().to_string();
+        assert!(
+            e.contains("WRITETRAJ: NTWV has to be 0 for energy minimization"),
+            "{e}"
+        );
+        r.outputs.velocities_every = 0;
+        assert!(check_outputs(&r).is_ok());
+    }
+
+    #[test]
+    fn a_bath_without_degrees_of_freedom_is_decoupled() {
+        let bath = |tau| ThermostatBath {
+            temperature: 300.0,
+            tau,
+            dof: 0.0,
+        };
+        // halves before NDFMIN: 24, 0, -2; the second and third baths are empty
+        let mut baths = vec![bath(0.1), bath(0.1), bath(-1.0)];
+        decouple_empty_baths(&mut baths, &[24, 0, -2], 3).unwrap();
+        let taus: Vec<f64> = baths.iter().map(|b| b.tau).collect();
+        assert_eq!(taus, vec![0.1, -1.0, -1.0]);
+        // nothing to spread over: an empty system decouples, NDFMIN is not blamed
+        let mut one = vec![bath(0.1)];
+        decouple_empty_baths(&mut one, &[0], 3).unwrap();
+        assert_eq!(one[0].tau, -1.0);
+    }
+
+    #[test]
+    fn an_ndfmin_that_removes_every_degree_of_freedom_is_refused() {
+        let mut baths = vec![ThermostatBath {
+            temperature: 300.0,
+            tau: 0.1,
+            dof: 0.0,
+        }];
+        // 6 dof (12 halves), NDFMIN 6
+        let e = decouple_empty_baths(&mut baths, &[12], 6)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("NDFMIN removes every degree of freedom (total 6, NDFMIN 6)"),
+            "{e}"
+        );
+        assert!(decouple_empty_baths(&mut baths, &[13], 6).is_ok());
+    }
+
+    // ── refusals of unread or unsupported settings ─────────────────────────────────────
+
+    #[test]
+    fn ntwse_and_nticom_out_of_range_are_refused() {
+        let mut r = RunRecipe::default();
+        r.outputs.ntwse = 1;
+        let e = check_outputs(&r).unwrap_err().to_string();
+        assert!(e.contains("NTWSE is not implemented"), "{e}");
+        r.outputs.ntwse = 0;
+        for nticom in 0..=2 {
+            r.control.com_motion.initial = nticom;
+            assert!(check_com_motion(&r).is_ok(), "NTICOM {nticom}");
+        }
+        for nticom in [-1, 3] {
+            r.control.com_motion.initial = nticom;
+            let e = check_com_motion(&r).unwrap_err().to_string();
+            assert!(
+                e.contains(&format!(
+                    "INITIALISE block: NTICOM parameter is {nticom}, should be: one of: 0,1,2"
+                )),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn nlam_must_be_positive_and_a_perturbation_needs_rcrf() {
+        let mut r = perturbed_recipe(false);
+        assert!(check_perturbation(&r).is_ok());
+        r.perturbation.nlam = 0;
+        assert!(refusal(&r).contains("PERTURBATION block: NLAM parameter is 0, should be: >0"));
+        // read with ">0" whatever NTG says
+        r.perturbation.enabled = 0;
+        assert!(check_perturbation(&r).is_err());
+        r.perturbation.nlam = 2;
+        r.forcefield.electrostatics.rf_cutoff = 0.0;
+        assert!(
+            check_perturbation(&r).is_ok(),
+            "RCRF = 0 without a perturbation"
+        );
+        r.perturbation.enabled = 1;
+        assert!(refusal(&r).contains("NONBONDED RCRF = 0 in a perturbed run"));
+    }
+
+    // ── MULTIBATH / DOFSET on a two-group alanine dipeptide ───────────────────────────
+
+    fn tg2_topology() -> Topology {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../newen-md/tests/gromosXX_references/aladip_vacuum_multibath_ndfmin3/aladip_tg2.topo",
+        );
+        newen_io::topology::build_topology(newen_io::topology::read_topology_file(path).unwrap())
+    }
+
+    fn baths_for(
+        n_baths: usize,
+        dof_sets: Vec<[usize; 3]>,
+        ndfmin: i32,
+        rottrans_last: Option<usize>,
+    ) -> Result<(Vec<ThermostatBath>, Vec<BathRange>), RunError> {
+        use crate::recipe::{Bath, ThermostatAlgorithm};
+        let t = Thermostat {
+            algorithm: ThermostatAlgorithm::Berendsen,
+            baths: vec![
+                Bath {
+                    temperature: 300.0,
+                    tau: 0.1,
+                };
+                n_baths
+            ],
+            dof_sets,
+        };
+        let sel = ConstraintSelection::from_codes(1, 0, 0, false);
+        let topo = tg2_topology();
+        thermostat_baths(&t, &topo, &sel, NtcMode::SolventOnly, ndfmin, rottrans_last)
+    }
+
+    #[test]
+    fn a_repeated_dofset_last_is_refused() {
+        assert!(baths_for(2, vec![[6, 1, 1], [12, 2, 2]], 0, None).is_ok());
+        let e = baths_for(2, vec![[6, 1, 1], [6, 2, 2], [12, 2, 2]], 0, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("Multibath not sorted: DOFSET line with LAST 6 follows LAST 6"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn rottrans_constrained_atoms_must_share_one_bath_pair() {
+        let sets = vec![[6, 1, 1], [12, 2, 2]];
+        let e = baths_for(2, sets.clone(), 0, Some(12))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains(
+                "roto-translational constraints: roto-translationally-constrained solute part \
+                 has to be coupled to one ir and one com bath"
+            ),
+            "{e}"
+        );
+        // only atoms 1..=RTCLAST count
+        let (baths, _) = baths_for(2, sets, 0, Some(6)).unwrap();
+        // 6 atoms, one group per bath: 18 dof, less 3 COM and 3 IR from bath 1
+        assert_eq!(baths[0].dof, 12.0);
+        assert_eq!(baths[1].dof, 18.0);
+    }
+
+    #[test]
+    fn one_bath_counts_through_the_bath_kernel() {
+        let topo = tg2_topology();
+        let sel = ConstraintSelection::from_codes(1, 0, 0, false);
+        for (ndfmin, rottrans_last) in [(0, None), (3, None), (3, Some(12)), (36, None)] {
+            let total = crate::total_dof(&topo, &sel, NtcMode::SolventOnly, ndfmin)
+                - crate::dof::rottrans_dof(&topo, rottrans_last.is_some());
+            match baths_for(1, Vec::new(), ndfmin, rottrans_last) {
+                Ok((baths, ranges)) => {
+                    assert_eq!(baths[0].dof, total, "NDFMIN {ndfmin}");
+                    assert_eq!(ranges.len(), 1);
+                },
+                // 36 dof, NDFMIN 36: refused as with several baths
+                Err(e) => assert!(
+                    ndfmin == 36 && e.to_string().contains("NDFMIN removes every degree"),
+                    "{e}"
+                ),
+            }
+        }
     }
 }

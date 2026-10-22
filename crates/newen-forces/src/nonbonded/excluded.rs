@@ -4,6 +4,29 @@ use super::innerloops::with_groups;
 use super::{CRFParameters, EnergyGroups, ForceStorage, LJParamMatrix};
 use newen_core::math::{BoundaryCondition, Vec3};
 
+/// Reaction-field correction of one excluded solute pair at squared distance `r2`:
+/// `(f_mag, e)` with `f_mag = q · crf_cut3i` (`q C_RF/R³`) and
+/// `e = q · (−crf_2cut3i · r2 − crf_cut)` (`q (−C_RF r²/(2R³) − (1 − C_RF/2)/R)`), the CRF pair
+/// term without its Coulomb `1/r` part. The force on atom i is `r_vec · f_mag`.
+///
+/// spec: nonbonded.rf_excluded_pair
+#[inline]
+pub fn rf_excluded_pair(r2: f64, q_prod: f64, crf: &CRFParameters) -> (f64, f64) {
+    let e = q_prod * (-crf.crf_2cut3i * r2 - crf.crf_cut);
+    let f_mag = q_prod * crf.crf_cut3i;
+    (f_mag, e)
+}
+
+/// Reaction-field self term of one solute atom with charge `q`:
+/// `−0.5 · q · q · four_pi_eps_i · crf_cut`, half the excluded-pair energy of the atom with
+/// itself at `r = 0`.
+///
+/// spec: nonbonded.rf_self_term
+#[inline]
+pub fn rf_self_term(q: f64, four_pi_eps_i: f64, crf: &CRFParameters) -> f64 {
+    -0.5 * q * q * four_pi_eps_i * crf.crf_cut
+}
+
 /// Calculate reaction-field excluded-pair corrections (energy + forces).
 ///
 /// In GROMOS, excluded atom pairs (bonded neighbours) are removed from the
@@ -68,8 +91,7 @@ fn rf_excluded_impl<BC: BoundaryCondition, const GROUPS: bool>(
     let mut n_solute_excl = 0usize;
 
     for i in 0..num_solute_atoms {
-        // Self term: -0.5 * qi^2 * FPEPSI * crf_cut
-        let term = -0.5 * charges[i] * charges[i] * four_pi_eps_i * crf.crf_cut;
+        let term = rf_self_term(charges[i], four_pi_eps_i, crf);
         e_self += term;
         storage.e_crf += term;
         if GROUPS {
@@ -83,8 +105,7 @@ fn rf_excluded_impl<BC: BoundaryCondition, const GROUPS: bool>(
                 let r2 = r.length_squared();
                 let q_prod = charges[i] * charges[j] * four_pi_eps_i;
 
-                // Energy: q_prod * (-crf_2cut3i * r² - crf_cut)
-                let term = q_prod * (-crf.crf_2cut3i * r2 - crf.crf_cut);
+                let (f_mag, term) = rf_excluded_pair(r2, q_prod, crf);
                 e_excl_solute += term;
                 storage.e_crf += term;
                 if GROUPS {
@@ -92,8 +113,7 @@ fn rf_excluded_impl<BC: BoundaryCondition, const GROUPS: bool>(
                 }
                 n_solute_excl += 1;
 
-                // Force: q_prod * crf_cut3i * r_vec
-                let force = r * (q_prod * crf.crf_cut3i);
+                let force = r * f_mag;
                 storage.forces[i] += force;
                 storage.forces[j] -= force;
 

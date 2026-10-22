@@ -75,13 +75,13 @@ fn with_aeds(imd: &str, body: &str) -> String {
 /// of the 9-decimal restart (memory time ASTEPS = BSTEPS, so its per-run restart changes
 /// nothing). gromosXX's own chained and single runs differ by the same amount (5·10⁻⁸ relative
 /// on this toy); the chained run is compared with gromosXX's exactly by the
-/// `aladip_vacuum_aeds_cont1/2` references.
+/// `aladip_vacuum_aeds_cont1/2_fixed` references.
 #[test]
 fn a_search_continued_over_two_jobs_follows_the_single_job() {
     let job1 = scratch("job1");
     let (ok, log) = md(
         &job1,
-        &reference_imd("aladip_vacuum_aeds_cont1"),
+        &reference_imd("aladip_vacuum_aeds_cont1_fixed"),
         &start_conf(),
         "aladip_aeds3.mpt",
         &[],
@@ -90,14 +90,14 @@ fn a_search_continued_over_two_jobs_follows_the_single_job() {
     let job2 = scratch("job2");
     let (ok, log) = md(
         &job2,
-        &reference_imd("aladip_vacuum_aeds_cont2"),
+        &reference_imd("aladip_vacuum_aeds_cont2_fixed"),
         &job1.join("final.cnf"),
         "aladip_aeds3.mpt",
         &[],
     );
     assert!(ok, "{log}");
     let single = scratch("single");
-    let imd = reference_imd("aladip_vacuum_aeds_cont1").replace(
+    let imd = reference_imd("aladip_vacuum_aeds_cont1_fixed").replace(
         "        100       0.0     0.002",
         "        200       0.0     0.002",
     );
@@ -125,7 +125,7 @@ fn a_search_continued_over_two_jobs_follows_the_single_job() {
 /// message naming the setting.
 #[test]
 fn defective_aeds_inputs_are_refused() {
-    let f2 = reference_imd("aladip_vacuum_aeds_f2");
+    let f2 = reference_imd("aladip_vacuum_aeds_f2_fixed");
     let eds_block = "EDS\n 1\n 1 3\n 0.5\n 0 0 0\nEND\n";
     let cases: Vec<(&str, String, &str)> = vec![
         (
@@ -148,29 +148,10 @@ fn defective_aeds_inputs_are_refused() {
             with_aeds(&f2, "1\n2 3\n5 -5\n0 0 0\n0 1 1 0.1 20 50"),
             "no AEDSSEARCH block in configuration",
         ),
-        (
-            "zero_variance",
-            with_aeds(
-                &reference_imd("aladip_vacuum_aeds_sigma0"),
-                "1\n3 2\n0 0\n-20 0\n1 0 2 2 100 100",
-            ),
-            "use BMAXTYPE 1 or RESTREMIN 1",
-        ),
     ];
     for (name, imd, what) in cases {
         let dir = scratch(name);
-        let mpt = if name == "zero_variance" {
-            "aladip_aeds2.mpt"
-        } else {
-            "aladip_aeds3.mpt"
-        };
-        // D15 is reached through gromosXX's never-visited target state 1 (D32)
-        let extra: &[&str] = if name == "zero_variance" {
-            &["@recipe_set", "aeds.target_state=gromosxx-state1-default"]
-        } else {
-            &[]
-        };
-        let (ok, log) = md(&dir, &imd, &start_conf(), mpt, extra);
+        let (ok, log) = md(&dir, &imd, &start_conf(), "aladip_aeds3.mpt", &[]);
         assert!(!ok, "{name}: md accepted it\n{log}");
         assert!(log.contains(what), "{name}: expected {what:?} in\n{log}");
         let _ = std::fs::remove_dir_all(dir);
@@ -245,58 +226,36 @@ fn rebuild_error(frames: &[Frame], k: usize, p: usize) -> f64 {
     (v_mix - printed[33]).abs().max((v_r - printed[34]).abs())
 }
 
-/// D16: by default a frame's V_mix and V_R* follow from that frame's own e_i, offsets, E_max
-/// and E_min (to the printed digits), what the LiveCoMS t_05 `search.py` assumes; gromosXX's
-/// columns (`aeds.energy_columns = gromosxx-post-update`) need the previous frame's
-/// parameters instead.
+/// D16: a frame's V_mix and V_R* follow from that frame's own e_i, offsets, E_max and E_min (to
+/// the printed digits), what the LiveCoMS t_05 `search.py` assumes, and not from the previous
+/// frame's.
 #[test]
 fn a_frame_carries_the_parameters_its_reference_energy_used() {
-    let imd = reference_imd("aladip_vacuum_aeds_f4");
-    for (columns, own_frame) in [("intended", true), ("gromosxx-post-update", false)] {
-        let dir = scratch(&format!("columns_{columns}"));
-        let set = format!("aeds.energy_columns={columns}");
-        let (ok, log) = md(
-            &dir,
-            &imd,
-            &start_conf(),
-            "aladip_aeds3.mpt",
-            &["@recipe_set", &set],
-        );
-        assert!(ok, "{log}");
-        let frames = energy_frames(&dir.join("ener.tre"));
-        assert_eq!(frames.len(), 300);
-        let own = (0..frames.len())
-            .map(|k| rebuild_error(&frames, k, k))
-            .fold(0.0, f64::max);
-        let previous = (1..frames.len())
-            .map(|k| rebuild_error(&frames, k, k - 1))
-            .fold(0.0, f64::max);
-        // ten significant digits printed, |V| ≲ 30 kJ/mol
-        let printed = 1e-7;
-        if own_frame {
-            assert!(own < printed, "{columns}: own frame off by {own}");
-            assert!(
-                previous > 1e-3,
-                "{columns}: previous frame fits too ({previous})"
-            );
-        } else {
-            assert!(
-                previous < printed,
-                "{columns}: previous frame off by {previous}"
-            );
-            assert!(own > 1e-3, "{columns}: own frame fits too ({own})");
-        }
-        let _ = std::fs::remove_dir_all(dir);
-    }
+    let imd = reference_imd("aladip_vacuum_aeds_f4_fixed");
+    let dir = scratch("columns");
+    let (ok, log) = md(&dir, &imd, &start_conf(), "aladip_aeds3.mpt", &[]);
+    assert!(ok, "{log}");
+    let frames = energy_frames(&dir.join("ener.tre"));
+    assert_eq!(frames.len(), 300);
+    let own = (0..frames.len())
+        .map(|k| rebuild_error(&frames, k, k))
+        .fold(0.0, f64::max);
+    let previous = (1..frames.len())
+        .map(|k| rebuild_error(&frames, k, k - 1))
+        .fold(0.0, f64::max);
+    // ten significant digits printed, |V| ≲ 30 kJ/mol
+    assert!(own < 1e-7, "own frame off by {own}");
+    assert!(previous > 1e-3, "previous frame fits too ({previous})");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
-/// D32: gromosXX's never-visited target state 1 (σ = 0) makes the FORM 3, BMAXTYPE 2,
-/// RESTREMIN 0 search divide by b_max = 0 (refused above); with the sampled state as the
-/// target the same input runs, and its G is the sampled state's mean, not 0.
+/// D32: with a never-visited state 1 (σ = 0) as the target, the FORM 3, BMAXTYPE 2, RESTREMIN 0
+/// search would divide by b_max = 0; with the sampled state as the target it runs, and its G is
+/// the sampled state's mean, not 0.
 #[test]
 fn the_e_min_target_is_a_sampled_state() {
     let imd = with_aeds(
-        &reference_imd("aladip_vacuum_aeds_sigma0"),
+        &reference_imd("aladip_vacuum_aeds_sigma0_fixed"),
         "1\n3 2\n0 0\n-20 0\n1 0 2 2 100 100",
     );
     let dir = scratch("target_intended");

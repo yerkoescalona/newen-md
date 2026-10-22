@@ -22,8 +22,3 @@ free_energy = "expected/free_energy.trg"
 force_abs = 1e-6
 energy_rel = 1e-8
 position_abs = 1e-9
-
-# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
-# Recipe.update in Python): the intended kernel (also the default).
-[recipe_overrides]
-"perturbation.atom_pair_kernel" = "intended"

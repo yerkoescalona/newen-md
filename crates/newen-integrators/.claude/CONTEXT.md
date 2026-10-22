@@ -12,6 +12,26 @@ barostats, energy minimisation.
 Berendsen barostat, COM removal.
 
 ## Status
+- **Thermostat kernels verified (2026-10-22):** `berendsen_scale` and `nose_hoover_scale` are the
+  pure per-bath steps `apply` calls, with one threshold `ZERO_TEMPERATURE = 1e-12` (gromosXX
+  `math::epsilon`; was `1e-10` and `f64::EPSILON`). Lean model in `spec/NewenSpec/Thermostat.lean`
+  (ℝ theorems in `spec/NewenTheory/Dynamics/Thermostats.lean`); `tests/thermostat_spec.rs`
+  compares the Rust with the model's `Float` evaluation bit for bit on `spec/vectors/thermostat.json`.
+  Keep the operation order of both kernels as it is: a reassociation fails that test.
+- **Dynamics kernels verified (2026-10-22):** the per-step arithmetic is in pure kernels the
+  algorithms call: `leap_frog_velocity`, `leap_frog_position` (`LeapFrogVelocity`/`Position`),
+  `kinetic_energy`, `group_kinetic_energy` (`TemperatureCalculation`), `kinetic_temperature`
+  (called by `md` for the written temperatures), `pressure_tensor`, `scalar_pressure`
+  (`PressureCalculation`, `BerendsenBarostat`) and `berendsen_barostat_scale`. Lean model in
+  `spec/NewenSpec/Dynamics.lean` (ℝ theorems in `spec/NewenTheory/Dynamics/Integration.lean` and
+  `Pressure.lean`); `tests/dynamics_spec.rs` compares the Rust with the model's `Float` evaluation
+  bit for bit on `spec/vectors/dynamics.json`. Keep the operation order of these kernels and of
+  their sums (atom order, `acc += term`): a reassociation fails that test. The barostat calls
+  `powf`; its rows agree because Rust and Lean call the same C `pow`.
+- **Nosé–Hoover restart (0.0.69, D41):** `NoseHooverThermostat::init` restores ζ from
+  `Configuration::nose_hoover` when `read_variables` (NTINHT = 0), every link of every bath,
+  plain NH included (`restored_zeta`);
+  `apply` mirrors ζ back into the configuration for the final NHCVARIABLES block.
 - **MPI seam (2026-08-30):** `Forcefield::pair_partition = Some((rank, size))` keeps the pairs
   whose first atom index ≡ rank (mod size) after every pairlist update (and for the initial list);
   `set_nonbonded_reducer(f)` is called once per step with the pair-term `ForceStorage` (forces,
@@ -24,9 +44,21 @@ Berendsen barostat, COM removal.
 - LINCS ✓ (wired, reference-tested for solvent + solute)
 - COM removal ✓: translational (NTICOM + NSCM) + rotational; uses min-image wrapped positions (gromosXX convention); periodic COM rotation suppressed in PBC
 - Berendsen thermostat ✓ (MULTIBATH)
-- Nosé-Hoover ✓: single NHC (algorithm=1) + chain NHC (algorithm=N≥2); both reference-tested
+- Nosé-Hoover ✓: single NHC (algorithm=1) + chain NHC (algorithm=N≥2); both reference-tested;
+  `NoseHooverThermostat::new(params, ranges)` keeps one ζ chain per bath (MULTIBATH), as gromosXX
+  (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`)
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
+- **Ewald (NLRELE 2) and P3M (NLRELE 3)** ✓ (2026-10-22): `Forcefield::lattice_sum:
+  Option<LatticeSum>` (`LatticeSum::{Ewald, P3m}`, built by newen-run; P3M's schedule reads the
+  step, `sim.step`); with it, `apply` replaces every reaction-field pair term by
+  `Forcefield::lattice_sum_terms` (LJ + real-space pairs into the pair storage; excluded pairs,
+  k space, self, A, surface, 1-4 into the local storage; LJ-only long-range shell cached on
+  pairlist steps of a twin-range run) and books `ls_realspace` (the storages' `e_crf`),
+  `ls_kspace`, `ls_a_term`, `ls_self`, `ls_surface`, `ls_pair`, `ls_total` with `crf_total = 0`
+  (gromosXX `energy.cc:582-588`). Every `ls_*` field is assigned every step (zero without a
+  lattice sum). Needs the atomic pairlist: non-empty solvent lists are an error. The
+  reaction-field path is untouched: the 122 RF references give byte-identical outputs.
 - **Perturbed nonbonded** ✓: soft-core LJ+CRF correction (`perturbed_pairlist_correction`), self-energy, excluded-pair, and 1-4 corrections; wired via `Forcefield`; `ch4_water_fep` reference test passes.
 - EDS ✓ (1.8): `eds::Eds`, the reference Hamiltonian after the force field (FORMS 1-3,
   reference-tested), with perturbed atoms (TI-EDS, 0.0.58) Σ p_i ∂V_i/∂λ into the derivative
@@ -35,15 +67,25 @@ Berendsen barostat, COM removal.
   search through the pure functions `memory_time`, `initialise_search`, `offset_update`,
   `track_state`, `emax_emin_update`, `advanced_offset_update` (`search_step`), on the
   configuration's `AedsSearch` (the `AEDSSEARCH` block); reference-tested and replayed against
-  gromosXX (`newen-run/tests/aeds_replay.rs`). Since 0.0.63 three gromosXX defects are corrected
-  by default, each reproduced on request through `AedsParams`: `AedsColumns` (D16, the energy
-  columns before the update), `AedsPrevalence` (D25, log-sum-exp prevalences), `AedsTarget` (D32,
-  a sampled state as the E_min target)
-- GaMD / REMD: **stubs only, untested**
+  gromosXX with the D16, D25 and D32 patches (`newen-run/tests/aeds_replay.rs`). Since 0.0.63
+  three gromosXX defects are corrected: the energy columns before the update (D16), log-sum-exp
+  prevalences (D25), a sampled state as the E_min target (D32)
+- GaMD ✓ (gromosXX's algorithm, `gamd::Gamd`, run at the end of `Forcefield::apply` when
+  `Forcefield::gamd` is set by `md`): FORMS 1-3, SEARCH 0-2, the statistics and `GAMDSTAT`;
+  one accelerated interaction group (plus the group gromosXX books the RF excluded solute pairs
+  to), reference-tested. The older `GamdParameters`/`GamdRunner` serve only the `gamd` binary.
+- REMD: **stubs only, untested**
 
 ## Key files
 ```
 src/algorithms/       — Forcefield, LeapFrog*, Temperature, Energy
+src/algorithms/berendsen_thermostat.rs, nosehoover_thermostat.rs — the thermostat kernels
+                        (`berendsen_scale`, `nose_hoover_scale`) and their `Algorithm`s
+src/algorithms/multibath.rs — atom → bath mapping, `ZERO_TEMPERATURE`
+tests/thermostat_spec.rs — kernels = Lean `Float` model, bit for bit
+src/algorithms/leap_frog.rs, temperature.rs, pressure_calculation.rs, berendsen_barostat.rs —
+                        the dynamics kernels and their `Algorithm`s
+tests/dynamics_spec.rs — dynamics kernels = Lean `Float` model, bit for bit
 src/constraints.rs    — SHAKE, SETTLE, LINCS
 src/thermostats.rs    — Berendsen, Nosé-Hoover (+ chain NHC)
 src/barostats.rs      — Berendsen, Parrinello-Rahman

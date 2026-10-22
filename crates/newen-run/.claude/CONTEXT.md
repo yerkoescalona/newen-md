@@ -27,10 +27,58 @@ RunError                                                                 -> ever
 ```
 
 ## Status
-- **Lattice sum refused (1.8, 0.0.65):** `check_electrostatics` (`plan.rs`, called by
-  `build_plan` and `build_sequence_from_plan`) refuses NLRELE 2/3 for every run, perturbed or
-  not: nothing calls newen-forces' `electrostatics.rs`/`pme.rs`, and the reaction field would
-  run in their place. No reference input uses NLRELE 2/3.
+- **Nosé–Hoover restart (0.0.69, D41):** `prepare_system` parses the configuration's NHCVARIABLES
+  into `Configuration::nose_hoover` for a Nosé–Hoover run with NTINHT = 0 (with NTINHT = 1:
+  `PrepareNote::NoseHooverVariablesIgnored`; without a block,
+  `PrepareNote::NoseHooverVariablesMissing`, a warning); the plan's `Thermostat` carries
+  `read_variables`. Every link of every bath is restored, plain Nosé–Hoover included. The
+  legacy-builder parity test skips a run that restores NHCVARIABLES (the frozen builder never
+  did).
+- **gromosXX's refusals (0.0.68):** `check_start_time` (STEP T outside ">=0", and T = −1, the
+  time from the TIMESTEP block, which newen does not read), `check_pairlist` (grid pairlist with
+  NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a
+  TORSDIHEDRALTYPE phase other than 0°/180°, `in_topology.cc:960-962`) in `plan.rs`, run by
+  `build_plan` and `build_sequence_from_plan`. No reference input trips them.
+- **More refusals (2026-10-22):** `check_com_motion` (NTICOM outside 0..=2,
+  `in_parameter.cc:1166`), `check_outputs` (NTWSE ≠ 0, parsed but never read),
+  `check_perturbation` (NLAM ≤ 0 whatever NTG says, `in_parameter.cc:882`; RCRF ≤ 0 in a perturbed
+  run, where the soft-core reaction field divides by the softened cutoff). `thermostat_baths`
+  refuses a repeated DOFSET LAST (the ranges must increase strictly) and ROTTRANS atoms
+  `1..=RTCLAST` spread over more than one bath pair (`topology.cc:1370-1394`); one bath is
+  counted by `bath_dofs` like several. newen-io's topology reader refuses LJEXCEPTIONS with
+  NEX > 0. No reference input trips them.
+- **Ewald and P3M runs (2026-10-22):** `check_electrostatics` (`plan.rs`, called by
+  `build_plan` and `build_sequence_from_plan`) checks the NONBONDED lattice-sum ranges gromosXX
+  reads for every NLRELE (NSHAPE −1..10, ASHAPE > 0, NA2CLC 0..4, TOLA2 > 0, EPSLS 0 or ≥ 1,
+  NK* > 0, KCUT > 0, NG* > 0, NASORD 1..5, NFDORD 0..5, NALIAS > 0, NQEVAL ≥ 0, FACCUR > 0,
+  NRDGRD/NWRGRD 0 or 1; NA2CLC 1 only with Ewald, 4 only with P3M; an odd grid and influence-
+  function I/O are errors whatever the NLRELE), refuses a P3M grid that is not a power of two in
+  every dimension (PhastFT; gromosXX accepts any even size), and for NLRELE 2 and 3 the
+  features gromosXX's FeatureChecker keeps locked against `ewald` and `p3m` (the same list): the
+  charge-group cutoff (PAIRLIST TYPE atomic is required), the grid-cell pairlist, vacuum, the
+  truncated octahedron, several energy groups, perturbation, EDS, A-EDS, GaMD, QM/ML terms, the
+  conjugate-gradient minimiser, LINCS/SETTLE for the solvent. `ForcefieldPlan::lattice_sum`
+  (`LatticeSumPlan`) carries NSHAPE, ASHAPE, NK, KCUT, NA2CLC (4 stored as 3, as gromosXX), TOLA2,
+  EPSLS and, for P3M, `p3m: Option<P3mPlan>` (grid, NASORD, NFDORD, NALIAS, NQEVAL, FACCUR);
+  `instantiate_forcefield` builds a `newen_forces::nonbonded::ewald::LatticeSum::{Ewald, P3m}`
+  from it with `1/ε₀ = FPEPSI · 4 · π`; the RF excluded/self terms are off for NLRELE 2/3. A plan
+  whose force field disagrees with the recipe's NLRELE (no lattice sum, Ewald or P3M) is refused
+  (`check_plan_against_recipe`). References: `nacl_pair_box_ewald`, `water_216_box_ewald`,
+  `water_216_box_ewald_epsls`; `nacl_pair_box_p3m_fixed`, `water_216_box_p3m_fixed`,
+  `water_216_box_p3m_gauss_fixed` (gromosXX + `patches/LS1_p3m_nvt_a_term.patch`);
+  `water_216_npt_ewald_epsls_fixed` (LS2, surface virial), `nacl_water_box_triclinic_p3m_fixed`
+  (LS3, triclinic wave vectors, ik differentiation).
+- **GENBOX angles and the cell height (2026-10-22):** `Coordinates` carries the GENBOX angles and
+  Euler angles; `prepare_system` builds NTB = 2 with an angle ≠ 90° as `SimBox::triclinic`
+  (`newen_core::math::genbox_box`, gromosXX `in_configuration.cc:1977-2005`;
+  `Prepared::triclinic_box`, used by `periodicity_of`), keeps NTB = 2 with right angles
+  rectangular, refuses NTB = 1 with an angle ≠ 90° (gromosXX's message) and any non-zero Euler
+  angle (gromosXX stores them unapplied on input but rotates by them on output).
+  `check_cutoffs_fit_box` refuses a periodic run whose largest of RCUTP, RCUTL, RCRF is not below
+  half the smallest cell height (`newen_core::math::box_heights`; gromosXX
+  `boundary_check_cutoff` checks RCUTL alike, `boundary_checks.cc:35-101`). `md` writes GENBOX
+  (NTB, lengths, angles) into the trajectory and the final configuration, a truncated octahedron as
+  its cube. Reference: `nacl_water_box_triclinic`.
 - **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
   `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
   DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)
@@ -45,10 +93,6 @@ RunError                                                                 -> ever
   the end states from an `AEDS` block as from `EDS`, and with NTIAEDSS = 0 in FORMS 2-6 parses the
   configuration's `AEDSSEARCH` block into `Configuration::aeds` (required; with NTIAEDSS = 1
   ignored, `PrepareNote::AedsSearchIgnored`). `Coordinates::aedssearch` carries the block's lines.
-  Since 0.0.63 `Aeds::{energy_columns, prevalence, target_state}` (`"intended"` by default,
-  `"gromosxx-post-update"` / `"gromosxx-plain-exp"` / `"gromosxx-state1-default"` reproduce D16,
-  D25, D32; no `.imd` token, set by `md @recipe_set` or `Recipe.update`) pass through
-  `AedsPlan` to `AedsParams`.
 - **Net charge of a perturbation (1.8, 0.0.59):** `prepare_system` notes the solute's net
   charge in state A and B (`PrepareNote::PerturbationNetCharge`) on every perturbed run and
   `NetChargeChanged` when ΔQ ≠ 0 under a reaction field (NLRELE −1/1/4): a warning, no refusal.

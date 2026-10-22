@@ -21,8 +21,3 @@ final_conf = "expected/final.conf"
 force_abs = 1e-6
 energy_rel = 1e-8
 position_abs = 1e-9
-
-# Recipe fields no .imd block carries, applied by the runners (md @recipe_set key=value,
-# Recipe.update in Python): the corrected search (also the default).
-[recipe_overrides]
-"aeds.energy_columns" = "intended"

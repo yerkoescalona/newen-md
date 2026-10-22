@@ -1,0 +1,29 @@
+# NDFMIN with two temperature baths (gromosXX multibath.cc:141-153). A DOFSET boundary between
+# atoms 6 and 7 cuts the constrained bonds 6-7 and 6-8, each giving 1/2 to both baths, so the
+# bath degrees of freedom stay integers (12 and 13) and gromosXX's int total is exact; with the
+# boundary between 7 and 8 they are half-integers and gromosXX truncates the total (D40), pinned
+# by `aladip_vacuum_multibath_ndfmin3_half_fixed` against the D40-patched binary.
+# gromosXX v1.6.0, double precision, 12 atoms
+
+[system]
+name = "aladip_vacuum_multibath_ndfmin3"
+description = "Aladip in vacuum, two weak-coupling baths (1-6 | 7-12), NTC 3, NDFMIN 3"
+level = 5
+natoms = 12
+isolates = "NDFMIN spread over baths in proportion to their dof"
+
+[input]
+topology = "aladip_tg2.topo"
+configuration = "aladip_vacuum_vel.conf"
+parameters = "aladip_vacuum_multibath_ndfmin3.imd"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

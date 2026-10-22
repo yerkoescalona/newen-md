@@ -31,7 +31,6 @@ mimalloc = { workspace = true, optional = true }
 [features]
 default = ["simd"]
 simd = []
-use-fftw = ["newen-forces/use-fftw"]
 use-mpi = ["mpi", "newen-forces/use-mpi"]
 use-cuda = ["cudarc"]
 mimalloc = ["dep:mimalloc"]

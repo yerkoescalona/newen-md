@@ -8,12 +8,12 @@ description = "Run assembly for newen: RunRecipe (a .imd as data) + topology + c
 
 [dependencies]
 newen-core = { workspace = true }
-# `serde`: the recipe carries `AtomPairKernel`
-newen-forces = { workspace = true, features = ["serde"] }
+newen-forces = { workspace = true }
 # `serde`: the plan carries `BathRange` (the DOFSET ranges) as data
 newen-integrators = { workspace = true, features = ["serde"] }
 newen-io = { workspace = true }
 newen-logic = { workspace = true }
+log = { workspace = true }
 
 # The recipe and the plan are plain data: serde is the Rust<->Python bridge (3.9 A12),
 # TOML the human-readable echo (`<run>.recipe.toml`), JSON the machine dump (`md @dump`).

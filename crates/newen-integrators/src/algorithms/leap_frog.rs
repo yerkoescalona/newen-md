@@ -5,8 +5,28 @@
 
 use newen_core::algorithm::{Algorithm, SimulationState};
 use newen_core::configuration::Configuration;
+use newen_core::math::Vec3;
 use newen_core::topology::Topology;
 use rayon::prelude::*;
+
+/// One atom's velocity half-step, `v + (f·m⁻¹)·dt`, each component on its own.
+///
+/// gromosXX writes `v + f·dt/m` (`leap_frog.cc`); a massless atom has `m⁻¹ = 0` here
+/// (`Topology::compute_inverse_masses`) and does not move.
+///
+/// spec: dynamics.leap_frog_velocity
+#[inline]
+pub fn leap_frog_velocity(v: Vec3, f: Vec3, inverse_mass: f64, dt: f64) -> Vec3 {
+    v + f * inverse_mass * dt
+}
+
+/// One atom's position step, `x + v·dt`, each component on its own.
+///
+/// spec: dynamics.leap_frog_position
+#[inline]
+pub fn leap_frog_position(x: Vec3, v: Vec3, dt: f64) -> Vec3 {
+    x + v * dt
+}
 
 /// Leap-Frog velocity update algorithm.
 ///
@@ -57,13 +77,17 @@ impl Algorithm for LeapFrogVelocity {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(i, vel_new)| {
-                    let accel = old_force[i] * topo.inverse_mass[i];
-                    *vel_new = old_vel[i] + accel * dt;
+                    *vel_new =
+                        leap_frog_velocity(old_vel[i], old_force[i], topo.inverse_mass[i], dt);
                 });
         } else {
             for i in 0..n_atoms {
-                let accel = conf.old().force[i] * topo.inverse_mass[i];
-                conf.current_mut().vel[i] = conf.old().vel[i] + accel * dt;
+                conf.current_mut().vel[i] = leap_frog_velocity(
+                    conf.old().vel[i],
+                    conf.old().force[i],
+                    topo.inverse_mass[i],
+                    dt,
+                );
             }
         }
 
@@ -131,11 +155,12 @@ impl Algorithm for LeapFrogPosition {
                 .par_iter_mut()
                 .enumerate()
                 .for_each(|(i, pos_new)| {
-                    *pos_new = old_pos[i] + cur_vel[i] * dt;
+                    *pos_new = leap_frog_position(old_pos[i], cur_vel[i], dt);
                 });
         } else {
             for i in 0..n_atoms {
-                conf.current_mut().pos[i] = conf.old().pos[i] + conf.current().vel[i] * dt;
+                conf.current_mut().pos[i] =
+                    leap_frog_position(conf.old().pos[i], conf.current().vel[i], dt);
             }
         }
 
@@ -155,7 +180,6 @@ impl Algorithm for LeapFrogPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use newen_core::math::Vec3;
 
     /// Helper to create a simple 2-atom topology (like pair_lj)
     fn make_pair_topology(mass: f64) -> Topology {

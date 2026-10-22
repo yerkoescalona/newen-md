@@ -519,6 +519,10 @@ def with_bath(
         )
         .ensemble["thermostat"]
     )
+    if algorithm == "nose_hoover":
+        # a fresh start: the thermostat variables are initialised to zero (NTINHT = 1), not read
+        # from a configuration that has none
+        return recipe.update(ensemble={"thermostat": thermostat}, control={"ntinht": 1})
     return recipe.update(ensemble={"thermostat": thermostat})
 
 

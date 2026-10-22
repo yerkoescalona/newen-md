@@ -14,7 +14,8 @@ use newen_core::{
     configuration::{Box as SimBox, Configuration},
     gather::gather_chargegroups,
     math::{
-        truncoct_triclinic, truncoct_triclinic_box, Mat3, Periodicity, Rectangular, Triclinic, Vec3,
+        box_heights, genbox_box, truncoct_triclinic, truncoct_triclinic_box, Mat3, Periodicity,
+        Rectangular, Triclinic, Vec3,
     },
     random::generate_velocities,
     units::PhysicalConstants,
@@ -24,6 +25,7 @@ use newen_core::{
     IndividualLambdas, NetCharge, PrecalcLambdas, Topology,
 };
 use newen_io::{coordinate::CoordinateData, imd::ImdParameters, ptp::read_pttopo};
+use newen_logic::topology::groups::{check_last_atoms, group_of, LastAtomsCheck};
 
 use crate::{RunError, RunInputs};
 
@@ -36,12 +38,19 @@ pub struct Coordinates {
     pub velocities: Vec<Vec3>,
     /// Zero for a vacuum system.
     pub box_dims: Vec3,
+    /// GENBOX angles α, β, γ in degrees (90° each for a rectangular box).
+    pub box_angles: Vec3,
+    /// GENBOX Euler angles φ, θ, ψ in degrees (zero unless the file sets them).
+    pub box_euler: Vec3,
     /// λ of the configuration's `PERTDATA` block, if it has one; a run with NRDGL=1 starts
     /// from it.
     pub pertdata: Option<f64>,
     /// The data lines of the configuration's `AEDSSEARCH` block, if it has one; an A-EDS search
     /// with NTIAEDSS = 0 continues from it.
     pub aedssearch: Option<Vec<String>>,
+    /// The data lines of the configuration's `NHCVARIABLES` block, if it has one; a
+    /// Nosé–Hoover run with NTINHT = 0 starts from it.
+    pub nhcvariables: Option<Vec<String>>,
 }
 
 impl From<CoordinateData> for Coordinates {
@@ -50,8 +59,11 @@ impl From<CoordinateData> for Coordinates {
             positions: c.positions,
             velocities: c.velocities,
             box_dims: c.box_dims,
+            box_angles: c.box_angles,
+            box_euler: c.box_euler,
             pertdata: c.pertdata,
             aedssearch: c.aedssearch,
+            nhcvariables: c.nhcvariables,
         }
     }
 }
@@ -121,6 +133,14 @@ pub enum PrepareNote {
     /// The configuration has an `AEDSSEARCH` block but the A-EDS search starts afresh
     /// (NTIAEDSS = 1): ignored, as gromosXX does with a warning.
     AedsSearchIgnored,
+    /// The configuration has an `NHCVARIABLES` block but the Nosé–Hoover variables start at
+    /// zero (NTINHT = 1): ignored, as gromosXX does with a warning ("Nose-Hoover-Chains
+    /// variables found but not read.", `in_configuration.cc:1166-1169`).
+    NoseHooverVariablesIgnored,
+    /// A Nosé–Hoover run asks for its variables from the configuration (NTINHT = 0) but the
+    /// configuration has no `NHCVARIABLES` block: they start at zero. A warning, not a refusal
+    /// ([`nose_hoover_missing_warning`]).
+    NoseHooverVariablesMissing,
     /// The run starts at a λ outside [0, 1] (a `PERTDATA` λ; RLAM is checked to [0, 1]): every
     /// perturbed term and mass is extrapolated. A warning, not a refusal; gromosXX says nothing
     /// (porting.md, slow growth). Slow growth that leaves [0, 1] during the run is reported by
@@ -143,6 +163,8 @@ pub struct Prepared {
     pub box_dims: Vec3,
     /// The lower-triangular triclinic box when `NTB=-1`, else `None`.
     pub truncoct_box: Option<Mat3>,
+    /// The GENBOX box when `NTB=2` with an angle other than 90°, else `None`.
+    pub triclinic_box: Option<Mat3>,
     pub notes: Vec<PrepareNote>,
 }
 
@@ -256,9 +278,33 @@ pub fn prepare_system(
         mut positions,
         mut velocities,
         box_dims,
+        box_angles,
+        box_euler,
         pertdata,
         aedssearch,
+        nhcvariables,
     } = coords;
+    // gromosXX `read_nose_hoover_chains` (`in_configuration.cc:1148-1178`): with NTINHT = 0 the
+    // variables come from the configuration's NHCVARIABLES block. Kept whole here; the
+    // thermostat restores them (`restored_zeta`).
+    let nose_hoover_run = imd.temp_bath.first().is_some_and(|b| b.algorithm >= 1);
+    let nose_hoover = match nhcvariables.as_ref().filter(|_| nose_hoover_run) {
+        Some(lines) if imd.ntinht == 0 => Some(
+            newen_io::coordinate::parse_nhcvariables(lines).map_err(|e| {
+                RunError::Inconsistent(format!("configuration NHCVARIABLES block: {e}"))
+            })?,
+        ),
+        Some(_) => {
+            notes.push(PrepareNote::NoseHooverVariablesIgnored);
+            None
+        },
+        None => {
+            if nose_hoover_run && imd.ntinht == 0 {
+                notes.push(PrepareNote::NoseHooverVariablesMissing);
+            }
+            None
+        },
+    };
     // gromosXX `read_aedssearch` (`in_configuration.cc:1399-1455`): a search form (2-6) with
     // NTIAEDSS = 0 continues the configuration's AEDSSEARCH block (it overrides the input's
     // EMAX, EMIN and EIR); with NTIAEDSS = 1 the block is ignored with a warning.
@@ -315,6 +361,25 @@ pub fn prepare_system(
     } else {
         None
     };
+    // 2a. The GENBOX angles (`in_configuration.cc:1977-2005`): a rectangular box must have right
+    //     angles; NTB=2 builds the box vectors from lengths and angles. gromosXX stores the
+    //     Euler angles without rotating the box, but rotates box, positions and velocities by
+    //     them on output; newen does not apply them and refuses a box that has them.
+    let right_angles = box_angles == Vec3::splat(90.0);
+    let periodic = imd.ntb != 0 && box_dims != Vec3::ZERO;
+    if periodic && box_euler != Vec3::ZERO {
+        return Err(RunError::Inconsistent(format!(
+            "GENBOX Euler angles ({}, {}, {}) are not supported; only an unrotated box is",
+            box_euler.x, box_euler.y, box_euler.z
+        )));
+    }
+    if periodic && imd.ntb == 1 && !right_angles {
+        return Err(RunError::Inconsistent(
+            "Rectangular box, but box angles != 90".to_string(),
+        ));
+    }
+    let triclinic_box =
+        (periodic && imd.ntb == 2 && !right_angles).then(|| genbox_box(box_dims, box_angles));
 
     // 3. NSM from the coordinate file (the binary's rule; the parameter file's NSM is only a
     //    hint), then solvate — unless the caller already did.
@@ -423,7 +488,7 @@ pub fn prepare_system(
     //     configuration. A `.cnf` written with the molecules put back into the box has charge
     //     groups split across the boundary; the pairlist works on their centres of geometry.
     if imd.ntb != 0 && box_dims.x > 0.0 {
-        let pbc = match truncoct_box {
+        let pbc = match truncoct_box.or(triclinic_box) {
             Some(b) => Periodicity::Triclinic(Triclinic::new(b)),
             None => Periodicity::Rectangular(Rectangular::new(box_dims)),
         };
@@ -473,6 +538,7 @@ pub fn prepare_system(
         conf.eds.resize(n, n_atoms);
     }
     conf.aeds = aeds_search;
+    conf.nose_hoover = nose_hoover;
     conf.current_mut().pos = positions;
     conf.current_mut().vel = if imd.ntivel == 1 {
         generate_velocities(imd.tempi, imd.ig as u32, &topology.mass)
@@ -481,11 +547,13 @@ pub fn prepare_system(
     } else {
         vec![Vec3::ZERO; n_atoms]
     };
-    conf.current_mut().box_config = match truncoct_box {
-        Some(triclinic_box) => SimBox::truncated_octahedral(triclinic_box),
-        None => SimBox::rectangular(box_dims.x, box_dims.y, box_dims.z),
+    conf.current_mut().box_config = match (truncoct_box, triclinic_box) {
+        (Some(b), _) => SimBox::truncated_octahedral(b),
+        (None, Some(b)) => SimBox::triclinic(b),
+        (None, None) => SimBox::rectangular(box_dims.x, box_dims.y, box_dims.z),
     };
     conf.copy_current_to_old();
+    check_cutoffs_fit_box(imd, &conf.current().box_config)?;
 
     // 8. Configuration validation (topology + coordinates together).
     validate(
@@ -500,8 +568,30 @@ pub fn prepare_system(
         physical_constants,
         box_dims,
         truncoct_box,
+        triclinic_box,
         notes,
     })
+}
+
+/// gromosXX `boundary_check_cutoff` (`math/boundary_checks.cc:35-101`, called from
+/// `configuration.cc:546`): every height of a periodic cell must exceed twice the long-range
+/// cutoff. newen checks every pair cutoff (RCUTP, RCUTL, RCRF), for every periodic box alike:
+/// below half the smallest height the nearest image is the unique shortest one (Lean
+/// `image_shortest_of_lt_half_height`), and newen's and gromosXX's triclinic reductions agree.
+fn check_cutoffs_fit_box(imd: &ImdParameters, box_config: &SimBox) -> Result<(), RunError> {
+    if imd.ntb == 0 || box_config.vectors.x_axis.x <= 0.0 {
+        return Ok(());
+    }
+    let h = box_heights(box_config.vectors);
+    let h_min = h.x.min(h.y).min(h.z);
+    let cutoff = imd.rcutp.max(imd.rcutl).max(imd.rcrf);
+    if 2.0 * cutoff >= h_min {
+        return Err(RunError::Inconsistent(format!(
+            "box is too small: the cutoff {cutoff} nm (largest of RCUTP, RCUTL, RCRF) is not \
+             below half the smallest cell height {h_min} nm"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether the `MPERTATOM` block of a perturbation topology can be merged (gromosXX
@@ -660,44 +750,46 @@ fn assign_energy_groups(
     nre: &[usize],
 ) -> Result<Option<PrepareNote>, RunError> {
     let n_atoms = topology.num_atoms();
-    let mut last_atoms = Vec::with_capacity(nre.len() + 1);
-    let mut previous = 0usize;
-    for &e in nre {
-        if e == 0 || e <= previous {
-            return Err(RunError::Recipe(format!(
-                "FORCE block: energy group last atoms {nre:?} must be positive and strictly                  increasing"
-            )));
-        }
-        previous = e;
-        last_atoms.push(e - 1);
+    let not_increasing = || {
+        RunError::Recipe(format!(
+            "FORCE block: energy group last atoms {nre:?} must be positive and strictly \
+             increasing"
+        ))
+    };
+    // NRE is 1-based: 0 names no atom
+    if nre.contains(&0) {
+        return Err(not_increasing());
     }
+    let mut last_atoms: Vec<usize> = nre.iter().map(|&e| e - 1).collect();
+    // no NRE is one group; a last group short of the last atom gets one more for the rest
     let mut note = None;
     match last_atoms.last().copied() {
         None => last_atoms.push(n_atoms.saturating_sub(1)),
-        Some(last) if last + 1 > n_atoms => {
-            return Err(RunError::Recipe(format!(
-                "FORCE block: the last energy group ends at atom {} but the system has {n_atoms}                  atoms",
-                last + 1
-            )));
-        },
         Some(last) if last + 1 < n_atoms => {
             last_atoms.push(n_atoms - 1);
             note = Some(PrepareNote::EnergyGroupAdded { last_atom: n_atoms });
         },
         Some(_) => {},
     }
-    topology.energy_groups.clear();
+    match check_last_atoms(&last_atoms, n_atoms) {
+        LastAtomsCheck::Ok => {},
+        LastAtomsCheck::NotIncreasing(_) => return Err(not_increasing()),
+        LastAtomsCheck::LastNotFinal => {
+            return Err(RunError::Recipe(format!(
+                "FORCE block: the last energy group ends at atom {} but the system has \
+                 {n_atoms} atoms",
+                last_atoms[last_atoms.len() - 1] + 1
+            )));
+        },
+        LastAtomsCheck::Empty => unreachable!("an empty NRE became one group"),
+    }
+    topology.energy_groups = vec![Vec::new(); last_atoms.len()];
     topology.atom_to_energy_group.clear();
     topology.atom_to_energy_group.reserve(n_atoms);
-    let mut atom = 0usize;
-    for (g, &last) in last_atoms.iter().enumerate() {
-        let mut members = Vec::with_capacity((last + 1).saturating_sub(atom));
-        while atom <= last && atom < n_atoms {
-            members.push(atom);
-            topology.atom_to_energy_group.push(g);
-            atom += 1;
-        }
-        topology.energy_groups.push(members);
+    for atom in 0..n_atoms {
+        let g = group_of(&last_atoms, atom).expect("checked: the last group ends at the last atom");
+        topology.energy_groups[g].push(atom);
+        topology.atom_to_energy_group.push(g);
     }
     Ok(note)
 }
@@ -744,12 +836,25 @@ fn validate(
 /// long-range pairs from its last update, and their λ_k terms are evaluated only when that
 /// update is also an NTWG step (`perturbed_nonbonded_set.cc:87-96`). That happens on some
 /// output step exactly when neither of NSNB and NTWG divides the other.
+/// The check ignores NSTLIM, so it also warns for a run that ends before its first incomplete row.
 pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> {
     let precalc = imd.ntg != 0 && imd.precalclam.is_some_and(|b| b.nr_lambdas > 0);
     let twin_range = imd.rcutp < imd.rcutl - 1e-10;
     let (nsnb, ntwg) = (imd.nsnb, imd.ntwg);
     (precalc && twin_range && newen_logic::schedule::output_misses_longrange(nsnb, ntwg))
         .then_some((nsnb, ntwg))
+}
+
+/// The warning for [`PrepareNote::NoseHooverVariablesMissing`] (`md` and Python print the
+/// same), or `None` when `recipe`'s thermostat is not Nosé–Hoover.
+pub fn nose_hoover_missing_warning(recipe: &crate::RunRecipe) -> Option<String> {
+    use crate::recipe::ThermostatAlgorithm;
+    let t = recipe.ensemble.thermostat.as_ref()?;
+    (t.algorithm != ThermostatAlgorithm::Berendsen).then(|| {
+        "INITIALISE NTINHT = 0 asks for the Nose-Hoover thermostat variables from the \
+         configuration, but it has no NHCVARIABLES block: they start at zero"
+            .to_string()
+    })
 }
 
 /// The warning for [`PrepareNote::PrecalclamLongRangeGaps`] (`md` and Python print the same).
@@ -787,6 +892,51 @@ mod tests {
             ..Default::default()
         };
         prepare_system(imd, topo, constants, coords, &inputs).unwrap()
+    }
+
+    /// NTINHT = 0 without an NHCVARIABLES block is noted (variables start at zero); NTINHT = 1,
+    /// a block, or no Nosé–Hoover say nothing.
+    #[test]
+    fn missing_nose_hoover_variables_are_noted() {
+        let refs = shared().join("..");
+        let mut imd = newen_io::imd::read_imd_file(
+            refs.join("water_216_nvt_nosehoover/water_216_nvt_nosehoover.in"),
+        )
+        .unwrap();
+        imd.ntinht = 0;
+        let run = |imd: &ImdParameters, conf: &str| {
+            let parsed = read_topology_file(refs.join("water_216_box/water_216_box.topo")).unwrap();
+            let constants = parsed.physical_constants;
+            let coords: Coordinates = read_coordinates(refs.join(conf)).unwrap().into();
+            let p = prepare_system(
+                imd,
+                build_topology(parsed),
+                constants,
+                coords,
+                &RunInputs::default(),
+            )
+            .unwrap();
+            p.notes
+                .iter()
+                .any(|n| matches!(n, PrepareNote::NoseHooverVariablesMissing))
+        };
+        let fresh = "water_216_box/water_216_box.conf";
+        assert!(run(&imd, fresh));
+        let mut reset = imd.clone();
+        reset.ntinht = 1;
+        assert!(!run(&reset, fresh));
+        assert!(!run(
+            &imd,
+            "water_216_nvt_nosehoover_cont_fixed/water_216_nvt_nosehoover_cont_fixed.conf"
+        ));
+        let mut weak = imd.clone();
+        weak.temp_bath[0].algorithm = 0;
+        assert!(!run(&weak, fresh));
+
+        let (recipe, _) = crate::RunRecipe::from_imd(&imd).unwrap();
+        assert!(nose_hoover_missing_warning(&recipe)
+            .unwrap()
+            .contains("no NHCVARIABLES block: they start at zero"));
     }
 
     #[test]
@@ -1156,6 +1306,31 @@ mod tests {
             ..Default::default()
         };
         prepare_system(&imd, build_topology(parsed), constants, coords, &inputs)
+    }
+
+    /// The largest of RCUTP, RCUTL and RCRF must stay below half the smallest cell height, for a
+    /// rectangular and a triclinic box alike (gromosXX `boundary_check_cutoff`).
+    #[test]
+    fn cutoffs_must_stay_below_half_the_smallest_cell_height() {
+        use newen_core::math::{box_heights, genbox_box};
+        let imd = |rcutp: f64, rcutl: f64, rcrf: f64| ImdParameters {
+            ntb: 2,
+            rcutp,
+            rcutl,
+            rcrf,
+            ..Default::default()
+        };
+        let rect = SimBox::rectangular(2.0, 2.0, 2.0);
+        assert!(check_cutoffs_fit_box(&imd(0.8, 0.9, 0.9), &rect).is_ok());
+        assert!(check_cutoffs_fit_box(&imd(0.8, 0.9, 1.0), &rect).is_err());
+        let m = genbox_box(Vec3::splat(2.092576336), Vec3::new(75.0, 80.0, 65.0));
+        let h = box_heights(m);
+        let h_min = h.x.min(h.y).min(h.z);
+        assert!((h_min - 1.855_136_663_696).abs() < 1e-9, "{h_min}");
+        let tric = SimBox::triclinic(m);
+        assert!(check_cutoffs_fit_box(&imd(0.7, 0.9, 0.9), &tric).is_ok());
+        let err = check_cutoffs_fit_box(&imd(0.7, 0.93, 0.9), &tric).unwrap_err();
+        assert!(err.to_string().contains("smallest cell height"), "{err}");
     }
 
     fn tmp_ptp(tag: &str, text: &str) -> PathBuf {

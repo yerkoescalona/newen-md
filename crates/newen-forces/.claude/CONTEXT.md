@@ -12,6 +12,87 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
 `PotentialProvider` trait + implementors (QM/MM/ML seam, 2.6-P2.8).
 
 ## Status
+- **Pair kernels verified (2026-10-22):** `lj_crf_pair` (one LJ + CRF pair at `r²`; `lj_crf_interaction`
+  wraps it), `rf_excluded_pair`, `rf_self_term` and `CRFParameters::new` carry `/// spec:` keys.
+  Lean model in `spec/NewenSpec/Nonbonded.lean` (ℝ theorems in
+  `spec/NewenTheory/Interactions/`); `tests/nonbonded_spec.rs` compares the Rust with the model's
+  `Float` evaluation bit for bit on `spec/vectors/nonbonded.json`, and a unit test in
+  `innerloops.rs` checks every lane of `lj_crf_interaction_x4` against `lj_crf_pair`. Keep the
+  operation order of these kernels as it is: a reassociation fails those tests.
+- **Bonded kernels verified (2026-10-22):** `quartic_bond`, `harmonic_bond`, `cosine_angle`,
+  `harmonic_angle`, `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral` (one pure kernel per
+  form in `bonded/`, called by the `calculate_*_grouped` loops) carry `/// spec:` keys. Lean model
+  in `spec/NewenSpec/Bonded.lean`, theory in `spec/NewenTheory/Interactions/Bonded.lean`;
+  `tests/bonded_spec.rs` compares them bit for bit on `spec/vectors/bonded.json` (acos/cos/sin from
+  the same C library as Lean's `Float`) and checks every force against the energy by finite
+  differences. The guards are `ZERO_DISTANCE`, `ZERO_DISTANCE2`, `ZERO_SINE`, `NEAR_LINEAR` in
+  `bonded/mod.rs`. Same rule: keep the operation order.
+- **Perturbed kernels verified (2026-10-22):** the free-energy loops in `nonbonded/perturbed.rs`
+  and `bonded/perturbed.rs` call pure scalar kernels with `/// spec:` keys:
+  `PerturbedLambdaParams::from_lambda` (the λ table, `powf`), `perturbed_lj_crf_pair` (soft-core
+  LJ + CRF at `r²`; `perturbed_lj_crf_interaction[_scaled]` wrap it), `rf_soft_interaction`,
+  `perturbed_rf_excluded_pair`, `perturbed_rf_self_term`, `lj_crf_soft_interaction_ext`,
+  `rf_soft_interaction_ext`; `chebyshev`, `perturbed_quartic_bond_term`, `perturbed_angle_term`,
+  `perturbed_improper_term`, `perturbed_dihedral_term`, `soft_perturbed_term`. Lean models in
+  `spec/NewenSpec/SoftCore.lean` and `PerturbedBonded.lean`; over ℝ each kernel's dV/dλ is proven
+  to be the derivative of its energy (`softcore_dvdl_is_deriv`,
+  `perturbedLjCrfPairModel_dvdl_is_deriv`, `pert_*_dvdl_is_deriv`), and the end states λ = 0, 1 are
+  the plain terms. `tests/softcore_spec.rs` and `tests/perturbed_bonded_spec.rs` compare the Rust
+  with the `Float` models bit for bit and check dV/dλ and the forces against central differences.
+  Keep the operation order of these kernels as it is. The extraction moved no bit: all 121
+  gromosXX reference systems give byte-identical output files before and after. Since
+  2026-10-22 `perturbed_lj_crf_pair` has no distance guard and takes `C12/C6` for any `C6 ≠ 0`,
+  as gromosXX and the ext kernel (overlapping soft-core atoms are finite; a state with `C6 = 0`
+  has no soft-core length there and diverges at `r = 0`, as in gromosXX).
+- **Lattice-sum kernels verified (2026-10-22):** `nonbonded/lattice_sum.rs` holds the
+  pieces Ewald (NLRELE 2) and P3M (NLRELE 3) share, ported from gromosXX in its operation order:
+  `ChargeShape` (NSHAPE −1 Gaussian, 0..=10 truncated polynomials), `shape_switch` (`η`, `η'`),
+  `shape_fourier` (`γ̂`, `γ̂'`), `lj_ls_pair` (LJ + real-space pair, gromosXX's LJ force form),
+  `ls_excluded_pair`, `self_constants` (`A1`, `A3`), `reciprocal_box`, `lattice_vector`,
+  `a2_cubic`, `a2_shells` (bounded by `max_shells`), `charge_sums`, `self_and_a_terms`,
+  `self_and_a_virials`, `surface_term`, with `/// spec:` keys. C `erfc` is declared `extern "C"`
+  there (Rust's std has none). Lean model `spec/NewenSpec/LatticeSum.lean`, theory
+  `spec/NewenTheory/Interactions/LatticeSum.lean`; `tests/lattice_sum_spec.rs` compares the phase-1
+  kernels bit for bit on `spec/vectors/lattice_sum.json`, checks `η'`, `γ̂'` and the pair forces by
+  finite differences and `γ̂`, `A1`, `A3` against Vol. 2's shape table by quadrature. Keep the
+  operation order.
+- **Direct Ewald sum (NLRELE 2), wired (2026-10-22):** `nonbonded/ewald.rs`: `k_vectors` (`|l_j| ≤
+  NK_j`, `k ≠ 0`, `|k|² ≤ KCUT` as gromosXX compares), `ewald_kspace` (energy, forces, `Ã2`,
+  virial `Ξ`), and `EwaldSum` (the per-run state: rebuilds the wave vectors and `A1`, `A2`, `A3`
+  when the box changes, then adds the k-space, self, A and surface terms to a `ForceStorage`, the
+  virial as `−2 Ξ`). `nonbonded/ls_real_space.rs`: the real-space loops (pairlist pairs, excluded
+  pairs, 1-4 pairs, LJ-only long-range shell), energies to the storage's `e_crf`. `ewald_spec.rs`
+  compares the kernels with the Lean model bit for bit on `spec/vectors/ewald.json` and checks
+  the forces and virials by finite differences, translation invariance, and the triclinic
+  periodicity. Differences from gromosXX (see `docs/src/verification/index.md`, phase 2): the
+  triclinic wave vectors (gromosXX multiplies by the transpose of the reciprocal basis), the
+  surface virial (gromosXX adds `+Ξ`'s diagonal, not `−2 Ξ`). `1/ε₀` is a parameter: a run passes
+  `FPEPSI · 4 · π` (gromosXX `in_topology.cc:1408`); `newen_core::units::EPS0_INV` is gromosXX's
+  literal `eps0_i = 1745.9137`, used only without a PHYSICALCONSTANTS block.
+- **P3M (NLRELE 3), wired (2026-10-22):** `nonbonded/p3m.rs`: the per-point kernels with
+  `/// spec:` keys (`assignment_1d`, `nearest_grid_point`, `assignment_weights`, `Mesh::new`,
+  `assign_charges`, `selfterm_fp`, `assign_squared_charges`, `fd_coefficients`, `sinc_power`
+  (C `pow`, `extern "C"`), `influence_at` with `influence_function`, `quality_at`,
+  `influence_box_correction`, `force_error_estimate`, `kspace_energy`, `potential_hat`,
+  `field_ik`, `field_fd`, `interpolate_forces`, `a2_tilde_p3m`), `Fft3` (PhastFT along z, y, x,
+  both directions unnormalised; powers of two only, `Fft3::new` panics otherwise, the run checks
+  refuse first), and `P3m` (per-run state: the influence function at the first evaluation,
+  refused above FACCUR, re-evaluated every NQEVAL steps, corrected to first order in a changed
+  box). The self, A and surface terms are shared with Ewald (`ewald.rs::add_constant_terms`,
+  `self_constants_of_box`), and `ewald.rs::LatticeSum` is the enum the force field drives.
+  `tests/p3m_spec.rs`: the kernels bit for bit against `spec/vectors/p3m.json`, `Fft3` within
+  1e-12 of the Lean direct transform (measured 3e-15 on 16³), the k-space energy within 1e-11 of
+  the Lean pipeline, P3M against the direct Ewald sum within the force-error estimate, forces
+  against central differences of the energy. Differences from gromosXX: see
+  `docs/src/verification/index.md`, phase 3 (the NVT A term, the triclinic finite-difference
+  field, the triclinic wave vectors). The FFT is PhastFT only: the unwired SPME code
+  (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`, not GROMOS's P3M), its `use-fftw` feature and the
+  `rustfft`/`fftw` dependencies were removed (2026-10-22).
+- **Lattice sums against the patched oracle (2026-10-22):** the corrected gromosXX defects are
+  pinned by `_fixed` references: LS1 (NVT A term), LS2 (surface virial,
+  `water_216_npt_ewald_epsls_fixed`), LS3 (triclinic wave vectors,
+  `nacl_water_box_triclinic_p3m_fixed`, ik differentiation). The triclinic finite-difference
+  field (NFDORD > 0) is corrected in newen but has no patched oracle yet.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
@@ -81,6 +162,13 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
 ```
 src/bonded/          — bonded force calculations (split from bonded.rs)
 src/nonbonded/       — LJ+CRF, rf_excluded, pairlist loops (split from nonbonded.rs)
+  innerloops.rs        — `lj_crf_pair` (scalar pair kernel), `lj_crf_interaction_x4` (4 lanes), the loops
+  excluded.rs          — `rf_excluded_pair`, `rf_self_term`, RF excluded and 1-4 loops
+  params.rs            — `CRFParameters::new`
+  lattice_sum.rs       — charge shapes, `lj_ls_pair`, `ls_excluded_pair`, `self_constants`, `A2`, self/A/surface terms
+  ewald.rs             — `k_vectors`, `ewald_kspace`, `EwaldSum` (NLRELE 2), the shared constant terms, `LatticeSum`
+  p3m.rs               — P3M (NLRELE 3): assignment, influence function, `Fft3` (PhastFT), fields, `P3m`
+  ls_real_space.rs     — the real-space loops of a lattice-sum run
   interaction.rs      — LjCrfInteraction (PotentialProvider impl, zone-partition-aware)
   embedding.rs         — ElectrostaticEmbedding (QM/MM Coulomb, forces on MM atoms)
   schnet.rs            — SchNetInteraction (feature `ml`)
@@ -90,6 +178,10 @@ src/orchestrator.rs    — ProviderOrchestrator: sums Vec<Box<dyn PotentialProvi
 src/zones.rs          — Zone, ZonePartition, PairOwner (QM/MM/BuRNN double-counting contract)
 src/energy.rs         — single_point_energy() entry point for analysis
 src/restraints.rs     — position + distance restraints
+tests/nonbonded_spec.rs — pair kernels = Lean `Float` model, bit for bit
+tests/lattice_sum_spec.rs — lattice-sum kernels = Lean `Float` model, bit for bit; FD, quadrature
+tests/ewald_spec.rs   — Ewald kernels = Lean `Float` model, bit for bit; forces and virials by FD
+tests/p3m_spec.rs     — P3M kernels = Lean `Float` model, bit for bit; FFT within a tolerance; vs Ewald
 tests/                — QM/MM seam reference tests against the real BuRNN tutorial (t_06),
                          gitignored under .local/, skip gracefully if not cloned
 ```

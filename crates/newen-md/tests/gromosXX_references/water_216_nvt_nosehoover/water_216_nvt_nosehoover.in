@@ -8,7 +8,7 @@ SYSTEM
 END
 INITIALISE
 #  NTIVEL  NTISHK  NTINHT  NTINHB
-        0       0       0       0
+        0       0       1       0
 #  NTISHI  NTIRTC  NTICOM
         1       0       0
 #  NTISTI

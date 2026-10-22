@@ -13,7 +13,8 @@ Parsers + writers for every GROMOS file format used in the workspace.
 ## Status
 - Topology parser ✓: all blocks (SOLUTEATOM, SOLVENTCONSTR, LJPARAMETERS, PRESSUREGROUPS, ...)
 - Coordinate reader/writer ✓: POSITION, POSITIONRED, VELOCITY (labelled or three columns),
-  VELOCITYRED, GENBOX, PERTDATA, AEDSSEARCH (`parse_aedssearch`, `G96Writer::write_aedssearch`)
+  VELOCITYRED, GENBOX, PERTDATA, AEDSSEARCH (`parse_aedssearch`, `G96Writer::write_aedssearch`),
+  NHCVARIABLES (`parse_nhcvariables`, `G96Writer::write_nhcvariables`, gromosXX's `%15.9f` rows)
 - IMD: the `AEDS` block (`AedsBlock`, `parse_aeds`, written by `write_imd`); ENERGY03 slots 34-39
   and the `# eds` offset column carry the A-EDS fields
 - Trajectory ✓: `TrajectoryReader` (3-column and legacy 7-column POSITIONRED; GENBOX optional for vacuum),

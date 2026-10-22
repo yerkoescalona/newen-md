@@ -229,12 +229,13 @@ fn push_constraint_algorithms(
     shake
 }
 
-/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box,
+/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box or a
+/// GENBOX box with an angle other than 90°,
 /// vacuum for an all-zero box, rectangular otherwise. Exposed for callers that attach extra
 /// algorithms needing the same boundary conditions as `Forcefield` (e.g. an ML term).
 fn periodicity_of(prepared: &Prepared) -> Periodicity {
     let b = prepared.box_dims;
-    if let Some(triclinic_box) = prepared.truncoct_box {
+    if let Some(triclinic_box) = prepared.truncoct_box.or(prepared.triclinic_box) {
         Periodicity::Triclinic(Triclinic::new(triclinic_box))
     } else if b.x == 0.0 && b.y == 0.0 && b.z == 0.0 {
         Periodicity::Vacuum(Vacuum)
@@ -268,7 +269,7 @@ pub(crate) fn legacy_build_sequence(
     let n_atoms = topo.num_atoms();
 
     // Nonbonded interactions: CRF interior dielectric is always 1 in GROMOS.
-    let crf_params = CRFParameters::new(imd.rcutl, 1.0, imd.epsrf, imd.appak);
+    let crf_params = CRFParameters::new(imd.rcrf, 1.0, imd.epsrf, imd.appak);
     let lj_params = Forcefield::convert_lj_parameters(topo);
 
     // Pairlist. PAIRLIST block SIZE; 0.0 means "auto" and is resolved by the cell-list

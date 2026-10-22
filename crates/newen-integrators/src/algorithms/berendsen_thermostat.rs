@@ -15,7 +15,38 @@ use newen_core::configuration::Configuration;
 use newen_core::topology::Topology;
 use newen_core::units::kB;
 
-use super::multibath::BathRange;
+use super::multibath::{BathRange, ZERO_TEMPERATURE};
+
+/// The Berendsen scaling factor of one bath (gromosXX `Berendsen_Thermostat::calc_scaling`):
+///
+/// ```text
+///   T_free = 2·E_kin / (N_df·k_B)        (0 when N_df ≤ 0; T₀ when below ZERO_TEMPERATURE)
+///   λ = sqrt(1 + dt/τ · (T₀/T_free − 1))   τ > 0
+///   λ = sqrt(T₀/T_free)                    τ = 0, instantaneous
+///   λ = 1                                  τ < 0 (no coupling), or T_free = T₀ = 0
+/// ```
+///
+/// spec: thermostat.berendsen_scale
+pub fn berendsen_scale(ekin: f64, dof: f64, temperature: f64, tau: f64, dt: f64) -> f64 {
+    if tau < 0.0 {
+        return 1.0;
+    }
+    let mut free_temp = if dof > 0.0 {
+        2.0 * ekin / (dof * kB)
+    } else {
+        0.0
+    };
+    if free_temp < ZERO_TEMPERATURE {
+        free_temp = temperature;
+    }
+    if free_temp < ZERO_TEMPERATURE {
+        1.0
+    } else if tau == 0.0 {
+        (temperature / free_temp).sqrt()
+    } else {
+        (1.0 + dt / tau * (temperature / free_temp - 1.0)).sqrt()
+    }
+}
 
 /// Berendsen thermostat parameters for a single temperature bath.
 #[derive(Debug, Clone)]
@@ -92,12 +123,6 @@ impl Algorithm for BerendsenThermostat {
         // gromosXX `Berendsen_Thermostat::calc_scaling`: one factor per bath
         self.scale.resize(self.params.len(), 1.0);
         for (bath_idx, params) in self.params.iter().enumerate() {
-            self.scale[bath_idx] = 1.0;
-            // Skip if no coupling (tau < 0)
-            if params.tau < 0.0 {
-                continue;
-            }
-
             // Read E_kin from the previous step (stored by TemperatureCalculation). A multi-bath
             // run scales each bath on its own kinetic energy, as gromosXX does
             // (`bath_struct::ekin`); with one bath the per-bath vector is empty and the total is
@@ -110,34 +135,12 @@ impl Algorithm for BerendsenThermostat {
                 .copied()
                 .unwrap_or(conf.current().energies.kinetic_energy_new);
 
-            // Compute free temperature: T_free = 2·E_kin / (DOF · k_B)
-            let mut free_temp = if params.dof > 0.0 {
-                2.0 * ekin / (params.dof * kB)
-            } else {
-                0.0
-            };
-
-            // Fallback: if T_free ≈ 0, use reference temperature (GROMOS convention)
-            if free_temp < 1e-10 {
-                free_temp = params.temperature;
-            }
-
-            // Second fallback: if reference T is also 0, no scaling
-            let scale = if free_temp < 1e-10 {
-                1.0
-            } else if params.tau == 0.0 {
-                // Instantaneous scaling (tau = 0)
-                (params.temperature / free_temp).sqrt()
-            } else {
-                // Weak coupling: λ = sqrt(1 + dt/τ · (T₀/T - 1))
-                (1.0 + sim.dt / params.tau * (params.temperature / free_temp - 1.0)).sqrt()
-            };
+            let scale = berendsen_scale(ekin, params.dof, params.temperature, params.tau, sim.dt);
 
             log::debug!(
-                "  Berendsen bath {}: E_kin_new={:.6e}, T_free={:.2}, T0={:.2}, scale={:.10}",
+                "  Berendsen bath {}: E_kin_new={:.6e}, T0={:.2}, scale={:.10}",
                 bath_idx,
                 ekin,
-                free_temp,
                 params.temperature,
                 scale
             );

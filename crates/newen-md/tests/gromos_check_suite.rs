@@ -14,9 +14,10 @@
 //!
 //! `lambdas.t.cc` (individual λ, LAMBDAS on vs off) is ported for its bonded terms and its
 //! individual-λ loop; its NonBonded values need SCALEDINTERACTIONS (NSCALE = 1), which newen
-//! does not implement. Not portable here: `scaling.t.cc`, `aladip_ls.t.cc` (lattice sum), the CG
-//! function, and the dihedral / angle / X-ray / local elevation / order-parameter restraints
-//! (1.6 — parked or next).
+//! does not implement. `aladip_ls.t.cc` (P3M, every charge shape) is evaluated with the atomic
+//! cutoff in place of its input's charge-group cutoff, which gromosXX's `md` and newen both
+//! refuse with P3M. Not portable here: `scaling.t.cc`, the CG function, and the dihedral /
+//! angle / X-ray / local elevation / order-parameter restraints (1.6 — parked or next).
 
 use std::path::{Path, PathBuf};
 
@@ -363,6 +364,52 @@ fn aladip_unperturbed_atomic_cutoff_matches_the_check_suite() {
         SUITE,
         "NonBonded_atomic vs check-suite table",
     );
+}
+
+// ── aladip_ls.t.cc: P3M with every charge shape ──────────────────────────────────────────
+
+/// `aladip_ls.t.cc` evaluates the NonBonded term of `aladip_ls.in` (NLRELE 3, grid 32³, NASORD 3,
+/// NFDORD 2, NALIAS 3, NA2CLC 2) for NSHAPE −1 … 10, ASHAPE 0.4 nm for the Gaussian and 1.4 nm
+/// otherwise, against a table with δ = 0.01. The input's PAIRLIST TYPE is `chargegroup`, which
+/// gromosXX's own `md` refuses with P3M (`check_parameter.cc`: `cutoff_cg` is not unlocked
+/// against `p3m`; the check program builds its simulation without the feature checker), and so
+/// does newen. Evaluated here with the atomic cutoff instead, as `check_atomic_cutoff` does for
+/// the reaction field: with RCUTP = ASHAPE = 1.4 nm the polynomial shapes' real-space term
+/// vanishes at the cutoff either way, and for the Gaussian `erfc(1.4/0.4) < 10⁻⁶`.
+#[test]
+fn aladip_p3m_atomic_cutoff_matches_the_check_suite_for_every_shape() {
+    let table = [
+        (-1, -0.65647E+02),
+        (0, -0.65880E+02),
+        (1, -0.66016E+02),
+        (2, -0.65843E+02),
+        (3, -0.66068E+02),
+        (4, -0.66018E+02),
+        (5, -0.65900E+02),
+        (6, -0.66028E+02),
+        (7, -0.65972E+02),
+        (8, -0.65862E+02),
+        (9, -0.65964E+02),
+        (10, -0.65880E+02),
+    ];
+    let mut sys = load("aladip_ls.in", false, false);
+    assert_eq!(sys.imd.nlrele, 3);
+    sys.imd.type_ = 1; // PAIRLIST TYPE 1 = atomic
+    let ashape = sys.imd.nonbonded_extra.ashape;
+    for (nshape, expected) in table {
+        sys.imd.nonbonded_extra.nshape = nshape;
+        sys.imd.nonbonded_extra.ashape = if nshape == -1 { 0.4 } else { ashape };
+        let e = step0_energies(&sys, None, None);
+        assert_eq!(e.crf_total, 0.0);
+        let nonbonded = e.lj_total + e.ls_total;
+        println!("NSHAPE {nshape:>2}: NonBonded {nonbonded:.6} vs table {expected:.3}");
+        close(
+            nonbonded,
+            expected,
+            0.01,
+            &format!("NonBonded_{nshape} (P3M, atomic cutoff)"),
+        );
+    }
 }
 
 // ── aladip_special.t.cc: restraints ──────────────────────────────────────────────────────

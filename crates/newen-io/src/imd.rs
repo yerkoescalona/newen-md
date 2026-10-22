@@ -94,7 +94,7 @@ pub struct ImdParameters {
     pub ntbdn: i32,
 
     // NONBONDED block
-    pub nlrele: i32,   // Long-range electrostatics (0=cutoff, 1=RF, 2=PME, 3=P3M)
+    pub nlrele: i32,   // Long-range electrostatics (0=cutoff, 1=RF, 2=Ewald, 3=P3M)
     pub appak: f64,    // Reaction field κ (nm⁻¹)
     pub rcrf: f64,     // Reaction field cutoff (nm)
     pub epsrf: f64,    // Reaction field permittivity

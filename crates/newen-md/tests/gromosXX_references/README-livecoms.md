@@ -25,7 +25,9 @@ Two more followed as the tutorials were worked through:
 | system | what it covers |
 |---|---|
 | `aladip_harmonic_covalent` | `COVALENTFORM 1 1 0` — harmonic bonds and harmonic angles instead of the quartic and cosine-harmonic forms. Both were implemented all along; nothing selected between them until 0.0.45, and the block was refused, which is what blocked the GaMD tutorial |
-| `aladip_gamd` | a `GAMD` block (dual boost, production mode) with its `@gamd` file. `#[ignore]`d: the classical part matches gromosXX exactly, the boost does not — it is the specification for the GaMD work in 1.9 |
+| `aladip_gamd` | a `GAMD` block (FORM 3, the dihedral boost; production mode, fixed parameters) with its `@gamd` file: one interaction group over all atoms |
+| `aladip_gamd_dual` | `aladip_gamd` with FORM 1 and ET 0: the potential and the dihedral boost both act on the forces; ΔV is the dihedral one only, as gromosXX assigns it twice |
+| `aladip_gamd_cmd_search` | `aladip_gamd` with SEARCH 1, NTIGAMDS 1: a cMD search from scratch, no boost; the dihedral statistics end in the final configuration's `GAMDSTAT` block |
 
 `aladip_wrapped` also writes a velocity trajectory (`WRITETRAJ` NTWV), so `@trv` — accepted and
 ignored until 0.0.44 — is exercised by a reference.

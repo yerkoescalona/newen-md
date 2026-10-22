@@ -598,9 +598,6 @@ impl PyRecipe {
     }
     /// The `AEDS` block as a dict (`enabled`, `form`, `num_states`, `emax`, `emin`, `eir`,
     /// `ntiaedss`, `restremin`, `bmaxtype`, `bmax`, `asteps`, `bsteps`), or `None` without one.
-    /// `energy_columns`, `prevalence` and `target_state` (no `.imd` block; listed only when not
-    /// `"intended"`) reproduce gromosXX's A-EDS defects (`"gromosxx-post-update"`,
-    /// `"gromosxx-plain-exp"`, `"gromosxx-state1-default"`).
     #[getter]
     fn aeds<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.group(py, "aeds")
@@ -758,8 +755,11 @@ impl PyRecipe {
             positions: system.configuration.pos_data.clone(),
             velocities: system.configuration.vel_data.clone(),
             box_dims: system.configuration.box_dims,
+            box_angles: newen_core::math::Vec3::splat(90.0),
+            box_euler: newen_core::math::Vec3::ZERO,
             pertdata: system.configuration.pertdata,
             aedssearch: system.configuration.aedssearch.clone(),
+            nhcvariables: system.configuration.nhcvariables.clone(),
         };
         let prepared = prepare_system(
             &imd,

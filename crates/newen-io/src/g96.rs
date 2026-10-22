@@ -3,7 +3,7 @@
 //! GROMOS96 format is a block-based format with keywords like TITLE, POSITION, VELOCITY, BOX
 
 use crate::coordinate::G96Atom;
-use newen_core::math::Vec3;
+use newen_core::math::{genbox_lengths_angles, truncoct_triclinic_box, Mat3, Vec3};
 use newen_core::topology::Topology;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -32,6 +32,28 @@ fn atom_label(topo: &Topology, i: usize) -> (usize, &str, &str) {
     (resnum, a.residue_name.as_str(), a.name.as_str())
 }
 
+/// A GENBOX block as gromosXX's `_print_box` writes it (`out_configuration.cc:1802-1897`): the
+/// boundary type, the edge lengths, the angles between the box vectors, zero Euler angles and a
+/// zero origin. `box_matrix` holds the box vectors as columns; a truncated octahedron (NTB −1)
+/// is written as its cube (`truncoct_triclinic_box(…, false)`). A box with a zero edge gets
+/// zero angles.
+pub fn genbox_block(ntb: i32, box_matrix: Mat3) -> String {
+    let m = if ntb == -1 {
+        truncoct_triclinic_box(box_matrix, false)
+    } else {
+        box_matrix
+    };
+    let (l, a) = genbox_lengths_angles(m);
+    let row = |v: Vec3| format!("{:15.9}{:15.9}{:15.9}\n", v.x, v.y, v.z);
+    format!(
+        "GENBOX\n{ntb:>5}\n{}{}{}{}END\n",
+        row(l),
+        row(a),
+        row(Vec3::ZERO),
+        row(Vec3::ZERO)
+    )
+}
+
 /// Write a GROMOS96 format file
 pub struct G96Writer {
     pub writer: BufWriter<File>,
@@ -52,6 +74,13 @@ impl G96Writer {
         writeln!(self.writer, "{}", title).map_err(|e| format!("Write error: {}", e))?;
         writeln!(self.writer, "END").map_err(|e| format!("Write error: {}", e))?;
         Ok(())
+    }
+
+    /// Write the TIMESTEP block (step counter and time, ps) — gromosXX `_print_timestep`
+    /// (out_configuration.cc:879-888): width 15, a space, width 14 with 9 decimals.
+    pub fn write_timestep(&mut self, step: usize, time: f64) -> Result<(), String> {
+        writeln!(self.writer, "TIMESTEP\n{step:15} {time:14.9}\nEND")
+            .map_err(|e| format!("Write error: {}", e))
     }
 
     /// Write position block
@@ -106,6 +135,12 @@ impl G96Writer {
 
         writeln!(self.writer, "END").map_err(|e| format!("Write error: {}", e))?;
         Ok(())
+    }
+
+    /// Write the GENBOX block of a periodic box ([`genbox_block`]).
+    pub fn write_genbox(&mut self, ntb: i32, box_matrix: Mat3) -> Result<(), String> {
+        write!(self.writer, "{}", genbox_block(ntb, box_matrix))
+            .map_err(|e| format!("Write error: {}", e))
     }
 
     /// Write box dimensions (for periodic boundary conditions)
@@ -179,6 +214,22 @@ impl G96Writer {
                 s.framecounts[i]
             )
             .map_err(err)?;
+        }
+        writeln!(w, "END").map_err(err)
+    }
+
+    /// Write the NHCVARIABLES block (the Nosé–Hoover variables a continuation run starts from),
+    /// one line per bath with its whole chain — gromosXX `_print_nose_hoover_chain_variables`
+    /// (out_configuration.cc:3426-3443): fixed format, 9 decimals, width 15, no separator.
+    pub fn write_nhcvariables(&mut self, zeta: &[Vec<f64>]) -> Result<(), String> {
+        let err = |e: std::io::Error| format!("Write error: {}", e);
+        let w = &mut self.writer;
+        writeln!(w, "NHCVARIABLES").map_err(err)?;
+        for bath in zeta {
+            for z in bath {
+                write!(w, "{z:15.9}").map_err(err)?;
+            }
+            writeln!(w).map_err(err)?;
         }
         writeln!(w, "END").map_err(err)
     }
@@ -343,6 +394,25 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, "PERTDATA\n      0.2500000\nEND\n");
         std::fs::remove_file(path).ok();
+    }
+
+    /// The block gromosXX wrote after 100 steps of a 3-link chain (the start configuration of
+    /// `water_216_nvt_nhc_cont_fixed`), byte for byte, and read back through the coordinate
+    /// parser.
+    #[test]
+    fn nhcvariables_are_written_as_gromosxx_does_and_read_back() {
+        let block = "NHCVARIABLES\n    0.883220231   20.087328305   72.553842985\nEND\n";
+        let text = format!("POSITION\n    1 SOLV  OW         1    0.1 0.2 0.3\nEND\n{block}");
+        let c = crate::coordinate::parse_coordinates(text.as_bytes()).unwrap();
+        let zeta = crate::coordinate::parse_nhcvariables(c.nhcvariables.as_ref().unwrap()).unwrap();
+        assert_eq!(zeta, vec![vec![0.883220231, 20.087328305, 72.553842985]]);
+        let path = std::env::temp_dir().join(format!("newen_nhc_{}.cnf", std::process::id()));
+        let mut w = G96Writer::new(&path).unwrap();
+        w.write_nhcvariables(&zeta).unwrap();
+        w.close().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), block);
+        std::fs::remove_file(path).ok();
+        assert!(crate::coordinate::parse_nhcvariables(&["0.1 x".to_string()]).is_err());
     }
 
     /// The block gromosXX wrote for a FORM 6 search (aladip, three states), byte for byte, and

@@ -328,6 +328,7 @@ fn resolve_mol_prefix(
             // Every solute molecule, never solvent (gromos++ `a` = molecules 1..numMolecules).
             // No `molecules` ranges means no solvent either: `solvate()` adds them.
             if topology.molecules.is_empty() {
+                #[allow(clippy::single_range_in_vec_init)] // one range over every atom
                 Ok(vec![0..n])
             } else if topology.instances.is_empty() {
                 Ok(topology.molecules.clone())

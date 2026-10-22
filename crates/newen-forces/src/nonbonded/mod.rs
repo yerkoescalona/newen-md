@@ -2,10 +2,14 @@
 
 pub mod eds;
 pub mod embedding;
+pub mod ewald;
 pub mod excluded;
 pub mod innerloops;
 pub mod interaction;
+pub mod lattice_sum;
+pub mod ls_real_space;
 pub mod mopac;
+pub mod p3m;
 pub mod params;
 pub mod perturbed;
 mod qm_subprocess;
