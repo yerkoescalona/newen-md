@@ -681,7 +681,7 @@ algorithm calls a pure kernel, extracted without changing one operation:
 | `leap_frog_position(x, v, dt)` | `LeapFrogPosition::apply` | `x + v · dt` per component |
 | `kinetic_energy(m, v_new, v_old)` | `TemperatureCalculation::apply` | `Σ ½ m (‖v_new‖² + ‖v_old‖²)/2` and `Σ ½ m ‖v_new‖²`, in atom order |
 | `group_kinetic_energy(m, v_new, v_old)` | `TemperatureCalculation::apply`, per temperature group | the centre-of-mass energy of the averaged velocities, the half-step total, and the same two for the new velocities |
-| `kinetic_temperature(K, N_df, k_B)` | `md` (bath temperatures of the energy trajectory, the energy check) | `2K / k_B / N_df`, 0 for `N_df = 0` |
+| `kinetic_temperature(K, N_df, k_B)` | `md` (bath temperatures of the energy trajectory, the energy check) | `2K / k_B / N_df`, 0 for `N_df ≤ 0` |
 | `pressure_tensor(K, W, V)` | `PressureCalculation::apply` | `(K + W · ½) · (2/V)` element by element, `W = Σ r⊗f` |
 | `scalar_pressure(P)` | `BerendsenBarostat::apply` | `(P_xx + P_yy + P_zz)/3` |
 | `berendsen_barostat_scale(P, P₀, β, τ, dt)` | `BerendsenBarostat::apply` | `powf(1 − β·dt/τ·(P₀ − P), 1/3)` |
@@ -960,8 +960,7 @@ terms (`pert_*_ends`, `soft_ends`), and `chebT_cos` proves the dihedral polynomi
 
 **One model.** `spec/NewenSpec/SoftCore.lean` and `PerturbedBonded.lean` write every kernel once
 over any number type, operation by operation like the Rust. The λ table calls `pow`, so
-`NewenSpec/Float.lean` has a `Powf` class (`Float.pow` and `Real.rpow`) next to `Sqrt`, and an
-`Fabs` class for the `|C6| > 1e-10` guard. At ℝ, `perturbedLjCrfPairModel_real_eq` proves the
+`NewenSpec/Float.lean` has a `Powf` class (`Float.pow` and `Real.rpow`) next to `Sqrt`. At ℝ, `perturbedLjCrfPairModel_real_eq` proves the
 pair kernel, fed the table kernel's output, returns the theory's force, energies and `dV/dλ`
 (`rpow` at the natural exponents `n` and `n − 1` is the power), and
 `perturbedLjCrfPairModel_dvdl_is_deriv` combines it with the theorem above: the `de_lj + de_crf`
@@ -969,24 +968,23 @@ the kernel model returns is the derivative of the `e_lj + e_crf` it returns. The
 return unweighted end-state energies with `A_de = ∂E_A/∂λ` and `B_de = −∂E_B/∂λ`
 (`ljCrfSoftExtModel_de_is_deriv`, `rfSoftExtModel_de_is_deriv`).
 
-**The tests.** `lake exe spec-vectors` writes `spec/vectors/softcore.json` (300 λ-table rows, 800
+**The tests.** `lake exe spec-vectors` writes `spec/vectors/softcore.json` (300 λ-table rows, 860
 pair rows, 300 rows of each excluded-pair kernel, 200 self-term rows, 400 + 200 PRECALCLAM rows) and
 `spec/vectors/perturbed_bonded.json` (300 rows of each bonded kernel, 400 soft rows), over λ ∈ {0,
-0.25, 0.5, 0.75, 1} and random, plain and individual λ (random slopes), NLAM ∈ {1, 2},
-α ∈ {0, 0.5, 1, 1.51}, and states that are charged, uncharged or dummies.
+0.25, 0.5, 0.75, 1} and random, plain and individual λ (random slopes, individual λ in
+[−0.1, 1.1]), NLAM ∈ {1, 2, 3, 5}, α ∈ {0, 0.5, 1, 1.51} and random in [0, 2], states that are
+charged, uncharged or dummies, negative and tiny `C6`, and overlapping atoms (`r² < 10⁻¹⁰`).
 `crates/newen-forces/tests/softcore_spec.rs` and `perturbed_bonded_spec.rs` require the same 64
 bits on every row, in debug, release and `target-cpu=generic` builds. `powf` is the one call IEEE
 754 does not require to be correctly rounded; Rust and Lean both call the platform libm's `pow`,
 so the comparison stays exact on one machine. The same tests also check the theorems numerically
 on the compiled code: on well-conditioned rows (`r² ≥ 0.01` nm², `C6` zero or at least `10⁻⁶`,
-soft bonded `α Δ² ≤ 10`) the kernel's `dV/dλ` agrees with the central difference of its energy,
-`h = 10⁻⁶`, with every individual λ moved along its own slope, and the force with the central
+soft bonded `α Δ² ≤ 10`) the kernel's `dV/dλ` agrees with the five-point central difference of its
+energy, `h = 10⁻⁶`, with every individual λ moved along its own slope, and the force with the central
 difference in `r`, to `10⁻⁶` relative.
 
 The model follows newen's Rust, which differs from gromosXX in rounding, never in the formula:
 
-- newen guards `r² < 10⁻¹⁰` and sets `C12/C6 = 0` for `|C6| ≤ 10⁻¹⁰` in the pair kernel; gromosXX
-  has no distance guard and divides whenever `C6 ≠ 0` (the PRECALCLAM kernel follows gromosXX).
 - newen forms the softened `C_RF/2` as `crf_2cut3i · cut³`, gromosXX keeps `C_RF/2` (`m_crf_2`);
   the excluded-pair correction forms it a third way, `crf_2cut3i · √((R²/cut2soft)³)`.
 - The self term, the quartic bond's `dE/dλ`, the angle's `dE/dλ` and the dihedral powers are

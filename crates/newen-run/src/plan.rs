@@ -17,16 +17,16 @@ use std::path::PathBuf;
 use newen_core::{units::PhysicalConstants, Topology};
 use serde::{Deserialize, Serialize};
 
-use crate::dof::{bath_dofs, rottrans_dof};
+use crate::dof::bath_dofs;
 use crate::recipe::{
     BoundaryKind, ConstraintAlgorithm, Coupling, PairlistAlgorithm, SoluteConstraints,
     ThermostatAlgorithm,
 };
 use crate::recipe::{RunRecipe, TermSpec, Thermostat, VirialKind};
-use crate::{total_dof, ConstraintSelection, RunError};
+use crate::{ConstraintSelection, RunError};
 use newen_integrators::algorithms::{in_bath, BathRange};
 use newen_integrators::constraints::NtcMode;
-use newen_logic::thermo::bath::empty_baths;
+use newen_logic::thermo::bath::{baths_of, empty_baths};
 
 /// Position restraints as the plan carries them: the input files, the force constant, and
 /// whether the reference positions are the start-up configuration (`reference: None`).
@@ -612,30 +612,29 @@ fn thermostat_baths(
     sel: &ConstraintSelection,
     ntc_mode: NtcMode,
     ndfmin: i32,
-    total: f64,
-    rottrans: bool,
+    rottrans_last: Option<usize>,
 ) -> Result<(Vec<ThermostatBath>, Vec<BathRange>), RunError> {
     let n_baths = t.baths.len();
     let last_atom = topo.num_atoms().saturating_sub(1);
+    let rottrans = rottrans_last.is_some();
     if n_baths <= 1 {
+        let whole = vec![BathRange {
+            last_atom,
+            com_bath: 0,
+            ir_bath: 0,
+        }];
+        let dof = bath_dofs(topo, sel, ntc_mode, ndfmin, 1, &whole, rottrans);
         let mut baths: Vec<ThermostatBath> = t
             .baths
             .iter()
             .map(|b| ThermostatBath {
                 temperature: b.temperature,
                 tau: b.tau,
-                dof: total,
+                dof: dof[0].dof,
             })
             .collect();
-        // `total` is NDFMIN less than the integer count of the whole system
-        let halves = (2.0 * (total + f64::from(ndfmin))).round() as i64;
-        decouple_empty_baths(&mut baths, &[halves], ndfmin)?;
-        let whole = BathRange {
-            last_atom,
-            com_bath: 0,
-            ir_bath: 0,
-        };
-        return Ok((baths, vec![whole]));
+        decouple_empty_baths(&mut baths, &[dof[0].halves], ndfmin)?;
+        return Ok((baths, whole));
     }
     if t.dof_sets.is_empty() {
         return Err(RunError::Recipe(format!(
@@ -662,11 +661,12 @@ fn thermostat_baths(
                 topo.num_atoms()
             )));
         }
-        // gromosXX `Multibath::check_state` (multibath.cc:189-196) means to refuse this, but its
-        // running maximum is never updated; the DOF count and the thermostat's ranges assume it
+        // gromosXX `Multibath::check_state` (multibath.cc:189-196) means to refuse a decreasing
+        // LAST, but its running maximum is never updated; the DOF count and the thermostat's
+        // ranges assume strictly increasing ones (a repeated LAST is an empty range)
         if ranges
             .last()
-            .is_some_and(|r: &BathRange| last - 1 < r.last_atom)
+            .is_some_and(|r: &BathRange| last - 1 <= r.last_atom)
         {
             return Err(RunError::Recipe(format!(
                 "Multibath not sorted: DOFSET line with LAST {last} follows LAST {}",
@@ -699,6 +699,17 @@ fn thermostat_baths(
                 g.last().map_or(first, |&l| l) + 1,
                 atom + 1
             )));
+        }
+    }
+    // gromosXX `topology.cc:1370-1394`: the constrained solute part must sit in one bath pair
+    if let Some(last) = rottrans_last.filter(|_| topo.num_solute_atoms() > 0) {
+        let first = baths_of(&ranges, 0);
+        if (1..last.min(topo.num_atoms())).any(|i| baths_of(&ranges, i) != first) {
+            return Err(RunError::Recipe(
+                "roto-translational constraints: roto-translationally-constrained solute part \
+                 has to be coupled to one ir and one com bath"
+                    .to_string(),
+            ));
         }
     }
     let dof = bath_dofs(topo, sel, ntc_mode, ndfmin, n_baths, &ranges, rottrans);
@@ -1119,11 +1130,31 @@ pub(crate) fn check_pairlist(recipe: &RunRecipe) -> Result<(), RunError> {
 
 /// WRITETRAJ NTWV > 0 in an energy minimisation: gromosXX refuses it (`check_parameter.cc:62-65`,
 /// a minimisation has no velocities to write). Every build path runs it.
+/// WRITETRAJ NTWSE ≠ 0 (the selection criterion of the coordinate trajectory) is parsed but
+/// nothing reads it, so it is refused instead of ignored.
 pub(crate) fn check_outputs(recipe: &RunRecipe) -> Result<(), RunError> {
     if recipe.is_minimization() && recipe.outputs.velocities_every != 0 {
         return Err(RunError::Recipe(
             "WRITETRAJ: NTWV has to be 0 for energy minimization".to_string(),
         ));
+    }
+    if recipe.outputs.ntwse != 0 {
+        return Err(RunError::Recipe(format!(
+            "WRITETRAJ NTWSE = {}: NTWSE is not implemented; use NTWSE = 0",
+            recipe.outputs.ntwse
+        )));
+    }
+    Ok(())
+}
+
+/// INITIALISE NTICOM: gromosXX reads it with the allowed values 0, 1, 2
+/// (`in_parameter.cc:1166`). Every build path runs it.
+pub(crate) fn check_com_motion(recipe: &RunRecipe) -> Result<(), RunError> {
+    let nticom = recipe.control.com_motion.initial;
+    if !(0..=2).contains(&nticom) {
+        return Err(RunError::Recipe(format!(
+            "INITIALISE block: NTICOM parameter is {nticom}, should be: one of: 0,1,2"
+        )));
     }
     Ok(())
 }
@@ -1190,8 +1221,23 @@ pub(crate) fn check_perturbation(recipe: &RunRecipe) -> Result<(), RunError> {
             p.dlamt
         )));
     }
+    // NLAM is read with the range ">0" whatever NTG says (`in_parameter.cc:882`)
+    if p.nlam <= 0 {
+        return Err(RunError::Recipe(format!(
+            "PERTURBATION block: NLAM parameter is {}, should be: >0",
+            p.nlam
+        )));
+    }
     if p.enabled == 0 {
         return Ok(());
+    }
+    // the soft-core reaction field divides by the softened cutoff RCRF² + α_C·s, NaN for 0
+    let rcrf = recipe.forcefield.electrostatics.rf_cutoff;
+    if rcrf.is_nan() || rcrf <= 0.0 {
+        return Err(RunError::Recipe(format!(
+            "NONBONDED RCRF = {rcrf} in a perturbed run: the soft-core reaction field needs \
+             RCRF > 0"
+        )));
     }
     if p.dlamt != 0.0 {
         check_slow_growth(recipe)?;
@@ -1355,9 +1401,6 @@ pub fn build_plan(
         has_solvent,
     );
     let ntc_mode = ConstraintSelection::ntc_mode_of(c.solute.ntc());
-    let rottrans = recipe.constraints.rottrans_last.is_some();
-    let dof =
-        total_dof(topo, &sel, ntc_mode, recipe.boundary.ndfmin) - rottrans_dof(topo, rottrans);
 
     let ff = &recipe.forcefield;
     let position_restraints = if ff.restraints.position.mode > 0 {
@@ -1424,6 +1467,7 @@ pub fn build_plan(
         None
     };
     check_start_time(recipe)?;
+    check_com_motion(recipe)?;
     check_electrostatics(recipe)?;
     check_pairlist(recipe)?;
     check_outputs(recipe)?;
@@ -1564,8 +1608,7 @@ pub fn build_plan(
                 &sel,
                 ntc_mode,
                 recipe.boundary.ndfmin,
-                dof,
-                rottrans,
+                recipe.constraints.rottrans_last,
             )?;
             if baths.len() > 1 {
                 kinetic = AlgorithmSpec::TemperatureCalculation {
@@ -2488,5 +2531,134 @@ mod tests {
             "{e}"
         );
         assert!(decouple_empty_baths(&mut baths, &[13], 6).is_ok());
+    }
+
+    // ── refusals of unread or unsupported settings ─────────────────────────────────────
+
+    #[test]
+    fn ntwse_and_nticom_out_of_range_are_refused() {
+        let mut r = RunRecipe::default();
+        r.outputs.ntwse = 1;
+        let e = check_outputs(&r).unwrap_err().to_string();
+        assert!(e.contains("NTWSE is not implemented"), "{e}");
+        r.outputs.ntwse = 0;
+        for nticom in 0..=2 {
+            r.control.com_motion.initial = nticom;
+            assert!(check_com_motion(&r).is_ok(), "NTICOM {nticom}");
+        }
+        for nticom in [-1, 3] {
+            r.control.com_motion.initial = nticom;
+            let e = check_com_motion(&r).unwrap_err().to_string();
+            assert!(
+                e.contains(&format!(
+                    "INITIALISE block: NTICOM parameter is {nticom}, should be: one of: 0,1,2"
+                )),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn nlam_must_be_positive_and_a_perturbation_needs_rcrf() {
+        let mut r = perturbed_recipe(false);
+        assert!(check_perturbation(&r).is_ok());
+        r.perturbation.nlam = 0;
+        assert!(refusal(&r).contains("PERTURBATION block: NLAM parameter is 0, should be: >0"));
+        // read with ">0" whatever NTG says
+        r.perturbation.enabled = 0;
+        assert!(check_perturbation(&r).is_err());
+        r.perturbation.nlam = 2;
+        r.forcefield.electrostatics.rf_cutoff = 0.0;
+        assert!(
+            check_perturbation(&r).is_ok(),
+            "RCRF = 0 without a perturbation"
+        );
+        r.perturbation.enabled = 1;
+        assert!(refusal(&r).contains("NONBONDED RCRF = 0 in a perturbed run"));
+    }
+
+    // ── MULTIBATH / DOFSET on a two-group alanine dipeptide ───────────────────────────
+
+    fn tg2_topology() -> Topology {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../newen-md/tests/gromosXX_references/aladip_vacuum_multibath_ndfmin3/aladip_tg2.topo",
+        );
+        newen_io::topology::build_topology(newen_io::topology::read_topology_file(path).unwrap())
+    }
+
+    fn baths_for(
+        n_baths: usize,
+        dof_sets: Vec<[usize; 3]>,
+        ndfmin: i32,
+        rottrans_last: Option<usize>,
+    ) -> Result<(Vec<ThermostatBath>, Vec<BathRange>), RunError> {
+        use crate::recipe::{Bath, ThermostatAlgorithm};
+        let t = Thermostat {
+            algorithm: ThermostatAlgorithm::Berendsen,
+            baths: vec![
+                Bath {
+                    temperature: 300.0,
+                    tau: 0.1,
+                };
+                n_baths
+            ],
+            dof_sets,
+        };
+        let sel = ConstraintSelection::from_codes(1, 0, 0, false);
+        let topo = tg2_topology();
+        thermostat_baths(&t, &topo, &sel, NtcMode::SolventOnly, ndfmin, rottrans_last)
+    }
+
+    #[test]
+    fn a_repeated_dofset_last_is_refused() {
+        assert!(baths_for(2, vec![[6, 1, 1], [12, 2, 2]], 0, None).is_ok());
+        let e = baths_for(2, vec![[6, 1, 1], [6, 2, 2], [12, 2, 2]], 0, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("Multibath not sorted: DOFSET line with LAST 6 follows LAST 6"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn rottrans_constrained_atoms_must_share_one_bath_pair() {
+        let sets = vec![[6, 1, 1], [12, 2, 2]];
+        let e = baths_for(2, sets.clone(), 0, Some(12))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains(
+                "roto-translational constraints: roto-translationally-constrained solute part \
+                 has to be coupled to one ir and one com bath"
+            ),
+            "{e}"
+        );
+        // only atoms 1..=RTCLAST count
+        let (baths, _) = baths_for(2, sets, 0, Some(6)).unwrap();
+        // 6 atoms, one group per bath: 18 dof, less 3 COM and 3 IR from bath 1
+        assert_eq!(baths[0].dof, 12.0);
+        assert_eq!(baths[1].dof, 18.0);
+    }
+
+    #[test]
+    fn one_bath_counts_through_the_bath_kernel() {
+        let topo = tg2_topology();
+        let sel = ConstraintSelection::from_codes(1, 0, 0, false);
+        for (ndfmin, rottrans_last) in [(0, None), (3, None), (3, Some(12)), (36, None)] {
+            let total = crate::total_dof(&topo, &sel, NtcMode::SolventOnly, ndfmin)
+                - crate::dof::rottrans_dof(&topo, rottrans_last.is_some());
+            match baths_for(1, Vec::new(), ndfmin, rottrans_last) {
+                Ok((baths, ranges)) => {
+                    assert_eq!(baths[0].dof, total, "NDFMIN {ndfmin}");
+                    assert_eq!(ranges.len(), 1);
+                },
+                // 36 dof, NDFMIN 36: refused as with several baths
+                Err(e) => assert!(
+                    ndfmin == 36 && e.to_string().contains("NDFMIN removes every degree"),
+                    "{e}"
+                ),
+            }
+        }
     }
 }

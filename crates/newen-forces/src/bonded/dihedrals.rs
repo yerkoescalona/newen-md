@@ -8,7 +8,9 @@ use super::{ForceEnergy, NEAR_LINEAR, ZERO_DISTANCE, ZERO_DISTANCE2};
 use newen_core::math::Periodicity;
 
 /// `(cos mφ, d cos mφ / d cos φ)` for `0 ≤ m ≤ 6` as polynomials in `c = cos φ`, with the powers
-/// formed as gromosXX forms them (`dihedral_interaction.cc`); `None` for `m > 6`.
+/// formed as gromosXX forms them (`dihedral_interaction.cc`); `None` for `m > 6`, where
+/// gromosXX's switch leaves both at 0 (energy K, no force) and newen drops the term: its caller
+/// warns and skips it.
 ///
 /// ```text
 /// c2 = c · c;  c3 = c2 · c;  c4 = c3 · c
@@ -46,7 +48,7 @@ fn cos_multiple(m: u32, c: f64) -> Option<(f64, f64)> {
 /// One dihedral `V = K · (1 + cos δ · cos mφ)` (COVALENTFORM NTBDN = 1, δ ∈ {0, π}) at
 /// `r_ij = x_i − x_j`, `r_kj = x_k − x_j`, `r_kl = x_k − x_l`: `(energy, f_i, f_j, f_k, f_l)`;
 /// nothing when `|r_kj|² <` [`ZERO_DISTANCE2`], a projection is shorter than [`ZERO_DISTANCE`],
-/// or `m > 6`. `cos mφ` is the polynomial of [`cos_multiple`]. In this order:
+/// or `m > 6` (gromosXX: energy K, no force). `cos mφ` is the polynomial of [`cos_multiple`]. In this order:
 ///
 /// ```text
 /// d_kj2 = r_kj · r_kj

@@ -11,7 +11,7 @@ use newen_core::topology::{PairInteraction, PerturbedAtomPair};
 
 /// Lambda-dependent parameters for perturbed nonbonded interactions
 ///
-/// Direct translation from GROMOS++ perturbed_nonbonded_term.h/.cc
+/// Direct translation from gromosXX perturbed_nonbonded_term.h/.cc
 #[derive(Debug, Clone)]
 pub struct PerturbedLambdaParams {
     /// Lambda for LJ interaction, state A: (1-λ)^n
@@ -23,31 +23,31 @@ pub struct PerturbedLambdaParams {
     /// Lambda for CRF interaction, state B: λ^n
     pub b_crf_lambda_n: f64,
 
-    /// Lambda derivative for LJ, state A: (1-λ)^(n-1) * dλ/dt
+    /// Lambda derivative for LJ, state A: (1-λ)^(n-1) · dΛ/dλ (the individual-λ slope)
     pub a_lj_lambda_n_1: f64,
-    /// Lambda derivative for LJ, state B: λ^(n-1) * dλ/dt
+    /// Lambda derivative for LJ, state B: λ^(n-1) · dΛ/dλ
     pub b_lj_lambda_n_1: f64,
-    /// Lambda derivative for CRF, state A: (1-λ)^(n-1) * dλ/dt
+    /// Lambda derivative for CRF, state A: (1-λ)^(n-1) · dΛ/dλ
     pub a_crf_lambda_n_1: f64,
-    /// Lambda derivative for CRF, state B: λ^(n-1) * dλ/dt
+    /// Lambda derivative for CRF, state B: λ^(n-1) · dΛ/dλ
     pub b_crf_lambda_n_1: f64,
 
-    /// Soft-core lambda for state A: (1-λ_soft)
+    /// (1-λ_ljs) · dΛ_ljs/dλ: the slope of state B's LJ softness
     pub a_ljs_lambda: f64,
-    /// Soft-core lambda for state B: λ_soft
+    /// λ_ljs · dΛ_ljs/dλ: the slope of state A's LJ softness
     pub b_ljs_lambda: f64,
-    /// Soft-core lambda squared for state A: (1-λ_soft)²
+    /// (1-λ_ljs)²: the LJ softness of state B
     pub a_ljs_lambda2: f64,
-    /// Soft-core lambda squared for state B: λ_soft²
+    /// λ_ljs²: the LJ softness of state A
     pub b_ljs_lambda2: f64,
 
-    /// Soft-core CRF lambda for state A: (1-λ_soft)
+    /// (1-λ_crfs) · dΛ_crfs/dλ: the slope of state B's CRF softness
     pub a_crfs_lambda: f64,
-    /// Soft-core CRF lambda for state B: λ_soft
+    /// λ_crfs · dΛ_crfs/dλ: the slope of state A's CRF softness
     pub b_crfs_lambda: f64,
-    /// Soft-core CRF lambda squared for state A: (1-λ_soft)²
+    /// (1-λ_crfs)²: the CRF softness of state B
     pub a_crfs_lambda2: f64,
-    /// Soft-core CRF lambda squared for state B: λ_soft²
+    /// λ_crfs²: the CRF softness of state A
     pub b_crfs_lambda2: f64,
 
     /// Lambda exponent (n)
@@ -79,19 +79,19 @@ impl PerturbedLambdaParams {
             b_lj_lambda_n: lj_lambda.powf(n as f64),
             b_crf_lambda_n: crf_lambda.powf(n as f64),
 
-            // Derivatives: (1-λ)^(n-1) * dλ/dt
+            // Derivatives: (1-λ)^(n-1) · dΛ/dλ
             a_lj_lambda_n_1: (1.0 - lj_lambda).powf((n - 1) as f64) * lj_lambda_derivative,
             a_crf_lambda_n_1: (1.0 - crf_lambda).powf((n - 1) as f64) * crf_lambda_derivative,
 
-            // Derivatives: λ^(n-1) * dλ/dt
+            // Derivatives: λ^(n-1) · dΛ/dλ
             b_lj_lambda_n_1: lj_lambda.powf((n - 1) as f64) * lj_lambda_derivative,
             b_crf_lambda_n_1: crf_lambda.powf((n - 1) as f64) * crf_lambda_derivative,
 
-            // Soft-core lambdas: (1-λ) * dλ/dt for state A
+            // Softness slopes: (1-λ_s) · dΛ_s/dλ
             a_ljs_lambda: (1.0 - ljs_lambda) * ljs_lambda_derivative,
             a_crfs_lambda: (1.0 - crfs_lambda) * crfs_lambda_derivative,
 
-            // Soft-core lambdas: λ * dλ/dt for state B
+            // Softness slopes: λ_s · dΛ_s/dλ
             b_ljs_lambda: ljs_lambda * ljs_lambda_derivative,
             b_crfs_lambda: crfs_lambda * crfs_lambda_derivative,
 
@@ -248,39 +248,26 @@ pub fn perturbed_lj_crf_pair(
     four_pi_eps_i: f64,
     coulomb_scaling: f64,
 ) -> (f64, f64, f64, f64, f64) {
-    // Early exit for zero distance
-    if r2 < 1e-10 {
-        return (0.0, 0.0, 0.0, 0.0, 0.0);
-    }
-
     let r6 = r2 * r2 * r2;
     let r4 = r2 * r2;
 
-    // Calculate C12/C6 ratios for soft-core
-    let a_c126 = if a_c6.abs() > 1e-10 {
-        a_c12 / a_c6
-    } else {
-        0.0
-    };
-    let b_c126 = if b_c6.abs() > 1e-10 {
-        b_c12 / b_c6
-    } else {
-        0.0
-    };
+    // C12/C6 of the soft-core length; 0 for C6 = 0, as gromosXX
+    let a_c126 = if a_c6 != 0.0 { a_c12 / a_c6 } else { 0.0 };
+    let b_c126 = if b_c6 != 0.0 { b_c12 / b_c6 } else { 0.0 };
 
     // ===== STATE A SOFT-CORE DISTANCES =====
-    // For state A, we use (1-λ) for softness
-    // Electrostatics: r_soft² = r² + α_crf * (1-λ_crf)²
+    // State A is softened by λ_soft² (it vanishes as λ → 1)
+    // Electrostatics: r_soft² = r² + α_crf · λ_crfs²
     let a_dist2soft = r2 + alpha_crf * lambda_params.b_crfs_lambda2;
     let a_distisoft = 1.0 / a_dist2soft.sqrt();
     let a_dist3isoft = a_distisoft / a_dist2soft;
 
-    // LJ: r⁶_soft = r⁶ + α_lj * (1-λ_lj)² * C12/C6
+    // LJ: r⁶_soft = r⁶ + α_lj · λ_ljs² · C12/C6
     let a_dist6soft = r6 + alpha_lj * lambda_params.b_ljs_lambda2 * a_c126;
     let a_dist6isoft = 1.0 / a_dist6soft;
 
     // ===== STATE B SOFT-CORE DISTANCES =====
-    // For state B, we use λ for softness
+    // State B is softened by (1 − λ_soft)² (it vanishes as λ → 0)
     let b_dist2soft = r2 + alpha_crf * lambda_params.a_crfs_lambda2;
     let b_distisoft = 1.0 / b_dist2soft.sqrt();
     let b_dist3isoft = b_distisoft / b_dist2soft;
@@ -289,7 +276,7 @@ pub fn perturbed_lj_crf_pair(
     let b_dist6isoft = 1.0 / b_dist6soft;
 
     // ===== SOFT-CORE CUTOFF MODIFICATIONS =====
-    let cut2 = crf.cutoff_sq; // actual cutoff², NOT crf_cut²
+    let cut2 = crf.cutoff_sq; // RCRF², the soft-core reaction-field radius
     let a_cut2soft = cut2 + alpha_crf * lambda_params.b_crfs_lambda2;
     let b_cut2soft = cut2 + alpha_crf * lambda_params.a_crfs_lambda2;
 
@@ -2215,5 +2202,53 @@ mod tests {
         println!("Lambda exponent comparison at λ=0.5:");
         println!("  n=1: E_lj={:.6}, dE_lj/dλ={:.6}", e_lj_n1, de_lj_n1);
         println!("  n=2: E_lj={:.6}, dE_lj/dλ={:.6}", e_lj_n2, de_lj_n2);
+    }
+
+    /// Two perturbed atoms on top of each other: with α > 0 and C6 ≠ 0 in both states the
+    /// soft-core pair has a finite energy and dV/dλ at r = 0 (a state with C6 = 0 has no
+    /// soft-core length, so there it diverges, as in gromosXX), and at NLAM = 1 it is the λ-mix
+    /// of the ext kernel's end states.
+    #[test]
+    fn overlapping_soft_core_pair_is_finite() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let fpe = newen_core::units::four_pi_eps_i;
+        let (a_c6, a_c12, b_c6, b_c12, a_q, b_q) = (2.6e-3, 2.7e-6, 1.1e-3, 0.9e-6, -0.3, 0.2);
+        let (alpha_lj, alpha_crf, lam) = (0.5, 0.5, 0.4);
+        let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, 1);
+        for r2 in [0.0, 1e-12, 9e-11] {
+            let (force, e_lj, e_crf, de_lj, de_crf) = perturbed_lj_crf_pair(
+                r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, alpha_crf, &lp, &crf, fpe, 1.0,
+            );
+            for v in [force, e_lj, e_crf, de_lj, de_crf] {
+                assert!(v.is_finite(), "r2 = {r2}: {v}");
+            }
+            assert!(
+                e_lj != 0.0 && e_crf != 0.0,
+                "r2 = {r2}: the pair is not dropped"
+            );
+            let (e, _) = lj_crf_soft_interaction_ext(
+                r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, alpha_crf, &crf, fpe, lam,
+            );
+            assert_relative_eq!(e_lj, (1.0 - lam) * e[0] + lam * e[1], max_relative = 1e-12);
+            assert_relative_eq!(e_crf, (1.0 - lam) * e[2] + lam * e[3], max_relative = 1e-12);
+        }
+    }
+
+    /// Any nonzero C6 enters the soft-core length through C12/C6, as in gromosXX: a C6 of
+    /// 1e-12 is softened, not treated as zero.
+    #[test]
+    fn a_tiny_c6_is_softened() {
+        let crf = CRFParameters::new(1.4, 1.0, 61.0, 0.0);
+        let (c6, c12, alpha_lj, lam, r2) = (1e-12, 1e-6, 0.5, 0.5, 0.09);
+        let lp = PerturbedLambdaParams::from_lambda(lam, lam, lam, lam, 1.0, 1.0, 1.0, 1.0, 1);
+        let (_, e_lj, _, _, _) = perturbed_lj_crf_pair(
+            r2, c6, c12, 0.0, 0.0, 0.0, 0.0, alpha_lj, 0.0, &lp, &crf, 1.0, 1.0,
+        );
+        let dist6 = r2 * r2 * r2 + alpha_lj * lam * lam * (c12 / c6);
+        let softened = (1.0 - lam) * (c12 / dist6 - c6) / dist6;
+        assert_relative_eq!(e_lj, softened, max_relative = 1e-12);
+        let r6 = r2 * r2 * r2;
+        let plain = (1.0 - lam) * (c12 / r6 - c6) / r6;
+        assert!(e_lj < 1e-6 * plain, "{e_lj} vs unsoftened {plain}");
     }
 }

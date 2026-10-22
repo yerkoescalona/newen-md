@@ -162,6 +162,15 @@ fn berendsen_tau_equal_to_dt_reaches_the_target() {
     assert!((t_new - t0).abs() < 1e-9, "T after one step = {t_new}");
 }
 
+/// The rows hold negative τ other than `−1`, for both thermostats.
+#[test]
+fn rows_cover_negative_tau_other_than_minus_one() {
+    let (berendsen, nose_hoover) = lean_rows();
+    let other = |tau: f64| tau < 0.0 && tau != -1.0;
+    assert!(berendsen.iter().any(|r| other(float(&r[3]))));
+    assert!(nose_hoover.iter().any(|r| other(float(&r[3]))));
+}
+
 #[test]
 fn negative_tau_leaves_zeta_and_velocities_alone() {
     assert_eq!(berendsen_scale(10.0, 3.0, 300.0, -1.0, 0.002), 1.0);

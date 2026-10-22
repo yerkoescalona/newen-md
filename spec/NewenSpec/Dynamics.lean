@@ -20,7 +20,7 @@ Rust (spec keys in `spec/SPEC.toml`):
 
 Theory: `NewenTheory/Dynamics/Integration.lean` and `NewenTheory/Dynamics/Pressure.lean`.
 
-Each kernel is written once, over any type `α` with the operations the Rust uses (`+ − × ÷`, `==`,
+Each kernel is written once, over any type `α` with the operations the Rust uses (`+ − × ÷`, `<`,
 `powf` from `NewenSpec/Float.lean`, the literals `0 1 2 3`), operation by operation in the Rust
 order, and used twice, as in `NewenSpec/Thermostat.lean`:
 
@@ -71,7 +71,8 @@ def V3.lengthSq {α : Type} [Add α] [Mul α] (a : V3 α) : α := a.x * a.x + a.
 
 section Model
 
-variable (α : Type) [Add α] [Sub α] [Mul α] [Div α] [BEq α] [Powf α]
+variable (α : Type) [Add α] [Sub α] [Mul α] [Div α] [LT α] [DecidableRel (α := α) (· < ·)]
+  [Powf α]
   [OfNat α 0] [OfNat α 1] [OfNat α 2] [OfNat α 3]
 
 /-- `leap_frog_velocity(v, f, inverse_mass, dt)`: `v + f·m⁻¹·dt`, component by component. -/
@@ -111,9 +112,10 @@ def groupKineticModel (half : α) (atoms : List (Atom α)) : α × α × α × �
     half * M * newCom.lengthSq,
     sumModel α (fun a => a.m * a.vNew.lengthSq) atoms * half)
 
-/-- `kinetic_temperature(ekin, dof, k_boltzmann)`: `2·E_kin/k_B/N_df`, `0` for `N_df = 0`. -/
+/-- `kinetic_temperature(ekin, dof, k_boltzmann)`: `2·E_kin/k_B/N_df`, `0` for `N_df ≤ 0` (and
+for a NaN `N_df`), as the thermostats. -/
 def kineticTemperatureModel (ekin dof kB : α) : α :=
-  if dof == 0 then 0 else 2 * ekin / kB / dof
+  if 0 < dof then 2 * ekin / kB / dof else 0
 
 /-- `pressure_tensor(kinetic, virial, volume)`: `(K + W·½)·(2/V)` element by element, with the
 literal `0.5` as `half`. -/
@@ -282,7 +284,7 @@ theorem groupKineticModel_real_eq (atoms : List (Atom ℝ)) :
     ring
 
 /-- The temperature over ℝ, with degrees of freedom, is the theory's `2K/(N k_B)`. -/
-theorem kineticTemperatureModel_real_eq {ekin dof kB : ℝ} (hdof : dof ≠ 0) :
+theorem kineticTemperatureModel_real_eq {ekin dof kB : ℝ} (hdof : 0 < dof) :
     kineticTemperatureModel ℝ ekin dof kB = temperatureOf ekin dof kB := by
   simp [kineticTemperatureModel, hdof, temperatureOf, div_div, mul_comm]
 

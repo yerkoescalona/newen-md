@@ -211,6 +211,9 @@ pub fn parse_topology(reader: impl BufRead) -> Result<ParsedTopology, IoError> {
             "PHYSICALCONSTANTS" => {
                 parse_physical_constants(&mut lines, &mut physical_constants)?;
             },
+            "LJEXCEPTIONS" => {
+                refuse_lj_exceptions(&mut lines)?;
+            },
             _ => {
                 // Skip unknown blocks
                 continue;
@@ -819,6 +822,38 @@ fn parse_lj_parameters<I: Iterator<Item = Result<String, std::io::Error>>>(
     }
 
     Ok(())
+}
+
+/// LJEXCEPTIONS: gromosXX puts each pair into `all_exclusion` and gives it its own C6/C12
+/// (`in_topology.cc:2111`), which newen does not implement; a block with NEX > 0 is refused
+/// rather than ignored. An empty block (NEX = 0) is read and dropped.
+fn refuse_lj_exceptions<I: Iterator<Item = Result<String, std::io::Error>>>(
+    lines: &mut I,
+) -> Result<(), IoError> {
+    let mut nex: Option<usize> = None;
+    while let Some(Ok(line)) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed == "END" {
+            break;
+        }
+        match nex {
+            None => {
+                nex = Some(trimmed.parse().map_err(|_| {
+                    IoError::ParseError(format!("Invalid LJEXCEPTIONS count NEX: {trimmed}"))
+                })?);
+            },
+            Some(_) => nex = Some(usize::MAX),
+        }
+    }
+    match nex {
+        Some(n) if n > 0 => Err(IoError::FormatError(
+            "LJEXCEPTIONS block is not implemented (NEX > 0)".to_string(),
+        )),
+        _ => Ok(()),
+    }
 }
 
 fn parse_temperature_groups<I: Iterator<Item = Result<String, std::io::Error>>>(
@@ -2023,6 +2058,18 @@ END
         let full = format!("{CG16_TOPO}\nTEMPERATUREGROUPS\n2\n1 4\nEND\n");
         let topo = build_topology(parse_topology(full.as_bytes()).unwrap());
         assert_eq!(topo.temperature_groups, vec![vec![0], vec![1, 2, 3]]);
+    }
+
+    #[test]
+    fn lj_exceptions_are_refused_unless_empty() {
+        let empty = format!("{CG16_TOPO}\nLJEXCEPTIONS\n# NEX\n0\nEND\n");
+        assert!(parse_topology(empty.as_bytes()).is_ok());
+        let one = format!("{CG16_TOPO}\nLJEXCEPTIONS\n1\n  1   4   1.0e-6   2.0e-3\nEND\n");
+        let e = parse_topology(one.as_bytes()).unwrap_err().to_string();
+        assert!(e.contains("LJEXCEPTIONS block is not implemented"), "{e}");
+        // a data line under NEX = 0 is not ignored either
+        let stray = format!("{CG16_TOPO}\nLJEXCEPTIONS\n0\n  1   4   1.0e-6   2.0e-3\nEND\n");
+        assert!(parse_topology(stray.as_bytes()).is_err());
     }
 
     #[test]

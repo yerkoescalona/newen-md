@@ -759,6 +759,7 @@ pub fn build_sequence_from_plan(
 ) -> Result<Built, RunError> {
     // the recipe's refusals hold whichever way the plan was made (`build_plan` runs them too)
     crate::plan::check_start_time(recipe)?;
+    crate::plan::check_com_motion(recipe)?;
     crate::plan::check_electrostatics(recipe)?;
     crate::plan::check_pairlist(recipe)?;
     crate::plan::check_outputs(recipe)?;

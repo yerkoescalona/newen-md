@@ -340,6 +340,10 @@ fn rows_cover_the_edges() {
     assert!(angles
         .iter()
         .any(|r| linear(r) && r[9] != std::f64::consts::PI));
+    // the linear branch at θ ≈ 0 with θ0 = π (energy k(1 + cos θ), as gromosXX)
+    assert!(angles
+        .iter()
+        .any(|r| linear(r) && angle_cos(r) > 0.0 && r[9] == std::f64::consts::PI && r[20] != 0.0));
 
     let dihedrals = dihedral_rows();
     let normals = |r: &Vec<f64>| {
@@ -361,6 +365,36 @@ fn rows_cover_the_edges() {
         let (dmj2, _, dkj2) = normals(r);
         dmj2 > 0.0 && dmj2 < NEAR_LINEAR * dkj2 && r[29..32].iter().all(|&f| f == 0.0)
     }));
+    // j, k, l nearly collinear with i off the axis: both kernels drop f_l and keep f_i
+    let zero = |f: &[f64]| f.iter().all(|&x| x == 0.0);
+    let l_side = |r: &Vec<f64>| {
+        let (dmj2, dnk2, dkj2) = normals(r);
+        dnk2.sqrt() >= ZERO_DISTANCE2 && dnk2 < NEAR_LINEAR * dkj2 && dmj2 >= NEAR_LINEAR * dkj2
+    };
+    assert!(dihedrals
+        .iter()
+        .any(|r| l_side(r) && zero(&r[38..41]) && !zero(&r[29..32])));
+    assert!(dihedrals
+        .iter()
+        .any(|r| l_side(r) && zero(&r[51..54]) && !zero(&r[42..45])));
+    // ζ0 outside [−π, π], and the wrap of ζ into [ζ0 − π, ζ0 + π] turning twice
+    let pi = std::f64::consts::PI;
+    let raw_zeta = |r: &Vec<f64>| {
+        let (rij, rkj, rkl) = (vec3(r, 0), vec3(r, 3), vec3(r, 6));
+        let (mj, nk) = (rij.cross(rkj), rkj.cross(rkl));
+        let z = (mj.dot(nk) / (mj.length() * nk.length()))
+            .clamp(-1.0, 1.0)
+            .acos();
+        if rij.dot(nk) < 0.0 {
+            -z
+        } else {
+            z
+        }
+    };
+    assert!(dihedrals.iter().any(|r| r[14].abs() > pi && r[41] != 0.0));
+    assert!(dihedrals
+        .iter()
+        .any(|r| (raw_zeta(r) - r[14]).abs() > 3.0 * pi && r[41] != 0.0));
     assert!(dihedrals.iter().any(|r| multiplicity(r) == 7));
     for m in 0..=6 {
         assert!(dihedrals.iter().any(|r| multiplicity(r) == m), "m = {m}");

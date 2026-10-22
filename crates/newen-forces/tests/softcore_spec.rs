@@ -18,9 +18,6 @@ use newen_forces::nonbonded::{
     PerturbedLambdaParams,
 };
 
-/// `guardFloat` in `spec/NewenSpec/SoftCore.lean`: the `1e-10` of the pair kernel's guards.
-const GUARD_BITS: u64 = 0x3ddb_7cdf_d9d7_bdbb;
-
 const SECTIONS: [&str; 7] = [
     "lambda_params",
     "perturbed_lj_crf_pair",
@@ -168,11 +165,6 @@ fn pair_with(row: &[f64], t: &PerturbedLambdaParams, r2: f64) -> (f64, f64, f64,
 }
 
 #[test]
-fn guard_is_the_bits_the_lean_model_uses() {
-    assert_eq!(1e-10_f64.to_bits(), GUARD_BITS);
-}
-
-#[test]
 fn lambda_params_equal_lean_model_bit_for_bit() {
     let rows = section("lambda_params");
     assert!(rows.len() >= 200, "{} lambda_params rows", rows.len());
@@ -313,13 +305,13 @@ fn rf_soft_interaction_ext_equals_lean_model_bit_for_bit() {
     report("rf_soft_interaction_ext", rows.len(), &mismatches);
 }
 
-/// The generated rows cover both NLAM, the end states, every α, dummy states, the guards.
+/// The generated rows cover every NLAM, the end states, every α, dummy states, individual λ
+/// outside `[0, 1]`, tiny and negative `C6`, overlapping atoms.
 #[test]
 fn rows_cover_the_edges() {
     let pair = section("perturbed_lj_crf_pair");
-    let guard = f64::from_bits(GUARD_BITS);
-    for n in [1.0, 2.0] {
-        assert!(pair.iter().any(|r| r[23] == n));
+    for n in [1.0, 2.0, 3.0, 5.0] {
+        assert!(pair.iter().any(|r| r[23] == n), "NLAM {n}");
     }
     for lam in [0.0, 0.25, 0.5, 0.75, 1.0] {
         assert!(pair.iter().any(|r| r[15..19].iter().all(|&l| l == lam)));
@@ -328,25 +320,48 @@ fn rows_cover_the_edges() {
         assert!(pair.iter().any(|r| r[7] == alpha));
         assert!(pair.iter().any(|r| r[8] == alpha));
     }
-    // individual λ: different λ per kind, derivatives other than 1
+    // α off the fixed values, up to 2
+    assert!(pair.iter().any(|r| r[7] > 1.51 && r[7] < 2.0));
+    assert!(pair.iter().any(|r| r[8] > 1.51 && r[8] < 2.0));
+    // individual λ: different λ per kind, derivatives other than 1, below 0 and above 1
     assert!(pair.iter().any(|r| r[15] != r[16] && r[19] != 1.0));
+    assert!(pair.iter().any(|r| r[15..19].iter().any(|&l| l < 0.0)));
+    assert!(pair.iter().any(|r| r[15..19].iter().any(|&l| l > 1.0)));
     // a dummy state A, an uncharged state B
     assert!(pair
         .iter()
         .any(|r| r[1] == 0.0 && r[2] == 0.0 && r[5] == 0.0));
     assert!(pair.iter().any(|r| r[4] > 0.0 && r[6] == 0.0));
-    // below the distance guard, at the C6 guard
-    assert!(pair.iter().any(|r| r[0] < guard));
-    assert!(pair.iter().any(|r| r[1] == guard || r[3] == guard));
+    // 0 < |C6| < 1e-10 (softened, since C12/C6 is used for any C6 ≠ 0), and a negative C6
+    let tiny = |c6: f64| c6 != 0.0 && c6.abs() < 1e-10;
+    assert!(pair.iter().any(|r| tiny(r[1]) || tiny(r[3])));
     assert!(pair
         .iter()
-        .any(|r| (r[1] > 0.0 && r[1] < guard) || (r[3] > 0.0 && r[3] < guard)));
+        .any(|r| (tiny(r[1]) && r[1] < 0.0) || (tiny(r[3]) && r[3] < 0.0)));
+    assert!(pair.iter().any(|r| r[1] < -1e-6 || r[3] < -1e-6));
+    // overlapping atoms: r² < 1e-10 with α > 0 and a soft core in both states is finite
+    assert!(pair.iter().any(|r| r[0] == 0.0));
+    assert!(pair.iter().any(|r| {
+        r[0] < 1e-10
+            && r[7] > 0.0
+            && r[8] > 0.0
+            && r[1] != 0.0
+            && r[3] != 0.0
+            && r[24..].iter().all(|v| v.is_finite())
+    }));
 }
 
 /// `h` of the central differences.
 const H: f64 = 1e-6;
 
 /// A row's table at `λ + δ`, each individual λ moved along its own slope: `Λ_k + δ·Λ_k′`.
+/// The five-point central difference `(−f(2h) + 8f(h) − 8f(−h) + f(−2h)) / 12h` of `f(δ)` at 0:
+/// exact for the λ polynomials up to degree 4, so NLAM ≤ 5 at an end point (where the energy
+/// is `(1 − λ)ⁿ·E_A` with a large `E_A`) leaves only rounding.
+fn fd5(f: impl Fn(f64) -> f64) -> f64 {
+    (-f(2.0 * H) + 8.0 * f(H) - 8.0 * f(-H) + f(-2.0 * H)) / (12.0 * H)
+}
+
 fn table_shifted(t: &[f64], delta: f64) -> PerturbedLambdaParams {
     let mut s = t.to_vec();
     for k in 0..4 {
@@ -361,9 +376,12 @@ fn close(a: f64, b: f64, scale: f64) -> bool {
     (a - b).abs() <= 1e-6 * a.abs() + 1e-9 * scale
 }
 
-/// Rows away from the soft-core singularity and the guards: `r² ≥ 0.01` nm², a reaction-field
-/// cutoff, and each `C6` zero or at least `1e-6` (a smaller one makes `C12/C6` so large that the
-/// energy's second λ derivative swamps a central difference).
+/// Rows a central difference can check: `r² ≥ 0.01` nm², a reaction-field cutoff, and each `C6`
+/// zero or at least `1e-6`. The filter removes every row with a negative `C6` or
+/// `0 < C6 < 1e-6`: there `C12/C6` is so large (or negative) that the soft-core length dominates
+/// and the energy's second λ derivative swamps a central difference with `h = 1e-6`; those rows
+/// are checked bit for bit against the Lean model only, whose dV/dλ is proved to be the
+/// derivative (`perturbedLjCrfPairModel_dvdl_is_deriv`, `ljCrfSoftExtModel_de_is_deriv`).
 fn well_conditioned(row: &[f64]) -> bool {
     let c6_ok = |c6: f64| c6 == 0.0 || c6 >= 1e-6;
     row[0] >= 0.01 && row[9] > 0.0 && c6_ok(row[1]) && c6_ok(row[3])
@@ -379,10 +397,8 @@ fn perturbed_lj_crf_pair_dvdl_is_the_derivative_of_its_energy() {
     for row in rows.iter().filter(|r| well_conditioned(r)) {
         let t = &row[15..24];
         let (_, e_lj, e_crf, de_lj, de_crf) = pair_with(row, &table_of(t), row[0]);
-        let (_, lj_p, crf_p, _, _) = pair_with(row, &table_shifted(t, H), row[0]);
-        let (_, lj_m, crf_m, _, _) = pair_with(row, &table_shifted(t, -H), row[0]);
-        let fd_lj = (lj_p - lj_m) / (2.0 * H);
-        let fd_crf = (crf_p - crf_m) / (2.0 * H);
+        let fd_lj = fd5(|d| pair_with(row, &table_shifted(t, d), row[0]).1);
+        let fd_crf = fd5(|d| pair_with(row, &table_shifted(t, d), row[0]).2);
         checked += 1;
         if !close(de_lj, fd_lj, 1.0 + e_lj.abs()) || !close(de_crf, fd_crf, 1.0 + e_crf.abs()) {
             failures.push(format!(
@@ -443,7 +459,7 @@ fn rf_kernels_dvdl_is_the_derivative_of_their_energy() {
                 kernel(row[0], row[1], row[2], row[3], tab, &crf, row[8])
             };
             let (_, e, de) = at(&table_of(t));
-            let fd = (at(&table_shifted(t, H)).1 - at(&table_shifted(t, -H)).1) / (2.0 * H);
+            let fd = fd5(|d| at(&table_shifted(t, d)).1);
             assert!(
                 close(de, fd, 1.0 + e.abs()),
                 "{name} row={row:?}: de={de:e} fd={fd:e}"
@@ -458,7 +474,7 @@ fn rf_kernels_dvdl_is_the_derivative_of_their_energy() {
         let at =
             |tab: &PerturbedLambdaParams| perturbed_rf_self_term(row[0], row[1], tab, &crf, row[6]);
         let (e, de) = at(&table_of(t));
-        let fd = (at(&table_shifted(t, H)).0 - at(&table_shifted(t, -H)).0) / (2.0 * H);
+        let fd = fd5(|d| at(&table_shifted(t, d)).0);
         assert!(
             close(de, fd, 1.0 + e.abs()),
             "self row={row:?}: de={de:e} fd={fd:e}"
@@ -504,7 +520,7 @@ fn ext_kernels_derivatives_are_the_derivatives_of_their_energies() {
         }
         checked += 1;
     }
-    assert!(checked >= 150, "{checked} ext rows");
+    assert!(checked >= 120, "{checked} ext rows");
     for row in section("rf_soft_interaction_ext")
         .iter()
         .filter(|r| r[4] > 0.0)

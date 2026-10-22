@@ -65,7 +65,7 @@ pub struct CRFParameters {
     pub crf_cut: f64,    // (1 - crf/2) / cutoff  (energy shift constant)
     pub crf_2cut3i: f64, // crf / (2 * cutoff^3)  (energy quadratic term)
     pub crf_cut3i: f64,  // crf / cutoff^3         (force correction term)
-    pub cutoff_sq: f64,  // cutoff^2 for Heaviside truncation (GROMOS XXHEAVISIDE)
+    pub cutoff_sq: f64,  // RCRF^2: the reaction-field radius the soft-core kernels soften
 }
 
 impl CRFParameters {

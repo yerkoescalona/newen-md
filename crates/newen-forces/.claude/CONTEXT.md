@@ -40,7 +40,10 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   the plain terms. `tests/softcore_spec.rs` and `tests/perturbed_bonded_spec.rs` compare the Rust
   with the `Float` models bit for bit and check dV/dλ and the forces against central differences.
   Keep the operation order of these kernels as it is. The extraction moved no bit: all 121
-  gromosXX reference systems give byte-identical output files before and after.
+  gromosXX reference systems give byte-identical output files before and after. Since
+  2026-10-22 `perturbed_lj_crf_pair` has no distance guard and takes `C12/C6` for any `C6 ≠ 0`,
+  as gromosXX and the ext kernel (overlapping soft-core atoms are finite; a state with `C6 = 0`
+  has no soft-core length there and diverges at `r = 0`, as in gromosXX).
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections

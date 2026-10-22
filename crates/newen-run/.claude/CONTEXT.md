@@ -39,6 +39,14 @@ RunError                                                                 -> ever
   NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a
   TORSDIHEDRALTYPE phase other than 0°/180°, `in_topology.cc:960-962`) in `plan.rs`, run by
   `build_plan` and `build_sequence_from_plan`. No reference input trips them.
+- **More refusals (2026-10-22):** `check_com_motion` (NTICOM outside 0..=2,
+  `in_parameter.cc:1166`), `check_outputs` (NTWSE ≠ 0, parsed but never read),
+  `check_perturbation` (NLAM ≤ 0 whatever NTG says, `in_parameter.cc:882`; RCRF ≤ 0 in a perturbed
+  run, where the soft-core reaction field divides by the softened cutoff). `thermostat_baths`
+  refuses a repeated DOFSET LAST (the ranges must increase strictly) and ROTTRANS atoms
+  `1..=RTCLAST` spread over more than one bath pair (`topology.cc:1370-1394`); one bath is
+  counted by `bath_dofs` like several. newen-io's topology reader refuses LJEXCEPTIONS with
+  NEX > 0. No reference input trips them.
 - **Lattice sum refused (1.8, 0.0.65):** `check_electrostatics` (`plan.rs`, called by
   `build_plan` and `build_sequence_from_plan`) refuses NLRELE 2/3 for every run, perturbed or
   not: nothing calls newen-forces' `electrostatics.rs`/`pme.rs`, and the reaction field would

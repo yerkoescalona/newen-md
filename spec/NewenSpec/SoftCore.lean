@@ -79,8 +79,8 @@ structure LambdaParams (α : Type) where
 
 section Model
 
-variable (α : Type) [Add α] [Sub α] [Mul α] [Div α] [Neg α] [LT α] [DecidableRel (α := α) (· < ·)]
-  [BEq α] [Sqrt α] [Powf α] [Fabs α]
+variable (α : Type) [Add α] [Sub α] [Mul α] [Div α] [Neg α]
+  [BEq α] [Sqrt α] [Powf α]
   [OfNat α 0] [OfNat α 1] [OfNat α 2] [OfNat α 3] [OfNat α 6] [OfNat α 12]
 
 /-- `PerturbedLambdaParams::from_lambda(lj, ljs, crf, crfs, dlj, dljs, dcrf, dcrfs, n)`, with
@@ -104,67 +104,64 @@ def lambdaParamsModel (lj ljs crf crfs dlj dljs dcrf dcrfs nF nm1F : α) : Lambd
   bCrfs2 := crfs * crfs
   nExp := nF
 
-/-- `C12/C6` for the soft-core length, `0` when `|C6| ≤ guard` (`1e-10` in the pair kernel). -/
-def c126Model (guard c6 c12 : α) : α :=
-  if guard < Fabs.fabs c6 then c12 / c6 else 0
+/-- `C12/C6` for the soft-core length, `0` when `C6 = 0` (gromosXX's test). -/
+def c126Model (c6 c12 : α) : α :=
+  if c6 != 0 then c12 / c6 else 0
 
 /-- `crf/2 / sqrt(cut2soft³)` as the soft kernels form it: `crf_2cut3i · cut³ / sqrt(…)`. -/
 def softCrf2Cut3iModel (p : CrfParams α) (cut2soft : α) : α :=
   p.crf2Cut3i * (p.cutoffSq * Sqrt.sqrt p.cutoffSq) / Sqrt.sqrt (cut2soft * cut2soft * cut2soft)
 
 /-- `perturbed_lj_crf_pair(r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, alpha_crf, lp, crf,
-four_pi_eps_i, coulomb_scaling)`: `(force, e_lj, e_crf, de_lj, de_crf)`, with the distance guard
-and the `|C6|` guard (both `1e-10`) as `guard`, `c6guard`. -/
-def perturbedLjCrfPairModel (guard c6guard r2 aC6 aC12 bC6 bC12 aQ bQ αlj αc : α)
+four_pi_eps_i, coulomb_scaling)`: `(force, e_lj, e_crf, de_lj, de_crf)`. -/
+def perturbedLjCrfPairModel (r2 aC6 aC12 bC6 bC12 aQ bQ αlj αc : α)
     (lp : LambdaParams α) (p : CrfParams α) (fpe cs : α) : α × α × α × α × α :=
-  if r2 < guard then (0, 0, 0, 0, 0)
-  else
-    let r6 := r2 * r2 * r2
-    let r4 := r2 * r2
-    let aC126 := c126Model α c6guard aC6 aC12
-    let bC126 := c126Model α c6guard bC6 bC12
-    let aDist2soft := r2 + αc * lp.bCrfs2
-    let aDistisoft := 1 / Sqrt.sqrt aDist2soft
-    let aDist3isoft := aDistisoft / aDist2soft
-    let aDist6soft := r6 + αlj * lp.bLjs2 * aC126
-    let aDist6isoft := 1 / aDist6soft
-    let bDist2soft := r2 + αc * lp.aCrfs2
-    let bDistisoft := 1 / Sqrt.sqrt bDist2soft
-    let bDist3isoft := bDistisoft / bDist2soft
-    let bDist6soft := r6 + αlj * lp.aLjs2 * bC126
-    let bDist6isoft := 1 / bDist6soft
-    let cut2 := p.cutoffSq
-    let aCut2soft := cut2 + αc * lp.bCrfs2
-    let bCut2soft := cut2 + αc * lp.aCrfs2
-    let aCut2soft3 := aCut2soft * aCut2soft * aCut2soft
-    let bCut2soft3 := bCut2soft * bCut2soft * bCut2soft
-    let cut3 := cut2 * Sqrt.sqrt cut2
-    let aCrf2cut3i := p.crf2Cut3i * cut3 / Sqrt.sqrt aCut2soft3
-    let bCrf2cut3i := p.crf2Cut3i * cut3 / Sqrt.sqrt bCut2soft3
-    let aCrfCut3i := 2 * aCrf2cut3i
-    let bCrfCut3i := 2 * bCrf2cut3i
-    let aCrfPert := 3 * aCrf2cut3i / aCut2soft
-    let bCrfPert := 3 * bCrf2cut3i / bCut2soft
-    let force0 := (lp.aCrfN * aQ * (cs * aDist3isoft + aCrfCut3i) +
-      lp.bCrfN * bQ * (cs * bDist3isoft + bCrfCut3i)) * fpe
-    let force1 := force0 + (-6) * (lp.aLjN * aC6 * aDist6isoft * aDist6isoft +
-      lp.bLjN * bC6 * bDist6isoft * bDist6isoft) * r4
-    let force := force1 + 12 * (lp.aLjN * aC12 * aDist6isoft * aDist6isoft * aDist6isoft +
-      lp.bLjN * bC12 * bDist6isoft * bDist6isoft * bDist6isoft) * r4
-    let aELj := (aC12 * aDist6isoft - aC6) * aDist6isoft
-    let bELj := (bC12 * bDist6isoft - bC6) * bDist6isoft
-    let aECrf := aQ * (cs * aDistisoft - aCrf2cut3i * r2 - p.crfCut)
-    let bECrf := bQ * (cs * bDistisoft - bCrf2cut3i * r2 - p.crfCut)
-    let eLj := lp.aLjN * aELj + lp.bLjN * bELj
-    let eCrf := (lp.aCrfN * aECrf + lp.bCrfN * bECrf) * fpe
-    let deLj := (-2) * αlj *
-        (lp.aLjN * lp.bLjs * aC126 * aDist6isoft * aDist6isoft * (2 * aC12 * aDist6isoft - aC6) -
-          lp.bLjN * lp.aLjs * bC126 * bDist6isoft * bDist6isoft * (2 * bC12 * bDist6isoft - bC6)) +
-      lp.nExp * (lp.bLjN1 * bELj - lp.aLjN1 * aELj)
-    let deCrf := (-(lp.aCrfN * aQ * lp.bCrfs * (cs * aDist3isoft - aCrfPert * r2) -
-          lp.bCrfN * bQ * lp.aCrfs * (cs * bDist3isoft - bCrfPert * r2))) * fpe * αc +
-      lp.nExp * (lp.bCrfN1 * bECrf - lp.aCrfN1 * aECrf) * fpe
-    (force, eLj, eCrf, deLj, deCrf)
+  let r6 := r2 * r2 * r2
+  let r4 := r2 * r2
+  let aC126 := c126Model α aC6 aC12
+  let bC126 := c126Model α bC6 bC12
+  let aDist2soft := r2 + αc * lp.bCrfs2
+  let aDistisoft := 1 / Sqrt.sqrt aDist2soft
+  let aDist3isoft := aDistisoft / aDist2soft
+  let aDist6soft := r6 + αlj * lp.bLjs2 * aC126
+  let aDist6isoft := 1 / aDist6soft
+  let bDist2soft := r2 + αc * lp.aCrfs2
+  let bDistisoft := 1 / Sqrt.sqrt bDist2soft
+  let bDist3isoft := bDistisoft / bDist2soft
+  let bDist6soft := r6 + αlj * lp.aLjs2 * bC126
+  let bDist6isoft := 1 / bDist6soft
+  let cut2 := p.cutoffSq
+  let aCut2soft := cut2 + αc * lp.bCrfs2
+  let bCut2soft := cut2 + αc * lp.aCrfs2
+  let aCut2soft3 := aCut2soft * aCut2soft * aCut2soft
+  let bCut2soft3 := bCut2soft * bCut2soft * bCut2soft
+  let cut3 := cut2 * Sqrt.sqrt cut2
+  let aCrf2cut3i := p.crf2Cut3i * cut3 / Sqrt.sqrt aCut2soft3
+  let bCrf2cut3i := p.crf2Cut3i * cut3 / Sqrt.sqrt bCut2soft3
+  let aCrfCut3i := 2 * aCrf2cut3i
+  let bCrfCut3i := 2 * bCrf2cut3i
+  let aCrfPert := 3 * aCrf2cut3i / aCut2soft
+  let bCrfPert := 3 * bCrf2cut3i / bCut2soft
+  let force0 := (lp.aCrfN * aQ * (cs * aDist3isoft + aCrfCut3i) +
+    lp.bCrfN * bQ * (cs * bDist3isoft + bCrfCut3i)) * fpe
+  let force1 := force0 + (-6) * (lp.aLjN * aC6 * aDist6isoft * aDist6isoft +
+    lp.bLjN * bC6 * bDist6isoft * bDist6isoft) * r4
+  let force := force1 + 12 * (lp.aLjN * aC12 * aDist6isoft * aDist6isoft * aDist6isoft +
+    lp.bLjN * bC12 * bDist6isoft * bDist6isoft * bDist6isoft) * r4
+  let aELj := (aC12 * aDist6isoft - aC6) * aDist6isoft
+  let bELj := (bC12 * bDist6isoft - bC6) * bDist6isoft
+  let aECrf := aQ * (cs * aDistisoft - aCrf2cut3i * r2 - p.crfCut)
+  let bECrf := bQ * (cs * bDistisoft - bCrf2cut3i * r2 - p.crfCut)
+  let eLj := lp.aLjN * aELj + lp.bLjN * bELj
+  let eCrf := (lp.aCrfN * aECrf + lp.bCrfN * bECrf) * fpe
+  let deLj := (-2) * αlj *
+      (lp.aLjN * lp.bLjs * aC126 * aDist6isoft * aDist6isoft * (2 * aC12 * aDist6isoft - aC6) -
+        lp.bLjN * lp.aLjs * bC126 * bDist6isoft * bDist6isoft * (2 * bC12 * bDist6isoft - bC6)) +
+    lp.nExp * (lp.bLjN1 * bELj - lp.aLjN1 * aELj)
+  let deCrf := (-(lp.aCrfN * aQ * lp.bCrfs * (cs * aDist3isoft - aCrfPert * r2) -
+        lp.bCrfN * bQ * lp.aCrfs * (cs * bDist3isoft - bCrfPert * r2))) * fpe * αc +
+    lp.nExp * (lp.bCrfN1 * bECrf - lp.aCrfN1 * aECrf) * fpe
+  (force, eLj, eCrf, deLj, deCrf)
 
 /-- `rf_soft_interaction(r2, a_q, b_q, alpha_crf, lp, crf, four_pi_eps_i)`:
 `(force, e_rf, de_rf)`. -/
@@ -269,16 +266,12 @@ end Model
 
 /-! ## 2. The `Float` instantiation (what `lake exe spec-vectors` runs) -/
 
-/-- The `1e-10` of the pair kernel's guards (`r2 < 1e-10`, `|C6| > 1e-10`), as `f64` bits; the
-same double as `ZERO_DISTANCE2`. -/
-def guardFloat : Float := Float.ofBits 0x3ddb7cdfd9d7bdbb
-
 def lambdaParamsFloat (lj ljs crf crfs dlj dljs dcrf dcrfs nF nm1F : Float) : LambdaParams Float :=
   lambdaParamsModel Float lj ljs crf crfs dlj dljs dcrf dcrfs nF nm1F
 
 def perturbedLjCrfPairFloat (r2 aC6 aC12 bC6 bC12 aQ bQ αlj αc : Float) (lp : LambdaParams Float)
     (p : CrfParams Float) (fpe cs : Float) : Float × Float × Float × Float × Float :=
-  perturbedLjCrfPairModel Float guardFloat guardFloat r2 aC6 aC12 bC6 bC12 aQ bQ αlj αc lp p fpe cs
+  perturbedLjCrfPairModel Float r2 aC6 aC12 bC6 bC12 aQ bQ αlj αc lp p fpe cs
 
 def rfSoftFloat (r2 aQ bQ αc : Float) (lp : LambdaParams Float) (p : CrfParams Float)
     (fpe : Float) : Float × Float × Float :=
@@ -313,7 +306,7 @@ theorem lambdaParamsModel_real (lj ljs crf crfs dlj dljs dcrf dcrfs : ℝ) (n : 
         aLjs2 := (1 - ljs) * (1 - ljs), bLjs2 := ljs * ljs,
         aCrfs := (1 - crfs) * dcrfs, bCrfs := crfs * dcrfs,
         aCrfs2 := (1 - crfs) * (1 - crfs), bCrfs2 := crfs * crfs, nExp := n } := by
-  simp only [lambdaParamsModel, Powf.powf, Real.rpow_eq_pow, Real.rpow_natCast]
+  simp only [lambdaParamsModel, Powf.powf, Real.rpow_natCast]
 
 /-- The table of individual λ `(lj, ljs, crf, crfs)` with derivatives `(dlj, dljs, dcrf, dcrfs)`
 and NLAM `n`, over ℝ. -/
@@ -321,7 +314,7 @@ noncomputable abbrev tableR (n : ℕ) (lj ljs crf crfs dlj dljs dcrf dcrfs : ℝ
   lambdaParamsModel ℝ lj ljs crf crfs dlj dljs dcrf dcrfs n ((n - 1 : ℕ) : ℝ)
 
 /-- The Lennard-Jones state the pair kernel sees: `C6`, `C12` and its guarded `C12/C6`. -/
-noncomputable abbrev ljStateOf (c6guard c6 c12 : ℝ) : LjState := ⟨c6, c12, c126Model ℝ c6guard c6 c12⟩
+noncomputable abbrev ljStateOf (c6 c12 : ℝ) : LjState := ⟨c6, c12, c126Model ℝ c6 c12⟩
 
 /-- The softened reaction-field coefficient over ℝ: `crf_2cut3i · cut³` is `crf/2` for `R > 0`. -/
 theorem crf2Cut3i_cut3_real (crf : ℝ) {R : ℝ} (hR : 0 < R) :
@@ -332,25 +325,23 @@ theorem crf2Cut3i_cut3_real (crf : ℝ) {R : ℝ} (hR : 0 < R) :
   have := hR.ne'
   field_simp
 
-/-- **The pair kernel over ℝ is the theory.** For `r > 0` outside the guard, `R > 0` and NLAM
-`n`, the model returns the soft-core force, energies and `dV/dλ` of
+/-- **The pair kernel over ℝ is the theory.** For `R > 0` and NLAM `n`, at any `r`, the model returns the soft-core force, energies and `dV/dλ` of
 `NewenTheory/Interactions/SoftCore.lean`, with the individual λ `(lj, ljs, crf, crfs)` and their
 derivatives as the table kernel receives them. -/
-theorem perturbedLjCrfPairModel_real_eq (n : ℕ) {guard c6guard r R : ℝ} (hR : 0 < R)
-    (hg : guard ≤ r ^ 2) (aC6 aC12 bC6 bC12 qA qB αlj αc fpe cs crf : ℝ)
+theorem perturbedLjCrfPairModel_real_eq (n : ℕ) {r R : ℝ} (hR : 0 < R)
+    (aC6 aC12 bC6 bC12 qA qB αlj αc fpe cs crf : ℝ)
     (lj ljs lc lcs dlj dljs dlc dlcs : ℝ) :
-    perturbedLjCrfPairModel ℝ guard c6guard (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
+    perturbedLjCrfPairModel ℝ (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
         (tableR n lj ljs lc lcs dlj dljs dlc dlcs) (crfDerivedModel ℝ crf R) fpe cs =
-      (pertLjForce n αlj (ljStateOf c6guard aC6 aC12) (ljStateOf c6guard bC6 bC12) r lj ljs +
+      (pertLjForce n αlj (ljStateOf aC6 aC12) (ljStateOf bC6 bC12) r lj ljs +
           pertCrfForce n αc cs fpe qA qB crf R r lc lcs,
-        pertLjEnergy n αlj (ljStateOf c6guard aC6 aC12) (ljStateOf c6guard bC6 bC12) r lj ljs,
+        pertLjEnergy n αlj (ljStateOf aC6 aC12) (ljStateOf bC6 bC12) r lj ljs,
         pertCrfEnergy n αc cs fpe qA qB crf R r lc lcs,
-        pertLjDvdl n αlj (ljStateOf c6guard aC6 aC12) (ljStateOf c6guard bC6 bC12) r lj ljs
+        pertLjDvdl n αlj (ljStateOf aC6 aC12) (ljStateOf bC6 bC12) r lj ljs
           dlj dljs,
         pertCrfDvdl n αc cs fpe qA qB crf R r lc lcs dlc dlcs) := by
   have hc := crf2Cut3i_cut3_real crf hR
-  simp only [perturbedLjCrfPairModel, tableR, lambdaParamsModel_real, not_lt.mpr hg, ite_false,
-    Sqrt.sqrt, hc]
+  simp only [perturbedLjCrfPairModel, tableR, lambdaParamsModel_real, Sqrt.sqrt, hc]
   simp only [crfDerivedModel, pertLjForce, pertCrfForce, pertLjEnergy, pertCrfEnergy, pertLjDvdl,
     pertCrfDvdl, scLjEnergy, scLjDs, scLjForce, scCrfEnergy, scCrfDs, scCrfForce, Prod.mk.injEq]
   simp only [div_eq_mul_inv, ← inv_pow]
@@ -362,26 +353,26 @@ built by `lambdaParamsModel` from individual λ `Λ`, `Λₛ`, `Λ_c`, `Λ_cs` t
 in λ (derivatives `dΛ`, … at `lam`, the inputs the table receives), the `de_lj + de_crf` the
 pair kernel returns at `lam` is the derivative at `lam` of the `e_lj + e_crf` it returns, wherever
 the softened distances are positive. -/
-theorem perturbedLjCrfPairModel_dvdl_is_deriv (n : ℕ) {guard c6guard r R : ℝ} (hR : 0 < R)
-    (hg : guard ≤ r ^ 2) (aC6 aC12 bC6 bC12 qA qB αlj αc fpe cs crf : ℝ)
+theorem perturbedLjCrfPairModel_dvdl_is_deriv (n : ℕ) {r R : ℝ} (hR : 0 < R)
+    (aC6 aC12 bC6 bC12 qA qB αlj αc fpe cs crf : ℝ)
     {Λ Λs Λc Λcs : ℝ → ℝ} {dΛ dΛs dΛc dΛcs lam : ℝ}
     (hΛ : HasDerivAt Λ dΛ lam) (hΛs : HasDerivAt Λs dΛs lam)
     (hΛc : HasDerivAt Λc dΛc lam) (hΛcs : HasDerivAt Λcs dΛcs lam)
-    (hA : r ^ 6 + αlj * Λs lam ^ 2 * c126Model ℝ c6guard aC6 aC12 ≠ 0)
-    (hB : r ^ 6 + αlj * (1 - Λs lam) ^ 2 * c126Model ℝ c6guard bC6 bC12 ≠ 0)
+    (hA : r ^ 6 + αlj * Λs lam ^ 2 * c126Model ℝ aC6 aC12 ≠ 0)
+    (hB : r ^ 6 + αlj * (1 - Λs lam) ^ 2 * c126Model ℝ bC6 bC12 ≠ 0)
     (hXA : 0 < r ^ 2 + αc * Λcs lam ^ 2) (hYA : 0 < R ^ 2 + αc * Λcs lam ^ 2)
     (hXB : 0 < r ^ 2 + αc * (1 - Λcs lam) ^ 2) (hYB : 0 < R ^ 2 + αc * (1 - Λcs lam) ^ 2) :
     HasDerivAt
       (fun l =>
-        let o := perturbedLjCrfPairModel ℝ guard c6guard (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
+        let o := perturbedLjCrfPairModel ℝ (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
           (tableR n (Λ l) (Λs l) (Λc l) (Λcs l) dΛ dΛs dΛc dΛcs) (crfDerivedModel ℝ crf R) fpe cs
         o.2.1 + o.2.2.1)
-      (let o := perturbedLjCrfPairModel ℝ guard c6guard (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
+      (let o := perturbedLjCrfPairModel ℝ (r ^ 2) aC6 aC12 bC6 bC12 qA qB αlj αc
           (tableR n (Λ lam) (Λs lam) (Λc lam) (Λcs lam) dΛ dΛs dΛc dΛcs)
           (crfDerivedModel ℝ crf R) fpe cs
        o.2.2.2.1 + o.2.2.2.2)
       lam := by
-  simp only [perturbedLjCrfPairModel_real_eq n hR hg]
+  simp only [perturbedLjCrfPairModel_real_eq n hR]
   exact softcore_dvdl_is_deriv n αlj αc cs fpe _ _ qA qB crf R r hΛ hΛs hΛc hΛcs hA hB hXA hYA
     hXB hYB
 

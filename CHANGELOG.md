@@ -84,6 +84,22 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
 - The exclusion lookup scans linearly after the `last < j` early-out, as gromosXX does, instead of
   binary-searching.
 
+### Fixed (review of the verified kernels)
+
+- The perturbed pair kernel no longer zeroes an overlapping soft-core pair (gromosXX and the
+  PRECALCLAM kernel compute its finite energy); its soft-core length test is gromosXX's `C6 ≠ 0`.
+  The minimisation stop frame gets the truncated-octahedron rotation. The one-bath thermostat path
+  counts through the same kernel as several baths.
+- Refused, as gromosXX or because newen does not implement it: `LJEXCEPTIONS` with NEX > 0 (it
+  was silently ignored, in the analysis programs too), roto-translationally constrained solute
+  across bath pairs, duplicate DOFSET LAST, NTICOM outside 0..2, NTWSE ≠ 0, NLAM ≤ 0, RCRF ≤ 0
+  in a perturbed run.
+- Lean: the improper wrap is characterised (`wrapZeta`) and the improper bridges hold for every
+  ζ; the conducting-boundary limit for every κ; minus-gradient theorems for the soft-core excluded
+  term, the harmonic angle and the Chebyshev dihedral on atoms i and l; the Berendsen bridges state
+  their radicand hypothesis; the docs say exactly which gradients are proven and that the
+  finite-difference checks compare the Rust with itself.
+
 ## [0.0.73] (2026-10-22)
 
 ### Added

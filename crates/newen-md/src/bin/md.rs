@@ -424,6 +424,26 @@ fn write_forces(
     result.map_err(|e| e.to_string())
 }
 
+/// One NTWX frame of `state`'s positions; gromosXX writes a truncated octahedron in its cube frame
+/// (`truncoct_triclinic_rotmat(false)`), as the final configuration.
+fn write_positions(
+    tw: &mut TrajectoryWriter,
+    step: usize,
+    time: f64,
+    state: &newen::configuration::State,
+) -> Result<(), String> {
+    let dims = state.box_config.dimensions();
+    let box_dims = (dims.x > 0.0).then_some(dims);
+    let result = if state.box_config.box_type == BoxType::TruncatedOctahedral {
+        let rot = truncoct_triclinic_rotmat(false);
+        let pos: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
+        tw.write_trc_frame(step, time, &pos, box_dims)
+    } else {
+        tw.write_trc_frame(step, time, &state.pos, box_dims)
+    };
+    result.map_err(|e| e.to_string())
+}
+
 fn main() {
     let t_total = Instant::now();
     let args: Vec<String> = env::args().collect();
@@ -1210,8 +1230,9 @@ fn main() {
             // converged forces, energies and dH/dλ once more, labelled with the previous step
             // and on its schedule (`out_configuration.cc:624-641`), so those frame counts are
             // NSTEPS + 1.
+            // the minimiser stopped before its buffer swap: step k's positions are `current`
             if let (true, Some(tw)) = (frames.positions, traj_writer.as_mut()) {
-                if let Err(e) = tw.write_frame(step, time, &conf) {
+                if let Err(e) = write_positions(tw, step, time, conf.current()) {
                     eprintln!("Error writing final trajectory frame: {}", e);
                 }
             }
@@ -1281,16 +1302,7 @@ fn main() {
         // schedule (frame 0 is the input configuration).
         if let (true, Some(traj_writer)) = (due(step, nstxout) && step < n_steps, &mut traj_writer)
         {
-            let write = if conf.current().box_config.box_type == BoxType::TruncatedOctahedral {
-                // as for the final configuration: gromosXX writes the cube frame
-                let rot = truncoct_triclinic_rotmat(false);
-                let pos: Vec<Vec3> = conf.old().pos.iter().map(|p| rot * *p).collect();
-                let dims = conf.old().box_config.dimensions();
-                traj_writer.write_trc_frame(step, time, &pos, (dims.x > 0.0).then_some(dims))
-            } else {
-                traj_writer.write_frame_of_step(step, time, &conf)
-            };
-            if let Err(e) = write {
+            if let Err(e) = write_positions(traj_writer, step, time, conf.old()) {
                 eprintln!("Error writing trajectory: {}", e);
             }
         }
@@ -1738,5 +1750,43 @@ mod mpi_support {
                 }
             }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use newen::configuration::{Box as SimBox, State};
+    use newen::math::Mat3;
+
+    /// The frame of a truncated octahedron holds `R·x` (gromosXX's cube frame), whichever buffer
+    /// it comes from: the in-loop frames and the minimisation stop frame share the writer.
+    #[test]
+    fn a_truncated_octahedron_frame_is_written_in_the_cube_frame() {
+        let dir = std::env::temp_dir();
+        let path = |name: &str| dir.join(format!("newen_md_{}_{name}.trc", std::process::id()));
+        let mut state = State::new(2, 1, 1);
+        state.pos = vec![Vec3::new(0.1, 0.2, 0.3), Vec3::new(-0.4, 0.5, 0.6)];
+        state.box_config = SimBox::truncated_octahedral(Mat3::from_diagonal(Vec3::splat(3.0)));
+
+        let mut tw = TrajectoryWriter::new(path("helper"), "t", false, false).unwrap();
+        write_positions(&mut tw, 7, 0.014, &state).unwrap();
+        drop(tw);
+
+        let rot = truncoct_triclinic_rotmat(false);
+        let rotated: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
+        let dims = state.box_config.dimensions();
+        let mut expected = TrajectoryWriter::new(path("expected"), "t", false, false).unwrap();
+        expected
+            .write_trc_frame(7, 0.014, &rotated, (dims.x > 0.0).then_some(dims))
+            .unwrap();
+        drop(expected);
+
+        let read = |name: &str| std::fs::read_to_string(path(name)).unwrap();
+        assert!(read("helper").contains("POSITIONRED"));
+        assert_eq!(read("helper"), read("expected"));
+        assert_ne!(rotated[0], state.pos[0], "the rotation is not the identity");
+        let _ = std::fs::remove_file(path("helper"));
+        let _ = std::fs::remove_file(path("expected"));
     }
 }

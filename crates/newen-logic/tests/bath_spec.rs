@@ -1,10 +1,11 @@
 //! The per-bath degrees of freedom against their meaning and their Lean model.
 //!
 //! Three independent references:
-//! - `by_atoms` below counts atom by atom without the range formula: it scans the ranges for each
-//!   atom's baths, gives 6 halves to the COM bath of a group's first atom and to the IR bath of
-//!   every other atom, takes 1 per constraint end and 6 from each bath of atom 0 for
-//!   roto-translational constraints; the spread is checked by 128-bit cross-multiplication;
+//! - `by_atoms` below counts atom by atom without the range formula: it finds each atom's baths
+//!   by walking the atoms upward past the range ends, gives 6 halves to the COM bath of a
+//!   group's first atom and to the IR bath of every other atom, takes 1 per constraint end and
+//!   6 from each bath of atom 0 for roto-translational constraints; the spread is checked by
+//!   128-bit cross-multiplication;
 //! - `spec/vectors/bath.json` holds the Lean models on a family of small systems, written by
 //!   `lake exe spec-vectors` (checked in, so this test needs no Lean);
 //! - the two DOFSET splits of the gromosXX reference `aladip_vacuum_multibath_ndfmin3`.
@@ -17,14 +18,17 @@ use newen_logic::thermo::bath::{
     bath_half_dofs, baths_of, empty_baths, ndfmin_spread, Constraint, DofRange, HalfDof, Spread,
 };
 
-/// The baths of `atom`: those of the first range reaching it.
+/// The baths of `atom`, without the kernel's test: walk the atoms `0..=atom` upward and step to
+/// the next range every time an atom lies past the end of the current one (the DOFSET ranges
+/// here are increasing, as gromosXX requires); `None` once the ranges run out.
 fn bath_of_atom(ranges: &[DofRange], atom: usize) -> Option<(usize, usize)> {
-    for r in ranges {
-        if r.last_atom >= atom {
-            return Some((r.com_bath, r.ir_bath));
+    let mut range = 0;
+    for a in 0..=atom {
+        while range < ranges.len() && a > ranges[range].last_atom {
+            range += 1;
         }
     }
-    None
+    ranges.get(range).map(|r| (r.com_bath, r.ir_bath))
 }
 
 /// Atom-by-atom half degrees of freedom of every bath.

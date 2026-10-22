@@ -230,7 +230,7 @@ vectors = "spec/vectors/topology.json"
 key = "topology.pairs.pair_kind"
 rust = "crates/newen-logic/src/topology/pairs.rs::pair_kind"
 used_by = ["crates/newen-core/src/topology.rs::Topology::pair_kind_of", "crates/newen-core/src/topology.rs::Topology::is_excluded_or_14 (every pairlist builder in crates/newen-core/src/pairlist.rs)"]
-origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority"
+origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority; LJEXCEPTIONS pairs, which gromosXX also moves into all_exclusion (in_topology.cc:2111), are refused by newen's topology reader (crates/newen-io/src/topology.rs::refuse_lj_exceptions)"
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
 theory = "NewenTheory.Topology.Pairs.pairKind (pairKind_symm, pairKind_excluded_iff, pairKind_normal_iff)"
 model = "NewenSpec.Topology.Pairs.pairKindModel"
@@ -262,7 +262,7 @@ vectors = "spec/vectors/topology.json"
 key = "topology.groups.check_last_atoms"
 rust = "crates/newen-logic/src/topology/groups.rs::check_last_atoms"
 used_by = ["crates/newen-run/src/prepare.rs::assign_energy_groups"]
-origin = "FORCE NRE (in_parameter.cc:986-988, in_topology.cc:433-447): the last energy group must end at the last atom; gromosXX accepts a non-increasing NRE (an empty group), newen refuses it"
+origin = "FORCE NRE (in_parameter.cc:984-995, in_topology.cc:433-447): the last energy group must end at the last atom, and the NRE must increase strictly (gromosXX: 'FORCE block: energy groups are not in order', in_parameter.cc:989-993); newen refuses the same inputs"
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
 theory = "NewenTheory.Topology.Groups.LastAtomsOk"
 model = "NewenSpec.Topology.Groups.checkLastAtomsModel"
@@ -435,7 +435,7 @@ key = "bonded.dihedral_chebyshev"
 kind = "float"
 rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_chebyshev"
 used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_forces_grouped (COVALENTFORM NTBDN = 1)"]
-origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
+origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1; for m > 6 gromosXX's switch leaves cos(m phi) = 0 (energy K, no force), newen's kernel returns nothing and its caller drops the term with a warning; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
 # Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; sum zero, no torque
 theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_conservation)"
 model = "NewenSpec.Bonded.dihedralChebyshevModel (at Float: dihedralChebyshevFloat)"
@@ -529,7 +529,7 @@ key = "dynamics.kinetic_temperature"
 kind = "float"
 rust = "crates/newen-integrators/src/algorithms/temperature.rs::kinetic_temperature"
 used_by = ["crates/newen-md/src/bin/md.rs::volume_pressure (bath temperatures written to the energy trajectory)", "crates/newen-md/src/bin/md.rs (total temperature of the energy check)"]
-origin = "gromosXX out_configuration.cc:3293-3301: 2 * ekin / k_B / dof; the thermostats use 2 * ekin / (dof * k_B) (berendsen_scale, nose_hoover_scale), as gromosXX's thermostats do"
+origin = "gromosXX out_configuration.cc:3293-3301: 2 * ekin / k_B / dof, 0 for dof == 0; newen gives 0 for every dof <= 0 (gromosXX prints a negative temperature for a negative dof), as the thermostats; the thermostats use 2 * ekin / (dof * k_B) (berendsen_scale, nose_hoover_scale), as gromosXX's thermostats do"
 # Theorems over R: equipartition inverted
 theory = "NewenTheory.Dynamics.Integration.temperatureOf (temperatureOf_iff)"
 model = "NewenSpec.Dynamics.kineticTemperatureModel (at Float: kineticTemperatureFloat)"
@@ -692,7 +692,7 @@ key = "nonbonded.perturbed_lj_crf_pair"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_pair"
 used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_interaction_scaled (pairlist, 1-4 and PERTATOMPAIR corrections)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS perturbed partners)"]
-origin = "gromosXX Eds_Nonbonded_Term::eds_pert_lj_crf_interaction (perturbed_nonbonded_term.cc:387-510); newen guards r^2 < 1e-10 and sets C12/C6 = 0 for |C6| <= 1e-10 (gromosXX: C6 != 0), and forms crf/2 as crf_2cut3i * cut^3 (gromosXX: m_crf_2)"
+origin = "gromosXX Eds_Nonbonded_Term::eds_pert_lj_crf_interaction (perturbed_nonbonded_term.cc:387-510): no distance guard (a soft-core pair is finite at r = 0 where alpha * softness * C12/C6 > 0), C12/C6 = 0 only for C6 == 0 (perturbed_nonbonded_term.cc:401-404), as the ext kernel; newen forms crf/2 as crf_2cut3i * cut^3 (gromosXX: m_crf_2)"
 # Theorems over R: dV/dlambda is the derivative of V (individual lambda, chain rule), force = -dV/dr, lambda = 0, 1 are the plain LJ + CRF pair of states A, B
 theory = "NewenTheory.Interactions.SoftCore.pertLjEnergy, pertCrfEnergy (softcore_dvdl_is_deriv, softcore_dvdl_is_deriv_lj, softcore_dvdl_is_deriv_crf, softcore_force_is_minus_grad, softcore_lambda_zero, softcore_lambda_one)"
 model = "NewenSpec.SoftCore.perturbedLjCrfPairModel (at Float: perturbedLjCrfPairFloat)"

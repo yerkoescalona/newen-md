@@ -278,8 +278,10 @@ Each entry: what gromosXX does, which bucket, what newen does.
   `tau != -1` (`berendsen_thermostat.cc:99`, `nosehoover_thermostat.cc:123,179`), so any other
   negative τ is coupled with a negative time constant; newen treats every `tau < 0` as uncoupled.
   gromosXX has no guard on `dof` (`2·ekin/(dof·k_B)` is inf or NaN for a 0-dof bath, which it
-  decouples at setup, `topology.cc:1405-1411`, not ported); newen's kernels take `T_free = 0`
-  there and fall back to `T₀`. Both are in the Lean models (`spec/NewenSpec/Thermostat.lean`); no
+  decouples at setup, `topology.cc:1405-1411`; ported as `decouple_empty_baths`,
+  `newen-run/src/plan.rs`); newen's kernels take `T_free = 0` there and fall back to `T₀`, and
+  `kinetic_temperature` prints 0 for every `dof ≤ 0` (gromosXX `out_configuration.cc:3293`
+  tests `dof != 0`). Both are in the Lean models (`spec/NewenSpec/Thermostat.lean`); no
   reference reaches either input.
 - **Multi-bath Nosé–Hoover** (C, ours, reconciled). newen built the thermostat from the first
   bath only (`NoseHooverThermostat::new_single_bath`/`new_chain_bath` with bath 0's T₀, τ and
@@ -332,9 +334,18 @@ Each entry: what gromosXX does, which bucket, what newen does.
   −½·FPEPSI·crf_cut·(q_B² − q_A²) (`perturbed_self_energy_correction` ↔
   `newen_analysis::free_energy::rf_self_energy`, test
   `rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term`). Reproduced as is.
+- **Soft improper ζ wrap** (C, ours, dossier candidate). newen's soft improper caller wraps ζ into
+  `[ζ0 − π, ζ0 + π]` before the soft kernel, as the plain and perturbed impropers do;
+  gromosXX's `perturbed_soft_improper_interaction.cc:134-138` does not wrap, so a ζ a turn away
+  from ζ0 gets the energy of the long way round there. newen keeps the wrap.
+- **LJEXCEPTIONS** (refused, not implemented). gromosXX moves each pair into `all_exclusion` and
+  gives it its own C6/C12 (`in_topology.cc:2111`); newen's topology reader refuses a block with
+  NEX > 0 ("LJEXCEPTIONS block is not implemented") instead of skipping it as an unknown block.
+- **ROTTRANS across baths** (ported). gromosXX refuses roto-translational constraints whose
+  atoms `1..=RTCLAST` span more than one (COM, IR) bath pair (`topology.cc:1370-1394`);
+  `thermostat_baths` (`newen-run/src/plan.rs`) does the same, with gromosXX's message.
 - **Not ported, no reference**: position-restraint and distance/dihedral-restraint virials
-  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`); baths with
-  dof ≤ 0 losing their coupling (`topology.cc:1405-1411`).
+  (`position_restraint_interaction.cc:89`, `distance_restraint_interaction.cc:194`).
 
 ## In one line
 

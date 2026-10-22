@@ -230,35 +230,51 @@ fn final_step_is_the_stop_or_the_run_length() {
     }
 }
 
-/// `RemoveCOMMotion` as written before `com_removal`: NTICOM flags for step 0, the sign of NSCM
-/// for the periodic flags, and no periodic rotation removal in a periodic box.
-fn com_by_flags(step: usize, nticom: i64, nscm: i64, periodic: bool) -> (bool, bool) {
-    let (skip, trans_on, rot_on) = match nscm {
-        n if n > 0 => (n as usize, true, false),
-        n if n < 0 => ((-n) as usize, true, true),
-        _ => (0, false, false),
-    };
-    if step == 0 {
-        return (nticom >= 1, nticom >= 2);
-    }
-    let on = skip > 0 && due_by_walking(step, skip);
-    (on && trans_on, on && rot_on && !periodic)
-}
+/// gromosXX's centre-of-mass removal, case by case, as data: `(step, NTICOM, NSCM, periodic,
+/// (translation, rotation))`. Step 0 reads INITIALISE NTICOM only (`in_parameter.cc:1243-1258`:
+/// 0 nothing, 1 translation, 2 both; `remove_com_motion.cc:240-243`); later steps remove when
+/// `step % |NSCM| == 0` (`remove_com_motion.cc:245-248`), translation for any NSCM ≠ 0 and
+/// rotation for NSCM < 0 (`in_parameter.cc:1308-1319`), never rotation under PBC
+/// (`configuration.cc:555-560`, the periodic flag only, `remove_com_motion.cc:258-261`).
+/// NTICOM outside 0..=2 is refused when the run is built.
+const GROMOSXX_COM_CASES: &[(usize, i64, i64, bool, (bool, bool))] = &[
+    // step 0: NTICOM, whatever NSCM and the boundary
+    (0, 0, 0, false, (false, false)),
+    (0, 0, -4, false, (false, false)),
+    (0, 0, 4, true, (false, false)),
+    (0, 1, 0, false, (true, false)),
+    (0, 1, -4, true, (true, false)),
+    (0, 2, 0, false, (true, true)),
+    (0, 2, 4, false, (true, true)),
+    (0, 2, -4, true, (true, true)),
+    // NSCM = 0: never after step 0
+    (1, 2, 0, false, (false, false)),
+    (12, 1, 0, false, (false, false)),
+    // NSCM > 0: translation every NSCM steps
+    (4, 0, 4, false, (true, false)),
+    (8, 2, 4, true, (true, false)),
+    (6, 0, 4, false, (false, false)),
+    (1, 0, 1, false, (true, false)),
+    (7, 0, 1, true, (true, false)),
+    // NSCM < 0: translation and rotation every |NSCM| steps, rotation not under PBC
+    (3, 0, -3, false, (true, true)),
+    (9, 1, -3, false, (true, true)),
+    (3, 0, -3, true, (true, false)),
+    (4, 0, -3, false, (false, false)),
+    (5, 2, -3, true, (false, false)),
+    (1, 0, -1, false, (true, true)),
+    (60, 0, -6, true, (true, false)),
+    (59, 0, -6, false, (false, false)),
+];
 
 #[test]
-fn com_removal_equals_the_flag_rule() {
-    for nticom in -1..=3 {
-        for nscm in -COM_NSCM..=COM_NSCM {
-            for periodic in [false, true] {
-                for step in 0..=COM_STEPS {
-                    assert_eq!(
-                        com_removal(step, nticom, nscm, periodic),
-                        com_by_flags(step, nticom, nscm, periodic),
-                        "step {step} nticom {nticom} nscm {nscm} periodic {periodic}"
-                    );
-                }
-            }
-        }
+fn com_removal_equals_the_gromosxx_cases() {
+    for &(step, nticom, nscm, periodic, expected) in GROMOSXX_COM_CASES {
+        assert_eq!(
+            com_removal(step, nticom, nscm, periodic),
+            expected,
+            "step {step} nticom {nticom} nscm {nscm} periodic {periodic}"
+        );
     }
     assert_eq!(com_removal(7, 0, i64::MAX, false), (false, false));
     assert_eq!(com_removal(7, 0, -7, false), (true, true));

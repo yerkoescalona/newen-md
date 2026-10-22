@@ -210,6 +210,10 @@ fn temperature_equals_lean_model_bit_for_bit() {
         );
     }
     report("kinetic_temperature", rows.len(), &bad);
+    // a negative and a zero dof, both at temperature 0
+    let v: Vec<Vec<f64>> = rows.iter().map(|r| floats(r)).collect();
+    assert!(v.iter().any(|r| r[1] < 0.0 && r[0] > 0.0 && r[3] == 0.0));
+    assert!(v.iter().any(|r| r[1] == 0.0 && r[0] > 0.0 && r[3] == 0.0));
 }
 
 #[test]

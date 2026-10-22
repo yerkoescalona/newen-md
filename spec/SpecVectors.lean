@@ -369,6 +369,13 @@ def drawEkin (dof : Float) : Gen Float := do
 
 def berendsenTaus (dt : Float) : List Float := [-1, 0, dt, 0.1, 1, 10]
 
+/-- A negative τ other than `−1`: `−0.5`, `−2` or uniform in `[−10, −1e-3)`. -/
+def drawNegativeTau : Gen Float := do
+  match ← below 3 with
+  | 0 => return -0.5
+  | 1 => return -2
+  | _ => uniform (-10) (-1e-3)
+
 def berendsenRow (ekin dof temperature tau dt : Float) : List Float :=
   [ekin, dof, temperature, tau, dt, berendsenFloat ekin dof temperature tau dt]
 
@@ -395,18 +402,32 @@ def berendsenRows : Gen (List (List Float)) := do
     rows := rows.push (berendsenRow ekin dof temperature tau dt)
   return rows.toList
 
+/-- Rows with a negative τ other than `−1` (decoupled as well), drawn after all other rows. -/
+def berendsenNegativeTauRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 40 do
+    let dt ← pick thermoDts
+    let dof ← drawDof
+    let temperature ← drawTemperature
+    let tau ← drawNegativeTau
+    let ekin ← drawEkin dof
+    rows := rows.push (berendsenRow ekin dof temperature tau dt)
+  return rows.toList
+
 def noseHooverTaus : List Float := [-1, 0.05, 0.1, 1]
 
-/-- One chain run: random parameters and starting `ζ` in `[-50, 50]`, then 1–8 steps, each with
-a new kinetic energy and the `ζ` the previous step left; one row per step. -/
-def noseHooverRun : Gen (List String) := do
+/-- One chain run: random parameters (τ given, or drawn) and starting `ζ` in `[-50, 50]`, then
+1–8 steps, each with a new kinetic energy and the `ζ` the previous step left; one row per step. -/
+def noseHooverRun (tauGiven : Option (Gen Float) := none) : Gen (List String) := do
   let nhc := [1, 2, 3, 5].getD (← below 4) 1
   let dt ← pick thermoDts
   let dof ← drawDof
   let temperature ← drawTemperature
-  let tau ← match ← below (noseHooverTaus.length + 1) with
-    | 0 => uniform 0.01 2
-    | i => pure (noseHooverTaus.getD (i - 1) 0)
+  let tau ← match tauGiven with
+    | some drawTau => drawTau
+    | none => match ← below (noseHooverTaus.length + 1) with
+      | 0 => uniform 0.01 2
+      | i => pure (noseHooverTaus.getD (i - 1) 0)
   let mut zeta := #[]
   for _ in List.range nhc do
     zeta := zeta.push (← uniform (-50) 50)
@@ -426,9 +447,20 @@ def noseHooverRows : Gen (List String) := do
     rows := rows ++ (← noseHooverRun).toArray
   return rows.toList
 
+/-- Runs with a negative τ other than `−1` (ζ and the velocities left alone), drawn after all
+other rows. -/
+def noseHooverNegativeTauRows : Gen (List String) := do
+  let mut rows := #[]
+  for _ in List.range 10 do
+    rows := rows ++ (← noseHooverRun (some drawNegativeTau)).toArray
+  return rows.toList
+
 /-- The rows of `vectors/thermostat.json`, from a fixed seed. -/
 def thermostatRows : List (List Float) × List String :=
-  (do return (← berendsenRows, ← noseHooverRows) : Gen _).run' 0x6e6577656e2d6d64
+  (do
+    let (b, n) := (← berendsenRows, ← noseHooverRows)
+    return (b ++ (← berendsenNegativeTauRows), n ++ (← noseHooverNegativeTauRows)) :
+    Gen _).run' 0x6e6577656e2d6d64
 
 def thermostatJson (berendsen : List (List Float)) (noseHoover : List String) : String :=
   "{\n" ++
@@ -655,6 +687,18 @@ def angleRows : Gen (List (List Float)) := do
     rows := rows.push (angleRow rij rkj kc cos0 kh theta0)
   return rows.toList
 
+/-- θ ≈ 0 with θ0 = π: the linear branch at its other end; drawn after all other rows. -/
+def angleZeroRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for i in List.range 6 do
+    let a ← uniform 0.09 0.2
+    let s ← uniform 0.5 2
+    let rij ← drawBondVec 0
+    let (rij, rkj) := if i % 2 == 0 then (vec 0 0 a, vec 0 0 (a * s)) else (rij, rij * s)
+    let (kc, cos0, kh, theta0) ← drawAngleParams (some piFloat)
+    rows := rows.push (angleRow rij rkj kc cos0 kh theta0)
+  return rows.toList
+
 /-- One `dihedrals` row: `r_ij, r_kj, r_kl, k, cos_delta, delta, m, k_improper, zeta0`, then the
 outputs of the Chebyshev, the NTBDN = 0 and the improper kernel (`m` as a float). -/
 def dihedralRow (rij rkj rkl : Vec3 Float) (k delta : Float) (m : Nat) (ki zeta0 : Float) :
@@ -683,6 +727,14 @@ def drawDihedralParams : Gen (Float × Float × Nat × Float × Float) := do
     | 1 | 2 => pure (rad 35.26)
     | _ => uniform (-piFloat) piFloat
   return (k, delta, m, ← uniform 100 400, zeta0)
+
+/-- The improper angle ζ of a geometry before the wrap, as the kernel forms it. -/
+def rawZeta (rij rkj rkl : Vec3 Float) : Float :=
+  let mj := rij.cross rkj
+  let nk := rkj.cross rkl
+  let c := mj.dot nk / (Float.sqrt (mj.dot mj) * Float.sqrt (nk.dot nk))
+  let z := Float.acos (if c < -1 then -1 else if 1 < c then 1 else c)
+  if rij.dot nk < 0 then -z else z
 
 def dihedralRows : Gen (List (List Float)) := do
   let mut rows := #[]
@@ -713,9 +765,37 @@ def dihedralRows : Gen (List (List Float)) := do
     rows := rows.push (dihedralRow rij rkj rkl k delta m ki zeta0)
   return rows.toList
 
+/-- j, k, l within 1e-7 nm of a line with i off it (NEAR_LINEAR on the l side drops f_l), and
+ζ0 beyond ±π; drawn after all other rows. -/
+def dihedralEdgeRows : Gen (List (List Float)) := do
+  let mut rows := #[]
+  for _ in List.range 5 do
+    let rij ← drawBondVec 0
+    let rkj ← drawBondVec 0
+    let s ← uniform 0.5 2
+    let side := rkj.cross rij
+    let side := side * (1e-7 / Float.sqrt (side.dot side))
+    let (k, delta, m, ki, zeta0) ← drawDihedralParams
+    rows := rows.push (dihedralRow rij rkj (rkj * s + side) k delta m ki zeta0)
+  -- |ζ0| > π, |ζ − ζ0| in (π, 3π) (one turn of the wrap) or in (3π, 4π) (two turns)
+  for i in List.range 8 do
+    let rij ← drawBondVec 0
+    let rkj ← drawBondVec 0
+    let rkl ← drawBondVec 0
+    let (k, delta, m, ki, _) ← drawDihedralParams
+    let d ← if i % 2 == 0 then uniform (piFloat + 0.1) (3 * piFloat)
+      else uniform (3 * piFloat + 0.1) (4 * piFloat - 0.1)
+    let z := rawZeta rij rkj rkl
+    let zeta0 := if z < 0 then z - d else z + d
+    rows := rows.push (dihedralRow rij rkj rkl k delta m ki zeta0)
+  return rows.toList
+
 /-- The three row sets of `vectors/bonded.json`, from a fixed seed. -/
 def bondedRows : List (List Float) × List (List Float) × List (List Float) :=
-  (do return (← bondRows, ← angleRows, ← dihedralRows) : Gen _).run' 0x6e6577656e2d6264
+  (do
+    let (b, a, d) := (← bondRows, ← angleRows, ← dihedralRows)
+    return (b, a ++ (← angleZeroRows), d ++ (← dihedralEdgeRows)) :
+    Gen _).run' 0x6e6577656e2d6264
 
 def bondedJson (bonds angles dihedrals : List (List Float)) : String :=
   let part (name : String) (rows : List (List Float)) : String :=
@@ -1156,17 +1236,24 @@ def scAlphas : List Float := [0, 0.5, 1.0, 1.51]
 /-- A λ: one of `scLambdas` or uniform in `[0, 1)`. -/
 def drawLam : Gen Float := drawFrom scLambdas 0 1
 
+/-- An individual λ: one of `scLambdas` or uniform in `[-0.1, 1.1)` (a λ schedule may leave
+`[0, 1]`). -/
+def drawIndividualLam : Gen Float := drawFrom scLambdas (-0.1) 1.1
+
+/-- An α: one of `scAlphas` or uniform in `[0, 2)`. -/
+def drawAlpha : Gen Float := drawFrom scAlphas 0 2
+
 /-- The inputs of `PerturbedLambdaParams::from_lambda`: half the time one λ with derivatives 1
-(no individual λ), else four λ and four derivatives in `[-2, 2)`; NLAM 1 or 2. -/
+(no individual λ), else four λ and four derivatives in `[-2, 2)`; NLAM 1, 2, 3 or 5. -/
 def drawTable : Gen (List Float × Nat) := do
-  let n := 1 + (← below 2)
+  let n := [1, 2, 3, 5].getD (← below 4) 1
   if (← below 2) == 0 then
     let l ← drawLam
     return ([l, l, l, l, 1, 1, 1, 1], n)
   else
     let mut xs := #[]
     for _ in List.range 4 do
-      xs := xs.push (← drawLam)
+      xs := xs.push (← drawIndividualLam)
     for _ in List.range 4 do
       xs := xs.push (← uniform (-2) 2)
     return (xs.toList, n)
@@ -1179,13 +1266,15 @@ def tableOf (t : List Float × Nat) : NewenSpec.SoftCore.LambdaParams Float :=
 /-- The table inputs as row fields: eight floats as bits, NLAM as a plain integer. -/
 def tableFields (t : List Float × Nat) : List String := t.1.map hexBits ++ [toString t.2]
 
-/-- A `C6`: `0` one time in eight, one time in sixteen at or below the `1e-10` guard, else
-log-uniform in `[1e-5, 1e-2]`. -/
+/-- A `C6`: `0` one time in nine, tiny (`0 < |C6| ≤ 1e-10`, either sign) one time in six,
+negative one time in eighteen, else log-uniform in `[1e-5, 1e-2]`. -/
 def drawC6 : Gen Float := do
-  match ← below 16 with
+  match ← below 18 with
   | 0 | 1 => return 0
   | 2 => logUniform 1e-12 1e-10
-  | 3 => return NewenSpec.SoftCore.guardFloat
+  | 3 => return 1e-10
+  | 4 => do return -(← logUniform 1e-12 1e-10)
+  | 5 => do return -(← logUniform 1e-5 1e-2)
   | _ => logUniform 1e-5 1e-2
 
 /-- One end state `(C6, C12, q)`: a dummy (all zero), uncharged, or charged. -/
@@ -1208,14 +1297,32 @@ def perturbedPairRows : Gen (List (List String)) := do
     let r2 ← drawR2 (inputs.getD 0 0)
     let (aC6, aC12, aQ) ← drawState
     let (bC6, bC12, bQ) ← drawState
-    let αlj ← pick scAlphas
-    let αc ← pick scAlphas
+    let αlj ← drawAlpha
+    let αc ← drawAlpha
     let fpe ← drawFpe
     let cs ← drawFrom [1, 0.5, 0.8333333333333334] 0 1
     let t ← drawTable
     let (f, eLj, eCrf, deLj, deCrf) := NewenSpec.SoftCore.perturbedLjCrfPairFloat r2 aC6 aC12 bC6
       bC12 aQ bQ αlj αc (tableOf t) (crfOf inputs) fpe cs
     rows := rows.push (([r2, aC6, aC12, bC6, bC12, aQ, bQ, αlj, αc] ++ inputs ++ [fpe, cs]).map
+      hexBits ++ tableFields t ++ [f, eLj, eCrf, deLj, deCrf].map hexBits)
+  -- overlapping atoms (r² below 1e-10) with a soft core in both states
+  for _ in List.range 60 do
+    let inputs ← drawCrfInputs
+    let r2 ← if (← below 4) == 0 then pure 0 else logUniform 1e-16 9e-11
+    let aC6 ← logUniform 1e-5 1e-2
+    let aC12 ← logUniform 1e-8 1e-5
+    let bC6 ← logUniform 1e-5 1e-2
+    let bC12 ← logUniform 1e-8 1e-5
+    let aQ ← uniform (-2) 2
+    let bQ ← uniform (-2) 2
+    let αlj ← uniform 0.1 2
+    let αc ← uniform 0.1 2
+    let fpe ← drawFpe
+    let t ← drawTable
+    let (f, eLj, eCrf, deLj, deCrf) := NewenSpec.SoftCore.perturbedLjCrfPairFloat r2 aC6 aC12 bC6
+      bC12 aQ bQ αlj αc (tableOf t) (crfOf inputs) fpe 1
+    rows := rows.push (([r2, aC6, aC12, bC6, bC12, aQ, bQ, αlj, αc] ++ inputs ++ [fpe, 1]).map
       hexBits ++ tableFields t ++ [f, eLj, eCrf, deLj, deCrf].map hexBits)
   return rows.toList
 
@@ -1230,7 +1337,7 @@ def rfTableRows (count : Nat)
     let r2 ← drawR2 (inputs.getD 0 0)
     let aQ ← orZero (uniform (-2) 2)
     let bQ ← orZero (uniform (-2) 2)
-    let αc ← pick scAlphas
+    let αc ← drawAlpha
     let fpe ← drawFpe
     let t ← drawTable
     let (f, e, de) := kernel r2 aQ bQ αc (tableOf t) (crfOf inputs) fpe
@@ -1272,8 +1379,8 @@ def ljCrfExtRows : Gen (List (List String)) := do
     let r2 ← drawR2 (inputs.getD 0 0)
     let (aC6, aC12, aQ) ← drawState
     let (bC6, bC12, bQ) ← drawState
-    let αlj ← pick scAlphas
-    let αc ← pick scAlphas
+    let αlj ← drawAlpha
+    let αc ← drawAlpha
     let fpe ← drawFpe
     let lam ← drawLam
     let ((e1, e2, e3, e4), (d1, d2, d3, d4)) := NewenSpec.SoftCore.ljCrfSoftExtFloat r2 aC6 aC12
@@ -1290,7 +1397,7 @@ def rfExtRows : Gen (List (List String)) := do
     let r2 ← drawR2 (inputs.getD 0 0)
     let aQ ← orZero (uniform (-2) 2)
     let bQ ← orZero (uniform (-2) 2)
-    let αc ← pick scAlphas
+    let αc ← drawAlpha
     let fpe ← drawFpe
     let lam ← drawLam
     let ((e1, e2), (d1, d2)) := NewenSpec.SoftCore.rfSoftExtFloat r2 aQ bQ αc (crfOf inputs) fpe lam

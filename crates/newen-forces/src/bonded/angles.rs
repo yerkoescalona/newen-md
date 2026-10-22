@@ -50,13 +50,17 @@ pub fn cosine_angle(r_ij: Vec3, r_kj: Vec3, k: f64, cos0: f64) -> (f64, Vec3, Ve
 /// |sin_theta| ≥ ZERO_SINE:
 ///     ff = k · (theta − theta0) / sin_theta;  k_i = ff / d_ij;  k_k = ff / d_kj
 ///     energy = 0.5 · k · (theta − theta0) · (theta − theta0)
-/// |sin_theta| < ZERO_SINE (θ = π) and |theta0 − π| ≤ ZERO_SINE:
+/// |sin_theta| < ZERO_SINE (θ = π or θ = 0) and |theta0 − π| ≤ ZERO_SINE:
 ///     k_i = −k / d_ij;  k_k = −k / d_kj;  energy = k · (1 + cos_theta)
 /// |sin_theta| < ZERO_SINE otherwise: nothing
 /// f_i = (r_kj/d_kj − (r_ij/d_ij) · cos_theta) · k_i
 /// f_k = (r_ij/d_ij − (r_kj/d_kj) · cos_theta) · k_k
 /// f_j = −(f_i + f_k)
 /// ```
+///
+/// The linear branch is the θ = π limit, but `|sin θ| < ZERO_SINE` also holds at θ ≈ 0: there,
+/// with θ0 = π, it returns `k(1 + cos θ)` = 2k (not `k/2 · π²`) and a vanishing force, as
+/// gromosXX does (`harm_angle_interaction.cc:112-127` assumes θ = 0 cannot occur).
 ///
 /// spec: bonded.harmonic_angle
 #[inline]
@@ -73,7 +77,8 @@ pub fn harmonic_angle(r_ij: Vec3, r_kj: Vec3, k: f64, theta0: f64) -> (f64, Vec3
     let sin_theta = theta.sin();
 
     let (k_i, k_k, energy) = if sin_theta.abs() < ZERO_SINE {
-        // θ = π, where (θ − θ0)/sin θ → −1 if θ0 = π; any other θ0 has no finite force there
+        // θ = π, where (θ − θ0)/sin θ → −1 if θ0 = π; any other θ0 has no finite force there.
+        // Also reached at θ ≈ 0, where it gives k(1 + cos θ) as gromosXX.
         if theta0 > PI + ZERO_SINE || theta0 < PI - ZERO_SINE {
             return nothing;
         }

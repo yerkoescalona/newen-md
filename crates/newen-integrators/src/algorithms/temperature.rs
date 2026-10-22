@@ -92,11 +92,12 @@ pub fn group_kinetic_energy(
 }
 
 /// The temperature `2·E_kin / k_B / N_df` of `dof` degrees of freedom holding the kinetic energy
-/// `ekin`, in gromosXX's order (`out_configuration.cc:3293`); 0 without degrees of freedom.
+/// `ekin`, in gromosXX's order (`out_configuration.cc:3293`); 0 for `dof ≤ 0`, as the
+/// thermostats.
 ///
 /// spec: dynamics.kinetic_temperature
 pub fn kinetic_temperature(ekin: f64, dof: f64, k_boltzmann: f64) -> f64 {
-    if dof != 0.0 {
+    if dof > 0.0 {
         2.0 * ekin / k_boltzmann / dof
     } else {
         0.0
@@ -356,6 +357,14 @@ impl Algorithm for TemperatureCalculation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No temperature for a non-positive number of degrees of freedom, as the thermostats.
+    #[test]
+    fn kinetic_temperature_is_zero_without_positive_dof() {
+        assert_eq!(kinetic_temperature(10.0, -1.0, 0.00831441), 0.0);
+        assert_eq!(kinetic_temperature(10.0, 0.0, 0.00831441), 0.0);
+        assert_eq!(kinetic_temperature(10.0, 2.0, 0.5), 20.0);
+    }
 
     #[test]
     fn kinetic_energy_is_the_average_of_the_old_and_new_half_steps() {
