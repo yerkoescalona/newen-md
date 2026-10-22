@@ -418,19 +418,27 @@ Each entry: what gromosXX does, which bucket, what newen does.
   `newen-forces/src/nonbonded/lattice_sum.rs`). Pinned by `water_216_npt_ewald_epsls_fixed`
   (Ewald, EPSLS 61, Berendsen NPT: released step-0 pressure −305.43 instead of −296.61
   kJ mol⁻¹ nm⁻³).
-- **Finite-difference field in a skewed cell** (A, corrected in newen; no patched oracle yet).
-  `latticesum.cc:626-641` divides the potential difference along grid axis `α` by
-  `2q·|box(α)/N_α|` (`box(α)` is edge `α`, `Box::operator()(int)`) and stores it as Cartesian
-  component `α`: the derivative along each lattice direction, the gradient only for orthogonal
-  edges. gromosXX's own influence function maps the per-axis operator through `H⁻¹`
-  (`influence_function.cc:186-190`, `product(H_inv_trans, D)`), which is correct. newen maps the
-  field the same way (`field_fd`, `newen-forces/src/nonbonded/p3m.rs`). Triclinic only; no
-  triclinic reference uses NFDORD > 0 until the oracle is patched.
-- **Box correction on a recompute step** (A, corrected; kernel test only). When the influence
-  function is recomputed at an NQEVAL step under pressure scaling, gromosXX keeps the box
-  deviation it set before the recomputation, so the new `Ĝ` is corrected by the deviation from
-  the old box on that step; newen measures it from the box the current `Ĝ` was computed in
-  (`influence_box_correction`). No reference (an NPT P3M reference with NQEVAL > 0 is open).
+- **Finite-difference field in a skewed cell** (A, LS4; corrected; patched oracle
+  `LS4_fd_field_triclinic.patch`, dossier ID pending). `latticesum.cc:626-641` divides the
+  potential difference along grid axis `α` by `2q·|box(α)/N_α|` (`box(α)` is edge `α`,
+  `Box::operator()(int)`) and stores it as Cartesian component `α`: the derivative along each
+  lattice direction, the gradient only for orthogonal edges. gromosXX's own influence function maps
+  the per-axis operator through `H⁻¹` (`influence_function.cc:186-190`, `product(H_inv_trans, D)`),
+  which is correct. newen maps the field the same way (`field_fd`,
+  `newen-forces/src/nonbonded/p3m.rs`); the patch maps the three axis derivatives through the
+  inverse of the matrix of unit axis vectors, the same operator, and the identity in a rectangular
+  box (the rectangular `_fixed` references regenerate byte for byte). Pinned by
+  `nacl_water_box_triclinic_p3m_fd_fixed` (NFDORD 2; LS4 alone moves the step-0 forces by up to
+  25.45 kJ mol⁻¹ nm⁻¹, the energies not at all).
+- **Box correction on a recompute step** (A, LS5; corrected; patched oracle
+  `LS5_box_correction_recompute.patch`, dossier ID pending). When the influence function is
+  recomputed at an NQEVAL step under pressure scaling, gromosXX keeps the box deviation it set
+  before the recomputation (`setBox` at `nonbonded_outerloop.cc:2138`, `tbox_dev = tL − tL_0` at
+  `influence_function.cc:60-65`, while `calculate` resets only `tL_0`), so the new `Ĝ` is
+  corrected by the deviation from the old box on that step; newen measures it from the box the
+  current `Ĝ` was computed in (`influence_box_correction`). The patch sets the box again after
+  the recomputation. Pinned by `water_216_npt_p3m_fixed` (NQEVAL 2, FACCUR 0.15385, recomputed at
+  step 6: released k-space 15877.39 instead of 15744.20 kJ/mol there).
 - **Nyquist planes in ik differentiation** (B, reproduced). gromosXX keeps `l = N/2` in `−i k φ̂`;
   the real part of the backward transform keeps only the Hermitian part, which is the usual
   treatment with those components zero, so it is harmless. newen does the same (`field_ik`).

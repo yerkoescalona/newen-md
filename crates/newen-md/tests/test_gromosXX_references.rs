@@ -1064,6 +1064,8 @@ ref_test!(nacl_pair_box, "nacl_pair_box");
 // The direct Ewald sum (NLRELE 2, atomic cutoff, Gaussian a = 0.4 nm, cubic A2); expected
 // output from the released binary run with @develop (see its input.toml).
 ref_test!(nacl_pair_box_ewald, "nacl_pair_box_ewald");
+// The same in a 2.0 × 2.2 × 2.4 nm box: A2 summed over shells (NA2CLC 2), not the Wigner constant.
+ref_test!(nacl_pair_box_ewald_rect, "nacl_pair_box_ewald_rect");
 // P3M (NLRELE 3): NSHAPE 3, ASHAPE 1.4 nm, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, P3M Ã2
 // (NA2CLC 3); expected output from the released binary. The FFTs differ (PhastFT vs FFTW), so
 // the agreement is within the tolerances, not byte for byte.
@@ -1083,10 +1085,18 @@ ref_test!(nacl_water_box, "nacl_water_box");
 ref_test!(nacl_water_box_shifted, "nacl_water_box_shifted");
 // GENBOX NTB 2 with angles 75/80/65: the box vectors from lengths and angles
 ref_test!(nacl_water_box_triclinic, "nacl_water_box_triclinic");
+// The direct Ewald sum with Ã2 from the k-space sum (NA2CLC 1); expected output from @develop.
+ref_test!(nacl_water_box_ewald_na2clc1, "nacl_water_box_ewald_na2clc1");
 // P3M in the same cell: the wave vectors Σ l_i b_i (patched oracle, LS3)
 ref_test!(
     nacl_water_box_triclinic_p3m_fixed,
     "nacl_water_box_triclinic_p3m_fixed"
+);
+// And the finite-difference field (NFDORD 2): the lattice-axis derivatives mapped through H⁻ᵀ
+// (patched oracle, LS4)
+ref_test!(
+    nacl_water_box_triclinic_p3m_fd_fixed,
+    "nacl_water_box_triclinic_p3m_fd_fixed"
 );
 
 // ── Constraint algorithms ────────────────────────────────────────────────────
@@ -1137,6 +1147,10 @@ ref_test!(
 );
 ref_test!(water_216_nvt_nhc_cont_fixed, "water_216_nvt_nhc_cont_fixed");
 ref_test!(water_216_npt, "water_216_npt");
+// P3M under pressure scaling with NQEVAL 2: the first-order box correction of the influence
+// function between evaluations, and a recomputation at step 6 whose correction is measured from
+// the box it was computed in (patched oracle, LS5).
+ref_test!(water_216_npt_p3m_fixed, "water_216_npt_p3m_fixed");
 // Berendsen barostat (VIRIAL 2) with all-bond and solvent SHAKE: the constraint virial enters
 // only the atomic virial (gromosXX `shake.h:380`).
 ref_test!(aladip_solvated_npt_shake, "aladip_solvated_npt_shake");

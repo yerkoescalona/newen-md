@@ -64,10 +64,13 @@ RunError                                                                 -> ever
   from it with `1/ε₀ = FPEPSI · 4 · π`; the RF excluded/self terms are off for NLRELE 2/3. A plan
   whose force field disagrees with the recipe's NLRELE (no lattice sum, Ewald or P3M) is refused
   (`check_plan_against_recipe`). References: `nacl_pair_box_ewald`, `water_216_box_ewald`,
-  `water_216_box_ewald_epsls`; `nacl_pair_box_p3m_fixed`, `water_216_box_p3m_fixed`,
-  `water_216_box_p3m_gauss_fixed` (gromosXX + `patches/LS1_p3m_nvt_a_term.patch`);
-  `water_216_npt_ewald_epsls_fixed` (LS2, surface virial), `nacl_water_box_triclinic_p3m_fixed`
-  (LS3, triclinic wave vectors, ik differentiation).
+  `water_216_box_ewald_epsls`, `nacl_water_box_ewald_na2clc1` (NA2CLC 1),
+  `nacl_pair_box_ewald_rect` (A2 over shells); `nacl_pair_box_p3m_fixed`,
+  `water_216_box_p3m_fixed`, `water_216_box_p3m_gauss_fixed` (gromosXX +
+  `patches/LS1_p3m_nvt_a_term.patch`); `water_216_npt_ewald_epsls_fixed` (LS2, surface virial),
+  `nacl_water_box_triclinic_p3m_fixed` (LS3, triclinic wave vectors, ik differentiation),
+  `nacl_water_box_triclinic_p3m_fd_fixed` (LS4, triclinic finite-difference field),
+  `water_216_npt_p3m_fixed` (LS5, NPT with NQEVAL 2, the box correction on a recomputation).
 - **GENBOX angles and the cell height (2026-10-22):** `Coordinates` carries the GENBOX angles and
   Euler angles; `prepare_system` builds NTB = 2 with an angle ≠ 90° as `SimBox::triclinic`
   (`newen_core::math::genbox_box`, gromosXX `in_configuration.cc:1977-2005`;

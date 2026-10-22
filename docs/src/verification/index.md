@@ -1240,9 +1240,15 @@ the surface virial (`LS2_surface_virial.patch`, pinned by `water_216_npt_ewald_e
 Berendsen pressure scaling with EPSLS 61 the released binary's step-0 pressure is −305.43 instead
 of −296.61 kJ mol⁻¹ nm⁻³).
 
+Two more Ewald references, from the released binary with `@develop`, cover the other `A2` paths:
+`nacl_water_box_ewald_na2clc1` (Na⁺Cl⁻ and 20 waters, `Ã2` from the k-space sum, NA2CLC 1) and
+`nacl_pair_box_ewald_rect` (a 2.0 × 2.2 × 2.4 nm box, so NA2CLC 2 sums `A2` over shells instead of
+taking the Wigner constant of the cube; NK 10, 11, 12 with KCUT 900 nm⁻²). Both agree at the
+standard tolerances.
+
 ```sh
 cargo test -p newen-forces --test ewald_spec                       # Rust = Float model, bit for bit; forces, virials by FD
-cargo test -p newen-md --test test_gromosXX_references ewald       # the three Ewald references
+cargo test -p newen-md --test test_gromosXX_references ewald       # the six Ewald references
 ```
 
 ### Lattice-sum electrostatics, phase 3: P3M
@@ -1357,7 +1363,11 @@ What newen does differently from gromosXX:
   (`latticesum.cc:636-641`), the gradient only when the cell edges are orthogonal. newen maps the
   per-axis differences through `H⁻¹`, the operator whose transform is the `D̂` of the influence
   function, as gromosXX's influence function itself does. In a rectangular box the two differ in
-  rounding only.
+  rounding only. Corrected in the oracle by `LS4_fd_field_triclinic.patch` (the axis derivatives
+  mapped through the inverse of the matrix of unit axis vectors, the identity in a rectangular box,
+  where the earlier references regenerate byte for byte); `nacl_water_box_triclinic_p3m_fd_fixed`
+  (NFDORD 2) agrees with newen, while without LS4 the step-0 forces are up to
+  25.45 kJ mol⁻¹ nm⁻¹ apart (the energies, which do not use the field, are the same).
 - **Triclinic wave vectors**, as for the Ewald sum: gromosXX's `k_l` multiplies by the transpose
   of the reciprocal basis in the influence function and in the `ik` field (`influence_function.cc:164, 424`,
   `latticesum.cc:566`); newen uses `lattice_vector`. Read with gromosXX's `Box(i, j)` convention:
@@ -1365,9 +1375,7 @@ What newen does differently from gromosXX:
   2π L⁻¹ l = (u_a·l, u_b·l, u_c·l)`, the same transposed product. Corrected in the oracle by
   `LS3_triclinic_kvectors.patch`; `nacl_water_box_triclinic_p3m_fixed` (ik differentiation)
   agrees with newen, while the released binary gives a k-space energy of 2021.89 instead of
-  2031.45 kJ/mol at step 0 and forces up to 27.6 kJ mol⁻¹ nm⁻¹ apart. The finite-difference field
-  above has no patch yet, so no triclinic reference uses NFDORD > 0 (with NFDORD 2 the patched
-  binary still differs from newen in the forces).
+  2031.45 kJ/mol at step 0 and forces up to 27.6 kJ mol⁻¹ nm⁻¹ apart.
 - **The Nyquist planes of `ik` differentiation.** gromosXX keeps `l = N/2` in `−i k φ̂`. That is
   harmless: the field is the real part of the backward transform, which keeps the Hermitian part of
   `Ê`, and that is `−i k' φ̂` with the Nyquist components of `l` set to zero, the usual treatment.
@@ -1375,7 +1383,12 @@ What newen does differently from gromosXX:
 - **A recomputation under pressure scaling.** When the influence function is recomputed at an
   NQEVAL step, gromosXX keeps the box deviation it set before the recomputation, so on that step
   the new `Ĝ` is corrected by the deviation from the old box; newen measures the deviation from
-  the box the current `Ĝ` was computed in.
+  the box the current `Ĝ` was computed in. Corrected in the oracle by
+  `LS5_box_correction_recompute.patch` (the box set again after the recomputation);
+  `water_216_npt_p3m_fixed` (`water_216_npt`'s Berendsen thermostat and barostat with the
+  Gaussian P3M of `water_216_box_p3m_gauss_fixed`, NQEVAL 2, FACCUR 0.15385 kJ mol⁻¹ nm⁻¹, 10
+  steps) recomputes `Ĝ` once, at step 6, and agrees with newen; the released binary gives a
+  k-space energy of 15877.39 instead of 15744.20 kJ/mol on that step.
 - **NGP at a half-integer.** With NASORD 1 a charge exactly half-way between two grid points gets
   weight zero on both (`|x| < 1/2`, `latticesum.h:512`), in gromosXX and in newen alike: a set of
   measure zero, recorded by `w1_half_integer`.
@@ -1384,7 +1397,7 @@ What newen does differently from gromosXX:
 
 ```sh
 cargo test -p newen-forces --test p3m_spec                         # kernels = Float model; FFT within 1e-12; vs Ewald
-cargo test -p newen-md --test test_gromosXX_references p3m         # the four P3M references
+cargo test -p newen-md --test test_gromosXX_references p3m         # the six P3M references
 cargo test -p newen-md --test gromos_check_suite aladip_p3m        # gromosXX's aladip_ls check
 ```
 
@@ -1735,10 +1748,12 @@ Planned, in the order chosen:
   `water_216_npt_ewald_epsls_fixed`, LS3 the triclinic wave vectors with
   `nacl_water_box_triclinic_p3m_fixed`), and the unwired smooth-PME code (`electrostatics.rs`,
   `pme.rs`, `pme_mpi.rs`), its `use-fftw` feature and the `rustfft`/`fftw` dependencies of
-  `newen-forces` removed. Open: an NPT P3M reference with NQEVAL > 0 (the influence-function
-  recomputation and its box correction are pinned by kernel tests only); a patched oracle for the
-  triclinic finite-difference field, and with it a triclinic P3M reference with NFDORD > 0; the
-  Lennard-Jones lattice sum (NLRLJ), implemented in neither engine.
+  `newen-forces` removed. Since then: the patched oracle for the triclinic finite-difference
+  field (LS4, `nacl_water_box_triclinic_p3m_fd_fixed`) and for the box correction on a
+  recomputation step (LS5, `water_216_npt_p3m_fixed`, NPT with NQEVAL 2), and two more Ewald
+  references (`nacl_water_box_ewald_na2clc1`, `Ã2` from the k-space sum;
+  `nacl_pair_box_ewald_rect`, `A2` over shells in a non-cubic box). Open: the Lennard-Jones
+  lattice sum (NLRLJ), implemented in neither engine.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

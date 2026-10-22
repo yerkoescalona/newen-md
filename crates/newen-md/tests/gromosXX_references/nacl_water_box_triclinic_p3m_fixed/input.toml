@@ -3,11 +3,11 @@
 #   python3 scripts/regen_gromosXX_references.py --binary <patched md> nacl_water_box_triclinic_p3m_fixed
 # gromosXX v1.6.0, double precision, 62 atoms. `nacl_water_box_triclinic`'s cell (edges
 # 2.092576336 nm, angles 75/80/65, smallest height 1.855 nm) under P3M with the parameters of
-# `nacl_pair_box_p3m_fixed`: NSHAPE 3, ASHAPE 1.4 nm, grid 32^3, NASORD 3, NFDORD 2, NALIAS 3,
-# NA2CLC 3, NQEVAL 0; atomic cutoff 0.9 nm, below half the smallest height. The released binary
-# builds the wave vectors as M^T l instead of M l = sum l_i b_i (`kspace.cc:128-135`,
-# `influence_function.cc:130, 390`, `latticesum.cc:538`), which in a skewed cell is not a
-# reciprocal-lattice vector.
+# `nacl_pair_box_p3m_fixed` but ik differentiation: NSHAPE 3, ASHAPE 1.4 nm, grid 32^3, NASORD 3,
+# NFDORD 0, NALIAS 3, NA2CLC 3, NQEVAL 0; atomic cutoff 0.9 nm, below half the smallest height.
+# The released binary builds the wave vectors as M^T l instead of M l = sum l_i b_i
+# (`kspace.cc:128-135`, `influence_function.cc:130, 390`, `latticesum.cc:538`), which in a skewed
+# cell is not a reciprocal-lattice vector.
 # newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
 # within the standard tolerances, not byte for byte.
 

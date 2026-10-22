@@ -1,0 +1,23 @@
+diff --git a/md++/src/interaction/nonbonded/interaction/latticesum.cc b/md++/src/interaction/nonbonded/interaction/latticesum.cc
+index 167fe32..3491d87 100644
+--- a/md++/src/interaction/nonbonded/interaction/latticesum.cc
++++ b/md++/src/interaction/nonbonded/interaction/latticesum.cc
+@@ -527,6 +527,10 @@ void interaction::Lattice_Sum::calculate_electric_field(const topology::Topology
+   const double H_y = math::abs(box(1) / Ny);
+   const double H_z = math::abs(box(2) / Nz);
+   DEBUG(15,"H_x = " << H_x << ", H_y = " << H_y << ", H_z = " << H_z);
++  // the differences below are derivatives along the unit lattice axes e_a: E = A^-1 delta,
++  // with the rows of A the e_a (product(M, v) = M^t v, so M is built column wise)
++  const math::Matrix axes_to_field = math::inverse(math::Matrix(
++          box(0) / Nx / H_x, box(1) / Ny / H_y, box(2) / Nz / H_z, true));
+   //math::Matrix H_trans = math::transpose(H);
+   // the volume of a grid cell (Vg) MD05.32 eq. 61
+   //const double cell_volume = math::det(H_trans);
+@@ -645,6 +649,7 @@ if (finite_difference_order == 0) {
+             DEBUG(14,"finite_difference_constants[" << q << "] = " << finite_difference_constants[q-1]);
+ 
+           } // loop over finite difference order
++          electric_field = math::product(axes_to_field, electric_field);
+           electric_field_x(x, y, z) = electric_field(0);
+           electric_field_y(x, y, z) = electric_field(1);
+           electric_field_z(x, y, z) = electric_field(2);

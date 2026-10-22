@@ -266,6 +266,7 @@ REFERENCE_SYSTEMS = [
     "benzene_vacuum",
     "nacl_pair_box",
     "nacl_pair_box_ewald",
+    "nacl_pair_box_ewald_rect",
     "nacl_pair_box_p3m_fixed",
     "butane_vacuum",
     "butane_vacuum_ntbdn1",
@@ -279,6 +280,7 @@ REFERENCE_SYSTEMS = [
     "nacl_3water_cutoff",
     "nacl_water_box",
     "nacl_water_box_shifted",
+    "nacl_water_box_ewald_na2clc1",
     # Constraint algorithms
     "nacl_1water_settle",
     "nacl_1water_lincs",
@@ -301,6 +303,7 @@ REFERENCE_SYSTEMS = [
     "water_216_nvt_nosehoover_cont_fixed",
     "water_216_nvt_nhc_cont_fixed",
     "water_216_npt",
+    "water_216_npt_p3m_fixed",
     # Level 4: Full system
     "aladip_solvated",
     "aladip_trunc_oct",
