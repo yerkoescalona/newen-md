@@ -9,5 +9,7 @@ import NewenSpec.Nonbonded
 import NewenSpec.Bonded
 import NewenSpec.Dynamics
 import NewenSpec.Periodicity
+import NewenSpec.SoftCore
+import NewenSpec.PerturbedBonded
 import NewenSpec.Extracted.NewenLogic
 import NewenSpec.Refinement

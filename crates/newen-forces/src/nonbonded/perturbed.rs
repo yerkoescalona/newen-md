@@ -57,6 +57,8 @@ pub struct PerturbedLambdaParams {
 impl PerturbedLambdaParams {
     /// gromosXX `set_lambda` (`perturbed_nonbonded_term.cc:322-347`), whose `pow(x, n)` is the
     /// double-precision `pow`: `powf`, not `powi` (they differ in the last bits for n ≥ 2).
+    ///
+    /// spec: nonbonded.perturbed_lambda_params
     pub fn from_lambda(
         lj_lambda: f64,
         ljs_lambda: f64,
@@ -208,8 +210,44 @@ pub fn perturbed_lj_crf_interaction_scaled(
     four_pi_eps_i: f64,
     coulomb_scaling: f64,
 ) -> (f64, f64, f64, f64, f64) {
-    let r2 = r.length_squared();
+    perturbed_lj_crf_pair(
+        r.length_squared(),
+        a_c6,
+        a_c12,
+        b_c6,
+        b_c12,
+        a_q,
+        b_q,
+        alpha_lj,
+        alpha_crf,
+        lambda_params,
+        crf,
+        four_pi_eps_i,
+        coulomb_scaling,
+    )
+}
 
+/// One perturbed LJ + CRF pair with soft-core at squared distance `r2`: the kernel of
+/// [`perturbed_lj_crf_interaction_scaled`]. Returns `(force, e_lj, e_crf, de_lj, de_crf)`, the
+/// force a scalar along the pair vector.
+///
+/// spec: nonbonded.perturbed_lj_crf_pair
+#[inline]
+pub fn perturbed_lj_crf_pair(
+    r2: f64,
+    a_c6: f64,
+    a_c12: f64,
+    b_c6: f64,
+    b_c12: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_lj: f64,
+    alpha_crf: f64,
+    lambda_params: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+    coulomb_scaling: f64,
+) -> (f64, f64, f64, f64, f64) {
     // Early exit for zero distance
     if r2 < 1e-10 {
         return (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -353,6 +391,8 @@ pub fn perturbed_lj_crf_interaction_scaled(
 /// 1-4 one included).
 ///
 /// Returns `([A_e_lj, B_e_lj, A_e_crf, B_e_crf], [A_de_lj, B_de_lj, A_de_crf, B_de_crf])`.
+///
+/// spec: nonbonded.lj_crf_soft_interaction_ext
 #[inline]
 pub fn lj_crf_soft_interaction_ext(
     r2: f64,
@@ -426,6 +466,8 @@ pub fn lj_crf_soft_interaction_ext(
 ///
 /// Returns `([A_e_rf, B_e_rf], [A_de_rf, B_de_rf])`, the derivatives in the sign convention of
 /// [`lj_crf_soft_interaction_ext`].
+///
+/// spec: nonbonded.rf_soft_interaction_ext
 #[inline]
 pub fn rf_soft_interaction_ext(
     r2: f64,
@@ -813,23 +855,11 @@ fn self_energy_correction_impl<const GROUPS: bool>(
     {
         // the self term takes the individual λ of the atom's own group (innerloop.cc:3367-3377)
         let (k, lp) = pair_params::<GROUPS>(lps, egroups, i, i);
-        let n = lp.lambda_exp as f64;
         let qa2 = pi.a_charge * pi.a_charge;
         let qb2 = pi.b_charge * pi.b_charge;
 
-        // GROMOS rf_soft_interaction at r=0 with selfterm_correction=true:
-        //   e_rf = [-(1-λ)^n*qa2 - λ^n*qb2 + qa2] * crf_cut * FPEPSI
-        let e_rf = (-(lp.a_crf_lambda_n * qa2) - lp.b_crf_lambda_n * qb2 + qa2)
-            * crf.crf_cut
-            * four_pi_eps_i;
+        let (e_rf, de_rf) = perturbed_rf_self_term(qa2, qb2, lp, crf, four_pi_eps_i);
         delta_e += 0.5 * e_rf;
-
-        // de_rf from lines 756-759 with dist2=0 (soft terms vanish):
-        //   de_rf = n*((1-λ)^(n-1)*qa2 - λ^(n-1)*qb2) * crf_cut * FPEPSI
-        let de_rf = n
-            * (lp.a_crf_lambda_n_1 * qa2 - lp.b_crf_lambda_n_1 * qb2)
-            * crf.crf_cut
-            * four_pi_eps_i;
         dhdl += 0.5 * de_rf;
         if GROUPS {
             sink.book(k, 0.0, 0.5 * e_rf, 0.0, 0.5 * de_rf);
@@ -839,6 +869,76 @@ fn self_energy_correction_impl<const GROUPS: bool>(
         }
     }
     (delta_e, dhdl)
+}
+
+/// The reaction-field self term of a perturbed atom with squared charges `qa2`, `qb2`, as the
+/// change from the state-A self term the unperturbed loop booked: gromosXX `rf_soft_interaction`
+/// at r = 0 with `selfterm_correction` (`perturbed_nonbonded_term.cc:718-765`), where the soft
+/// terms vanish. Returns `(e_rf, de_rf)`; the caller books half of each.
+///
+/// spec: nonbonded.perturbed_rf_self_term
+#[inline]
+pub fn perturbed_rf_self_term(
+    qa2: f64,
+    qb2: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+) -> (f64, f64) {
+    let n = lp.lambda_exp as f64;
+    // e_rf = [-(1-λ)^n*qa2 - λ^n*qb2 + qa2] * crf_cut * FPEPSI
+    let e_rf =
+        (-(lp.a_crf_lambda_n * qa2) - lp.b_crf_lambda_n * qb2 + qa2) * crf.crf_cut * four_pi_eps_i;
+    // de_rf = n*((1-λ)^(n-1)*qa2 - λ^(n-1)*qb2) * crf_cut * FPEPSI
+    let de_rf =
+        n * (lp.a_crf_lambda_n_1 * qa2 - lp.b_crf_lambda_n_1 * qb2) * crf.crf_cut * four_pi_eps_i;
+    (e_rf, de_rf)
+}
+
+/// The soft reaction-field term of an excluded perturbed pair at squared distance `r2`, as the
+/// excluded-pair correction computes it: gromosXX `rf_soft_interaction` without the self-term
+/// correction, with the softened `crf/2 / sqrt(cut2soft³)` formed as
+/// `crf_2cut3i · sqrt((cut2/cut2soft)³)`. Returns `(force, e_crf, de_crf)`, the force a scalar
+/// along the pair vector.
+///
+/// spec: nonbonded.perturbed_rf_excluded_pair
+#[inline]
+pub fn perturbed_rf_excluded_pair(
+    r2: f64,
+    a_q: f64,
+    b_q: f64,
+    alpha_crf: f64,
+    lp: &PerturbedLambdaParams,
+    crf: &CRFParameters,
+    four_pi_eps_i: f64,
+) -> (f64, f64, f64) {
+    // only the quadratic crf_2cut3i term is softened, not the crf_cut constant
+    let cut2 = crf.cutoff_sq;
+    let a_cut2soft = cut2 + alpha_crf * lp.b_crfs_lambda2;
+    let b_cut2soft = cut2 + alpha_crf * lp.a_crfs_lambda2;
+    let a_crf_2cut3i = crf.crf_2cut3i * (cut2 / a_cut2soft).powi(3).sqrt();
+    let b_crf_2cut3i = crf.crf_2cut3i * (cut2 / b_cut2soft).powi(3).sqrt();
+    let a_crf_cut3i = 2.0 * a_crf_2cut3i;
+    let b_crf_cut3i = 2.0 * b_crf_2cut3i;
+    let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
+    let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
+
+    // no 1/r term for excluded pairs
+    let a_e_crf = a_q * (-a_crf_2cut3i * r2 - crf.crf_cut);
+    let b_e_crf = b_q * (-b_crf_2cut3i * r2 - crf.crf_cut);
+
+    let e_crf = (lp.a_crf_lambda_n * a_e_crf + lp.b_crf_lambda_n * b_e_crf) * four_pi_eps_i;
+    let force = (lp.a_crf_lambda_n * a_q * a_crf_cut3i + lp.b_crf_lambda_n * b_q * b_crf_cut3i)
+        * four_pi_eps_i;
+
+    let n_exp = lp.lambda_exp as f64;
+    let de_crf = ((lp.a_crf_lambda_n * a_q * lp.b_crfs_lambda * a_crf_pert
+        - lp.b_crf_lambda_n * b_q * lp.a_crfs_lambda * b_crf_pert)
+        * r2
+        * alpha_crf
+        + n_exp * (lp.b_crf_lambda_n_1 * b_e_crf - lp.a_crf_lambda_n_1 * a_e_crf))
+        * four_pi_eps_i;
+    (force, e_crf, de_crf)
 }
 
 /// Correct excluded-pair RF for pairs where ≥1 atom is perturbed.
@@ -925,40 +1025,12 @@ fn excluded_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
             let a_q = a_q_i * a_q_j;
             let b_q = b_q_i * b_q_j;
 
-            // Soft cutoff (GROMOS rf_soft_interaction: only modifies the quadratic
-            // crf_2cut3i term, NOT the crf_cut constant; uses actual cutoff², not crf_cut²)
-            let cut2 = crf.cutoff_sq;
-            let a_cut2soft = cut2 + alpha_crf * lp.b_crfs_lambda2;
-            let b_cut2soft = cut2 + alpha_crf * lp.a_crfs_lambda2;
-            let a_crf_2cut3i = crf.crf_2cut3i * (cut2 / a_cut2soft).powi(3).sqrt();
-            let b_crf_2cut3i = crf.crf_2cut3i * (cut2 / b_cut2soft).powi(3).sqrt();
-            let a_crf_cut3i = 2.0 * a_crf_2cut3i;
-            let b_crf_cut3i = 2.0 * b_crf_2cut3i;
-            let a_crf_pert = 3.0 * a_crf_2cut3i / a_cut2soft;
-            let b_crf_pert = 3.0 * b_crf_2cut3i / b_cut2soft;
-
-            // NO 1/r term for excluded pairs (GROMOS rf_soft_interaction lines 742-743)
-            let a_e_crf = a_q * (-a_crf_2cut3i * r2 - crf.crf_cut);
-            let b_e_crf = b_q * (-b_crf_2cut3i * r2 - crf.crf_cut);
-
-            let e_crf_p =
-                (lp.a_crf_lambda_n * a_e_crf + lp.b_crf_lambda_n * b_e_crf) * four_pi_eps_i;
-            let f_p = (lp.a_crf_lambda_n * a_q * a_crf_cut3i
-                + lp.b_crf_lambda_n * b_q * b_crf_cut3i)
-                * four_pi_eps_i;
+            let (f_p, e_crf_p, de_crf) =
+                perturbed_rf_excluded_pair(r2, a_q, b_q, alpha_crf, lp, crf, four_pi_eps_i);
 
             // State-A: what the regular excluded loop computed (same formula, no 1/r)
             let e_crf_a = a_q * four_pi_eps_i * (-crf.crf_2cut3i * r2 - crf.crf_cut);
             let f_a = a_q * four_pi_eps_i * crf.crf_cut3i;
-
-            // dH/dλ (GROMOS lines 756-759, no dist3isoft term for excluded)
-            let n_exp = lp.lambda_exp as f64;
-            let de_crf = ((lp.a_crf_lambda_n * a_q * lp.b_crfs_lambda * a_crf_pert
-                - lp.b_crf_lambda_n * b_q * lp.a_crfs_lambda * b_crf_pert)
-                * r2
-                * alpha_crf
-                + n_exp * (lp.b_crf_lambda_n_1 * b_e_crf - lp.a_crf_lambda_n_1 * a_e_crf))
-                * four_pi_eps_i;
 
             let df = r * (f_p - f_a);
             out.forces[i] += df;
@@ -1141,6 +1213,8 @@ fn one_four_correction_impl<BC: BoundaryCondition, const GROUPS: bool>(
 /// `r2` is the squared distance.
 ///
 /// Returns `(force, e_rf, de_rf)`, the force a scalar along the pair vector.
+///
+/// spec: nonbonded.rf_soft_interaction
 #[inline]
 pub fn rf_soft_interaction(
     r2: f64,

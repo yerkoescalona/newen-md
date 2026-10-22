@@ -672,3 +672,163 @@ theorem = "NewenSpec.Periodicity.triclinicPutIntoBoxModel_real_eq"
 # Rust = model at Float, bit for bit on the generated rows (cargo test)
 differential = "crates/newen-core/tests/periodicity_spec.rs"
 vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "nonbonded.perturbed_lambda_params"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::PerturbedLambdaParams::from_lambda"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PerturbedLambdaParams::fill_table (one table per pair of energy groups)"]
+origin = "gromosXX Eds_Nonbonded_Term::set_lambda (perturbed_nonbonded_term.cc:322-347); pow(x, n) is the C library pow on both sides (Rust powf, Lean Float.pow), not powi"
+# Theorems over R: at natural NLAM n, powf is the power, so the table holds (1 - L)^n, L^n, (1 - L)^(n-1) L', ...
+theory = "NewenTheory.Interactions.SoftCore (the weights (1 - L)^n, L^n and softness L_s^2, (1 - L_s)^2 of pertLjEnergy, pertCrfEnergy)"
+model = "NewenSpec.SoftCore.lambdaParamsModel (at Float: lambdaParamsFloat)"
+theorem = "NewenSpec.SoftCore.lambdaParamsModel_real"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_lj_crf_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_pair"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_interaction_scaled (pairlist, 1-4 and PERTATOMPAIR corrections)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS perturbed partners)"]
+origin = "gromosXX Eds_Nonbonded_Term::eds_pert_lj_crf_interaction (perturbed_nonbonded_term.cc:387-510); newen guards r^2 < 1e-10 and sets C12/C6 = 0 for |C6| <= 1e-10 (gromosXX: C6 != 0), and forms crf/2 as crf_2cut3i * cut^3 (gromosXX: m_crf_2)"
+# Theorems over R: dV/dlambda is the derivative of V (individual lambda, chain rule), force = -dV/dr, lambda = 0, 1 are the plain LJ + CRF pair of states A, B
+theory = "NewenTheory.Interactions.SoftCore.pertLjEnergy, pertCrfEnergy (softcore_dvdl_is_deriv, softcore_dvdl_is_deriv_lj, softcore_dvdl_is_deriv_crf, softcore_force_is_minus_grad, softcore_lambda_zero, softcore_lambda_one)"
+model = "NewenSpec.SoftCore.perturbedLjCrfPairModel (at Float: perturbedLjCrfPairFloat)"
+theorem = "NewenSpec.SoftCore.perturbedLjCrfPairModel_real_eq, perturbedLjCrfPairModel_dvdl_is_deriv"
+# Rust = model at Float, bit for bit; dV/dlambda and force against central differences (cargo test)
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.rf_soft_interaction"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::rf_soft_interaction"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::atom_pair_state (excluded PERTATOMPAIR states)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS excluded pairs)"]
+origin = "gromosXX Eds_Nonbonded_Term::rf_soft_interaction (perturbed_nonbonded_term.cc:718-765) without the self-term correction; crf/2 formed as crf_2cut3i * cut^3"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy (softcore_dvdl_is_deriv_rf_excluded, softcore_lambda_zero, softcore_lambda_one)"
+model = "NewenSpec.SoftCore.rfSoftModel (at Float: rfSoftFloat)"
+theorem = "NewenSpec.SoftCore.rfSoftModel_real_eq"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_rf_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_rf_excluded_pair"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_excluded_correction"]
+origin = "gromosXX rf_soft_interaction (perturbed_nonbonded_term.cc:718-765), as the excluded-pair correction rounds it: crf_2cut3i * sqrt((cut2/cut2soft)^3) with powi(3), where rf_soft_interaction has crf_2cut3i * cut^3 / sqrt(cut2soft^3); equal over R"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy (softcore_dvdl_is_deriv_rf_excluded)"
+model = "NewenSpec.SoftCore.perturbedRfExcludedModel (at Float: perturbedRfExcludedFloat)"
+theorem = "NewenSpec.SoftCore.perturbedRfExcludedModel_real_eq"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_rf_self_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_rf_self_term"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_self_energy_correction"]
+origin = "gromosXX rf_soft_interaction at r = 0 with selfterm_correction (perturbed_nonbonded_term.cc:718-765, innerloop.cc:3367-3453); newen sums (-(1-L)^n qa2 - L^n qb2 + qa2) crf_cut fpe in another order than gromosXX"
+theory = "NewenTheory.Interactions.SoftCore.rfSelfChange (rf_self_dvdl_is_deriv, rfSelfChange_ends)"
+model = "NewenSpec.SoftCore.perturbedRfSelfModel (at Float: perturbedRfSelfFloat)"
+theorem = "NewenSpec.SoftCore.perturbedRfSelfModel_real_eq, perturbedRfSelfModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.lj_crf_soft_interaction_ext"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::lj_crf_soft_interaction_ext"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PrecalcNonbonded::add_lj_crf_ext (PRECALCLAM)"]
+origin = "gromosXX Eds_Nonbonded_Term::lj_crf_soft_interaction_ext (perturbed_nonbonded_term.cc:614-716); A_de = +dE_A/dlambda, B_de = -dE_B/dlambda"
+theory = "NewenTheory.Interactions.SoftCore.scLjEnergy, scCrfEnergy (scLj_hasDerivAt_s, scCrf_hasDerivAt_s)"
+model = "NewenSpec.SoftCore.ljCrfSoftExtModel (at Float: ljCrfSoftExtFloat)"
+theorem = "NewenSpec.SoftCore.ljCrfSoftExtModel_real_eq, ljCrfSoftExtModel_de_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.rf_soft_interaction_ext"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::rf_soft_interaction_ext"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PrecalcNonbonded::add_rf_ext (PRECALCLAM)"]
+origin = "gromosXX Eds_Nonbonded_Term::rf_soft_interaction_ext (perturbed_nonbonded_term.cc:853-881)"
+theory = "NewenTheory.Interactions.SoftCore.scRfExclEnergy (scRfExcl_hasDerivAt_s)"
+model = "NewenSpec.SoftCore.rfSoftExtModel (at Float: rfSoftExtFloat)"
+theorem = "NewenSpec.SoftCore.rfSoftExtModel_real_eq, rfSoftExtModel_de_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "bonded.chebyshev"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::chebyshev"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::perturbed_dihedral_term"]
+origin = "gromosXX perturbed_dihedral_interaction.cc:134-168; gromosXX forms the powers as cos^2, cos^2*cos, cos^3*cos (newen: powi); both give 0 for m = 0, where cos(0 phi) = 1"
+theory = "NewenTheory.Interactions.PerturbedBonded.chebT, chebDT (chebT_cos, chebT_hasDerivAt)"
+model = "NewenSpec.PerturbedBonded.chebyshevModel (at Float: chebyshevFloat)"
+theorem = "NewenSpec.PerturbedBonded.chebyshevModel_real_eq, chebyshevModel_zero"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_quartic_bond_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_quartic_bond_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_bond_forces_grouped"]
+origin = "gromosXX perturbed_quartic_bond_interaction.cc:102-157; gromosXX's e_lambda mixes K and b0 as K_A + lambda K_diff, r0_A + lambda b_diff and recomputes Delta (newen reuses the energy's K, b0, Delta)"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertQuarticEnergy (pert_quartic_dvdl_is_deriv, quartic_force_is_minus_grad, pert_quartic_ends)"
+model = "NewenSpec.PerturbedBonded.quarticModel (at Float: quarticFloat)"
+theorem = "NewenSpec.PerturbedBonded.quarticModel_real_eq, quarticModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_angle_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_angle_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_angle_forces_grouped"]
+origin = "gromosXX perturbed_angle_interaction.cc:110-154; gromosXX writes e_lambda as 0.5 L' (-2 K cos_diff d + K_diff d d), newen as 0.5 L' (K_diff d d - 2 K cos_diff d)"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends)"
+model = "NewenSpec.PerturbedBonded.angleModel (at Float: angleFloat)"
+theorem = "NewenSpec.PerturbedBonded.angleModel_real_eq, angleModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_improper_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_improper_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_improper_dihedral_forces_grouped"]
+origin = "gromosXX perturbed_improper_dihedral_interaction.cc:129-182, the wrap of zeta into [q0 - pi, q0 + pi] included"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends)"
+model = "NewenSpec.PerturbedBonded.improperModel (at Float: improperFloat)"
+theorem = "NewenSpec.PerturbedBonded.improperModel_real_eq (at the wrapped zeta it returns)"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_dihedral_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_dihedral_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_dihedral_forces_grouped"]
+origin = "gromosXX perturbed_dihedral_interaction.cc:134-262 (energies mixed, e_lambda = L' (E_B - E_A))"
+theory = "NewenTheory.Interactions.PerturbedBonded.dihedralEnergy, mix (pert_dihedral_dvdl_is_deriv, chebT_cos)"
+model = "NewenSpec.PerturbedBonded.dihedralModel (at Float: dihedralFloat)"
+theorem = "NewenSpec.PerturbedBonded.dihedralModel_real_eq"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.soft_perturbed_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::soft_perturbed_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_soft_bond_forces_grouped", "calculate_soft_angle_forces_grouped", "calculate_soft_improper_forces_grouped", "BondedPrecalc::add_soft (PRECALCLAM)"]
+origin = "gromosXX perturbed_soft_bond_interaction.cc:106-162 (and the soft angle and improper files): energy 0.5 K_soft diff^2, force K_eff diff, the e_lambda formula"
+theory = "NewenTheory.Interactions.PerturbedBonded.softEnergy (soft_dvdl_is_deriv, soft_grad_is_deriv, soft_ends)"
+model = "NewenSpec.PerturbedBonded.softModel (at Float: softFloat)"
+theorem = "NewenSpec.PerturbedBonded.softModel_real_eq, softModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"

@@ -9,10 +9,11 @@ public import NewenTheory.Space.Periodicity
 # What the floating-point models share
 
 The models of the floating-point kernels (`NewenSpec/Thermostat.lean`, `NewenSpec/Nonbonded.lean`,
-`NewenSpec/Bonded.lean`, `NewenSpec/Dynamics.lean`, `NewenSpec/Periodicity.lean`) are written once
-over any number type `α` and used at `Float` (executed) and at `ℝ` (proven about). `+ − × ÷ <`
-come from the standard classes; the square root, the three transcendental functions of the bonded
-kernels, the power function and the two roundings to an integer have none that covers both, so
+`NewenSpec/Bonded.lean`, `NewenSpec/Dynamics.lean`, `NewenSpec/Periodicity.lean`,
+`NewenSpec/SoftCore.lean`, `NewenSpec/PerturbedBonded.lean`) are written once over any number type
+`α` and used at `Float` (executed) and at `ℝ` (proven about). `+ − × ÷ <` come from the standard
+classes; the square root, the three transcendental functions of the bonded kernels, the power
+function, the absolute value and the two roundings to an integer have none that covers both, so
 they are the classes below. A Lean `module`, as the theory files that import Mathlib.
 
 `sqrt` is correctly rounded (IEEE 754); `acos`, `cos`, `sin` and `pow` are not, so `Float` and
@@ -85,6 +86,14 @@ class Floor (α : Type) where
 instance : Floor Float := ⟨Float.floor⟩
 
 noncomputable instance : Floor ℝ := ⟨fun x => ((⌊x⌋ : ℤ) : ℝ)⟩
+
+/-- `x.abs()`: `Float.abs` (exact: clears the sign bit) or `|x|`. -/
+class Fabs (α : Type) where
+  fabs : α → α
+
+instance : Fabs Float := ⟨Float.abs⟩
+
+noncomputable instance : Fabs ℝ := ⟨fun x => |x|⟩
 
 end NewenSpec
 

@@ -8,10 +8,12 @@ import NewenSpec.Nonbonded
 import NewenSpec.Bonded
 import NewenSpec.Dynamics
 import NewenSpec.Periodicity
+import NewenSpec.SoftCore
+import NewenSpec.PerturbedBonded
 
 /-! `lake exe spec-vectors`: evaluate the Lean models on the grids the Rust tests sweep (and the
-thermostat, nonbonded, bonded, dynamics and periodicity models on random `Float` inputs) and write
-them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
+thermostat, nonbonded, bonded, dynamics, periodicity, soft-core and perturbed bonded models on
+random `Float` inputs) and write them to `vectors/`, so `cargo test` can compare the Rust functions against Lean without Lean. -/
 
 open NewenSpec.Schedule
 open NewenSpec.Thermo.Dof
@@ -1146,6 +1148,353 @@ def periodicityJson (parts : List (String × List (List Float))) : String :=
 
 end Periodicity
 
+/-! ## Soft-core: the perturbed nonbonded kernels on random `Float` inputs, written as bits -/
+
+def scLambdas : List Float := [0, 0.25, 0.5, 0.75, 1]
+def scAlphas : List Float := [0, 0.5, 1.0, 1.51]
+
+/-- A λ: one of `scLambdas` or uniform in `[0, 1)`. -/
+def drawLam : Gen Float := drawFrom scLambdas 0 1
+
+/-- The inputs of `PerturbedLambdaParams::from_lambda`: half the time one λ with derivatives 1
+(no individual λ), else four λ and four derivatives in `[-2, 2)`; NLAM 1 or 2. -/
+def drawTable : Gen (List Float × Nat) := do
+  let n := 1 + (← below 2)
+  if (← below 2) == 0 then
+    let l ← drawLam
+    return ([l, l, l, l, 1, 1, 1, 1], n)
+  else
+    let mut xs := #[]
+    for _ in List.range 4 do
+      xs := xs.push (← drawLam)
+    for _ in List.range 4 do
+      xs := xs.push (← uniform (-2) 2)
+    return (xs.toList, n)
+
+def tableOf (t : List Float × Nat) : NewenSpec.SoftCore.LambdaParams Float :=
+  let x (i : Nat) := t.1.getD i 0
+  NewenSpec.SoftCore.lambdaParamsFloat (x 0) (x 1) (x 2) (x 3) (x 4) (x 5) (x 6) (x 7)
+    (Float.ofNat t.2) (Float.ofNat (t.2 - 1))
+
+/-- The table inputs as row fields: eight floats as bits, NLAM as a plain integer. -/
+def tableFields (t : List Float × Nat) : List String := t.1.map hexBits ++ [toString t.2]
+
+/-- A `C6`: `0` one time in eight, one time in sixteen at or below the `1e-10` guard, else
+log-uniform in `[1e-5, 1e-2]`. -/
+def drawC6 : Gen Float := do
+  match ← below 16 with
+  | 0 | 1 => return 0
+  | 2 => logUniform 1e-12 1e-10
+  | 3 => return NewenSpec.SoftCore.guardFloat
+  | _ => logUniform 1e-5 1e-2
+
+/-- One end state `(C6, C12, q)`: a dummy (all zero), uncharged, or charged. -/
+def drawState : Gen (Float × Float × Float) := do
+  match ← below 3 with
+  | 0 => return (0, 0, 0)
+  | k =>
+    let c6 ← drawC6
+    let c12 ← logUniform 1e-8 1e-5
+    let q ← if k == 1 then pure 0 else uniform (-2) 2
+    return (c6, c12, q)
+
+def drawFpe : Gen Float := drawFrom [138.9354, 1] 1 200
+
+/-- `perturbed_lj_crf_pair` rows. -/
+def perturbedPairRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 800 do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let (aC6, aC12, aQ) ← drawState
+    let (bC6, bC12, bQ) ← drawState
+    let αlj ← pick scAlphas
+    let αc ← pick scAlphas
+    let fpe ← drawFpe
+    let cs ← drawFrom [1, 0.5, 0.8333333333333334] 0 1
+    let t ← drawTable
+    let (f, eLj, eCrf, deLj, deCrf) := NewenSpec.SoftCore.perturbedLjCrfPairFloat r2 aC6 aC12 bC6
+      bC12 aQ bQ αlj αc (tableOf t) (crfOf inputs) fpe cs
+    rows := rows.push (([r2, aC6, aC12, bC6, bC12, aQ, bQ, αlj, αc] ++ inputs ++ [fpe, cs]).map
+      hexBits ++ tableFields t ++ [f, eLj, eCrf, deLj, deCrf].map hexBits)
+  return rows.toList
+
+/-- Rows of a kernel `(r2, a_q, b_q, alpha_crf, lp, crf, fpe) → 3 floats`. -/
+def rfTableRows (count : Nat)
+    (kernel : Float → Float → Float → Float → NewenSpec.SoftCore.LambdaParams Float →
+      NewenSpec.Nonbonded.CrfParams Float → Float → Float × Float × Float) :
+    Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range count do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let aQ ← orZero (uniform (-2) 2)
+    let bQ ← orZero (uniform (-2) 2)
+    let αc ← pick scAlphas
+    let fpe ← drawFpe
+    let t ← drawTable
+    let (f, e, de) := kernel r2 aQ bQ αc (tableOf t) (crfOf inputs) fpe
+    rows := rows.push (([r2, aQ, bQ, αc] ++ inputs ++ [fpe]).map hexBits ++ tableFields t ++
+      [f, e, de].map hexBits)
+  return rows.toList
+
+/-- `perturbed_rf_self_term` rows: squared charges in `[0, 4)`. -/
+def perturbedSelfRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 200 do
+    let inputs ← drawCrfInputs
+    let qa ← orZero (uniform (-2) 2)
+    let qb ← orZero (uniform (-2) 2)
+    let fpe ← drawFpe
+    let t ← drawTable
+    let (e, de) := NewenSpec.SoftCore.perturbedRfSelfFloat (qa * qa) (qb * qb) (tableOf t)
+      (crfOf inputs) fpe
+    rows := rows.push (([qa * qa, qb * qb] ++ inputs ++ [fpe]).map hexBits ++ tableFields t ++
+      [e, de].map hexBits)
+  return rows.toList
+
+/-- `PerturbedLambdaParams::from_lambda` rows: the inputs, then the sixteen fields. -/
+def lambdaTableRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let t ← drawTable
+    let p := tableOf t
+    rows := rows.push (tableFields t ++ ([p.aLjN, p.bLjN, p.aCrfN, p.bCrfN, p.aLjN1, p.bLjN1,
+      p.aCrfN1, p.bCrfN1, p.aLjs, p.bLjs, p.aLjs2, p.bLjs2, p.aCrfs, p.bCrfs, p.aCrfs2,
+      p.bCrfs2]).map hexBits)
+  return rows.toList
+
+/-- `lj_crf_soft_interaction_ext` rows. -/
+def ljCrfExtRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 400 do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let (aC6, aC12, aQ) ← drawState
+    let (bC6, bC12, bQ) ← drawState
+    let αlj ← pick scAlphas
+    let αc ← pick scAlphas
+    let fpe ← drawFpe
+    let lam ← drawLam
+    let ((e1, e2, e3, e4), (d1, d2, d3, d4)) := NewenSpec.SoftCore.ljCrfSoftExtFloat r2 aC6 aC12
+      bC6 bC12 aQ bQ αlj αc (crfOf inputs) fpe lam
+    rows := rows.push (([r2, aC6, aC12, bC6, bC12, aQ, bQ, αlj, αc] ++ inputs ++
+      [fpe, lam, e1, e2, e3, e4, d1, d2, d3, d4]).map hexBits)
+  return rows.toList
+
+/-- `rf_soft_interaction_ext` rows. -/
+def rfExtRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 200 do
+    let inputs ← drawCrfInputs
+    let r2 ← drawR2 (inputs.getD 0 0)
+    let aQ ← orZero (uniform (-2) 2)
+    let bQ ← orZero (uniform (-2) 2)
+    let αc ← pick scAlphas
+    let fpe ← drawFpe
+    let lam ← drawLam
+    let ((e1, e2), (d1, d2)) := NewenSpec.SoftCore.rfSoftExtFloat r2 aQ bQ αc (crfOf inputs) fpe lam
+    rows := rows.push (([r2, aQ, bQ, αc] ++ inputs ++ [fpe, lam, e1, e2, d1, d2]).map hexBits)
+  return rows.toList
+
+structure SoftCoreRows where
+  lambdaParams : List (List String)
+  pair : List (List String)
+  rfSoft : List (List String)
+  rfExcluded : List (List String)
+  rfSelf : List (List String)
+  ljCrfExt : List (List String)
+  rfExt : List (List String)
+
+/-- The row sets of `vectors/softcore.json`, from a fixed seed. -/
+def softCoreRows : SoftCoreRows :=
+  (do return {
+      lambdaParams := ← lambdaTableRows, pair := ← perturbedPairRows,
+      rfSoft := ← rfTableRows 300 NewenSpec.SoftCore.rfSoftFloat,
+      rfExcluded := ← rfTableRows 300 NewenSpec.SoftCore.perturbedRfExcludedFloat,
+      rfSelf := ← perturbedSelfRows, ljCrfExt := ← ljCrfExtRows, rfExt := ← rfExtRows } :
+    Gen _).run' 0x6e6577656e2d7363
+
+def fieldRow (fields : List String) : String := "    [" ++ ", ".intercalate fields ++ "]"
+
+def softCoreJson (r : SoftCoreRows) : String :=
+  let part (name : String) (rows : List (List String)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map fieldRow) ++ "\n  ]"
+  let table := "lj, ljs, crf, crfs, dlj, dljs, dcrf, dcrfs, nlam"
+  "{\n" ++
+  "  \"spec\": \"nonbonded.perturbed_lambda_params, nonbonded.perturbed_lj_crf_pair, " ++
+  "nonbonded.rf_soft_interaction, nonbonded.perturbed_rf_excluded_pair, " ++
+  "nonbonded.perturbed_rf_self_term, nonbonded.lj_crf_soft_interaction_ext, " ++
+  "nonbonded.rf_soft_interaction_ext\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.SoftCore.*Float; SplitMix64, fixed " ++
+  "seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); nlam is a plain integer\",\n" ++
+  s!"  \"layout_lambda_params\": \"{table}; a_lj_n, b_lj_n, a_crf_n, b_crf_n, a_lj_n_1, " ++
+  "b_lj_n_1, a_crf_n_1, b_crf_n_1, a_ljs, b_ljs, a_ljs2, b_ljs2, a_crfs, b_crfs, a_crfs2, " ++
+  "b_crfs2\",\n" ++
+  "  \"layout_perturbed_lj_crf_pair\": \"r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, alpha_lj, " ++
+  s!"alpha_crf, cutoff, epsilon, rf_epsilon, rf_kappa, four_pi_eps_i, coulomb_scaling, {table}; " ++
+  "force, e_lj, e_crf, de_lj, de_crf\",\n" ++
+  "  \"layout_rf_soft_interaction\": \"r2, a_q, b_q, alpha_crf, cutoff, epsilon, rf_epsilon, " ++
+  s!"rf_kappa, four_pi_eps_i, {table}; force, e_rf, de_rf\",\n" ++
+  "  \"layout_perturbed_rf_excluded_pair\": \"as layout_rf_soft_interaction\",\n" ++
+  "  \"layout_perturbed_rf_self_term\": \"qa2, qb2, cutoff, epsilon, rf_epsilon, rf_kappa, " ++
+  s!"four_pi_eps_i, {table}; e_rf, de_rf\",\n" ++
+  "  \"layout_lj_crf_soft_interaction_ext\": \"r2, a_c6, a_c12, b_c6, b_c12, a_q, b_q, " ++
+  "alpha_lj, alpha_crf, cutoff, epsilon, rf_epsilon, rf_kappa, four_pi_eps_i, lam; A_e_lj, " ++
+  "B_e_lj, A_e_crf, B_e_crf, A_de_lj, B_de_lj, A_de_crf, B_de_crf\",\n" ++
+  "  \"layout_rf_soft_interaction_ext\": \"r2, a_q, b_q, alpha_crf, cutoff, epsilon, " ++
+  "rf_epsilon, rf_kappa, four_pi_eps_i, lam; A_e_rf, B_e_rf, A_de_rf, B_de_rf\",\n" ++
+  part "lambda_params" r.lambdaParams ++ ",\n" ++
+  part "perturbed_lj_crf_pair" r.pair ++ ",\n" ++
+  part "rf_soft_interaction" r.rfSoft ++ ",\n" ++
+  part "perturbed_rf_excluded_pair" r.rfExcluded ++ ",\n" ++
+  part "perturbed_rf_self_term" r.rfSelf ++ ",\n" ++
+  part "lj_crf_soft_interaction_ext" r.ljCrfExt ++ ",\n" ++
+  part "rf_soft_interaction_ext" r.rfExt ++ "\n}\n"
+
+/-! ## Perturbed bonded: the kernels on random `Float` inputs, written as bits -/
+
+/-- A λ derivative: `1` half the time (no individual λ), else uniform in `[-2, 2)`. -/
+def drawDlam : Gen Float := do
+  if (← below 2) == 0 then return 1 else uniform (-2) 2
+
+/-- A force constant: `0` one time in eight (the term is absent in that state), else uniform. -/
+def drawK (lo hi : Float) : Gen Float := orZero (uniform lo hi)
+
+def piF : Float := NewenSpec.PerturbedBonded.piFloat
+
+def pertQuarticRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let d2 ← logUniform 0.002 0.1
+    let kA ← drawK 1e6 2e7
+    let kB ← drawK 1e6 2e7
+    let r0A ← uniform 0.09 0.2
+    let r0B ← uniform 0.09 0.2
+    let lam ← drawLam
+    let dlam ← drawDlam
+    let (e, f, de) := NewenSpec.PerturbedBonded.quarticFloat d2 kA kB r0A r0B lam dlam
+    rows := rows.push ([d2, kA, kB, r0A, r0B, lam, dlam, e, f, de].map hexBits)
+  return rows.toList
+
+def pertAngleRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let cost ← uniform (-1) 1
+    let kA ← drawK 100 800
+    let kB ← drawK 100 800
+    let cA ← uniform (-1) 0
+    let cB ← uniform (-1) 0
+    let lam ← drawLam
+    let dlam ← drawDlam
+    let (e, df, de) := NewenSpec.PerturbedBonded.angleFloat cost kA kB cA cB lam dlam
+    rows := rows.push ([cost, kA, kB, cA, cB, lam, dlam, e, df, de].map hexBits)
+  return rows.toList
+
+/-- Impropers: `ζ` in `[-π, π)`, one time in eight in `[-3π, 3π)` (several turns to wrap). -/
+def pertImproperRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let zeta ← if (← below 8) == 0 then uniform (-3 * piF) (3 * piF) else uniform (-piF) piF
+    let kA ← drawK 0 400
+    let kB ← drawK 0 400
+    let qA ← drawFrom [0, 0.6154797086703874, -0.6154797086703874] (-piF) piF
+    let qB ← drawFrom [0, 0.6154797086703874, -0.6154797086703874] (-piF) piF
+    let lam ← drawLam
+    let dlam ← drawDlam
+    let (e, mkd, de, z) := NewenSpec.PerturbedBonded.improperFloat zeta kA kB qA qB lam dlam
+    rows := rows.push ([zeta, kA, kB, qA, qB, lam, dlam, e, mkd, de, z].map hexBits)
+  return rows.toList
+
+/-- `chebyshev(m, c)` for `m = 0 … 7` (7: unsupported, `(0, 0)`), `c` in `[-1, 1)` or `±1`, `0`. -/
+def pertChebyshevRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let m := (← below 8)
+    let c ← drawFrom [-1, 0, 1] (-1) 1
+    let (cm, dcm) := NewenSpec.PerturbedBonded.chebyshevFloat (m : Int) c
+    rows := rows.push ([toString m] ++ [c, cm, dcm].map hexBits)
+  return rows.toList
+
+def pertDihedralRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 300 do
+    let c ← uniform (-1) 1
+    let kA ← drawK 0 10
+    let kB ← drawK 0 10
+    let pA ← drawFrom [-1, 1] (-1) 1
+    let pB ← drawFrom [-1, 1] (-1) 1
+    let mA := (← below 7)
+    let mB := (← below 7)
+    let lam ← drawLam
+    let dlam ← drawDlam
+    let (eA, eB, gA, gB, e, de) := NewenSpec.PerturbedBonded.dihedralFloat c kA pA (mA : Int) kB pB
+      (mB : Int) lam dlam
+    rows := rows.push ([c, kA, pA].map hexBits ++ [toString mA] ++ [kB, pB].map hexBits ++
+      [toString mB] ++ [lam, dlam, eA, eB, gA, gB, e, de].map hexBits)
+  return rows.toList
+
+/-- Soft terms in a bond length, `cos θ` or `ζ`; one state's force constant may be `0` (the term
+is absent there, and the kernel's caller gives it the other state's reference value). -/
+def pertSoftRows : Gen (List (List String)) := do
+  let mut rows := #[]
+  for _ in List.range 400 do
+    let (x, x0A, x0B, k) : Float × Float × Float × Float ← match ← below 3 with
+      | 0 => do pure (← uniform 0.05 0.3, ← uniform 0.09 0.2, ← uniform 0.09 0.2, 4e5)
+      | 1 => do pure (← uniform (-1) 1, ← uniform (-1) 0, ← uniform (-1) 0, 800)
+      | _ => do pure (← uniform (-piF) piF, ← uniform (-1) 1, ← uniform (-1) 1, 400)
+    let kA ← drawK 0 k
+    let kB ← drawK 0 k
+    let alpha ← drawFrom scAlphas 0 1000
+    let lam ← drawLam
+    let dlam ← drawDlam
+    let (e, g, de) := NewenSpec.PerturbedBonded.softFloat x kA kB x0A x0B alpha lam dlam
+    rows := rows.push ([x, kA, kB, x0A, x0B, alpha, lam, dlam, e, g, de].map hexBits)
+  return rows.toList
+
+structure PerturbedBondedRows where
+  chebyshev : List (List String)
+  quartic : List (List String)
+  angle : List (List String)
+  improper : List (List String)
+  dihedral : List (List String)
+  soft : List (List String)
+
+/-- The row sets of `vectors/perturbed_bonded.json`, from a fixed seed. -/
+def perturbedBondedRows : PerturbedBondedRows :=
+  (do return {
+      chebyshev := ← pertChebyshevRows, quartic := ← pertQuarticRows, angle := ← pertAngleRows,
+      improper := ← pertImproperRows, dihedral := ← pertDihedralRows, soft := ← pertSoftRows } :
+    Gen _).run' 0x6e6577656e2d7062
+
+def perturbedBondedJson (r : PerturbedBondedRows) : String :=
+  let part (name : String) (rows : List (List String)) : String :=
+    s!"  \"{name}\": [\n" ++ ",\n".intercalate (rows.map fieldRow) ++ "\n  ]"
+  "{\n" ++
+  "  \"spec\": \"bonded.chebyshev, bonded.perturbed_quartic_bond_term, " ++
+  "bonded.perturbed_angle_term, bonded.perturbed_improper_term, " ++
+  "bonded.perturbed_dihedral_term, bonded.soft_perturbed_term\",\n" ++
+  "  \"generator\": \"lake exe spec-vectors (NewenSpec.PerturbedBonded.*Float; SplitMix64, " ++
+  "fixed seed)\",\n" ++
+  "  \"encoding\": \"every float is the hex string of its IEEE 754 binary64 bits (f64::to_bits, " ++
+  "Float.toBits); multiplicities are plain integers\",\n" ++
+  "  \"layout_chebyshev\": \"m, cos_phi; cos(m phi), d cos(m phi) / d cos_phi\",\n" ++
+  "  \"layout_quartic\": \"dist2, k_a, k_b, r0_a, r0_b, lambda, lambda_derivative; energy, f, " ++
+  "de_dl\",\n" ++
+  "  \"layout_angle\": \"cost, k_a, k_b, cos0a, cos0b, lambda, lambda_derivative; energy, df, " ++
+  "de_dl\",\n" ++
+  "  \"layout_improper\": \"zeta, k_a, k_b, q0_a, q0_b, lambda, lambda_derivative; energy, " ++
+  "minus_k_dzeta, de_dl, zeta_wrapped\",\n" ++
+  "  \"layout_dihedral\": \"cos_phi, k_a, cospd_a, m_a, k_b, cospd_b, m_b, lambda, " ++
+  "lambda_derivative; e_a, e_b, g_a, g_b, energy, de_dl\",\n" ++
+  "  \"layout_soft\": \"x, k_a, k_b, x0_a, x0_b, alpha, lambda, lambda_derivative; energy, " ++
+  "k_eff_diff, de_dl\",\n" ++
+  part "chebyshev" r.chebyshev ++ ",\n" ++ part "quartic" r.quartic ++ ",\n" ++
+  part "angle" r.angle ++ ",\n" ++ part "improper" r.improper ++ ",\n" ++
+  part "dihedral" r.dihedral ++ ",\n" ++ part "soft" r.soft ++ "\n}\n"
+
 def main : IO Unit := do
   IO.FS.createDirAll "vectors"
   IO.FS.writeFile "vectors/schedule.json" scheduleJson
@@ -1200,3 +1549,15 @@ def main : IO Unit := do
     IO.FS.writeFile "vectors/periodicity.json" (periodicityJson parts)
     IO.println (s!"wrote vectors/periodicity.json (" ++
       ", ".intercalate (parts.map fun p => s!"{p.2.length} {p.1}") ++ " rows)")
+  let sc := softCoreRows
+  IO.FS.writeFile "vectors/softcore.json" (softCoreJson sc)
+  IO.println (s!"wrote vectors/softcore.json ({sc.lambdaParams.length} lambda_params, " ++
+    s!"{sc.pair.length} perturbed_lj_crf_pair, {sc.rfSoft.length} rf_soft_interaction, " ++
+    s!"{sc.rfExcluded.length} perturbed_rf_excluded_pair, {sc.rfSelf.length} " ++
+    s!"perturbed_rf_self_term, {sc.ljCrfExt.length} lj_crf_soft_interaction_ext, " ++
+    s!"{sc.rfExt.length} rf_soft_interaction_ext rows)")
+  let pb := perturbedBondedRows
+  IO.FS.writeFile "vectors/perturbed_bonded.json" (perturbedBondedJson pb)
+  IO.println (s!"wrote vectors/perturbed_bonded.json ({pb.chebyshev.length} chebyshev, " ++
+    s!"{pb.quartic.length} quartic, {pb.angle.length} angle, {pb.improper.length} improper, " ++
+    s!"{pb.dihedral.length} dihedral, {pb.soft.length} soft rows)")

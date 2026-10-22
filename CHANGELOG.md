@@ -64,6 +64,17 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   that removes every degree of freedom is refused instead of producing NaN; a bath with no degrees
   of freedom before the NDFMIN spread is decoupled with a warning (`topology.cc:1404-1411`).
 
+- **Soft-core and perturbed kernels checked against a Lean model, bit for bit**: seven nonbonded
+  (the perturbed LJ + reaction-field pair, the λ tables, the soft reaction field, the excluded and
+  self corrections and the two `_ext` kernels) and six perturbed bonded kernels (quartic bond,
+  angle, improper with its ζ wrap, Chebyshev dihedral, the soft bonded term) are pure functions.
+  Lean (`NewenTheory/Interactions/{SoftCore,PerturbedBonded}.lean`): **the kernel's dV/dλ is the
+  derivative of its V(λ)** for the LJ, reaction-field, excluded and self terms and for every
+  perturbed bonded term, with the chain rule for individual λ; the end states are the plain
+  kernels; the soft-core force is minus the gradient. `spec/vectors/{softcore,perturbed_bonded}.json`,
+  `crates/newen-forces/tests/{softcore_spec,perturbed_bonded_spec}.rs`, with finite-difference
+  checks of dV/dλ and of the forces. Every FEP reference byte-identical before and after.
+
 ### Changed
 
 - The Chebyshev dihedral builds its powers of `cos φ` as explicit products in gromosXX's order

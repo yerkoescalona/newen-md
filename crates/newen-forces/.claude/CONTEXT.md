@@ -27,6 +27,20 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   the same C library as Lean's `Float`) and checks every force against the energy by finite
   differences. The guards are `ZERO_DISTANCE`, `ZERO_DISTANCE2`, `ZERO_SINE`, `NEAR_LINEAR` in
   `bonded/mod.rs`. Same rule: keep the operation order.
+- **Perturbed kernels verified (2026-10-22):** the free-energy loops in `nonbonded/perturbed.rs`
+  and `bonded/perturbed.rs` call pure scalar kernels with `/// spec:` keys:
+  `PerturbedLambdaParams::from_lambda` (the λ table, `powf`), `perturbed_lj_crf_pair` (soft-core
+  LJ + CRF at `r²`; `perturbed_lj_crf_interaction[_scaled]` wrap it), `rf_soft_interaction`,
+  `perturbed_rf_excluded_pair`, `perturbed_rf_self_term`, `lj_crf_soft_interaction_ext`,
+  `rf_soft_interaction_ext`; `chebyshev`, `perturbed_quartic_bond_term`, `perturbed_angle_term`,
+  `perturbed_improper_term`, `perturbed_dihedral_term`, `soft_perturbed_term`. Lean models in
+  `spec/NewenSpec/SoftCore.lean` and `PerturbedBonded.lean`; over ℝ each kernel's dV/dλ is proven
+  to be the derivative of its energy (`softcore_dvdl_is_deriv`,
+  `perturbedLjCrfPairModel_dvdl_is_deriv`, `pert_*_dvdl_is_deriv`), and the end states λ = 0, 1 are
+  the plain terms. `tests/softcore_spec.rs` and `tests/perturbed_bonded_spec.rs` compare the Rust
+  with the `Float` models bit for bit and check dV/dλ and the forces against central differences.
+  Keep the operation order of these kernels as it is. The extraction moved no bit: all 121
+  gromosXX reference systems give byte-identical output files before and after.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections

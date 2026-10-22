@@ -106,11 +106,11 @@ kernel against the model on many random inputs (differential random testing).
 
 | | Integer decision logic | Floating-point kernels |
 |---|---|---|
-| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
+| Examples | output schedules, degrees of freedom, bath mapping, index matching | LJ, reaction field, bonded terms, soft-core and perturbed terms, Berendsen, Nosé–Hoover, leap-frog, kinetic energy, pressure, periodic boundaries |
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, and the periodic boundaries (below) |
+| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, and the soft-core and perturbed free-energy terms (below) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -901,6 +901,102 @@ The model follows newen's Rust. Where it differs from gromosXX:
 cargo test -p newen-core --test periodicity_spec    # Rust = Float model, bit for bit
 ```
 
+### The soft-core and perturbed terms
+
+Most of the gromosXX defects in the dossier were found in the free-energy code (D1, D16, D25, D32,
+D34, D35, D37). Its kernels get the same three pieces, and one theorem more than the others: the
+`dV/dλ` a kernel returns is the derivative in λ of the energy it returns. Thermodynamic
+integration integrates exactly that number, so a kernel whose `dV/dλ` is not the derivative of its
+`V` gives a wrong free energy however well the rest is done.
+
+**The kernels.** The free-energy loops call pure scalar functions. In
+`crates/newen-forces/src/nonbonded/perturbed.rs`: `PerturbedLambdaParams::from_lambda` (the λ table
+of a pair of energy groups, gromosXX `set_lambda`), `perturbed_lj_crf_pair` (one soft-core LJ + CRF
+pair at `r²`; `perturbed_lj_crf_interaction` wraps it), `rf_soft_interaction` and
+`perturbed_rf_excluded_pair` (the soft reaction field of an excluded pair, as the `PERTATOMPAIR`
+code and the excluded-pair correction round it), `perturbed_rf_self_term`, and the PRECALCLAM
+kernels `lj_crf_soft_interaction_ext` and `rf_soft_interaction_ext`. In `src/bonded/perturbed.rs`:
+`chebyshev`, `perturbed_quartic_bond_term`, `perturbed_angle_term`, `perturbed_improper_term`,
+`perturbed_dihedral_term` and `soft_perturbed_term` (the soft bond, angle and improper). Extracting
+them moved no bit: the 121 gromosXX reference systems write byte-identical energy, free-energy,
+force and trajectory files before and after.
+
+**The meaning.** `spec/NewenTheory/Interactions/SoftCore.lean` writes the soft-core pair of Beutler
+et al. (1994) as GROMOS Vol. 2 and the code have it. State A is softened by the other state's λ:
+
+```
+E_A^LJ(s)  = C12_A / (r⁶ + α_LJ s C12_A/C6_A)² − C6_A / (r⁶ + α_LJ s C12_A/C6_A),    s = Λₛ²
+E_A^CRF(s) = q_A (1/√(r² + α_CRF s) − (C_RF/2) r² / √((R² + α_CRF s)³) − (1 − C_RF/2)/R)
+V(λ)       = (1 − Λ)ⁿ E_A(Λₛ²) + Λⁿ E_B((1 − Λₛ)²)
+```
+
+with `n` = NLAM and the individual λ of GROMOS's LAMBDAS block: `Λ(λ)` for the weights and `Λₛ(λ)`
+for the softness, any two differentiable functions of λ (and separate ones for LJ and CRF). The
+central theorem:
+
+```lean
+theorem softcore_dvdl_is_deriv_lj (n : ℕ) (αlj : ℝ) (A B : LjState) (r : ℝ)
+    {Λ Λs : ℝ → ℝ} {dΛ dΛs lam : ℝ} (hΛ : HasDerivAt Λ dΛ lam) (hΛs : HasDerivAt Λs dΛs lam)
+    (hA : r ^ 6 + αlj * Λs lam ^ 2 * A.c126 ≠ 0)
+    (hB : r ^ 6 + αlj * (1 - Λs lam) ^ 2 * B.c126 ≠ 0) :
+    HasDerivAt (fun l => pertLjEnergy n αlj A B r (Λ l) (Λs l))
+      (pertLjDvdl n αlj A B r (Λ lam) (Λs lam) dΛ dΛs) lam
+```
+
+Read aloud: wherever the softened `r⁶` of both states is nonzero, the closed form `pertLjDvdl` —
+`(1 − Λ)ⁿ ∂E_A/∂s · 2Λₛ Λₛ′ + Λⁿ ∂E_B/∂s · (−2(1 − Λₛ) Λₛ′) + n (Λⁿ⁻¹ E_B − (1 − Λ)ⁿ⁻¹ E_A) Λ′`,
+the chain rule `∂V/∂Λ · Λ′ + ∂V/∂Λₛ · Λₛ′` — is the derivative of the energy. `softcore_dvdl_is_deriv_crf`
+says the same for the reaction field (where the softened `r²` and `R²` are positive),
+`softcore_dvdl_is_deriv` for their sum, `softcore_dvdl_is_deriv_rf_excluded` and
+`rf_self_dvdl_is_deriv` for the excluded-pair and self terms. `softcore_lambda_zero` and
+`softcore_lambda_one` say that λ = 0 and λ = 1 (NLAM ≥ 1) are the plain `ljEnergy` and
+`crfEnergy` of states A and B, and `softcore_force_is_minus_grad` that the scalar force is
+`−∂V/∂r / r` at fixed λ. `PerturbedBonded.lean` does the same for the bonded terms: the parameters
+mix linearly, `K(λ) = (1 − λ) K_A + λ K_B` (`hasDerivAt_mix`), each kernel's `dE/dλ` is the
+derivative (`pert_quartic_dvdl_is_deriv`, `pert_harmonic_dvdl_is_deriv` for the angle and the
+improper, `pert_dihedral_dvdl_is_deriv`, `soft_dvdl_is_deriv`), the end states are the plain
+terms (`pert_*_ends`, `soft_ends`), and `chebT_cos` proves the dihedral polynomials are
+`cos(mφ)` for `m = 1 … 6`.
+
+**One model.** `spec/NewenSpec/SoftCore.lean` and `PerturbedBonded.lean` write every kernel once
+over any number type, operation by operation like the Rust. The λ table calls `pow`, so
+`NewenSpec/Float.lean` has a `Powf` class (`Float.pow` and `Real.rpow`) next to `Sqrt`, and an
+`Fabs` class for the `|C6| > 1e-10` guard. At ℝ, `perturbedLjCrfPairModel_real_eq` proves the
+pair kernel, fed the table kernel's output, returns the theory's force, energies and `dV/dλ`
+(`rpow` at the natural exponents `n` and `n − 1` is the power), and
+`perturbedLjCrfPairModel_dvdl_is_deriv` combines it with the theorem above: the `de_lj + de_crf`
+the kernel model returns is the derivative of the `e_lj + e_crf` it returns. The PRECALCLAM kernels
+return unweighted end-state energies with `A_de = ∂E_A/∂λ` and `B_de = −∂E_B/∂λ`
+(`ljCrfSoftExtModel_de_is_deriv`, `rfSoftExtModel_de_is_deriv`).
+
+**The tests.** `lake exe spec-vectors` writes `spec/vectors/softcore.json` (300 λ-table rows, 800
+pair rows, 300 rows of each excluded-pair kernel, 200 self-term rows, 400 + 200 PRECALCLAM rows) and
+`spec/vectors/perturbed_bonded.json` (300 rows of each bonded kernel, 400 soft rows), over λ ∈ {0,
+0.25, 0.5, 0.75, 1} and random, plain and individual λ (random slopes), NLAM ∈ {1, 2},
+α ∈ {0, 0.5, 1, 1.51}, and states that are charged, uncharged or dummies.
+`crates/newen-forces/tests/softcore_spec.rs` and `perturbed_bonded_spec.rs` require the same 64
+bits on every row, in debug, release and `target-cpu=generic` builds. `powf` is the one call IEEE
+754 does not require to be correctly rounded; Rust and Lean both call the platform libm's `pow`,
+so the comparison stays exact on one machine. The same tests also check the theorems numerically
+on the compiled code: on well-conditioned rows (`r² ≥ 0.01` nm², `C6` zero or at least `10⁻⁶`,
+soft bonded `α Δ² ≤ 10`) the kernel's `dV/dλ` agrees with the central difference of its energy,
+`h = 10⁻⁶`, with every individual λ moved along its own slope, and the force with the central
+difference in `r`, to `10⁻⁶` relative.
+
+The model follows newen's Rust, which differs from gromosXX in rounding, never in the formula:
+
+- newen guards `r² < 10⁻¹⁰` and sets `C12/C6 = 0` for `|C6| ≤ 10⁻¹⁰` in the pair kernel; gromosXX
+  has no distance guard and divides whenever `C6 ≠ 0` (the PRECALCLAM kernel follows gromosXX).
+- newen forms the softened `C_RF/2` as `crf_2cut3i · cut³`, gromosXX keeps `C_RF/2` (`m_crf_2`);
+  the excluded-pair correction forms it a third way, `crf_2cut3i · √((R²/cut2soft)³)`.
+- The self term, the quartic bond's `dE/dλ`, the angle's `dE/dλ` and the dihedral powers are
+  summed or multiplied in another order than in gromosXX.
+
+```sh
+cargo test -p newen-forces --test softcore_spec            # soft-core kernels = Float model; dV/dλ, force by FD
+cargo test -p newen-forces --test perturbed_bonded_spec    # perturbed bonded kernels = Float model; dV/dλ by FD
+```
+
 ## Where each mistake is caught
 
 Lean does not run your code and look for errors. You write a statement ("the Rust function equals
@@ -995,10 +1091,13 @@ And at the level of the whole project:
   was, by reference tests and unit tests.
 - **Floating-point kernels: covered on generated inputs only.** The thermostat steps, the
   Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy,
-  temperature, pressure and barostat kernels, and the periodic boundaries equal their Lean models
-  bit for bit on the rows `lake exe spec-vectors` writes; no rounding bound is proved, and inputs
-  outside those rows are not checked. The bonded kernels' agreement also assumes the same C
-  `acos`, `cos` and `sin` on both sides, the barostat's the same C `pow`.
+  temperature, pressure and barostat kernels, the periodic boundaries, and the soft-core and
+  perturbed free-energy kernels equal their Lean models bit for bit on the rows
+  `lake exe spec-vectors` writes; no rounding bound is proved, and inputs outside those rows are
+  not checked. The bonded kernels' agreement also assumes the same C `acos`, `cos` and `sin` on
+  both sides, the barostat's and the λ table's the same C `pow`. That `dV/dλ` is the derivative
+  of `V` is proved over ℝ, for every input; in floating point it is checked by finite differences
+  on the generated rows only.
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
   against published values stay necessary; verification adds to them, it does not replace them.
@@ -1203,13 +1302,16 @@ Planned, in the order chosen:
   `lj_crf_pair`, `rf_excluded_pair`, `rf_self_term`, with the SIMD lanes checked against the scalar
   kernel), the bonded terms (`quartic_bond`, `harmonic_bond`, `cosine_angle`,
   `harmonic_angle`, `dihedral_chebyshev`, `dihedral_new`, `improper_dihedral`, with a
-  finite-difference check of every force), and the dynamics kernels (`leap_frog_velocity`,
+  finite-difference check of every force), the dynamics kernels (`leap_frog_velocity`,
   `leap_frog_position`, `kinetic_energy`, `group_kinetic_energy`, `kinetic_temperature`,
-  `pressure_tensor`, `scalar_pressure`, `berendsen_barostat_scale`); each with ℝ theorems, a
-  `Float` model and a bit-exact differential test. Not yet covered in `newen-integrators`: the
-  constraint algorithms (SHAKE, SETTLE, LINCS), centre-of-mass removal, the anisotropic barostat
-  modes gromosXX has, and the older `integrator.rs` and `barostats.rs` implementations, which the
-  MD sequence does not use.
+  `pressure_tensor`, `scalar_pressure`, `berendsen_barostat_scale`), and the free-energy
+  kernels, nonbonded (the λ table, the soft-core pair, the soft excluded-pair and self terms, the
+  PRECALCLAM end-state kernels) and bonded (quartic bond, cosine angle, improper, Chebyshev
+  dihedral, soft-core terms), with the theorem that each kernel's `dV/dλ` is the derivative of its
+  energy; each with ℝ theorems, a `Float` model and a bit-exact differential test. Not yet covered
+  in `newen-integrators`: the constraint algorithms (SHAKE, SETTLE, LINCS), centre-of-mass
+  removal, the anisotropic barostat modes gromosXX has, and the older `integrator.rs` and
+  `barostats.rs` implementations, which the MD sequence does not use.
 - **Periodic boundaries, the same way** (see [Periodic boundaries](#periodic-boundaries)). Done:
   the nearest image and the put-into-box of every box type (vacuum, rectangular, triclinic; the
   truncated octahedron is a triclinic box) and the two box constructors, with the lattice, cell,

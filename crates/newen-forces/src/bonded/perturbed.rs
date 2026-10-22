@@ -16,7 +16,9 @@ use newen_core::math::Periodicity;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// cos(mφ) and d[cos(mφ)]/d[cosφ] via Chebyshev polynomials (same as regular dihedral).
-fn chebyshev(m: i32, cos_phi: f64) -> (f64, f64) {
+///
+/// spec: bonded.chebyshev
+pub fn chebyshev(m: i32, cos_phi: f64) -> (f64, f64) {
     match m {
         0 => (0.0, 0.0),
         1 => (cos_phi, 1.0),
@@ -146,22 +148,10 @@ impl BondedPrecalc {
     /// `:192-219`, soft improper `:203-230`).
     #[inline]
     fn add_soft(&mut self, col: usize, x: f64, k: (f64, f64), x0: (f64, f64), alpha: f64) {
-        let x0_diff = x0.1 - x0.0;
         for (i, &lam) in self.lambdas.iter().enumerate() {
-            let x0_lam = (1.0 - lam) * x0.0 + lam * x0.1;
-            let diff = x - x0_lam;
-            let diff2 = diff * diff;
-            let soft_a = 1.0 + alpha * lam * diff2;
-            let soft_b = 1.0 + alpha * (1.0 - lam) * diff2;
-            let soft_a2 = soft_a * soft_a;
-            let soft_b2 = soft_b * soft_b;
-            let k_soft = (1.0 - lam) * k.0 / soft_a + lam * k.1 / soft_b;
-            let st1 = 1.0 + alpha * diff2;
-            let st2 = -2.0 * alpha * lam * (1.0 - lam) * diff * x0_diff;
-            self.energy[col][i] += 0.5 * k_soft * diff2;
-            self.deriv[col][i] +=
-                0.5 * diff2 * (k.0 / soft_a2 * (-st1 - st2) + k.1 / soft_b2 * (st1 - st2))
-                    - k_soft * diff * x0_diff;
+            let (energy, _, de) = soft_perturbed_term(x, k.0, k.1, x0.0, x0.1, alpha, lam, 1.0);
+            self.energy[col][i] += energy;
+            self.deriv[col][i] += de;
         }
     }
 }
@@ -211,20 +201,19 @@ pub(crate) fn calculate_perturbed_bond_forces_grouped<const GROUPS: bool>(
         let pa = &topo.bond_parameters[bond.a_type];
         let pb = &topo.bond_parameters[bond.b_type];
 
-        let k = (1.0 - lambda) * pa.k_quartic + lambda * pb.k_quartic;
-        let r0 = (1.0 - lambda) * pa.r0 + lambda * pb.r0;
-        let k_d = pb.k_quartic - pa.k_quartic;
-        let b_d = pb.r0 - pa.r0;
-        // b_mix = r0(λ), already computed above as `r0`
-
         // GROMOS: v = pos(i) - pos(j)
         let v = pbc.nearest_image(conf.current().pos[bond.i], conf.current().pos[bond.j]);
         let dist2 = v.length_squared();
-        let r02 = r0 * r0;
-        let delta = dist2 - r02;
-
-        let energy = 0.25 * k * delta * delta;
-        let f_i = v * (-k * delta); // F_i += f; F_j -= f
+        let (energy, f_scalar, de_dl) = perturbed_quartic_bond_term(
+            dist2,
+            pa.k_quartic,
+            pb.k_quartic,
+            pa.r0,
+            pb.r0,
+            lambda,
+            lambda_derivative,
+        );
+        let f_i = v * f_scalar; // F_i += f; F_j -= f
         result.energy += energy;
         if GROUPS {
             e_group[topo.atom_to_energy_group[bond.i]] += energy;
@@ -233,14 +222,14 @@ pub(crate) fn calculate_perturbed_bond_forces_grouped<const GROUPS: bool>(
         result.forces[bond.j] -= f_i;
         result.add_virial(&[(v, f_i)]);
 
-        // dE/dλ = ¼·λ_d·[K_d·Δ² - 4·K·b_d·r0·Δ]
-        let de_dl = 0.25 * lambda_derivative * (k_d * delta * delta - 4.0 * k * b_d * r0 * delta);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[bond.i]] += de_dl;
         }
         // gromosXX perturbed_quartic_bond_interaction.cc:173-196: ¼·K(λ_k)·(r² − b0(λ_k)²)²
         if let Some(pc) = precalc.as_deref_mut() {
+            let k_d = pb.k_quartic - pa.k_quartic;
+            let b_d = pb.r0 - pa.r0;
             for (i, &l) in pc.lambdas.iter().enumerate() {
                 let b0lam = (1.0 - l) * pa.r0 + l * pb.r0;
                 let klam = (1.0 - l) * pa.k_quartic + l * pb.k_quartic;
@@ -253,6 +242,32 @@ pub(crate) fn calculate_perturbed_bond_forces_grouped<const GROUPS: bool>(
     }
 
     result
+}
+
+/// One perturbed quartic bond at squared length `dist2`: `(energy, f, dE/dλ)` with
+/// `K(λ)`, `b0(λ)` mixed linearly and the force on atom `i` equal to `f · v`.
+///
+/// spec: bonded.perturbed_quartic_bond_term
+#[inline]
+pub fn perturbed_quartic_bond_term(
+    dist2: f64,
+    k_a: f64,
+    k_b: f64,
+    r0_a: f64,
+    r0_b: f64,
+    lambda: f64,
+    lambda_derivative: f64,
+) -> (f64, f64, f64) {
+    let k = (1.0 - lambda) * k_a + lambda * k_b;
+    let r0 = (1.0 - lambda) * r0_a + lambda * r0_b;
+    let k_d = k_b - k_a;
+    let b_d = r0_b - r0_a;
+    let r02 = r0 * r0;
+    let delta = dist2 - r02;
+    let energy = 0.25 * k * delta * delta;
+    // dE/dλ = ¼·λ_d·[K_d·Δ² - 4·K·b_d·r0·Δ]
+    let de_dl = 0.25 * lambda_derivative * (k_d * delta * delta - 4.0 * k * b_d * r0 * delta);
+    (energy, -k * delta, de_dl)
 }
 
 // ─── Perturbed cos-harmonic angle ────────────────────────────────────────────
@@ -299,12 +314,8 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
         let pa = &topo.angle_parameters[angle.a_type];
         let pb = &topo.angle_parameters[angle.b_type];
 
-        let k = (1.0 - lambda) * pa.k_cosine + lambda * pb.k_cosine;
         let cos0a = pa.theta0.cos();
         let cos0b = pb.theta0.cos();
-        let cos0 = (1.0 - lambda) * cos0a + lambda * cos0b;
-        let k_d = pb.k_cosine - pa.k_cosine;
-        let cd_d = cos0b - cos0a;
 
         // GROMOS: rij = pos(i)-pos(j), rkj = pos(k)-pos(j)
         let rij = pbc.nearest_image(conf.current().pos[angle.i], conf.current().pos[angle.j]);
@@ -316,11 +327,17 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
         }
 
         let cost = (rij.dot(rkj) / (dij * dkj)).clamp(-1.0, 1.0);
-        let d_cos = cost - cos0;
-        let energy = 0.5 * k * d_cos * d_cos;
+        let (energy, df, de_dl) = perturbed_angle_term(
+            cost,
+            pa.k_cosine,
+            pb.k_cosine,
+            cos0a,
+            cos0b,
+            lambda,
+            lambda_derivative,
+        );
 
         // Force (same kernel as calculate_angle_forces)
-        let df = -k * d_cos;
         let f_i = (rkj * (1.0 / dkj) - rij * (cost / dij)) * (df / dij);
         let f_k = (rij * (1.0 / dij) - rkj * (cost / dkj)) * (df / dkj);
         let f_j = -(f_i + f_k);
@@ -333,8 +350,6 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
         result.forces[angle.k] += f_k;
         result.add_virial(&[(rij, f_i), (rkj, f_k)]);
 
-        // dE/dλ = ½·λ_d·[K_d·d² - 2·K·cd_d·d]
-        let de_dl = 0.5 * lambda_derivative * (k_d * d_cos * d_cos - 2.0 * k * cd_d * d_cos);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[angle.i]] += de_dl;
@@ -345,6 +360,31 @@ pub(crate) fn calculate_perturbed_angle_forces_grouped<const GROUPS: bool>(
     }
 
     result
+}
+
+/// One perturbed cos-harmonic angle at `cost = cos θ`: `(energy, df, dE/dλ)` with `K(λ)`,
+/// `cos θ0(λ)` mixed linearly and `df = −K·(cos θ − cos θ0)`, the derivative the force uses.
+///
+/// spec: bonded.perturbed_angle_term
+#[inline]
+pub fn perturbed_angle_term(
+    cost: f64,
+    k_a: f64,
+    k_b: f64,
+    cos0a: f64,
+    cos0b: f64,
+    lambda: f64,
+    lambda_derivative: f64,
+) -> (f64, f64, f64) {
+    let k = (1.0 - lambda) * k_a + lambda * k_b;
+    let cos0 = (1.0 - lambda) * cos0a + lambda * cos0b;
+    let k_d = k_b - k_a;
+    let cd_d = cos0b - cos0a;
+    let d_cos = cost - cos0;
+    let energy = 0.5 * k * d_cos * d_cos;
+    // dE/dλ = ½·λ_d·[K_d·d² - 2·K·cd_d·d]
+    let de_dl = 0.5 * lambda_derivative * (k_d * d_cos * d_cos - 2.0 * k * cd_d * d_cos);
+    (energy, -k * d_cos, de_dl)
 }
 
 // ─── Perturbed improper dihedral ─────────────────────────────────────────────
@@ -391,11 +431,6 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
         let pa = &topo.improper_dihedral_parameters[imp.a_type];
         let pb = &topo.improper_dihedral_parameters[imp.b_type];
 
-        let k = (1.0 - lambda) * pa.k + lambda * pb.k;
-        let q0 = (1.0 - lambda) * pa.q0 + lambda * pb.q0;
-        let k_d = pb.k - pa.k;
-        let q_d = pb.q0 - pa.q0;
-
         // Same geometry as calculate_improper_dihedral_forces
         let r_kj = pbc.nearest_image(conf.current().pos[imp.k], conf.current().pos[imp.j]);
         let r_ij = pbc.nearest_image(conf.current().pos[imp.i], conf.current().pos[imp.j]);
@@ -421,18 +456,10 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
             zeta = -zeta;
         }
 
-        let mut zeta_adj = zeta;
-        while zeta_adj < q0 - std::f64::consts::PI {
-            zeta_adj += 2.0 * std::f64::consts::PI;
-        }
-        while zeta_adj > q0 + std::f64::consts::PI {
-            zeta_adj -= 2.0 * std::f64::consts::PI;
-        }
+        let (energy, k_dzeta, de_dl, zeta_adj) =
+            perturbed_improper_term(zeta, pa.k, pb.k, pa.q0, pb.q0, lambda, lambda_derivative);
 
-        let d_zeta = zeta_adj - q0;
-        let energy = 0.5 * k * d_zeta * d_zeta;
-
-        let mut k_i = -k * d_zeta * d_kj;
+        let mut k_i = k_dzeta * d_kj;
         let mut k_l = -k_i;
         if d_mj2 < 1e-10 * d_kj2 {
             k_i = 0.0;
@@ -463,8 +490,6 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
         let r_lj = pbc.nearest_image(conf.current().pos[imp.l], conf.current().pos[imp.j]);
         result.add_virial(&[(r_ij, f_i), (r_kj, f_k), (r_lj, f_l)]);
 
-        // dE/dλ = ½·λ_d·[-2·K·q_d·Δ + K_d·Δ²]
-        let de_dl = 0.5 * lambda_derivative * (-2.0 * k * q_d * d_zeta + k_d * d_zeta * d_zeta);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[imp.i]] += de_dl;
@@ -476,6 +501,45 @@ pub(crate) fn calculate_perturbed_improper_dihedral_forces_grouped<const GROUPS:
     }
 
     result
+}
+
+/// `zeta` moved by whole turns into `[q0 − π, q0 + π]`.
+#[inline]
+fn wrap_around(zeta: f64, q0: f64) -> f64 {
+    let mut zeta_adj = zeta;
+    while zeta_adj < q0 - std::f64::consts::PI {
+        zeta_adj += 2.0 * std::f64::consts::PI;
+    }
+    while zeta_adj > q0 + std::f64::consts::PI {
+        zeta_adj -= 2.0 * std::f64::consts::PI;
+    }
+    zeta_adj
+}
+
+/// One perturbed improper dihedral at angle `zeta`: `(energy, −K·Δ, dE/dλ, ζ)` with `K(λ)`,
+/// `ζ0(λ)` mixed linearly, `ζ` wrapped into `[ζ0(λ) − π, ζ0(λ) + π]` and `Δ = ζ − ζ0(λ)`.
+///
+/// spec: bonded.perturbed_improper_term
+#[inline]
+pub fn perturbed_improper_term(
+    zeta: f64,
+    k_a: f64,
+    k_b: f64,
+    q0_a: f64,
+    q0_b: f64,
+    lambda: f64,
+    lambda_derivative: f64,
+) -> (f64, f64, f64, f64) {
+    let k = (1.0 - lambda) * k_a + lambda * k_b;
+    let q0 = (1.0 - lambda) * q0_a + lambda * q0_b;
+    let k_d = k_b - k_a;
+    let q_d = q0_b - q0_a;
+    let zeta_adj = wrap_around(zeta, q0);
+    let d_zeta = zeta_adj - q0;
+    let energy = 0.5 * k * d_zeta * d_zeta;
+    // dE/dλ = ½·λ_d·[-2·K·q_d·Δ + K_d·Δ²]
+    let de_dl = 0.5 * lambda_derivative * (-2.0 * k * q_d * d_zeta + k_d * d_zeta * d_zeta);
+    (energy, -k * d_zeta, de_dl, zeta_adj)
 }
 
 // ─── Perturbed proper dihedral ────────────────────────────────────────────────
@@ -549,21 +613,25 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
 
         let cos_phi = (r_im.dot(r_ln) / (d_im * d_ln)).clamp(-1.0, 1.0);
 
-        // Compute state A energy and force vectors
-        let (cos_m_phi_a, d_cos_m_phi_a) = chebyshev(pa.m, cos_phi);
-        let e_a = pa.k * (1.0 + pa.cospd * cos_m_phi_a);
-        let k_ia = -pa.k * pa.cospd * d_cos_m_phi_a / d_im;
-        let k_la = -pa.k * pa.cospd * d_cos_m_phi_a / d_ln;
+        let t = perturbed_dihedral_term(
+            cos_phi,
+            (pa.k, pa.cospd, pa.m),
+            (pb.k, pb.cospd, pb.m),
+            lambda,
+            lambda_derivative,
+        );
+
+        // State A force vectors
+        let k_ia = t.g_a / d_im;
+        let k_la = t.g_a / d_ln;
         let f_ia = r_ln * (k_ia / d_ln) - r_im * (k_ia * cos_phi / d_im);
         let f_la = r_im * (k_la / d_im) - r_ln * (k_la * cos_phi / d_ln);
         let f_ja = f_ia * (f_rim - 1.0) - f_la * f_rln;
         let f_ka = -(f_ia + f_ja + f_la);
 
-        // Compute state B energy and force vectors
-        let (cos_m_phi_b, d_cos_m_phi_b) = chebyshev(pb.m, cos_phi);
-        let e_b = pb.k * (1.0 + pb.cospd * cos_m_phi_b);
-        let k_ib = -pb.k * pb.cospd * d_cos_m_phi_b / d_im;
-        let k_lb = -pb.k * pb.cospd * d_cos_m_phi_b / d_ln;
+        // State B force vectors
+        let k_ib = t.g_b / d_im;
+        let k_lb = t.g_b / d_ln;
         let f_ib = r_ln * (k_ib / d_ln) - r_im * (k_ib * cos_phi / d_im);
         let f_lb = r_im * (k_lb / d_im) - r_ln * (k_lb * cos_phi / d_ln);
         let f_jb = f_ib * (f_rim - 1.0) - f_lb * f_rln;
@@ -572,7 +640,7 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
         // Combine
         let w_a = 1.0 - lambda;
         let w_b = lambda;
-        let e_term = w_a * e_a + w_b * e_b;
+        let e_term = t.energy;
         result.energy += e_term;
         if GROUPS {
             e_group[topo.atom_to_energy_group[dih.i]] += e_term;
@@ -588,20 +656,66 @@ pub(crate) fn calculate_perturbed_dihedral_forces_grouped<const GROUPS: bool>(
             (r_lj, f_la * w_a + f_lb * w_b),
         ]);
 
-        let de_term = lambda_derivative * (e_b - e_a);
+        let de_term = t.de_dl;
         result.lambda_derivative += de_term;
         if GROUPS {
             d_group[topo.atom_to_energy_group[dih.i]] += de_term;
         }
         // gromosXX perturbed_dihedral_interaction.cc:270-276
         if let Some(pc) = precalc.as_deref_mut() {
-            pc.a_dihedral += e_a;
-            pc.b_dihedral += e_b;
-            pc.d_a_dihedral += e_b - e_a;
+            pc.a_dihedral += t.e_a;
+            pc.b_dihedral += t.e_b;
+            pc.d_a_dihedral += t.e_b - t.e_a;
         }
     }
 
     result
+}
+
+/// The λ-dependent scalars of one perturbed proper dihedral at `cos φ`.
+#[derive(Debug, Clone, Copy)]
+pub struct PerturbedDihedralTerm {
+    /// `E_A = K_A·(1 + cos δ_A·cos(m_A φ))`.
+    pub e_a: f64,
+    /// `E_B`.
+    pub e_b: f64,
+    /// `−K_A·cos δ_A·d cos(m_A φ)/d cos φ`, the state-A force factor.
+    pub g_a: f64,
+    /// The state-B force factor.
+    pub g_b: f64,
+    /// `(1 − λ)·E_A + λ·E_B`.
+    pub energy: f64,
+    /// `λ′·(E_B − E_A)`.
+    pub de_dl: f64,
+}
+
+/// One perturbed proper dihedral at `cos_phi`, each state `(K, cos δ, m)`.
+///
+/// spec: bonded.perturbed_dihedral_term
+#[inline]
+pub fn perturbed_dihedral_term(
+    cos_phi: f64,
+    a: (f64, f64, i32),
+    b: (f64, f64, i32),
+    lambda: f64,
+    lambda_derivative: f64,
+) -> PerturbedDihedralTerm {
+    let (cos_m_phi_a, d_cos_m_phi_a) = chebyshev(a.2, cos_phi);
+    let e_a = a.0 * (1.0 + a.1 * cos_m_phi_a);
+    let g_a = -a.0 * a.1 * d_cos_m_phi_a;
+    let (cos_m_phi_b, d_cos_m_phi_b) = chebyshev(b.2, cos_phi);
+    let e_b = b.0 * (1.0 + b.1 * cos_m_phi_b);
+    let g_b = -b.0 * b.1 * d_cos_m_phi_b;
+    let w_a = 1.0 - lambda;
+    let w_b = lambda;
+    PerturbedDihedralTerm {
+        e_a,
+        e_b,
+        g_a,
+        g_b,
+        energy: w_a * e_a + w_b * e_b,
+        de_dl: lambda_derivative * (e_b - e_a),
+    }
 }
 
 // ─── Soft-core perturbed harmonic bond ───────────────────────────────────────
@@ -656,8 +770,6 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
             (None, None) => continue,
         };
 
-        let r0 = (1.0 - lambda) * r0_a + lambda * r0_b;
-        let b_diff = r0_b - r0_a;
         let alpha = sb.alpha;
 
         let v = pbc.nearest_image(conf.current().pos[sb.i], conf.current().pos[sb.j]);
@@ -665,19 +777,9 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
         if dist < 1e-10 {
             continue;
         }
-        let diff = dist - r0;
-        let diff2 = diff * diff;
-
-        let s_a = 1.0 + alpha * lambda * diff2;
-        let s_b = 1.0 + alpha * (1.0 - lambda) * diff2;
-        let s_a2 = s_a * s_a;
-        let s_b2 = s_b * s_b;
-
-        let k_eff = (1.0 - lambda) * k_a / s_a2 + lambda * k_b / s_b2;
-        let k_soft = (1.0 - lambda) * k_a / s_a + lambda * k_b / s_b;
-
-        let energy = 0.5 * k_soft * diff2;
-        let f_i = v * (-k_eff * diff / dist);
+        let (energy, k_eff_diff, de_dl) =
+            soft_perturbed_term(dist, k_a, k_b, r0_a, r0_b, alpha, lambda, lambda_derivative);
+        let f_i = v * (-k_eff_diff / dist);
         result.energy += energy;
         if GROUPS {
             e_group[topo.atom_to_energy_group[sb.i]] += energy;
@@ -686,12 +788,6 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
         result.forces[sb.j] -= f_i;
         result.add_virial(&[(v, f_i)]);
 
-        // dE/dλ (GROMOS `e_lambda` formula)
-        let st1 = 1.0 + alpha * diff2;
-        let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * b_diff;
-        let de_dl = lambda_derivative
-            * (0.5 * diff2 * (k_a / s_a2 * (-st1 - st2) + k_b / s_b2 * (st1 - st2))
-                - k_soft * diff * b_diff);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[sb.i]] += de_dl;
@@ -702,6 +798,46 @@ pub(crate) fn calculate_soft_bond_forces_grouped<const GROUPS: bool>(
     }
 
     result
+}
+
+/// One soft-core perturbed harmonic term in the coordinate `x` (a bond length, `cos θ` or an
+/// improper angle): `(energy, K_eff·Δ, dE/dλ)` with `x0(λ)` mixed linearly, `Δ = x − x0(λ)`,
+/// `S_A = 1 + α·λ·Δ²`, `S_B = 1 + α·(1 − λ)·Δ²`, `E = ½·[(1 − λ)·K_A/S_A + λ·K_B/S_B]·Δ²`;
+/// `K_eff·Δ = ∂E/∂x` with `K_eff = (1 − λ)·K_A/S_A² + λ·K_B/S_B²`, and the derivative is gromosXX's
+/// `e_lambda` formula.
+///
+/// spec: bonded.soft_perturbed_term
+#[inline]
+pub fn soft_perturbed_term(
+    x: f64,
+    k_a: f64,
+    k_b: f64,
+    x0_a: f64,
+    x0_b: f64,
+    alpha: f64,
+    lambda: f64,
+    lambda_derivative: f64,
+) -> (f64, f64, f64) {
+    let x0 = (1.0 - lambda) * x0_a + lambda * x0_b;
+    let x0_diff = x0_b - x0_a;
+    let diff = x - x0;
+    let diff2 = diff * diff;
+
+    let s_a = 1.0 + alpha * lambda * diff2;
+    let s_b = 1.0 + alpha * (1.0 - lambda) * diff2;
+    let s_a2 = s_a * s_a;
+    let s_b2 = s_b * s_b;
+
+    let k_eff = (1.0 - lambda) * k_a / s_a2 + lambda * k_b / s_b2;
+    let k_soft = (1.0 - lambda) * k_a / s_a + lambda * k_b / s_b;
+
+    let energy = 0.5 * k_soft * diff2;
+    let st1 = 1.0 + alpha * diff2;
+    let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * x0_diff;
+    let de_dl = lambda_derivative
+        * (0.5 * diff2 * (k_a / s_a2 * (-st1 - st2) + k_b / s_b2 * (st1 - st2))
+            - k_soft * diff * x0_diff);
+    (energy, k_eff * diff, de_dl)
 }
 
 // ─── Soft-core perturbed cos-harmonic angle ───────────────────────────────────
@@ -757,8 +893,6 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
             (None, None) => continue,
         };
 
-        let cos0 = (1.0 - lambda) * cos0_a + lambda * cos0_b;
-        let cos_diff = cos0_b - cos0_a;
         let alpha = sa.alpha;
 
         let rij = pbc.nearest_image(conf.current().pos[sa.i], conf.current().pos[sa.j]);
@@ -770,21 +904,19 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
         }
 
         let cost = (rij.dot(rkj) / (dij * dkj)).clamp(-1.0, 1.0);
-        let diff = cost - cos0;
-        let diff2 = diff * diff;
+        let (energy, k_eff_diff, de_dl) = soft_perturbed_term(
+            cost,
+            k_a,
+            k_b,
+            cos0_a,
+            cos0_b,
+            alpha,
+            lambda,
+            lambda_derivative,
+        );
 
-        let s_a = 1.0 + alpha * lambda * diff2;
-        let s_b = 1.0 + alpha * (1.0 - lambda) * diff2;
-        let s_a2 = s_a * s_a;
-        let s_b2 = s_b * s_b;
-
-        let k_eff = (1.0 - lambda) * k_a / s_a2 + lambda * k_b / s_b2;
-        let k_soft = (1.0 - lambda) * k_a / s_a + lambda * k_b / s_b;
-
-        let energy = 0.5 * k_soft * diff2;
-
-        let f_i = (rkj / dkj - rij / dij * cost) * (-k_eff * diff / dij);
-        let f_k = (rij / dij - rkj / dkj * cost) * (-k_eff * diff / dkj);
+        let f_i = (rkj / dkj - rij / dij * cost) * (-k_eff_diff / dij);
+        let f_k = (rij / dij - rkj / dkj * cost) * (-k_eff_diff / dkj);
         let f_j = -(f_i + f_k);
         result.energy += energy;
         if GROUPS {
@@ -795,11 +927,6 @@ pub(crate) fn calculate_soft_angle_forces_grouped<const GROUPS: bool>(
         result.forces[sa.k] += f_k;
         result.add_virial(&[(rij, f_i), (rkj, f_k)]);
 
-        let st1 = 1.0 + alpha * diff2;
-        let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * cos_diff;
-        let de_dl = lambda_derivative
-            * (0.5 * diff2 * (k_a / s_a2 * (-st1 - st2) + k_b / s_b2 * (st1 - st2))
-                - k_soft * diff * cos_diff);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[sa.i]] += de_dl;
@@ -865,8 +992,6 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
             (None, None) => continue,
         };
 
-        let q0 = (1.0 - lambda) * q0_a + lambda * q0_b;
-        let q_diff = q0_b - q0_a;
         let alpha = si.alpha;
 
         // Same geometry as calculate_improper_dihedral_forces
@@ -894,28 +1019,20 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
             zeta = -zeta;
         }
 
-        let mut zeta_adj = zeta;
-        while zeta_adj < q0 - std::f64::consts::PI {
-            zeta_adj += 2.0 * std::f64::consts::PI;
-        }
-        while zeta_adj > q0 + std::f64::consts::PI {
-            zeta_adj -= 2.0 * std::f64::consts::PI;
-        }
+        let q0 = (1.0 - lambda) * q0_a + lambda * q0_b;
+        let zeta_adj = wrap_around(zeta, q0);
+        let (energy, k_eff_diff, de_dl) = soft_perturbed_term(
+            zeta_adj,
+            k_a,
+            k_b,
+            q0_a,
+            q0_b,
+            alpha,
+            lambda,
+            lambda_derivative,
+        );
 
-        let diff = zeta_adj - q0;
-        let diff2 = diff * diff;
-
-        let s_a = 1.0 + alpha * lambda * diff2;
-        let s_b = 1.0 + alpha * (1.0 - lambda) * diff2;
-        let s_a2 = s_a * s_a;
-        let s_b2 = s_b * s_b;
-
-        let k_eff = (1.0 - lambda) * k_a / s_a2 + lambda * k_b / s_b2;
-        let k_soft = (1.0 - lambda) * k_a / s_a + lambda * k_b / s_b;
-
-        let energy = 0.5 * k_soft * diff2;
-
-        let fac = k_eff * diff * d_kj;
+        let fac = k_eff_diff * d_kj;
         let kj1 = r_ij.dot(r_kj) / d_kj2 - 1.0;
         let kj2 = r_kl.dot(r_kj) / d_kj2;
 
@@ -934,11 +1051,6 @@ pub(crate) fn calculate_soft_improper_forces_grouped<const GROUPS: bool>(
         let r_lj = pbc.nearest_image(conf.current().pos[si.l], conf.current().pos[si.j]);
         result.add_virial(&[(r_ij, f_i), (r_kj, f_k), (r_lj, f_l)]);
 
-        let st1 = 1.0 + alpha * diff2;
-        let st2 = -2.0 * alpha * lambda * (1.0 - lambda) * diff * q_diff;
-        let de_dl = lambda_derivative
-            * (0.5 * diff2 * (k_a / s_a2 * (-st1 - st2) + k_b / s_b2 * (st1 - st2))
-                - k_soft * diff * q_diff);
         result.lambda_derivative += de_dl;
         if GROUPS {
             d_group[topo.atom_to_energy_group[si.i]] += de_dl;
