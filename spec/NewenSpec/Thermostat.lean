@@ -124,13 +124,21 @@ theorem freeTempModel_real {kB eps ekin dof temperature : ℝ} (hdof : 0 < dof)
   simp [freeTempModel, hdof, not_lt.mpr hft]
 
 /-- Coupled Berendsen (`τ > 0`) over ℝ is the theory's `berendsenScale` of the bath
-temperature `2·E_kin / (N_df·k_B)`, once the fallbacks are ruled out. -/
+temperature `T = 2·E_kin / (N_df·k_B)`, once the fallbacks are ruled out, and its square is the
+radicand `1 + dt/τ · (T₀/T − 1)`. The radicand must not be negative (`hr`): below it Rust and
+`Float` return NaN, while `Real.sqrt` returns `0`. -/
 theorem berendsenModel_real_eq {kB eps ekin dof temperature tau dt : ℝ} (hτ : 0 < tau)
-    (hdof : 0 < dof) (hft : eps ≤ 2 * ekin / (dof * kB)) :
+    (hdof : 0 < dof) (hft : eps ≤ 2 * ekin / (dof * kB))
+    (hr : 0 ≤ 1 + dt / tau * (temperature / (2 * ekin / (dof * kB)) - 1)) :
     berendsenModel ℝ kB eps ekin dof temperature tau dt =
+        berendsenScale (2 * ekin / (dof * kB)) temperature dt tau ∧
+      berendsenModel ℝ kB eps ekin dof temperature tau dt ^ 2 =
+        1 + dt / tau * (temperature / (2 * ekin / (dof * kB)) - 1) := by
+  have h : berendsenModel ℝ kB eps ekin dof temperature tau dt =
       berendsenScale (2 * ekin / (dof * kB)) temperature dt tau := by
-  simp [berendsenModel, freeTempModel_real hdof hft, not_lt.mpr hτ.le, not_lt.mpr hft,
-    hτ.ne', berendsenScale, Sqrt.sqrt]
+    simp [berendsenModel, freeTempModel_real hdof hft, not_lt.mpr hτ.le, not_lt.mpr hft,
+      hτ.ne', berendsenScale, Sqrt.sqrt]
+  exact ⟨h, by rw [h, berendsenScale, Real.sq_sqrt hr]⟩
 
 /-- `τ = 0` over ℝ: instantaneous scaling to the reference temperature,
 `λ = sqrt(T₀ / T)`. -/

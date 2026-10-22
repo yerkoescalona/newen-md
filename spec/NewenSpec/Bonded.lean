@@ -287,7 +287,7 @@ def halfFloat : Float := Float.ofBits 0x3fe0000000000000
 def piFloat : Float := Float.ofBits 0x400921fb54442d18
 
 /-- How often `improperFloat` may turn ζ by 2π in each direction; one turn suffices for
-`|ζ0| ≤ π`, since `ζ ∈ [−π, π]`. -/
+`|ζ0| ≤ π`, since `ζ ∈ [−π, π]`, and `improperModel_real_eq` covers every `|ζ0| ≤ 128 π`. -/
 def wrapFuel : Nat := 64
 
 def quarticBondFloat (r : Vec3 Float) (k b0 : Float) : Float × Vec3 Float :=
@@ -321,8 +321,10 @@ def improperFloat (rij rkj rkl : Vec3 Float) (k zeta0 : Float) :
 Outside the guards, every model at ℝ returns the theory's energy (`quarticBond`, `cosineAngle`,
 `dihedral`, …) at the theory's geometry (`len`, `cosAngle`, `cosDihedral`, `signedDihedral`,
 `improperAngle`) and the theory's force expressions (`radialForce`, `cosineAngleForces`,
-`chebyshevForces`, …), about which `NewenTheory/Interactions/Bonded.lean` proves
-force = −∇energy and the conservation laws. Over ℝ the clamps never act (`cos_between_mem`). -/
+`chebyshevForces`, …), about which `NewenTheory/Interactions/Bonded.lean` proves the conservation
+laws (the zero torque; the zero sum holds by construction) and, for the bonds, the angles and the
+Chebyshev dihedral's `f_i` and `f_l`, force = −∇energy. The other dihedral forces are checked only
+by finite differences of the Rust against itself. Over ℝ the clamps never act (`cos_between_mem`). -/
 
 open NewenTheory.Interactions.Bonded.V3 (len len_sq cos_between_mem)
 
@@ -397,13 +399,73 @@ theorem cosMultipleModel_real {m : Nat} (hm : m ≤ 6) (c : ℝ) :
     refine ⟨?_, ?_⟩ <;> first | trivial | ring
   | n + 7, h => exact absurd h (by omega)
 
-/-- The two `while` loops do nothing when `ζ` is already in `[lo, hi]`. -/
-theorem wrap_real_of_mem (fuel : Nat) {lo hi step z : ℝ} (hlo : lo ≤ z) (hhi : z ≤ hi) :
-    wrapDown ℝ fuel hi step (wrapUp ℝ fuel lo step z) = z := by
-  have hu : wrapUp ℝ fuel lo step z = z := by
-    cases fuel <;> simp [wrapUp, not_lt.mpr hlo]
-  rw [hu]
-  cases fuel <;> simp [wrapDown, not_lt.mpr hhi]
+/-- `while z < lo { z += step }` over ℝ, with enough fuel (`lo − z ≤ step · fuel`): it adds the
+fewest steps that reach `lo`. -/
+theorem wrapUp_real {lo step : ℝ} (hs : 0 < step) :
+    ∀ (fuel : Nat) (z : ℝ), lo - z ≤ step * fuel →
+      wrapUp ℝ fuel lo step z = if z < lo then z + step * ⌈(lo - z) / step⌉ else z
+  | 0, z, h => by
+    have : ¬ z < lo := by simp at h; linarith
+    simp [wrapUp, this]
+  | fuel + 1, z, h => by
+    by_cases hz : z < lo
+    · simp only [wrapUp, hz, ite_true]
+      rw [wrapUp_real hs fuel (z + step) (by push_cast at h; linarith)]
+      by_cases hz2 : z + step < lo
+      · have hx : (lo - (z + step)) / step = (lo - z) / step - 1 := by field_simp; ring
+        simp only [hz2, ite_true, hx, Int.ceil_sub_one]
+        push_cast
+        ring
+      · have hc : ⌈(lo - z) / step⌉ = 1 := by
+          rw [Int.ceil_eq_iff]
+          constructor
+          · norm_num; exact div_pos (by linarith) hs
+          · norm_num; rw [div_le_one hs]; linarith
+        simp [hz2, hc]
+    · simp [wrapUp, hz]
+
+/-- `while z > hi { z -= step }` over ℝ, with enough fuel (`z − hi ≤ step · fuel`): it removes
+the fewest steps that reach `hi`. -/
+theorem wrapDown_real {hi step : ℝ} (hs : 0 < step) :
+    ∀ (fuel : Nat) (z : ℝ), z - hi ≤ step * fuel →
+      wrapDown ℝ fuel hi step z = if hi < z then z - step * ⌈(z - hi) / step⌉ else z
+  | 0, z, h => by
+    have : ¬ hi < z := by simp at h; linarith
+    simp [wrapDown, this]
+  | fuel + 1, z, h => by
+    by_cases hz : hi < z
+    · simp only [wrapDown, hz, ite_true]
+      rw [wrapDown_real hs fuel (z - step) (by push_cast at h; linarith)]
+      by_cases hz2 : hi < z - step
+      · have hx : (z - step - hi) / step = (z - hi) / step - 1 := by field_simp; ring
+        simp only [hz2, ite_true, hx, Int.ceil_sub_one]
+        push_cast
+        ring
+      · have hc : ⌈(z - hi) / step⌉ = 1 := by
+          rw [Int.ceil_eq_iff]
+          constructor
+          · norm_num; exact div_pos (by linarith) hs
+          · norm_num; rw [div_le_one hs]; linarith
+        simp [hz2, hc]
+    · simp [wrapDown, hz]
+
+/-- **The two `while` loops compute `wrapZeta`** over ℝ, for every `ζ` within
+`(2 · fuel + 1) π` of `ζ0`: each loop then has the turns it needs. -/
+theorem wrap_real_eq_wrapZeta (fuel : Nat) {zeta0 zeta : ℝ}
+    (hfuel : |zeta - zeta0| ≤ (2 * fuel + 1) * Real.pi) :
+    wrapDown ℝ fuel (zeta0 + Real.pi) (2 * Real.pi)
+        (wrapUp ℝ fuel (zeta0 - Real.pi) (2 * Real.pi) zeta) = wrapZeta zeta0 zeta := by
+  have hp := Real.pi_pos
+  have h2p : (0 : ℝ) < 2 * Real.pi := by positivity
+  rw [abs_le] at hfuel
+  rw [wrapUp_real h2p fuel zeta (by nlinarith)]
+  by_cases h1 : zeta < zeta0 - Real.pi
+  · have hm := (wrapZeta_mem zeta0 zeta).2
+    simp only [wrapZeta, h1, ite_true] at hm ⊢
+    cases fuel <;> simp [wrapDown, not_lt.mpr hm]
+  · simp only [h1, ite_false]
+    rw [wrapDown_real h2p fuel zeta (by nlinarith)]
+    simp only [wrapZeta, h1, ite_false]
 
 /-- A quartic bond over ℝ, `0.25` as `1/4`: the theory's energy `quarticBond` at `b = |r|` and the
 force `radialForce (dV/db) r`, which is `−∇V` (`quarticBond_force_is_minus_grad`). -/
@@ -443,7 +505,9 @@ theorem cosineAngleModel_real_eq {guard : ℝ} (rij rkj : Vec3 ℝ) (k cos0 : �
   refine ⟨by ring, ?_, ?_, ?_⟩ <;> ext <;> simp <;> ring
 
 /-- A harmonic angle over ℝ with both bonds not below the guard and `|sin θ|` not below the sine
-guard: the theory's `harmonicAngle` at `θ = arccos(cos θ)` and `harmonicAngleForces`. -/
+guard: the theory's `harmonicAngle` at `θ = arccos(cos θ)` and `harmonicAngleForces`, which are
+`−∇V` (`harmonicAngle_force_is_minus_grad`).
+Excluded: the linear branch `|sin θ| < ZERO_SINE` (`K (1 + cos θ)` if `θ0 ≈ π`, else zero). -/
 theorem harmonicAngleModel_real_eq {guard sineGuard pi : ℝ} (rij rkj : Vec3 ℝ) (k theta0 : ℝ)
     (hij : guard ≤ len rij.toV3) (hkj : guard ≤ len rkj.toV3)
     (hs : sineGuard ≤ |Real.sin (Real.arccos (cosAngle rij.toV3 rkj.toV3))|) :
@@ -495,7 +559,8 @@ theorem dihedralChebyshevModel_real_eq {guard guard2 : ℝ} (rij rkj rkl : Vec3 
 
 /-- The NTBDN = 0 dihedral over ℝ outside the guards (`|r_kj|`, `|r_im|`, `|r_ln|`, neither bond
 angle linear): the theory's `dihedralNew` at the signed `φ` and `newDihedralForces`, which conserve
-momentum and angular momentum (`newDihedral_conservation`). -/
+momentum and angular momentum (`newDihedral_conservation`).
+Excluded: the near-linear branches `|r_mj|² or |r_nk|² ≤ NEAR_LINEAR·|r_kj|²` (`f_i`, `f_l` dropped). -/
 theorem dihedralNewModel_real_eq {guard nearLinear : ℝ} (rij rkj rkl : Vec3 ℝ) (k delta m : ℝ)
     (hkj : guard ≤ len rkj.toV3)
     (him : guard ≤ len (perpI rij.toV3 rkj.toV3)) (hln : guard ≤ len (perpL rkj.toV3 rkl.toV3))
@@ -527,22 +592,22 @@ theorem dihedralNewModel_real_eq {guard nearLinear : ℝ} (rij rkj rkl : Vec3 �
     refine ⟨trivial, ?_, ?_, ?_, ?_⟩ <;> ext <;> simp <;> ring
 
 /-- The improper dihedral over ℝ outside the guards (both normals not below the guard, neither
-bond angle linear), with `ζ` already in `[ζ0 − π, ζ0 + π]` (always so for `ζ0 = 0`): the theory's
-`improper` at `ζ` and `improperForces`, which conserve momentum and angular momentum
+bond angle linear), for every `ζ0` the fuel reaches (`|ζ0| ≤ 2 · fuel · π`; at the `Float` fuel 64,
+`|ζ0| ≤ 128 π`): the theory's `improper` and `improperForces` at the wrapped angle
+`wrapZeta ζ0 ζ` (`wrap_real_eq_wrapZeta`), which conserve momentum and angular momentum
 (`improper_conservation`). -/
 theorem improperModel_real_eq {guard2 nearLinear : ℝ} (fuel : Nat) (rij rkj rkl : Vec3 ℝ)
     (k zeta0 : ℝ)
     (hmj : guard2 ≤ len (V3.cross rij.toV3 rkj.toV3))
     (hnk : guard2 ≤ len (V3.cross rkj.toV3 rkl.toV3))
-    (hlo : zeta0 - Real.pi ≤ improperAngle rij.toV3 rkj.toV3 rkl.toV3)
-    (hhi : improperAngle rij.toV3 rkj.toV3 rkl.toV3 ≤ zeta0 + Real.pi)
+    (hfuel : |zeta0| ≤ 2 * fuel * Real.pi)
     (hmj2 : nearLinear * V3.dot rkj.toV3 rkj.toV3 ≤
       V3.dot (V3.cross rij.toV3 rkj.toV3) (V3.cross rij.toV3 rkj.toV3))
     (hnk2 : nearLinear * V3.dot rkj.toV3 rkj.toV3 ≤
       V3.dot (V3.cross rkj.toV3 rkl.toV3) (V3.cross rkj.toV3 rkl.toV3)) :
     out4 (improperModel ℝ guard2 nearLinear (1 / 2) Real.pi fuel rij rkj rkl k zeta0) =
-      (improper k zeta0 (improperAngle rij.toV3 rkj.toV3 rkl.toV3),
-        improperForces k zeta0 (improperAngle rij.toV3 rkj.toV3 rkl.toV3)
+      (improper k zeta0 (wrapZeta zeta0 (improperAngle rij.toV3 rkj.toV3 rkl.toV3)),
+        improperForces k zeta0 (wrapZeta zeta0 (improperAngle rij.toV3 rkj.toV3 rkl.toV3))
           rij.toV3 rkj.toV3 rkl.toV3) := by
   have hc : clampUnit ℝ (V3.dot (V3.cross rij.toV3 rkj.toV3) (V3.cross rkj.toV3 rkl.toV3) /
       (len (V3.cross rij.toV3 rkj.toV3) * len (V3.cross rkj.toV3 rkl.toV3))) =
@@ -560,10 +625,19 @@ theorem improperModel_real_eq {guard2 nearLinear : ℝ} (fuel : Nat) (rij rkj rk
       else Real.arccos (cosAngle (V3.cross rij.toV3 rkj.toV3) (V3.cross rkj.toV3 rkl.toV3))) =
       improperAngle rij.toV3 rkj.toV3 rkl.toV3 := by
     unfold improperAngle; split_ifs <;> rfl
+  -- `ζ ∈ [−π, π]`, so `|ζ − ζ0| ≤ (2 · fuel + 1) π`
+  have hrange : |improperAngle rij.toV3 rkj.toV3 rkl.toV3 - zeta0| ≤ (2 * fuel + 1) * Real.pi := by
+    have h0 := Real.arccos_nonneg (cosAngle (V3.cross rij.toV3 rkj.toV3) (V3.cross rkj.toV3 rkl.toV3))
+    have hπ := Real.arccos_le_pi (cosAngle (V3.cross rij.toV3 rkj.toV3) (V3.cross rkj.toV3 rkl.toV3))
+    have hz : |improperAngle rij.toV3 rkj.toV3 rkl.toV3| ≤ Real.pi := by
+      unfold improperAngle; split_ifs <;> rw [abs_le] <;> constructor <;> linarith
+    calc |improperAngle rij.toV3 rkj.toV3 rkl.toV3 - zeta0|
+        ≤ |improperAngle rij.toV3 rkj.toV3 rkl.toV3| + |zeta0| := abs_sub _ _
+      _ ≤ (2 * fuel + 1) * Real.pi := by linarith
   simp only [improperModel, sqrt_dot_eq, toV3_cross]
   simp only [hg, ite_false, hmj2', hnk2']
   simp only [dot_eq, toV3_cross, hc, Acos.acos]
-  simp only [hζ, wrap_real_of_mem fuel hlo hhi]
+  simp only [hζ, wrap_real_eq_wrapZeta fuel hrange]
   simp only [out4, improperForces, fourBody, improper, Prod.mk.injEq]
   refine ⟨by ring, ?_, ?_, ?_, ?_⟩ <;> ext <;> simp <;> ring
 

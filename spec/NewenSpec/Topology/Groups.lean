@@ -13,7 +13,8 @@ Theory: `NewenTheory/Topology/Groups.lean` (`groupOf`, `LastAtomsOk`, `energyCel
    the last entry.
 2. The *bridges*: `group_of` is the theory's least index (`groupOfModel_eq`),
    `check_last_atoms` accepts exactly the lists that partition the atoms
-   (`checkLastAtomsModel_iff`), `energy_cell` is the row-major cell (`energyCellModel_eq`); and
+   (`checkLastAtomsModel_iff`) and reports each refusal in the Rust's check order
+   (`checkLastAtomsModel_empty_iff`, `_notIncreasing_iff`, `_lastNotFinal_iff`), `energy_cell` is the row-major cell (`energyCellModel_eq`); and
    `thermo.bath.baths_of` is the same lookup on the DOFSET ranges (`bathsOf_eq_groupOf`).
 
 The Aeneas refinements (Rust = model) are in `NewenSpec/Refinement.lean`. Core Lean only.
@@ -151,6 +152,122 @@ theorem checkLastAtomsModel_iff (L : List Nat) (n : Nat) :
         simpa [show k - 1 + 1 = k by omega] using this)
       omega
     simp [show L.length ≠ 0 by omega, hd, show n ≠ 0 by omega, hl]
+
+/-- Every index the loop passes is an ascent. -/
+theorem firstDescentFrom_asc (L : List Nat) (g : Nat) :
+    ∀ k (hk : k < L.length), g ≤ k → k < firstDescentFrom L g → L[k - 1] < L[k] := by
+  intro k hk hgk hkd
+  rw [firstDescentFrom] at hkd
+  by_cases h : g < L.length
+  · simp only [h, dite_true] at hkd
+    by_cases hd : L[g - 1] < L[g]
+    · simp only [hd, ite_true] at hkd
+      by_cases e : k = g
+      · subst e; exact hd
+      · exact firstDescentFrom_asc L (g + 1) k hk (by omega) hkd
+    · simp only [hd, ite_false] at hkd; omega
+  · simp only [h, dite_false] at hkd; omega
+termination_by L.length - g
+
+/-- Where the loop stops inside the list, the entry does not exceed its predecessor. -/
+theorem firstDescentFrom_desc (L : List Nat) (g d : Nat) (e : firstDescentFrom L g = d)
+    (hd : d < L.length) : ¬ L[d - 1] < L[d] := by
+  rw [firstDescentFrom] at e
+  by_cases hg : g < L.length
+  · simp only [hg, dite_true] at e
+    by_cases ha : L[g - 1] < L[g]
+    · simp only [ha, ite_true] at e
+      exact firstDescentFrom_desc L (g + 1) d e hd
+    · simp only [ha, ite_false] at e
+      subst e
+      exact ha
+  · simp only [hg, dite_false] at e
+    omega
+termination_by L.length - g
+
+/-- **`check_last_atoms` reports `Empty` exactly for the empty list.** -/
+theorem checkLastAtomsModel_empty_iff (L : List Nat) (n : Nat) :
+    checkLastAtomsModel L n = .empty ↔ L = [] := by
+  unfold checkLastAtomsModel
+  by_cases h0 : L.length = 0
+  · simp [List.length_eq_zero_iff.mp h0]
+  · have : L ≠ [] := fun e => h0 (by simp [e])
+    simp only [h0, dite_false, this, iff_false]
+    repeat' split
+    all_goals simp
+
+/-- **`check_last_atoms` reports `NotIncreasing g` exactly when `g` is the first index whose entry
+does not exceed its predecessor** (`1 ≤ g`, `L[g − 1] ≥ L[g]`, ascents before it). -/
+theorem checkLastAtomsModel_notIncreasing_iff (L : List Nat) (n g : Nat) :
+    checkLastAtomsModel L n = .notIncreasing g ↔
+      ∃ hg : g < L.length, 1 ≤ g ∧ L[g] ≤ L[g - 1] ∧
+        ∀ k (hk : k < g), 1 ≤ k → L[k - 1] < L[k] := by
+  have hasc := firstDescentFrom_asc L 1
+  have hge := firstDescentFrom_ge L 1
+  unfold checkLastAtomsModel
+  by_cases h0 : L.length = 0
+  · simp only [h0, dite_true, reduceCtorEq, false_iff]
+    intro ⟨hg, _⟩; omega
+  · simp only [h0, dite_false]
+    by_cases hd : firstDescentFrom L 1 < L.length
+    · have hdesc := firstDescentFrom_desc L 1 _ rfl hd
+      simp only [hd, ite_true, LastAtomsCheck.notIncreasing.injEq]
+      constructor
+      · rintro rfl
+        exact ⟨hd, hge, Nat.le_of_not_lt hdesc,
+          fun k hk hk1 => hasc k (by omega) hk1 hk⟩
+      · rintro ⟨hg, hg1, hle, hbefore⟩
+        apply Nat.le_antisymm
+        · apply Nat.le_of_not_lt
+          intro hlt
+          exact absurd (hasc g hg hg1 hlt) (Nat.not_lt_of_le hle)
+        · apply Nat.le_of_not_lt
+          intro hlt
+          exact hdesc (hbefore _ hlt hge)
+    · simp only [hd, ite_false]
+      constructor
+      · intro h
+        revert h
+        repeat' split
+        all_goals simp
+      · rintro ⟨hg, hg1, hle, _⟩
+        exact absurd (hasc g hg hg1 (by omega)) (Nat.not_lt_of_le hle)
+
+/-- **`check_last_atoms` reports `LastNotFinal` exactly for a non-empty, strictly increasing
+list whose last entry is not `n − 1`** (or `n = 0`): the third check, after the first two
+passed. -/
+theorem checkLastAtomsModel_lastNotFinal_iff (L : List Nat) (n : Nat) :
+    checkLastAtomsModel L n = .lastNotFinal ↔
+      0 < L.length ∧ (∀ k (hk : k < L.length), 1 ≤ k → L[k - 1] < L[k]) ∧
+        (n = 0 ∨ L.getLast? ≠ some (n - 1)) := by
+  have spec := firstDescentFrom_spec L 1 (Nat.le_refl 1)
+  unfold checkLastAtomsModel
+  by_cases h0 : L.length = 0
+  · simp [h0]
+  · simp only [h0, dite_false]
+    have hlast : L.getLast? = some L[L.length - 1] := by
+      rw [List.getLast?_eq_getElem?, List.getElem?_eq_getElem]
+    by_cases hd : firstDescentFrom L 1 < L.length
+    · simp only [hd, ite_true, reduceCtorEq, false_iff]
+      intro ⟨_, hinc, _⟩
+      have := spec.mpr hinc
+      omega
+    · have hinc := spec.mp (by omega)
+      simp only [hd, ite_false]
+      constructor
+      · intro h
+        refine ⟨by omega, hinc, ?_⟩
+        by_cases hn : n = 0
+        · exact Or.inl hn
+        · right
+          rw [hlast]
+          intro e
+          simp only [Option.some.injEq] at e
+          simp [hn, e] at h
+      · rintro ⟨_, _, hn | hl⟩
+        · simp [hn]
+        · have : L[L.length - 1] ≠ n - 1 := fun e => hl (by rw [hlast, e])
+          by_cases hn : n = 0 <;> simp [hn, this]
 
 /-- **`energy_cell` is the row-major cell of two groups in range.** -/
 theorem energyCellModel_eq (i j n : Nat) :

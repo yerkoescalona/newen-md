@@ -39,8 +39,9 @@ rule `∂V/∂Λ · Λ′ + ∂V/∂Λₛ · Λₛ′`; with `Λ = Λₛ = λ` i
 (`softcore_dvdl_is_deriv_lj_plain`, `softcore_dvdl_is_deriv_crf_plain`).
 
 As in the other interaction files, the force of a pair is the scalar `−∂V/∂r / r`
-(`softcore_force_is_minus_grad`). Everything here is over ℝ; how newen computes it in binary64 is
-in `NewenSpec/SoftCore.lean`.
+(`softcore_force_is_minus_grad`; `softcore_rf_excluded_force_is_minus_grad` for an excluded
+pair). Everything here is over ℝ; how newen computes it in binary64 is in
+`NewenSpec/SoftCore.lean`.
 -/
 
 @[expose] public section
@@ -410,6 +411,28 @@ theorem softcore_force_is_minus_grad (n : ℕ) (αlj αc cs fpe : ℝ) (A B : Lj
   have h := (hLA.add hLB).add ((hCA.add hCB).mul_const fpe)
   refine h.congr_deriv ?_
   simp only [pertLjForce, pertCrfForce]
+  ring
+
+/-- One state of the excluded pair: `−∂E/∂r = q · crf/√((R² + α s)³) · r`. -/
+theorem scRfExcl_force_is_minus_grad (αc q crf R s r : ℝ) :
+    HasDerivAt (fun r => scRfExclEnergy αc q crf R s r)
+      (-(q * (crf / Real.sqrt ((R ^ 2 + αc * s) ^ 3))) * r) r := by
+  have h := (((hasDerivAt_pow 2 r).const_mul
+    (-(crf / 2 / Real.sqrt ((R ^ 2 + αc * s) ^ 3)))).sub_const ((1 - crf / 2) / R)).const_mul q
+  refine h.congr_deriv ?_
+  push_cast
+  ring
+
+/-- **Force = −dV/dr** for the excluded perturbed pair: the scalar `pertRfExclForce` is
+`−∂V/∂r / r`, at every `r` and λ. -/
+theorem softcore_rf_excluded_force_is_minus_grad (n : ℕ) (αc fpe qA qB crf R L Ls r : ℝ) :
+    HasDerivAt (fun r => pertRfExclEnergy n αc fpe qA qB crf R r L Ls)
+      (-(pertRfExclForce n αc fpe qA qB crf R L Ls) * r) r := by
+  have hA := (scRfExcl_force_is_minus_grad αc qA crf R (Ls ^ 2) r).const_mul ((1 - L) ^ n)
+  have hB := (scRfExcl_force_is_minus_grad αc qB crf R ((1 - Ls) ^ 2) r).const_mul (L ^ n)
+  have h := (hA.add hB).mul_const fpe
+  refine h.congr_deriv ?_
+  simp only [pertRfExclForce]
   ring
 
 /-! ## End states -/

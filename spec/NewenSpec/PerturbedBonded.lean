@@ -1,4 +1,5 @@
 import NewenSpec.Float
+import NewenSpec.Bonded
 import NewenTheory.Interactions.PerturbedBonded
 
 /-!
@@ -9,7 +10,7 @@ Rust, all in `src/bonded/perturbed.rs` (spec keys in `spec/SPEC.toml`):
 * `bonded.perturbed_quartic_bond_term`: `perturbed_quartic_bond_term`;
 * `bonded.perturbed_angle_term`: `perturbed_angle_term` (cosine-harmonic);
 * `bonded.perturbed_improper_term`: `perturbed_improper_term`, with the wrap of `ζ` into
-  `[ζ0(λ) − π, ζ0(λ) + π]`;
+  `[ζ0(λ) − π, ζ0(λ) + π]` (the theory's `wrapZeta`, `wrapModel_real_eq`);
 * `bonded.chebyshev`, `bonded.perturbed_dihedral_term`: `cos(m φ)` as a polynomial in `cos φ`,
   and the proper dihedral that mixes the two states' energies;
 * `bonded.soft_perturbed_term`: `soft_perturbed_term`, the soft-core form of the bond, the angle
@@ -29,6 +30,8 @@ What is not proved: the rounding error between the two instantiations.
 namespace NewenSpec.PerturbedBonded
 
 open NewenTheory.Interactions.PerturbedBonded
+open NewenTheory.Interactions.Bonded (wrapZeta wrapZeta_sub_eq_int_mul wrapZeta_eq_of_abs_lt)
+open Filter Topology
 
 /-! ## 1. Model -/
 
@@ -70,7 +73,8 @@ def wrapDown (pi q0 : α) : Nat → α → α
   | 0, z => z
   | n + 1, z => if q0 + pi < z then wrapDown pi q0 n (z - 2 * pi) else z
 
-/-- `wrap_around(zeta, q0)`; the 64 turns of fuel are far more than any angle needs. -/
+/-- `wrap_around(zeta, q0)`; the 64 turns of fuel are far more than any angle needs
+(`wrapModel_real_eq` covers every `|ζ − ζ0| ≤ 129 π`). -/
 def wrapModel (pi zeta q0 : α) : α := wrapDown α pi q0 64 (wrapUp α pi q0 64 zeta)
 
 /-- `perturbed_improper_term(zeta, k_a, k_b, q0_a, q0_b, lambda, lambda_derivative)`:
@@ -195,14 +199,41 @@ theorem angleModel_real_eq (cost kA kB cA cB L dL : ℝ) :
     Prod.mk.injEq]
   refine ⟨?_, ?_, ?_⟩ <;> first | trivial | ring
 
-/-- The improper kernel over ℝ, at the wrapped angle `ζ` it returns. -/
-theorem improperModel_real_eq (pi zeta kA kB qA qB L dL : ℝ) :
-    let o := improperModel ℝ (1 / 2) pi zeta kA kB qA qB L dL
-    o.1 = pertHarmonicEnergy kA kB qA qB o.2.2.2 L ∧
-      o.2.1 = -mix kA kB L * (o.2.2.2 - mix qA qB L) ∧
-      o.2.2.1 = pertHarmonicDvdl kA kB qA qB o.2.2.2 L dL := by
-  simp only [improperModel, pertHarmonicEnergy, harmonicEnergy, pertHarmonicDvdl, mix]
-  refine ⟨?_, ?_, ?_⟩ <;> first | trivial | ring
+/-- The loops of `wrap_around` are those of the unperturbed improper kernel
+(`NewenSpec.Bonded.wrapUp`, `wrapDown`) with bounds `ζ0 ∓ π` and step `2π`. -/
+theorem wrapUp_eq_bonded (pi q0 : ℝ) :
+    ∀ (n : Nat) (z : ℝ), wrapUp ℝ pi q0 n z = NewenSpec.Bonded.wrapUp ℝ n (q0 - pi) (2 * pi) z
+  | 0, _ => rfl
+  | n + 1, z => by
+    simp only [wrapUp, NewenSpec.Bonded.wrapUp, wrapUp_eq_bonded pi q0 n]
+
+theorem wrapDown_eq_bonded (pi q0 : ℝ) :
+    ∀ (n : Nat) (z : ℝ), wrapDown ℝ pi q0 n z = NewenSpec.Bonded.wrapDown ℝ n (q0 + pi) (2 * pi) z
+  | 0, _ => rfl
+  | n + 1, z => by
+    simp only [wrapDown, NewenSpec.Bonded.wrapDown, wrapDown_eq_bonded pi q0 n]
+
+/-- **`wrap_around` over ℝ is `wrapZeta`**, for every `ζ` within `129 π` of `ζ0` (the 64 turns
+of fuel, `NewenSpec.Bonded.wrap_real_eq_wrapZeta`). -/
+theorem wrapModel_real_eq {zeta q0 : ℝ} (h : |zeta - q0| ≤ 129 * Real.pi) :
+    wrapModel ℝ Real.pi zeta q0 = wrapZeta q0 zeta := by
+  rw [wrapModel, wrapUp_eq_bonded, wrapDown_eq_bonded]
+  exact NewenSpec.Bonded.wrap_real_eq_wrapZeta 64 (by norm_num; linarith)
+
+/-- The improper kernel over ℝ, for every `ζ` within `129 π` of `ζ0(λ)`: the mixed energy,
+`−K(λ)·Δ` and `pertHarmonicDvdl` at the wrapped angle `wrapZeta ζ0(λ) ζ`, which it also returns. -/
+theorem improperModel_real_eq (zeta kA kB qA qB L dL : ℝ)
+    (hfuel : |zeta - mix qA qB L| ≤ 129 * Real.pi) :
+    improperModel ℝ (1 / 2) Real.pi zeta kA kB qA qB L dL =
+      (pertHarmonicEnergy kA kB qA qB (wrapZeta (mix qA qB L) zeta) L,
+        -mix kA kB L * (wrapZeta (mix qA qB L) zeta - mix qA qB L),
+        pertHarmonicDvdl kA kB qA qB (wrapZeta (mix qA qB L) zeta) L dL,
+        wrapZeta (mix qA qB L) zeta) := by
+  have hw : wrapModel ℝ Real.pi zeta ((1 - L) * qA + L * qB) = wrapZeta (mix qA qB L) zeta :=
+    wrapModel_real_eq hfuel
+  simp only [improperModel, hw, pertHarmonicEnergy, harmonicEnergy, pertHarmonicDvdl, mix,
+    Prod.mk.injEq]
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> first | trivial | ring
 
 /-- The soft-core kernel over ℝ: `softEnergy`, `softGrad`, `softDvdl`. -/
 theorem softModel_real_eq (x kA kB xA xB a L dL : ℝ) :
@@ -254,6 +285,32 @@ theorem angleModel_dvdl_is_deriv (cost kA kB cA cB : ℝ) {Λ : ℝ → ℝ} {d�
       (angleModel ℝ (1 / 2) cost kA kB cA cB (Λ lam) dΛ).2.2 lam := by
   simp only [angleModel_real_eq]
   exact pert_harmonic_dvdl_is_deriv kA kB cA cB cost hΛ
+
+/-- **The improper kernel's `dE/dλ` is the derivative of its energy** on every λ-interval where
+the wrapped angle does not jump: `ζ0(λ)` moves with λ, and the wrap jumps by `2π` where `ζ` meets
+`ζ0(λ) ± π`. The hypothesis `hjump` keeps the wrapped angle strictly inside
+`(ζ0(λ) − π, ζ0(λ) + π)`; there it stays the same turn of `ζ` for all λ near `lam`. -/
+theorem improperModel_dvdl_is_deriv (zeta kA kB qA qB : ℝ) {Λ : ℝ → ℝ} {dΛ lam : ℝ}
+    (hΛ : HasDerivAt Λ dΛ lam)
+    (hfuel : |zeta - mix qA qB (Λ lam)| < 129 * Real.pi)
+    (hjump : |wrapZeta (mix qA qB (Λ lam)) zeta - mix qA qB (Λ lam)| < Real.pi) :
+    HasDerivAt (fun l => (improperModel ℝ (1 / 2) Real.pi zeta kA kB qA qB (Λ l) dΛ).1)
+      (improperModel ℝ (1 / 2) Real.pi zeta kA kB qA qB (Λ lam) dΛ).2.2.1 lam := by
+  have hq : ContinuousAt (fun l => mix qA qB (Λ l)) lam := (hasDerivAt_mix qA qB hΛ).continuousAt
+  set w := wrapZeta (mix qA qB (Λ lam)) zeta
+  obtain ⟨k, hk⟩ := wrapZeta_sub_eq_int_mul (mix qA qB (Λ lam)) zeta
+  have ev1 : ∀ᶠ l in 𝓝 lam, |zeta - mix qA qB (Λ l)| < 129 * Real.pi :=
+    (continuousAt_const.sub hq).abs.eventually_lt continuousAt_const hfuel
+  have ev2 : ∀ᶠ l in 𝓝 lam, |w - mix qA qB (Λ l)| < Real.pi :=
+    (continuousAt_const.sub hq).abs.eventually_lt continuousAt_const hjump
+  have heq : (fun l => (improperModel ℝ (1 / 2) Real.pi zeta kA kB qA qB (Λ l) dΛ).1)
+      =ᶠ[𝓝 lam] fun l => pertHarmonicEnergy kA kB qA qB w (Λ l) := by
+    filter_upwards [ev1, ev2] with l h1 h2
+    rw [improperModel_real_eq _ _ _ _ _ _ _ h1.le]
+    have hzk : zeta + 2 * Real.pi * k = w := by linarith
+    rw [wrapZeta_eq_of_abs_lt k (by rw [hzk]; exact h2), hzk]
+  rw [improperModel_real_eq _ _ _ _ _ _ _ hfuel.le]
+  exact (pert_harmonic_dvdl_is_deriv kA kB qA qB w hΛ).congr_of_eventuallyEq heq
 
 /-- The soft-core kernel, wherever both softening denominators are nonzero. -/
 theorem softModel_dvdl_is_deriv (x kA kB xA xB a : ℝ) {Λ : ℝ → ℝ} {dΛ lam : ℝ}

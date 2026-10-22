@@ -240,8 +240,32 @@ def finalStep (n : Nat) : Option Nat → Nat
   | some k => k
   | none => n
 
-/-- A minimisation that stops does so before its last step, so its final step is below `n`. -/
-theorem finalStep_le (n k : Nat) (hk : k < n) : finalStep n (some k) < n := hk
+/-- The step counter after a loop over the steps `0 .. n − 1` that, at the top of step `s`,
+stops if `stop s` and otherwise integrates step `s` and moves on: from step `s`, with `m` steps
+left. -/
+def loopCounter (stop : Nat → Bool) : (s m : Nat) → Nat
+  | s, 0 => s
+  | s, m + 1 => if stop s then s else loopCounter stop (s + 1) m
+
+theorem loopCounter_eq (stop : Nat → Bool) (s m : Nat) :
+    loopCounter stop s m = finalStep (s + m) ((List.range' s m).find? stop) := by
+  induction m generalizing s with
+  | zero => simp [loopCounter, finalStep]
+  | succ m ih =>
+    rw [loopCounter, List.range'_succ, List.find?_cons]
+    cases h : stop s
+    · simp only [Bool.false_eq_true, ite_false, ih]
+      congr 1
+      omega
+    · simp [finalStep]
+
+/-- **The final step is the number of steps integrated.** A loop over `n` steps that stops at
+the top of the first step `k` with `stop k` has integrated `k` steps, and `finalStep` of that
+first stop is `k`; a loop that never stops has integrated `n` steps, and `finalStep n none` is
+`n`. -/
+theorem finalStep_eq_loopCounter (stop : Nat → Bool) (n : Nat) :
+    finalStep n ((List.range n).find? stop) = loopCounter stop 0 n := by
+  rw [loopCounter_eq, Nat.zero_add, List.range_eq_range']
 
 /-! ## Centre-of-mass motion removal
 

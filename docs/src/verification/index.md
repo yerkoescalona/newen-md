@@ -110,7 +110,7 @@ kernel against the model on many random inputs (differential random testing).
 | Rust lives in | `crates/newen-logic` | the existing kernel crates |
 | Lean has | meaning, model, theorem model ⇔ meaning | meaning, executable model, theorems about the model |
 | Rust ⇔ model | proof, for every input (Charon + Aeneas + refinement theorem) | differential random testing |
-| Status | working (one function, the pilot below) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, and the soft-core and perturbed free-energy terms (below) |
+| Status | working (eighteen functions: the pilot below, the run schedule, the degrees of freedom and bath mapping, the topology bookkeeping) | working for the Berendsen and Nosé–Hoover thermostats, the Lennard-Jones and reaction-field pair term, the bonded terms, the leap-frog, kinetic-energy, temperature, pressure and Berendsen barostat kernels, the periodic boundaries, and the soft-core and perturbed free-energy terms (below) |
 
 ## Worked example: `output_misses_longrange`
 
@@ -461,13 +461,17 @@ def berendsenModel (kB eps ekin dof temperature tau dt : α) : α :=
     else Sqrt.sqrt (1 + dt / tau * (temperature / freeTemp - 1))
 ```
 
-At `α = ℝ` it is proven equal to the meaning once the fallbacks are ruled out:
+At `α = ℝ` it is proven equal to the meaning once the fallbacks are ruled out and the radicand
+is not negative (below it Rust and `Float` return NaN, while `Real.sqrt` returns `0`):
 
 ```lean
 theorem berendsenModel_real_eq (hτ : 0 < tau) (hdof : 0 < dof)
-    (hft : eps ≤ 2 * ekin / (dof * kB)) :
+    (hft : eps ≤ 2 * ekin / (dof * kB))
+    (hr : 0 ≤ 1 + dt / tau * (temperature / (2 * ekin / (dof * kB)) - 1)) :
     berendsenModel ℝ kB eps ekin dof temperature tau dt =
-      berendsenScale (2 * ekin / (dof * kB)) temperature dt tau
+        berendsenScale (2 * ekin / (dof * kB)) temperature dt tau ∧
+      berendsenModel ℝ kB eps ekin dof temperature tau dt ^ 2 =
+        1 + dt / tau * (temperature / (2 * ekin / (dof * kB)) - 1)
 ```
 
 At `α = Float` the same definition runs. `lake exe spec-vectors` draws random inputs from a
@@ -523,10 +527,11 @@ it. `ReactionField.lean` does the same for the reaction field of Tironi et al. (
 `crfConstant ε ε_rf κ R`, `crfEnergy q crf R r = q (1/r − crf r²/(2R³) − (1 − crf/2)/R)` with
 `crf_force_is_minus_grad`, `crf_energy_zero_at_cutoff` (the energy is zero at `r = R`),
 `crf_eps_rf_eq_eps` (`κ = 0` and `ε_rf = ε`: no reaction field, a Coulomb energy shifted to zero at
-`R`), `crf_conducting_limit` (`C_RF → −1` as `ε_rf → ∞`, which is why GROMOS writes `ε_rf = 0` for a
-conducting boundary and newen sets `C_RF = −1` there), and `rf_excluded_is_crf_minus_coulomb` (an
-excluded pair keeps the pair term without its `q/r` and `q/r³`), with `rf_self_is_half_excluded`
-(the self term is half the excluded term of the atom with itself at `r = 0`).
+`R`), `crf_conducting_limit` (`C_RF → −1` as `ε_rf → ∞`, for every `κ ≥ 0` and `R > 0`, which is
+why GROMOS writes `ε_rf = 0` for a conducting boundary and newen sets `C_RF = −1` there), and
+`rf_excluded_is_crf_minus_coulomb` (an excluded pair keeps the pair term without its `q/r` and
+`q/r³`), with `rf_self_is_half_excluded` (the self term is half the excluded term of the atom with
+itself at `r = 0`).
 
 **One model.** `spec/NewenSpec/Nonbonded.lean` writes the four kernels once over any number type,
 operation by operation like the Rust, with the guard `ZERO_DISTANCE2 = 1e-10` and the `0.5` of the
@@ -602,14 +607,22 @@ evaluate. The theorems:
   topology.
 - `cosineAngle_forces_sum_zero`, `cosineAngle_torque_zero`, `harmonicAngle_conservation`,
   `chebyshev_conservation`, `newDihedral_conservation`, `improper_conservation`: the forces of an
-  angle or a dihedral sum to zero and exert no torque about any origin. For the two forms whose
-  forces lie along the plane normals (NTBDN = 0 and the improper) this needs Lagrange's identity
-  `|r_ij|²|r_kj|² − (r_ij · r_kj)² = |r_ij × r_kj|²` and holds away from a linear bond angle, where
-  the kernels drop a force on purpose.
-- `cosineAngle_force_is_minus_grad`: moving atom `i`, `j` or `k` along any `e`, the
-  cosine-harmonic energy changes at the rate `−f · e` of that atom's force. The other angle and the
-  dihedrals have the conservation theorems but no gradient theorem; the finite-difference test below
-  covers them.
+  angle or a dihedral sum to zero and exert no torque about any origin. The sum is zero by
+  construction (each kernel sets `f_j` or `f_k` to minus the others); the torque is the proven
+  part. For the two forms whose forces lie along the plane normals (NTBDN = 0 and the improper) it
+  needs Lagrange's identity `|r_ij|²|r_kj|² − (r_ij · r_kj)² = |r_ij × r_kj|²` and holds away from a
+  linear bond angle, where the kernels drop a force on purpose.
+- `cosineAngle_force_is_minus_grad`, `harmonicAngle_force_is_minus_grad`: moving atom `i`, `j` or
+  `k` along any `e`, the angle energy changes at the rate `−f · e` of that atom's force (the
+  harmonic angle for `0 < θ < π`); `chebyshev_force_is_minus_grad`: the same for the forces of the
+  Chebyshev dihedral on its outer atoms `i` and `l`. Force = −∇E is thus proven in Lean for the two
+  bonds, the two angles and the Chebyshev dihedral's `f_i`, `f_l`. The rest (the Chebyshev `f_j`,
+  `f_k`, the NTBDN = 0 dihedral, the improper) rests on the conservation theorems and on the
+  finite-difference test below, which compares the Rust with itself (its forces against central
+  differences of its own energy), not with the theory.
+- `wrapZeta`: the improper angle moved by whole turns into `[ζ0 − π, ζ0 + π]`, with the boundary
+  convention of the kernel's two `while` loops; it lies in that interval (`wrapZeta_mem`),
+  differs from ζ by `2πk` (`wrapZeta_sub_eq_int_mul`) and is idempotent (`wrapZeta_idem`).
 
 **One model.** `spec/NewenSpec/Bonded.lean` writes the seven kernels once over any number type, on
 a `Vec3 α` with glam's `dot` (`x·x' + y·y' + z·z'`, left to right), `cross` and `length`. The bonded
@@ -620,8 +633,9 @@ parameters given at `Float` by their bits; the two `while` loops that move ζ in
 run with fuel (one turn suffices for `|ζ0| ≤ π`). At ℝ, one `*Model_real_eq` per kernel proves
 that, outside the guards, the model returns the theory's energy at the theory's geometry and the
 theory's force expressions; the clamps of `cos θ`, `cos φ`, `cos ζ` to `[−1, 1]` never act there
-(`cos_between_mem`, Cauchy–Schwarz). The improper's theorem assumes ζ already in
-`[ζ0 − π, ζ0 + π]`, always true for `ζ0 = 0`.
+(`cos_between_mem`, Cauchy–Schwarz). For the improper, `wrap_real_eq_wrapZeta` proves the two
+fuel-bounded loops compute `wrapZeta` when the fuel reaches (`|ζ0| ≤ 2 · fuel · π`, at the fuel
+64 every `|ζ0| ≤ 128π`), so `improperModel_real_eq` holds for every ζ.
 
 **The tests.** `lake exe spec-vectors` writes `spec/vectors/bonded.json` (under 2 MB): 1 482 bond
 rows, 1 000 angle rows and 710 dihedral rows, each row evaluated by every kernel of its kind
@@ -745,7 +759,8 @@ with acceleration `m⁻¹ f`, `kineticEnergyModel_real_eq` and `groupKineticMode
 kinetic energies are the theory's sums (velocities as vectors of `EuclideanSpace ℝ (Fin 3)`, the
 centre of mass `comVelocity`), `kineticTemperatureModel_real_eq` that the temperature is
 `temperatureOf`, and `pressureTensorModel_real_eq`, `scalarPressureModel_real_eq`,
-`berendsenBarostatModel_real_eq` the same for the pressure and the barostat.
+`berendsenBarostatModel_real_eq` the same for the pressure and the barostat (the barostat for a
+non-negative radicand `1 − β·dt/τ·(P₀ − P)`, below which Rust and `Float` return NaN).
 
 **The bit-exact test.** `lake exe spec-vectors` writes `spec/vectors/dynamics.json`: 1 200
 leap-frog rows (velocities in `[−3, 3]` nm/ps, forces to `10⁶` kJ mol⁻¹ nm⁻¹, GROMOS masses,
@@ -950,13 +965,16 @@ says the same for the reaction field (where the softened `r²` and `R²` are pos
 `softcore_dvdl_is_deriv` for their sum, `softcore_dvdl_is_deriv_rf_excluded` and
 `rf_self_dvdl_is_deriv` for the excluded-pair and self terms. `softcore_lambda_zero` and
 `softcore_lambda_one` say that λ = 0 and λ = 1 (NLAM ≥ 1) are the plain `ljEnergy` and
-`crfEnergy` of states A and B, and `softcore_force_is_minus_grad` that the scalar force is
+`crfEnergy` of states A and B, and `softcore_force_is_minus_grad` (and
+`softcore_rf_excluded_force_is_minus_grad` for an excluded pair) that the scalar force is
 `−∂V/∂r / r` at fixed λ. `PerturbedBonded.lean` does the same for the bonded terms: the parameters
 mix linearly, `K(λ) = (1 − λ) K_A + λ K_B` (`hasDerivAt_mix`), each kernel's `dE/dλ` is the
 derivative (`pert_quartic_dvdl_is_deriv`, `pert_harmonic_dvdl_is_deriv` for the angle and the
 improper, `pert_dihedral_dvdl_is_deriv`, `soft_dvdl_is_deriv`), the end states are the plain
 terms (`pert_*_ends`, `soft_ends`), and `chebT_cos` proves the dihedral polynomials are
-`cos(mφ)` for `m = 1 … 6`.
+`cos(mφ)` for `m = 1 … 6`. The perturbed improper wraps ζ around `ζ0(λ)`, which moves with λ, so
+the wrapped angle jumps by `2π` where ζ meets `ζ0(λ) ± π`; `improperModel_dvdl_is_deriv` proves
+its `dE/dλ` is the derivative of its energy away from that jump.
 
 **One model.** `spec/NewenSpec/SoftCore.lean` and `PerturbedBonded.lean` write every kernel once
 over any number type, operation by operation like the Rust. The λ table calls `pow`, so
@@ -1096,6 +1114,14 @@ And at the level of the whole project:
   both sides, the barostat's and the λ table's the same C `pow`. That `dV/dλ` is the derivative
   of `V` is proved over ℝ, for every input; in floating point it is checked by finite differences
   on the generated rows only.
+- **Bookkeeping: the rule is the meaning.** For pure bookkeeping (`Due`, `finalStep`,
+  `comRemoval`, `pairKind`, the spread formula) the theory's definition is the rule itself, so
+  "Rust = meaning" there says "Rust = rule". The content of those files is in their property
+  theorems: `stop_positions_eq` and `stop_lagged_eq` (an end-of-step writer writes gromosXX's
+  frames), `framesIn_eq_ceil`, `spread_sum`, `pairKind_symm`, `containsSortedModel_iff`,
+  `bathHalf_partition`, `groupOf_some_iff` and `groupOf_contiguous`, `emptyBath_iff`,
+  `rows_complete_iff`, and `finalStep_eq_loopCounter` (the final step is the number of steps the
+  loop integrated).
 - **Not covered: physics that is self-consistent but wrong.** A specification can be internally
   consistent and still describe the wrong thing. The comparisons against gromosXX references and
   against published values stay necessary; verification adds to them, it does not replace them.

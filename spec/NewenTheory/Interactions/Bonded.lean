@@ -2,6 +2,7 @@ module
 
 public import Mathlib.Analysis.SpecialFunctions.Sqrt
 public import Mathlib.Analysis.SpecialFunctions.Trigonometric.Inverse
+public import Mathlib.Analysis.SpecialFunctions.Trigonometric.InverseDeriv
 public import Mathlib.Analysis.Calculus.Deriv.Add
 public import Mathlib.Analysis.Calculus.Deriv.Inv
 public import Mathlib.Analysis.Calculus.Deriv.Mul
@@ -31,9 +32,13 @@ The two bond forms agree near the minimum when `K_harm = 2 K_quartic b0²`
 
 A force is minus the gradient of the energy, and the forces of an isolated term sum to zero and
 exert no torque. Here these are theorems about the force expressions newen evaluates (the same
-expressions as `crates/newen-forces/src/bonded/`, over ℝ): `*_force_is_minus_grad`,
-`*_forces_sum_zero`, `*_torque_zero`. How the kernels compute them in floating point is in
-`NewenSpec/Bonded.lean`.
+expressions as `crates/newen-forces/src/bonded/`, over ℝ). Force = −∇E is proven for the two bonds,
+the two angles (the harmonic one for `0 < θ < π`) and the Chebyshev dihedral's forces on atoms `i`
+and `l` (`*_force_is_minus_grad`). The sum is zero by construction (`threeBody`, `fourBody`); the
+torque is the proven part (`*_torque_zero`, `*_conservation`). The other dihedral forces rest on
+that and on the finite-difference test of `crates/newen-forces/tests/bonded_spec.rs`, which
+compares the Rust with itself. How the kernels
+compute them in floating point is in `NewenSpec/Bonded.lean`.
 
 Vectors are `V3`, three real components, with `dot`, `cross` and `len` written out, so that
 every identity below is a statement about nine (or six) real numbers.
@@ -373,6 +378,67 @@ noncomputable def dihedralNew (k δ m φ : ℝ) : ℝ := k * (1 + Real.cos (m * 
 /-- The improper dihedral energy at `ζ`: `K/2 · (ζ − ζ0)²`. -/
 noncomputable def improper (k ζ0 ζ : ℝ) : ℝ := k / 2 * (ζ - ζ0) ^ 2
 
+/-- The improper angle `ζ` moved by whole turns into `[ζ0 − π, ζ0 + π]`, as the kernels' two
+loops do it (`while ζ < ζ0 − π { ζ += 2π }`, then `while ζ > ζ0 + π { ζ −= 2π }`): from below it
+lands in `[ζ0 − π, ζ0 + π)`, from above in `(ζ0 − π, ζ0 + π]`, and inside it stays. -/
+noncomputable def wrapZeta (ζ0 ζ : ℝ) : ℝ :=
+  if ζ < ζ0 - Real.pi then ζ + 2 * Real.pi * ⌈(ζ0 - Real.pi - ζ) / (2 * Real.pi)⌉
+  else if ζ0 + Real.pi < ζ then ζ - 2 * Real.pi * ⌈(ζ - (ζ0 + Real.pi)) / (2 * Real.pi)⌉
+  else ζ
+
+/-- An angle already in `[ζ0 − π, ζ0 + π]` is not moved. -/
+theorem wrapZeta_of_mem {ζ0 ζ : ℝ} (hlo : ζ0 - Real.pi ≤ ζ) (hhi : ζ ≤ ζ0 + Real.pi) :
+    wrapZeta ζ0 ζ = ζ := by
+  simp [wrapZeta, not_lt.mpr hlo, not_lt.mpr hhi]
+
+/-- **The wrapped angle lies in `[ζ0 − π, ζ0 + π]`.** -/
+theorem wrapZeta_mem (ζ0 ζ : ℝ) :
+    ζ0 - Real.pi ≤ wrapZeta ζ0 ζ ∧ wrapZeta ζ0 ζ ≤ ζ0 + Real.pi := by
+  have hp := Real.pi_pos
+  have h2p : (0 : ℝ) < 2 * Real.pi := by positivity
+  unfold wrapZeta
+  split_ifs with h1 h2
+  · set x := (ζ0 - Real.pi - ζ) / (2 * Real.pi)
+    have hx : 2 * Real.pi * x = ζ0 - Real.pi - ζ := by simp only [x]; field_simp
+    have hc1 := Int.le_ceil x
+    have hc2 := Int.ceil_lt_add_one x
+    constructor <;> nlinarith
+  · set x := (ζ - (ζ0 + Real.pi)) / (2 * Real.pi)
+    have hx : 2 * Real.pi * x = ζ - (ζ0 + Real.pi) := by simp only [x]; field_simp
+    have hc1 := Int.le_ceil x
+    have hc2 := Int.ceil_lt_add_one x
+    constructor <;> nlinarith
+  · exact ⟨not_lt.mp h1, not_lt.mp h2⟩
+
+/-- **The wrapped angle differs from `ζ` by whole turns**, `2π k` with `k : ℤ`. -/
+theorem wrapZeta_sub_eq_int_mul (ζ0 ζ : ℝ) : ∃ k : ℤ, wrapZeta ζ0 ζ - ζ = 2 * Real.pi * k := by
+  unfold wrapZeta
+  split_ifs
+  · exact ⟨⌈(ζ0 - Real.pi - ζ) / (2 * Real.pi)⌉, by ring⟩
+  · exact ⟨-⌈(ζ - (ζ0 + Real.pi)) / (2 * Real.pi)⌉, by push_cast; ring⟩
+  · exact ⟨0, by simp⟩
+
+/-- Wrapping twice is wrapping once. -/
+theorem wrapZeta_idem (ζ0 ζ : ℝ) : wrapZeta ζ0 (wrapZeta ζ0 ζ) = wrapZeta ζ0 ζ :=
+  wrapZeta_of_mem (wrapZeta_mem ζ0 ζ).1 (wrapZeta_mem ζ0 ζ).2
+
+/-- A turn of `ζ` strictly inside `(ζ0 − π, ζ0 + π)` is the wrapped angle: the interior has room
+for one representative only. -/
+theorem wrapZeta_eq_of_abs_lt {ζ0 ζ : ℝ} (k : ℤ) (h : |ζ + 2 * Real.pi * k - ζ0| < Real.pi) :
+    wrapZeta ζ0 ζ = ζ + 2 * Real.pi * k := by
+  have hp := Real.pi_pos
+  obtain ⟨j, hj⟩ := wrapZeta_sub_eq_int_mul ζ0 ζ
+  obtain ⟨hlo, hhi⟩ := wrapZeta_mem ζ0 ζ
+  rw [abs_lt] at h
+  have hlt : ((j - k : ℤ) : ℝ) < 1 := by push_cast; nlinarith
+  have hgt : (-1 : ℝ) < ((j - k : ℤ) : ℝ) := by push_cast; nlinarith
+  have hjk : j = k := by
+    have h1 : j - k < 1 := by exact_mod_cast hlt
+    have h2 : -1 < j - k := by exact_mod_cast hgt
+    omega
+  rw [← hjk]
+  linarith
+
 /-- `cos((n + 2)φ) = 2 cos φ cos((n + 1)φ) − cos(nφ)`, the Chebyshev recursion. -/
 theorem cos_add_two_mul (n φ : ℝ) :
     Real.cos ((n + 2) * φ) = 2 * Real.cos φ * Real.cos ((n + 1) * φ) - Real.cos (n * φ) := by
@@ -658,6 +724,189 @@ theorem cosineAngle_force_is_minus_grad (k cos0 : ℝ) {rij rkj : V3} (hij : rij
       congr 2 <;> ext <;> simp <;> ring
     · simp only [cosineAngleForces, threeBody, cosAngle]
       v3_expand
+      field_simp
+      ring
+
+/-! ## The harmonic-angle force is minus the gradient of its energy -/
+
+/-- `cos θ` between `r_ij + t a` and `r_kj + t b`, differentiated at `t = 0` (quotient rule). -/
+theorem cosAngle_hasDerivAt_lines {u v : V3} (hu : u ≠ 0) (hv : v ≠ 0) (a b : V3) :
+    HasDerivAt (fun t : ℝ => cosAngle (u + t • a) (v + t • b))
+      (((dot a v + dot u b) * (len u * len v) -
+          dot u v * (dot u a / len u * len v + len u * (dot v b / len v))) /
+        (len u * len v) ^ 2) 0 := by
+  have hd : len u * len v ≠ 0 := mul_ne_zero (len_pos hu).ne' (len_pos hv).ne'
+  have hden := (hasDerivAt_len_line hu a).mul (hasDerivAt_len_line hv b)
+  have hg := HasDerivAt.div (hasDerivAt_dot_lines u v a b) hden
+    (by simp only [Pi.mul_apply, line_zero]; exact hd)
+  simp only [Pi.mul_apply, line_zero] at hg
+  exact hg
+
+/-- The derivative of the harmonic-angle energy when `r_ij` moves along `a` and `r_kj` along `b`,
+away from `cos θ = ±1`: `K (θ − θ0) · dθ/dt` with `dθ/dt = −(d cos θ/dt)/√(1 − cos²θ)`. -/
+theorem harmonicAngle_hasDerivAt_lines (k θ0 : ℝ) {u v : V3} (hu : u ≠ 0) (hv : v ≠ 0)
+    (h1 : cosAngle u v ≠ -1) (h2 : cosAngle u v ≠ 1) (a b : V3) :
+    HasDerivAt (fun t : ℝ => harmonicAngle k θ0 (Real.arccos (cosAngle (u + t • a) (v + t • b))))
+      (k * (Real.arccos (cosAngle u v) - θ0) * (-(1 / Real.sqrt (1 - cosAngle u v ^ 2)) *
+        (((dot a v + dot u b) * (len u * len v) -
+            dot u v * (dot u a / len u * len v + len u * (dot v b / len v))) /
+          (len u * len v) ^ 2))) 0 := by
+  have hA : HasDerivAt Real.arccos (-(1 / Real.sqrt (1 - cosAngle u v ^ 2)))
+      (cosAngle (u + (0 : ℝ) • a) (v + (0 : ℝ) • b)) := by
+    rw [line_zero, line_zero]; exact Real.hasDerivAt_arccos h1 h2
+  have h := (((hA.comp 0 (cosAngle_hasDerivAt_lines hu hv a b)).sub_const θ0).pow 2).const_mul
+    (k / 2)
+  refine h.congr_deriv ?_
+  simp only [Function.comp_apply, line_zero]
+  push_cast
+  ring
+
+/-- **The harmonic-angle forces are `−∇V`** for `0 < θ < π`. Moving atom `i` along `e`
+(`r_ij + t e`), atom `k` (`r_kj + t e`) or atom `j` (`r_ij − t e`, `r_kj − t e`), the energy
+changes at the rate `−f_i · e`, `−f_k · e`, `−f_j · e`. At `θ = 0` or `π` the energy is not
+differentiable in the positions unless `θ0` is that angle, and the kernel switches branch there. -/
+theorem harmonicAngle_force_is_minus_grad (k θ0 : ℝ) {rij rkj : V3} (hij : rij ≠ 0)
+    (hkj : rkj ≠ 0) (hθ0 : 0 < Real.arccos (cosAngle rij rkj))
+    (hθπ : Real.arccos (cosAngle rij rkj) < Real.pi) (e : V3) :
+    let f := harmonicAngleForces k θ0 rij rkj
+    HasDerivAt (fun t : ℝ => harmonicAngle k θ0 (Real.arccos (cosAngle (rij + t • e) rkj)))
+        (-dot f.1 e) 0 ∧
+      HasDerivAt (fun t : ℝ => harmonicAngle k θ0 (Real.arccos (cosAngle rij (rkj + t • e))))
+        (-dot f.2.2 e) 0 ∧
+      HasDerivAt
+        (fun t : ℝ => harmonicAngle k θ0 (Real.arccos (cosAngle (rij - t • e) (rkj - t • e))))
+        (-dot f.2.1 e) 0 := by
+  have h1 : cosAngle rij rkj ≠ -1 := fun h => by
+    rw [h, Real.arccos_neg_one] at hθπ; exact lt_irrefl _ hθπ
+  have h2 : cosAngle rij rkj ≠ 1 := fun h => by
+    rw [h, Real.arccos_one] at hθ0; exact lt_irrefl _ hθ0
+  have hS : Real.sin (Real.arccos (cosAngle rij rkj)) ≠ 0 :=
+    (Real.sin_pos_of_pos_of_lt_pi hθ0 hθπ).ne'
+  rw [Real.sin_arccos] at hS
+  have hi := (len_pos hij).ne'
+  have hk := (len_pos hkj).ne'
+  refine ⟨?_, ?_, ?_⟩
+  · have h := harmonicAngle_hasDerivAt_lines k θ0 hij hkj h1 h2 e 0
+    refine (h.congr_of_eventuallyEq (Filter.Eventually.of_forall fun t => ?_)).congr_deriv ?_
+    · simp only
+      congr 3; ext <;> simp
+    · simp only [harmonicAngleForces, threeBody]
+      rw [Real.sin_arccos]
+      generalize Real.sqrt (1 - cosAngle rij rkj ^ 2) = S at hS ⊢
+      generalize Real.arccos (cosAngle rij rkj) = θ
+      simp only [cosAngle]
+      v3_expand
+      field_simp
+      ring
+  · have h := harmonicAngle_hasDerivAt_lines k θ0 hij hkj h1 h2 0 e
+    refine (h.congr_of_eventuallyEq (Filter.Eventually.of_forall fun t => ?_)).congr_deriv ?_
+    · simp only
+      congr 3; ext <;> simp
+    · simp only [harmonicAngleForces, threeBody]
+      rw [Real.sin_arccos]
+      generalize Real.sqrt (1 - cosAngle rij rkj ^ 2) = S at hS ⊢
+      generalize Real.arccos (cosAngle rij rkj) = θ
+      simp only [cosAngle]
+      v3_expand
+      field_simp
+      ring
+  · have h := harmonicAngle_hasDerivAt_lines k θ0 hij hkj h1 h2 (-e) (-e)
+    refine (h.congr_of_eventuallyEq (Filter.Eventually.of_forall fun t => ?_)).congr_deriv ?_
+    · simp only
+      congr 3 <;> ext <;> simp <;> ring
+    · simp only [harmonicAngleForces, threeBody]
+      rw [Real.sin_arccos]
+      generalize Real.sqrt (1 - cosAngle rij rkj ^ 2) = S at hS ⊢
+      generalize Real.arccos (cosAngle rij rkj) = θ
+      simp only [cosAngle]
+      v3_expand
+      field_simp
+      ring
+
+/-! ## The Chebyshev-dihedral force on the outer atoms is minus the gradient of its energy -/
+
+theorem dot_comm (u v : V3) : dot u v = dot v u := by simp only [dot]; ring
+
+theorem dot_sub_left (u w v : V3) : dot (u - w) v = dot u v - dot w v := by
+  simp only [dot, sub_x, sub_y, sub_z]; ring
+
+theorem dot_smul_left (a : ℝ) (u v : V3) : dot (a • u) v = a * dot u v := by
+  simp only [dot, smul_x, smul_y, smul_z]; ring
+
+theorem dot_zero_right (u : V3) : dot u 0 = 0 := by simp [dot]
+
+theorem dot_zero_left (u : V3) : dot 0 u = 0 := by simp [dot]
+
+theorem add_smul_zero (u : V3) (t : ℝ) : u + t • (0 : V3) = u := by ext <;> simp
+
+/-- Moving `x_i` along `e` moves `r_im` along `e`'s part perpendicular to `r_kj`. -/
+theorem perpI_line (rij rkj e : V3) (t : ℝ) :
+    perpI (rij + t • e) rkj = perpI rij rkj + t • perpI e rkj := by
+  ext <;> simp only [perpI, dot, add_x, add_y, add_z, sub_x, sub_y, sub_z, smul_x, smul_y,
+    smul_z] <;> ring
+
+/-- Moving `x_l` along `e` (`r_kl − t e`) moves `r_ln` along `e`'s part perpendicular to `r_kj`. -/
+theorem perpL_line (rkj rkl e : V3) (t : ℝ) :
+    perpL rkj (rkl - t • e) = perpL rkj rkl + t • perpI e rkj := by
+  ext <;> simp only [perpL, perpI, dot, add_x, add_y, add_z, sub_x, sub_y, sub_z, smul_x, smul_y,
+    smul_z] <;> ring
+
+/-- A vector perpendicular to `r_kj` sees only the perpendicular part of `e`. -/
+theorem dot_perpI_of_perp {rkj w : V3} (e : V3) (hw : dot w rkj = 0) :
+    dot (perpI e rkj) w = dot e w := by
+  rw [perpI, dot_sub_left, dot_smul_left, dot_comm rkj w, hw, mul_zero, sub_zero]
+
+theorem perpI_perp {rkj : V3} (u : V3) (hkj : dot rkj rkj ≠ 0) : dot (perpI u rkj) rkj = 0 := by
+  rw [perpI, dot_sub_left, dot_smul_left, div_mul_cancel₀ _ hkj, sub_self]
+
+theorem perpL_perp {rkj : V3} (rkl : V3) (hkj : dot rkj rkj ≠ 0) :
+    dot (perpL rkj rkl) rkj = 0 := by
+  rw [perpL, dot_sub_left, dot_smul_left, div_mul_cancel₀ _ hkj, sub_self]
+
+/-- **The Chebyshev-dihedral forces on atoms `i` and `l` are `−∇V`.** Moving atom `i` along `e`
+(`r_ij + t e`) or atom `l` (`r_kl − t e`), the energy changes at the rate `−f_i · e`, `−f_l · e`,
+wherever `r_kj`, `r_im` and `r_ln` are nonzero. (Atoms `j` and `k` move `r_kj` too; their forces
+are not covered here.) -/
+theorem chebyshev_force_is_minus_grad (k cosδ : ℝ) (m : ℕ) {rij rkj rkl : V3}
+    (hkj : dot rkj rkj ≠ 0) (him : perpI rij rkj ≠ 0) (hln : perpL rkj rkl ≠ 0) (e : V3) :
+    let f := chebyshevForces k cosδ m rij rkj rkl
+    HasDerivAt (fun t : ℝ => dihedral k cosδ m (cosDihedral (rij + t • e) rkj rkl))
+        (-dot f.1 e) 0 ∧
+      HasDerivAt (fun t : ℝ => dihedral k cosδ m (cosDihedral rij rkj (rkl - t • e)))
+        (-dot f.2.2.2 e) 0 := by
+  have hp := (len_pos him).ne'
+  have hq := (len_pos hln).ne'
+  have hu := perpI_perp rij hkj
+  have hv := perpL_perp rkl hkj
+  have hT : HasDerivAt (cosMultiple m) (dcosMultiple m (cosAngle (perpI rij rkj) (perpL rkj rkl)))
+      (cosAngle (perpI rij rkj + (0 : ℝ) • perpI e rkj) (perpL rkj rkl + (0 : ℝ) • 0)) := by
+    rw [line_zero, line_zero]; exact dcosMultiple_is_deriv m _
+  have hT' : HasDerivAt (cosMultiple m) (dcosMultiple m (cosAngle (perpI rij rkj) (perpL rkj rkl)))
+      (cosAngle (perpI rij rkj + (0 : ℝ) • 0) (perpL rkj rkl + (0 : ℝ) • perpI e rkj)) := by
+    rw [line_zero, line_zero]; exact dcosMultiple_is_deriv m _
+  refine ⟨?_, ?_⟩
+  · have h := (((hT.comp 0 (cosAngle_hasDerivAt_lines him hln (perpI e rkj) 0)).const_mul
+      cosδ).const_add 1).const_mul k
+    refine (h.congr_of_eventuallyEq (Filter.Eventually.of_forall fun t => ?_)).congr_deriv ?_
+    · simp only [Function.comp_apply, dihedral, cosDihedral, perpI_line, add_smul_zero]
+    · simp only [chebyshevForces, fourBody, dot_sub_left, dot_smul_left, dot_zero_right,
+        dot_perpI_of_perp e hv, dot_comm (perpI rij rkj) (perpI e rkj), dot_perpI_of_perp e hu,
+        cosAngle]
+      rw [dot_comm (perpL rkj rkl) e, dot_comm (perpI rij rkj) e]
+      generalize len (perpI rij rkj) = p at hp ⊢
+      generalize len (perpL rkj rkl) = q at hq ⊢
+      field_simp
+      ring
+  · have h := (((hT'.comp 0 (cosAngle_hasDerivAt_lines him hln 0 (perpI e rkj))).const_mul
+      cosδ).const_add 1).const_mul k
+    refine (h.congr_of_eventuallyEq (Filter.Eventually.of_forall fun t => ?_)).congr_deriv ?_
+    · simp only [Function.comp_apply, dihedral, cosDihedral, perpL_line, add_smul_zero]
+    · simp only [chebyshevForces, fourBody, dot_sub_left, dot_smul_left, dot_zero_left,
+        dot_comm (perpI rij rkj) (perpI e rkj), dot_perpI_of_perp e hu, dot_zero_right,
+        dot_comm (perpL rkj rkl) (perpI e rkj), dot_perpI_of_perp e hv, cosAngle]
+      rw [dot_comm (perpL rkj rkl) e, dot_comm (perpI rij rkj) e]
+      generalize len (perpI rij rkj) = p at hp ⊢
+      generalize len (perpL rkj rkl) = q at hq ⊢
       field_simp
       ring
 

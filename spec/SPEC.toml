@@ -7,6 +7,7 @@ key = "schedule.output_misses_longrange"
 rust = "crates/newen-logic/src/schedule/mod.rs::output_misses_longrange"
 used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
 origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
+# Misses quantifies over all output steps, so it can warn for a run shorter than the first incomplete row (NSTLIM is not considered); a variant bounded by NSTLIM is a follow-up
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
 theory = "NewenTheory.Dynamics.Schedule.Misses"
 model = "NewenSpec.Schedule.missesModel"
@@ -72,7 +73,7 @@ rust = "crates/newen-logic/src/schedule/output.rs::final_step"
 used_by = ["crates/newen-md/src/bin/md.rs (the final configuration's TIMESTEP)"]
 origin = "gromosXX _print_timestep (out_configuration.cc:519): sim.steps() after the loop, NSTLIM or the step a minimisation stopped at"
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
-theory = "NewenTheory.Dynamics.Schedule.finalStep"
+theory = "NewenTheory.Dynamics.Schedule.finalStep (finalStep_eq_loopCounter: the number of steps the loop integrated)"
 model = "NewenSpec.Schedule.finalStepModel"
 theorem = "NewenSpec.Schedule.finalStepModel_eq"
 # Layer 2, Rust = model (Aeneas), for all inputs
@@ -266,7 +267,7 @@ origin = "FORCE NRE (in_parameter.cc:984-995, in_topology.cc:433-447): the last 
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
 theory = "NewenTheory.Topology.Groups.LastAtomsOk"
 model = "NewenSpec.Topology.Groups.checkLastAtomsModel"
-theorem = "NewenSpec.Topology.Groups.checkLastAtomsModel_iff"
+theorem = "NewenSpec.Topology.Groups.checkLastAtomsModel_iff (checkLastAtomsModel_empty_iff, checkLastAtomsModel_notIncreasing_iff, checkLastAtomsModel_lastNotFinal_iff: the refusals in the Rust's check order)"
 # Layer 2, Rust = model (Aeneas), for all inputs
 extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.check_last_atoms"
 refinement = "NewenSpec.Refinement.check_last_atoms_eq (check_last_atoms_ok_iff)"
@@ -296,7 +297,7 @@ kind = "float"
 rust = "crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::berendsen_scale"
 used_by = ["crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::BerendsenThermostat::apply"]
 origin = "gromosXX Berendsen_Thermostat::calc_scaling (berendsen_thermostat.cc:95-135); tau = 0 is instantaneous scaling, which gromosXX does only through its `immediate` argument (a tau of 0 there divides by zero)"
-# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out
+# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out (and the radicand is not negative: below it Rust and Float return NaN)
 theory = "NewenTheory.Dynamics.Thermostats.berendsenScale (berendsen_relax, berendsen_fixed, berendsen_between, berendsen_contraction)"
 model = "NewenSpec.Thermostat.berendsenModel (at Float: berendsenFloat)"
 theorem = "NewenSpec.Thermostat.berendsenModel_real_eq (berendsenModel_real_instant, berendsenModel_uncoupled)"
@@ -422,8 +423,8 @@ kind = "float"
 rust = "crates/newen-forces/src/bonded/angles.rs::harmonic_angle"
 used_by = ["crates/newen-forces/src/bonded/angles.rs::calculate_harmonic_angle_forces_grouped (COVALENTFORM NTBAH = 1)"]
 origin = "gromosXX Harm_Angle_Interaction (harm_angle_interaction.cc:73-163); the linear test is |sin theta| < 1e-10 in newen, sin theta < 1e-12 (math::epsilon) in gromosXX; the clamp and the guard d < 1e-10 are newen's"
-# Theorems over R: sum zero and no torque (the gradient is checked by finite differences only)
-theory = "NewenTheory.Interactions.Bonded.harmonicAngle, harmonicAngleForces (harmonicAngle_conservation)"
+# Theorems over R: forces = -grad E for 0 < theta < pi, sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.harmonicAngle, harmonicAngleForces (harmonicAngle_force_is_minus_grad, harmonicAngle_conservation)"
 model = "NewenSpec.Bonded.harmonicAngleModel (at Float: harmonicAngleFloat)"
 theorem = "NewenSpec.Bonded.harmonicAngleModel_real_eq"
 # Rust = model at Float, bit for bit on the generated rows (acos, sin: same C library); forces = -dE/dx by finite differences (cargo test)
@@ -436,8 +437,8 @@ kind = "float"
 rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_chebyshev"
 used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_forces_grouped (COVALENTFORM NTBDN = 1)"]
 origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1; for m > 6 gromosXX's switch leaves cos(m phi) = 0 (energy K, no force), newen's kernel returns nothing and its caller drops the term with a warning; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
-# Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; sum zero, no torque
-theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_conservation)"
+# Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; f_i and f_l = -grad E; sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_force_is_minus_grad, chebyshev_conservation)"
 model = "NewenSpec.Bonded.dihedralChebyshevModel (at Float: dihedralChebyshevFloat)"
 theorem = "NewenSpec.Bonded.dihedralChebyshevModel_real_eq (cosMultipleModel_real)"
 # Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test); reference butane_vacuum_ntbdn1
@@ -464,10 +465,10 @@ kind = "float"
 rust = "crates/newen-forces/src/bonded/improper.rs::improper_dihedral"
 used_by = ["crates/newen-forces/src/bonded/improper.rs::calculate_improper_dihedral_forces_grouped"]
 origin = "gromosXX Improper_Dihedral_Interaction (improper_dihedral_interaction.cc:70-173), the same operations in the same order; gromosXX clamps cos zeta only within 1e-12 of +-1 and reports anything further out as critical, newen clamps silently; the guard |r_mj|, |r_nk| < 1e-10 is newen's (gromosXX asserts they are nonzero)"
-# Theorems over R: sum zero, no torque away from a linear bond angle
-theory = "NewenTheory.Interactions.Bonded.improper, improperAngle, improperForces (improper_conservation)"
+# Theorems over R: sum zero, no torque away from a linear bond angle; the two while loops are wrapZeta for |zeta0| <= 2 fuel pi
+theory = "NewenTheory.Interactions.Bonded.improper, improperAngle, improperForces, wrapZeta (improper_conservation, wrapZeta_mem, wrapZeta_sub_eq_int_mul, wrapZeta_idem)"
 model = "NewenSpec.Bonded.improperModel (at Float: improperFloat)"
-theorem = "NewenSpec.Bonded.improperModel_real_eq (wrap_real_of_mem)"
+theorem = "NewenSpec.Bonded.improperModel_real_eq (wrap_real_eq_wrapZeta)"
 # Rust = model at Float, bit for bit on the generated rows (acos: same C library); forces = -dE/dx by finite differences (cargo test)
 differential = "crates/newen-forces/tests/bonded_spec.rs"
 vectors = "spec/vectors/bonded.json"
@@ -479,7 +480,7 @@ rust = "crates/newen-integrators/src/algorithms/leap_frog.rs::leap_frog_velocity
 used_by = ["crates/newen-integrators/src/algorithms/leap_frog.rs::LeapFrogVelocity::apply (serial and parallel loops)"]
 origin = "gromosXX Leap_Frog_Velocity::apply (leap_frog.cc): v + f * dt / m; newen computes v + f * m^-1 * dt with m^-1 from Topology::compute_inverse_masses (0 for m <= 0, where gromosXX divides by zero), last-bit differences"
 # Theorems over R: leap-frog is time-reversible, exact for constant acceleration, area preserving in 1-D; the model at R is the theory's step
-theory = "NewenTheory.Dynamics.Integration.leapFrog (leapFrog_reversible, reverse_comp_leapFrog_involutive, leapFrog_exact_constant, leapFrog_iterate_exact, leapFrog_jacobian)"
+theory = "NewenTheory.Dynamics.Integration.leapFrog (leapFrog_reversible, reverse_comp_leapFrog_involutive, leapFrog_exact_constant, leapFrog_iterate_exact, leapFrog_jacobian: one-dimensional, x and v real)"
 model = "NewenSpec.Dynamics.leapFrogVelocityModel (at Float: leapFrogVelocityFloat)"
 theorem = "NewenSpec.Dynamics.leapFrogModel_real_eq"
 # Rust = model at Float, bit for bit on the generated rows (cargo test)
@@ -568,7 +569,7 @@ kind = "float"
 rust = "crates/newen-integrators/src/algorithms/berendsen_barostat.rs::berendsen_barostat_scale"
 used_by = ["crates/newen-integrators/src/algorithms/berendsen_barostat.rs::BerendsenBarostat::apply"]
 origin = "gromosXX Berendsen_Barostat::apply (berendsen_barostat.cc, isotropic): pow(1 - comp * dt / tau * (P0 - P), 1/3); calls powf, the platform pow (not correctly rounded; Rust and Lean both call libm)"
-# Theorems over R: fixed point at P0, the box grows exactly when P > P0, the volume scales by the radicand, and the pressure relaxes by dt/tau under linear response
+# Theorems over R: fixed point at P0, the box grows exactly when P > P0, the volume scales by the radicand, and the pressure relaxes by dt/tau under linear response; the model at R is the theory for a non-negative radicand (below it Rust and Float return NaN)
 theory = "NewenTheory.Dynamics.Pressure.barostatScale (barostat_fixed, barostat_grows_iff, barostat_shrinks_iff, barostat_volume, barostat_relax)"
 model = "NewenSpec.Dynamics.berendsenBarostatModel (at Float: berendsenBarostatFloat)"
 theorem = "NewenSpec.Dynamics.berendsenBarostatModel_real_eq"
@@ -707,7 +708,7 @@ kind = "float"
 rust = "crates/newen-forces/src/nonbonded/perturbed.rs::rf_soft_interaction"
 used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::atom_pair_state (excluded PERTATOMPAIR states)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS excluded pairs)"]
 origin = "gromosXX Eds_Nonbonded_Term::rf_soft_interaction (perturbed_nonbonded_term.cc:718-765) without the self-term correction; crf/2 formed as crf_2cut3i * cut^3"
-theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy (softcore_dvdl_is_deriv_rf_excluded, softcore_lambda_zero, softcore_lambda_one)"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy, pertRfExclForce (softcore_dvdl_is_deriv_rf_excluded, softcore_rf_excluded_force_is_minus_grad, softcore_lambda_zero, softcore_lambda_one)"
 model = "NewenSpec.SoftCore.rfSoftModel (at Float: rfSoftFloat)"
 theorem = "NewenSpec.SoftCore.rfSoftModel_real_eq"
 differential = "crates/newen-forces/tests/softcore_spec.rs"
@@ -719,7 +720,7 @@ kind = "float"
 rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_rf_excluded_pair"
 used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_excluded_correction"]
 origin = "gromosXX rf_soft_interaction (perturbed_nonbonded_term.cc:718-765), as the excluded-pair correction rounds it: crf_2cut3i * sqrt((cut2/cut2soft)^3) with powi(3), where rf_soft_interaction has crf_2cut3i * cut^3 / sqrt(cut2soft^3); equal over R"
-theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy (softcore_dvdl_is_deriv_rf_excluded)"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy, pertRfExclForce (softcore_dvdl_is_deriv_rf_excluded, softcore_rf_excluded_force_is_minus_grad)"
 model = "NewenSpec.SoftCore.perturbedRfExcludedModel (at Float: perturbedRfExcludedFloat)"
 theorem = "NewenSpec.SoftCore.perturbedRfExcludedModel_real_eq"
 differential = "crates/newen-forces/tests/softcore_spec.rs"
@@ -803,9 +804,9 @@ kind = "float"
 rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_improper_term"
 used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_improper_dihedral_forces_grouped"]
 origin = "gromosXX perturbed_improper_dihedral_interaction.cc:129-182, the wrap of zeta into [q0 - pi, q0 + pi] included"
-theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends)"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends); NewenTheory.Interactions.Bonded.wrapZeta"
 model = "NewenSpec.PerturbedBonded.improperModel (at Float: improperFloat)"
-theorem = "NewenSpec.PerturbedBonded.improperModel_real_eq (at the wrapped zeta it returns)"
+theorem = "NewenSpec.PerturbedBonded.improperModel_real_eq (wrapModel_real_eq; improperModel_dvdl_is_deriv away from the wrap's jump)"
 differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
 vectors = "spec/vectors/perturbed_bonded.json"
 

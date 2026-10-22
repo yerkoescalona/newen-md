@@ -305,8 +305,13 @@ theorem scalarPressureModel_real_eq (p : M3 ℝ) :
     scalarPressureModel ℝ p = scalarPressure p.toMatrix := by
   simp [scalarPressureModel, scalarPressure, Matrix.trace_fin_three, M3.toMatrix]
 
-/-- The barostat factor over ℝ, with `third = 1/3`, is the theory's `barostatScale`. -/
-theorem berendsenBarostatModel_real_eq (P P₀ β τ dt : ℝ) :
-    berendsenBarostatModel ℝ (1 / 3) P P₀ β τ dt = barostatScale P P₀ β τ dt := rfl
+/-- The barostat factor over ℝ, with `third = 1/3`, is the theory's `barostatScale`, and its
+cube is the volume factor `1 − β·dt/τ·(P₀ − P)` (`barostat_volume`). The radicand must not be
+negative (`hr`): below it Rust's `powf` and `Float.pow` return NaN, while ℝ's `rpow` returns a real
+number that is not a cube root. -/
+theorem berendsenBarostatModel_real_eq {P P₀ β τ dt : ℝ} (hr : 0 ≤ 1 - β * dt / τ * (P₀ - P)) :
+    berendsenBarostatModel ℝ (1 / 3) P P₀ β τ dt = barostatScale P P₀ β τ dt ∧
+      berendsenBarostatModel ℝ (1 / 3) P P₀ β τ dt ^ 3 = 1 - β * dt / τ * (P₀ - P) :=
+  ⟨rfl, barostat_volume hr⟩
 
 end NewenSpec.Dynamics

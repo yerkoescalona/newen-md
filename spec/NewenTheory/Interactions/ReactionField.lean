@@ -25,7 +25,7 @@ with the reaction-field constant
 
 The `r²` term is the reaction field of the continuum, the constant term shifts the energy to zero
 at the cutoff (`crf_energy_zero_at_cutoff`). GROMOS writes `ε_rf = 0` for a conducting boundary,
-the limit `ε_rf → ∞` where `C_RF = −1` (`crf_conducting_limit`, at `κ = 0`).
+the limit `ε_rf → ∞` where `C_RF = −1` (`crf_conducting_limit`, for every `κ ≥ 0`).
 
 Excluded pairs (bonded neighbours) and each atom with itself get no Coulomb `1/r` term, but they
 do polarise the continuum, so they keep the rest of the pair energy
@@ -142,24 +142,31 @@ theorem rf_excluded_force_is_minus_grad (q crf R r : ℝ) :
   · field_simp
     ring
 
-/-- A conducting boundary: with `κ = 0`, `C_RF → −1` as `ε_rf → ∞`. This is the value GROMOS
-assigns to the sentinel `ε_rf = 0`. -/
-theorem crf_conducting_limit (ε R : ℝ) :
-    Tendsto (fun εrf => crfConstant ε εrf 0 R) atTop (𝓝 (-1)) := by
+/-- A conducting boundary: for every ionic strength `κ ≥ 0` and radius `R > 0`, `C_RF → −1` as
+`ε_rf → ∞`. This is the value GROMOS assigns to the sentinel `ε_rf = 0`. -/
+theorem crf_conducting_limit (ε : ℝ) {κ R : ℝ} (hκ : 0 ≤ κ) (hR : 0 < R) :
+    Tendsto (fun εrf => crfConstant ε εrf κ R) atTop (𝓝 (-1)) := by
+  -- numerator `2 ε a − ε_rf c`, denominator `ε a + ε_rf c`, with `a = 1 + κR`, `c = 2a + (κR)²`
+  set a := 1 + κ * R
+  set c := 2 * a + (κ * R) ^ 2
+  have hc : 0 < c := by have : 0 ≤ κ * R := mul_nonneg hκ hR.le; positivity
   have hinv : Tendsto (fun x : ℝ => x⁻¹) atTop (𝓝 0) := tendsto_inv_atTop_zero
-  have hn : Tendsto (fun x : ℝ => 2 * ε * x⁻¹ - 2) atTop (𝓝 (2 * ε * 0 - 2)) :=
-    (hinv.const_mul (2 * ε)).sub_const 2
-  have hd : Tendsto (fun x : ℝ => ε * x⁻¹ + 2) atTop (𝓝 (ε * 0 + 2)) :=
-    (hinv.const_mul ε).add_const 2
-  have hlim := hn.div hd (by norm_num)
-  rw [show (2 * ε * 0 - 2) / (ε * 0 + 2) = (-1 : ℝ) by norm_num] at hlim
+  have hn : Tendsto (fun x : ℝ => 2 * ε * a * x⁻¹ - c) atTop (𝓝 (2 * ε * a * 0 - c)) :=
+    (hinv.const_mul (2 * ε * a)).sub_const c
+  have hd : Tendsto (fun x : ℝ => ε * a * x⁻¹ + c) atTop (𝓝 (ε * a * 0 + c)) :=
+    (hinv.const_mul (ε * a)).add_const c
+  have hlim := hn.div hd (by simp only [mul_zero, zero_add]; exact hc.ne')
+  rw [show (2 * ε * a * 0 - c) / (ε * a * 0 + c) = (-1 : ℝ) by
+    rw [mul_zero, mul_zero, zero_sub, zero_add, neg_div, div_self hc.ne']] at hlim
   refine hlim.congr' ?_
   filter_upwards [eventually_gt_atTop 0] with x hx
   have hx' : x ≠ 0 := hx.ne'
-  have hnum : 2 * ε * x⁻¹ - 2 = 2 * (ε - x) / x := by field_simp
-  have hden : ε * x⁻¹ + 2 = (ε + 2 * x) / x := by field_simp
+  have hnum : 2 * ε * a * x⁻¹ - c = (2 * (ε - x) * a - x * (κ * R) ^ 2) / x := by
+    simp only [c]; field_simp; ring
+  have hden : ε * a * x⁻¹ + c = ((ε + 2 * x) * a + x * (κ * R) ^ 2) / x := by
+    simp only [c]; field_simp; ring
   rw [Pi.div_apply, hnum, hden, div_div_div_cancel_right₀ hx']
-  simp [crfConstant]
+  rfl
 
 end NewenTheory.Interactions.ReactionField
 

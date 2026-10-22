@@ -782,6 +782,7 @@ fn validate(
 /// long-range pairs from its last update, and their λ_k terms are evaluated only when that
 /// update is also an NTWG step (`perturbed_nonbonded_set.cc:87-96`). That happens on some
 /// output step exactly when neither of NSNB and NTWG divides the other.
+/// The check ignores NSTLIM, so it also warns for a run that ends before its first incomplete row.
 pub fn precalclam_longrange_gaps(imd: &ImdParameters) -> Option<(usize, usize)> {
     let precalc = imd.ntg != 0 && imd.precalclam.is_some_and(|b| b.nr_lambdas > 0);
     let twin_range = imd.rcutp < imd.rcutl - 1e-10;
