@@ -653,9 +653,9 @@ key = "periodicity.triclinic_nearest_image"
 kind = "float"
 rust = "crates/newen-core/src/math.rs::triclinic_nearest_image"
 used_by = ["crates/newen-core/src/math.rs::Triclinic::nearest_image (through Periodicity::nearest_image; triclinic and truncated-octahedron boxes)"]
-origin = "gromosXX Boundary_Implementation<triclinic>::nearest_image (boundary_implementation.cc:277-318), loop for loop and operation for operation"
+origin = "gromosXX Boundary_Implementation<triclinic>::nearest_image (boundary_implementation.cc:277-318) as its comments intend: newen reduces the fractional coordinates (z by c, then y − (c_y/c_z)z by b, then the rest of x by a: the centred parallelepiped). gromosXX itself reads m_box(i, j) as component i of edge j (math::Box::operator(), gmath.h:592-596), so its skew terms are b_z, a_y, a_z = 0 and it reduces raw z by c_z, y by b_y, x by a_x: a brick. Both give the same, shortest image for every vector shorter than half the smallest height (image_shortest_of_lt_half_height); they can differ beyond"
 # Theorems over R: lattice, in the centred cell (fractional coordinates in (-1/2, 1/2]), unique, idempotent; not always the shortest image (image_not_shortest)
-theory = "NewenTheory.Space.Periodicity.Box.image (image_lattice, image_inCell, inCell_unique, image_eq_of, image_idem, image_not_shortest)"
+theory = "NewenTheory.Space.Periodicity.Box.image (image_lattice, image_inCell, inCell_unique, image_eq_of, image_idem, image_not_shortest, image_shortest_of_lt_half_height)"
 model = "NewenSpec.Periodicity.triclinicNearestImageModel (at Float: triclinicNearestImageFloat, fuel 100000)"
 theorem = "NewenSpec.Periodicity.triclinicNearestImageModel_real_eq (triclinicNearestImageModel_real_idem), for lower-triangular boxes and fuel above every fractional coordinate plus one"
 # Rust = model at Float, bit for bit on the generated rows (rectangular, truncated-octahedron, reduced, skewed and monoclinic boxes) (cargo test)
@@ -1223,7 +1223,7 @@ key = "p3m.a2_tilde"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::a2_tilde_p3m"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NA2CLC 3 and 4"]
-origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges: newen reports the A term of the step (the P3M references use gromosXX + patches/p3m_nvt_a_term.patch)"
+origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges: newen reports the A term of the step (the P3M references use gromosXX + patches/LS1_p3m_nvt_a_term.patch)"
 model = "NewenSpec.P3M.a2TildeModel (at Float: a2TildeFloat)"
 # Rust = model at Float, bit for bit (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"

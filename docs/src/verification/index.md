@@ -849,7 +849,24 @@ theorem image_not_shortest :
 Read aloud: there is a box and a point whose image in the centred cell can be shortened by a
 lattice vector. In the box `a = (2, 0, 0)`, `b = (1, 1, 0)`, `c = (0, 0, 1)` the point
 `(6/5, 2/5, 0)` is its own image, with squared length `8/5`, while `r − a` has `4/5`. What
-gromosXX's triclinic `nearest_image` guarantees is the centred cell, not the shortest vector.
+the centred cell guarantees is a cell, not the shortest vector.
+
+Below half the smallest height of the cell (`h_a = V/|b × c|`, and so on) it is the shortest:
+
+```lean
+theorem image_shortest_of_lt_half_height (h : B.LowerTriangular) {d : Vec3 ℝ}
+    (hd : Real.sqrt (normSq d) < B.minHeight / 2) :
+    B.image d = d ∧ ∀ w : Vec3 ℝ, B.Lattice w → w ≠ 0 → normSq d < normSq (d - w)
+```
+
+Read aloud: a separation shorter than half the smallest height is its own image, and every other
+image is strictly longer. The proof writes each fractional coordinate as the dot product with a
+reciprocal vector (`frac_eq_dot`, `rec_eq_cross`: `u_a = (b × c)/V`), so `|s_a| ≤ |d|/h_a < 1/2`,
+and a non-zero lattice vector has an integer fractional coordinate of size at least one, so it is
+at least one height long (`lattice_dot_ge`, `longer_of`). gromosXX's triclinic reduction (below)
+returns the same vector there, so the two agree on every pair that short; newen refuses a run
+whose largest cutoff is not below half the smallest height (`check_cutoffs_fit_box`), as gromosXX
+does for RCUTL (`boundary_checks.cc:59-91`).
 
 **One model.** `spec/NewenSpec/Periodicity.lean` writes each kernel over any number type, with
 glam's vector and matrix operations in glam's order: `DMat3 * DVec3` is
@@ -911,7 +928,18 @@ The model follows newen's Rust. Where it differs from gromosXX:
   the centred cell (`periodicity.cc:36-41`). newen's `put_into_box` uses the positive cell,
   `[0, L)` and fractional `[0, 1)`. `gather.rs` reproduces gromosXX's choice with
   `nearest_image(v, 0)` where it matters.
-- **Triclinic nearest image.** It is gromosXX's, loop for loop and operation for operation.
+- **Triclinic nearest image.** newen's loops are gromosXX's as its comments and formulas intend:
+  `nim_y = nim.y − m_box(2,1)/m_box(2,2)·nim.z` read as `c_y/c_z`, the fractional coordinates.
+  But gromosXX's `math::Box::operator()(i, j)` returns component `i` of edge `j`
+  (`gmath.h:592-596`), so `m_box(2,1)` is `b_z`, `m_box(1,0)` is `a_y` and `m_box(2,0)` is `a_z`,
+  all zero in GROMOS's lower-triangular box: gromosXX reduces the raw `z` by `c`, the raw `y` by
+  `b` and the raw `x` by `a`, into the brick `|x| < aₓ/2, |y| < b_y/2, |z| < c_z/2`. Below half the
+  smallest height both return the vector itself (the brick contains that ball, since `h_a ≤ aₓ`,
+  `h_b ≤ b_y`, `h_c = c_z`), the shortest image (`image_shortest_of_lt_half_height`). With a
+  charge-group cutoff an atom pair can be longer than the cutoff by the extent of its two groups;
+  in `nacl_water_box_triclinic` with RCUTL 0.9 nm (smallest height 1.855 nm) an H–H pair of two
+  waters 0.899 nm apart was 1.461 nm in newen's image, 1.277 nm in gromosXX's and 1.055 nm in the
+  shortest, so the reference runs with 0.7 nm cutoffs (every pair below 0.9 nm).
 
 ```sh
 cargo test -p newen-core --test periodicity_spec    # Rust = Float model, bit for bit
@@ -1206,6 +1234,12 @@ What newen does differently from gromosXX, each reported as found:
   `k_cut2` and commented "k cutoff squared for faster comparison"); Vol. 2 cuts at `|k| ≤ k_c`.
   newen follows the code; the references choose KCUT accordingly.
 
+Corrected in the oracle since (patches in `tests/gromosXX_references/patches/`): the triclinic
+wave vectors (`LS3_triclinic_kvectors.patch`, pinned by `nacl_water_box_triclinic_p3m_fixed`) and
+the surface virial (`LS2_surface_virial.patch`, pinned by `water_216_npt_ewald_epsls_fixed`: under
+Berendsen pressure scaling with EPSLS 61 the released binary's step-0 pressure is −305.43 instead
+of −296.61 kJ mol⁻¹ nm⁻³).
+
 ```sh
 cargo test -p newen-forces --test ewald_spec                       # Rust = Float model, bit for bit; forces, virials by FD
 cargo test -p newen-md --test test_gromosXX_references ewald       # the three Ewald references
@@ -1312,7 +1346,7 @@ What newen does differently from gromosXX:
   box only, but P3M's `Ã2` depends on where each charge sits relative to the grid (Vol. 2 after
   `u_ga_slf_def_p3m`), so gromosXX's A term, and every total containing it, is stale from step 1
   on (2.2·10⁻⁷ relative after 8 steps in `nacl_pair_box_p3m_fixed`). newen reports the step's A
-  term. The references come from gromosXX with `patches/p3m_nvt_a_term.patch`, which removes that
+  term. The references come from gromosXX with `patches/LS1_p3m_nvt_a_term.patch`, which removes that
   one line; with the released binary their forces, trajectories and every other energy row are
   identical. Not yet in the dossier.
 - **`Ã2` every step.** gromosXX computes the P3M `Ã2` at step 0, under pressure scaling and on
@@ -1326,7 +1360,14 @@ What newen does differently from gromosXX:
   rounding only.
 - **Triclinic wave vectors**, as for the Ewald sum: gromosXX's `k_l` multiplies by the transpose
   of the reciprocal basis in the influence function and in the `ik` field (`influence_function.cc:164, 424`,
-  `latticesum.cc:566`); newen uses `lattice_vector`.
+  `latticesum.cc:566`); newen uses `lattice_vector`. Read with gromosXX's `Box(i, j)` convention:
+  `tL_0 = transpose(Matrix(box))` has the box vectors as rows, so `product(2π tL_0⁻¹, l) =
+  2π L⁻¹ l = (u_a·l, u_b·l, u_c·l)`, the same transposed product. Corrected in the oracle by
+  `LS3_triclinic_kvectors.patch`; `nacl_water_box_triclinic_p3m_fixed` (ik differentiation)
+  agrees with newen, while the released binary gives a k-space energy of 2021.89 instead of
+  2031.45 kJ/mol at step 0 and forces up to 27.6 kJ mol⁻¹ nm⁻¹ apart. The finite-difference field
+  above has no patch yet, so no triclinic reference uses NFDORD > 0 (with NFDORD 2 the patched
+  binary still differs from newen in the forces).
 - **The Nyquist planes of `ik` differentiation.** gromosXX keeps `l = N/2` in `−i k φ̂`. That is
   harmless: the field is the real part of the backward transform, which keeps the Hermitian part of
   `Ê`, and that is `−i k' φ̂` with the Nyquist components of `l` set to zero, the usual treatment.
@@ -1343,7 +1384,7 @@ What newen does differently from gromosXX:
 
 ```sh
 cargo test -p newen-forces --test p3m_spec                         # kernels = Float model; FFT within 1e-12; vs Ewald
-cargo test -p newen-md --test test_gromosXX_references p3m         # the three P3M references
+cargo test -p newen-md --test test_gromosXX_references p3m         # the four P3M references
 cargo test -p newen-md --test gromos_check_suite aladip_p3m        # gromosXX's aladip_ls check
 ```
 
@@ -1687,10 +1728,17 @@ Planned, in the order chosen:
   (NLRELE = 3), charge assignment to a grid, the optimal influence function and the FFT with
   PhastFT (powers of two only), its per-point kernels bit-exact against their Lean model and the
   FFT within a tolerance, three gromosXX references and the check suite's `aladip_ls` (see
-  [phase 3](#lattice-sum-electrostatics-phase-3-p3m)). Phase 4: the
-  refusals that remain (the combinations gromosXX itself refuses, and those newen does not
-  support), and the removal of the unwired smooth-PME code in `crates/newen-forces`
-  (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`), which is not GROMOS's P3M.
+  [phase 3](#lattice-sum-electrostatics-phase-3-p3m)). Phase 4, done: GENBOX boxes with their
+  angles (NTB 2, `nacl_water_box_triclinic`), the cutoff refused at half the smallest cell height
+  with the theorem that both triclinic reductions give the shortest image below it, the patched
+  oracle for the three gromosXX defects (LS1 the NVT A term, LS2 the surface virial with
+  `water_216_npt_ewald_epsls_fixed`, LS3 the triclinic wave vectors with
+  `nacl_water_box_triclinic_p3m_fixed`), and the unwired smooth-PME code (`electrostatics.rs`,
+  `pme.rs`, `pme_mpi.rs`), its `use-fftw` feature and the `rustfft`/`fftw` dependencies of
+  `newen-forces` removed. Open: an NPT P3M reference with NQEVAL > 0 (the influence-function
+  recomputation and its box correction are pinned by kernel tests only); a patched oracle for the
+  triclinic finite-difference field, and with it a triclinic P3M reference with NFDORD > 0; the
+  Lennard-Jones lattice sum (NLRLJ), implemented in neither engine.
 - **Continuous integration (planned):** on every pull request, the cargo tests and lint, which
   include the exhaustive test; a Lean job (`lake build`) only when `spec/` or
   `crates/newen-logic` changes, since the Mathlib cache is large; and nightly long runs of the

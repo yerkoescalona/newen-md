@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
+## [0.0.75] (2026-10-22)
+
+### Added (lattice-sum electrostatics, specification first)
+
+- **Ewald (NLRELE 2) and P3M (NLRELE 3) run.** The GROMOS lattice sum with its twelve
+  charge-shaping functions, the real-space, k-space, self, A and surface terms, ENERGY03 rows
+  13–19; P3M with the Hockney–Eastwood influence function, ik or finite-difference forces, Ã2 from
+  the squared-charge grid and the FACCUR quality check, on PhastFT (grids must be powers of two).
+  Lean: `NewenTheory/Interactions/{LatticeSum,P3M}.lean` (shapes with their derivatives, erfc by its
+  integral, forces as minus the gradient of every term, the symmetric k set, the partition of
+  unity of the assignment functions, the discrete Fourier transform and its inverse, the
+  finite-difference stencils exact on polynomials, the P3M energy real), 70 theorems; models and
+  bit-exact tests for every per-point kernel, a tolerance layer for the transform. References:
+  three Ewald (gromosXX with `@develop`), three P3M and one NPT and one triclinic `_fixed` on the
+  patched oracle, gromosXX's `aladip_ls` check for twelve shapes. 131 references, none ignored.
+- **Triclinic boxes** are read from GENBOX's angles (they were run as rectangular before) and
+  written back as gromosXX does; reference `nacl_water_box_triclinic`. Cutoffs reaching half the
+  smallest cell height are refused for every box type.
+
+### Fixed (corrected in newen, patched in the oracle: LS1–LS3, dossier ids pending)
+
+- gromosXX freezes the self and A terms of an NVT run at step 0 (wrong for P3M), stores the
+  surface virial without the factor every other lattice-sum virial has, and builds triclinic
+  k vectors from the transposed reciprocal matrix. Also corrected without a patch yet: the
+  finite-difference field's lattice-axis spacing assigned to Cartesian components, and the box
+  correction applied relative to the old box on a recompute step.
+
+### Removed
+
+- The unwired SPME code of newen-forces and its FFTW feature; `fftw` leaves the workspace.
+
 ## [0.0.74] (2026-10-22)
 
 ### Added

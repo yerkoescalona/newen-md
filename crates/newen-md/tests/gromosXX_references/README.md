@@ -34,7 +34,7 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 1   | benzene_vacuum   | 12    | aromatic ring + improper + torsion   | **PASS** |
 | 1   | nacl_pair_box    | 2     | Coulomb + LJ in PBC with RF (no solvent) | **PASS** |
 | 1   | nacl_pair_box_ewald | 2  | direct Ewald sum (NLRELE 2): k space, real space, self and A terms (cubic A2), Gaussian a = 0.4 nm, atomic cutoff, NK 10, KCUT 900 nm⁻²; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
-| 1   | nacl_pair_box_p3m_fixed | 2 | P3M (NLRELE 3): NSHAPE 3, ASHAPE 1.4 nm as the check suite's `aladip_ls`, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, NQEVAL 0, FACCUR 1.0, Ã2 from the grid (NA2CLC 3), cubic A2; expected output from native 247c95c4 + `patches/p3m_nvt_a_term.patch` (the A term of each step, not step 0's; with the released binary every other block agrees). PhastFT vs FFTW: energies to the printed digits, forces to the last digit | **PASS** |
+| 1   | nacl_pair_box_p3m_fixed | 2 | P3M (NLRELE 3): NSHAPE 3, ASHAPE 1.4 nm as the check suite's `aladip_ls`, grid 32³, NASORD 3, NFDORD 2, NALIAS 3, NQEVAL 0, FACCUR 1.0, Ã2 from the grid (NA2CLC 3), cubic A2; expected output from native 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` (the A term of each step, not step 0's; with the released binary every other block agrees). PhastFT vs FFTW: energies to the printed digits, forces to the last digit | **PASS** |
 | 1   | butane_vacuum    | 4     | dihedral + 1-4 LJ interaction        | **PASS** |
 | 1   | butane_vacuum_ntbdn1 | 4 | `butane_vacuum` with `COVALENTFORM 0 0 1`: the Chebyshev-polynomial dihedral K(1 + cos δ cos mφ) (NTBDN = 1, δ = 0) | **PASS** |
 | 1   | aladip_vacuum    | 12    | all bonded + exclusions + 1-4        | **PASS** |
@@ -48,14 +48,17 @@ Run them: `cargo test -p newen-md --test test_gromosXX_references`
 | 2   | nacl_3water_cutoff | 11  | nacl_3water near cutoff boundary     | **PASS** |
 | 2   | nacl_water_box   | 62    | ion-water RF in PBC                  | **PASS** |
 | 2   | nacl_water_box_shifted | 62 | nacl_water_box with perturbed positions | **PASS** |
+| 2   | nacl_water_box_triclinic | 62 | GENBOX NTB 2: `nacl_water_box` in a cell of edges 2.0926 nm and angles 75/80/65 (same volume), RF with RCUTP = RCUTL = RCRF = 0.7 nm, so every pair is shorter than half the smallest height (1.855 nm) and both triclinic reductions give the shortest image; released binary | **PASS** |
+| 2   | nacl_water_box_triclinic_p3m_fixed | 62 | P3M in the same cell: the reciprocal-lattice wave vectors, NSHAPE 3, ASHAPE 1.4 nm, grid 32³, NASORD 3, ik differentiation (NFDORD 0), NA2CLC 3, atomic cutoff 0.9 nm; expected output from native 247c95c4 + `patches/LS3_triclinic_kvectors.patch` and `LS1` | **PASS** |
 | 3   | water_216_box    | 648   | bulk NVE, pairlist, virial           | **PASS** |
 | 3   | water_216_nve_nobath | 648 | absent MULTIBATH block ⇒ no bath (IMD parser defaults, 3.9 A18) | **PASS** |
 | 3   | water_216_box_com| 648   | bulk NVE + COM removal (NTICOM=1, NSCM=10) | **PASS** |
 | 3   | water_216_box_com_rot | 648 | COM translation+rotation removal (NTICOM=2, NSCM=-10) | **PASS** |
 | 3   | water_216_box_ewald | 648 | direct Ewald sum in bulk water: excluded pairs, twin-range LJ-only shell, cubic A2, EPSLS 0; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
 | 3   | water_216_box_ewald_epsls | 648 | `water_216_box_ewald` with EPSLS 61: the surface term of the box dipole; expected output from the released binary with @develop: gromosXX marks Ewald as under development | **PASS** |
-| 3   | water_216_box_p3m_fixed | 648 | P3M in bulk water: finite-difference field (NFDORD 2), NSHAPE 3 with ASHAPE 1.4 nm, grid 32³, NASORD 3, NALIAS 3, NA2CLC 3, excluded pairs, twin-range LJ-only shell; expected output from native 247c95c4 + `patches/p3m_nvt_a_term.patch` | **PASS** |
-| 3   | water_216_box_p3m_gauss_fixed | 648 | the same with the Gaussian (ASHAPE 0.4 nm) and ik differentiation (NFDORD 0, three backward transforms); expected output from native 247c95c4 + `patches/p3m_nvt_a_term.patch` | **PASS** |
+| 3   | water_216_npt_ewald_epsls_fixed | 648 | `water_216_box_ewald_epsls` under `water_216_npt`'s Berendsen thermostat and barostat: the surface-term virial (−2Ξ, whole tensor); expected output from native 247c95c4 + `patches/LS2_surface_virial.patch`, with @develop | **PASS** |
+| 3   | water_216_box_p3m_fixed | 648 | P3M in bulk water: finite-difference field (NFDORD 2), NSHAPE 3 with ASHAPE 1.4 nm, grid 32³, NASORD 3, NALIAS 3, NA2CLC 3, excluded pairs, twin-range LJ-only shell; expected output from native 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` | **PASS** |
+| 3   | water_216_box_p3m_gauss_fixed | 648 | the same with the Gaussian (ASHAPE 0.4 nm) and ik differentiation (NFDORD 0, three backward transforms); expected output from native 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` | **PASS** |
 | 3   | water_216_nvt    | 648   | Berendsen thermostat                 | **PASS** |
 | 3   | water_216_nvt_nosehoover | 648 | Nosé-Hoover thermostat (single NHC), fresh start (NTINHT 1); expected output from native 247c95c4 + `patches/D41_nh_restart.patch`: the final configuration carries plain Nosé–Hoover's NHCVARIABLES block (D41) | **PASS** |
 | 3   | water_216_nvt_nhc_chain | 648 | Nosé-Hoover-Chain (3 chains)        | **PASS** |

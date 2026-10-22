@@ -14,7 +14,8 @@ use newen_core::{
     configuration::{Box as SimBox, Configuration},
     gather::gather_chargegroups,
     math::{
-        truncoct_triclinic, truncoct_triclinic_box, Mat3, Periodicity, Rectangular, Triclinic, Vec3,
+        box_heights, genbox_box, truncoct_triclinic, truncoct_triclinic_box, Mat3, Periodicity,
+        Rectangular, Triclinic, Vec3,
     },
     random::generate_velocities,
     units::PhysicalConstants,
@@ -37,6 +38,10 @@ pub struct Coordinates {
     pub velocities: Vec<Vec3>,
     /// Zero for a vacuum system.
     pub box_dims: Vec3,
+    /// GENBOX angles α, β, γ in degrees (90° each for a rectangular box).
+    pub box_angles: Vec3,
+    /// GENBOX Euler angles φ, θ, ψ in degrees (zero unless the file sets them).
+    pub box_euler: Vec3,
     /// λ of the configuration's `PERTDATA` block, if it has one; a run with NRDGL=1 starts
     /// from it.
     pub pertdata: Option<f64>,
@@ -54,6 +59,8 @@ impl From<CoordinateData> for Coordinates {
             positions: c.positions,
             velocities: c.velocities,
             box_dims: c.box_dims,
+            box_angles: c.box_angles,
+            box_euler: c.box_euler,
             pertdata: c.pertdata,
             aedssearch: c.aedssearch,
             nhcvariables: c.nhcvariables,
@@ -156,6 +163,8 @@ pub struct Prepared {
     pub box_dims: Vec3,
     /// The lower-triangular triclinic box when `NTB=-1`, else `None`.
     pub truncoct_box: Option<Mat3>,
+    /// The GENBOX box when `NTB=2` with an angle other than 90°, else `None`.
+    pub triclinic_box: Option<Mat3>,
     pub notes: Vec<PrepareNote>,
 }
 
@@ -269,6 +278,8 @@ pub fn prepare_system(
         mut positions,
         mut velocities,
         box_dims,
+        box_angles,
+        box_euler,
         pertdata,
         aedssearch,
         nhcvariables,
@@ -350,6 +361,25 @@ pub fn prepare_system(
     } else {
         None
     };
+    // 2a. The GENBOX angles (`in_configuration.cc:1977-2005`): a rectangular box must have right
+    //     angles; NTB=2 builds the box vectors from lengths and angles. gromosXX stores the
+    //     Euler angles without rotating the box, but rotates box, positions and velocities by
+    //     them on output; newen does not apply them and refuses a box that has them.
+    let right_angles = box_angles == Vec3::splat(90.0);
+    let periodic = imd.ntb != 0 && box_dims != Vec3::ZERO;
+    if periodic && box_euler != Vec3::ZERO {
+        return Err(RunError::Inconsistent(format!(
+            "GENBOX Euler angles ({}, {}, {}) are not supported; only an unrotated box is",
+            box_euler.x, box_euler.y, box_euler.z
+        )));
+    }
+    if periodic && imd.ntb == 1 && !right_angles {
+        return Err(RunError::Inconsistent(
+            "Rectangular box, but box angles != 90".to_string(),
+        ));
+    }
+    let triclinic_box =
+        (periodic && imd.ntb == 2 && !right_angles).then(|| genbox_box(box_dims, box_angles));
 
     // 3. NSM from the coordinate file (the binary's rule; the parameter file's NSM is only a
     //    hint), then solvate — unless the caller already did.
@@ -458,7 +488,7 @@ pub fn prepare_system(
     //     configuration. A `.cnf` written with the molecules put back into the box has charge
     //     groups split across the boundary; the pairlist works on their centres of geometry.
     if imd.ntb != 0 && box_dims.x > 0.0 {
-        let pbc = match truncoct_box {
+        let pbc = match truncoct_box.or(triclinic_box) {
             Some(b) => Periodicity::Triclinic(Triclinic::new(b)),
             None => Periodicity::Rectangular(Rectangular::new(box_dims)),
         };
@@ -517,11 +547,13 @@ pub fn prepare_system(
     } else {
         vec![Vec3::ZERO; n_atoms]
     };
-    conf.current_mut().box_config = match truncoct_box {
-        Some(triclinic_box) => SimBox::truncated_octahedral(triclinic_box),
-        None => SimBox::rectangular(box_dims.x, box_dims.y, box_dims.z),
+    conf.current_mut().box_config = match (truncoct_box, triclinic_box) {
+        (Some(b), _) => SimBox::truncated_octahedral(b),
+        (None, Some(b)) => SimBox::triclinic(b),
+        (None, None) => SimBox::rectangular(box_dims.x, box_dims.y, box_dims.z),
     };
     conf.copy_current_to_old();
+    check_cutoffs_fit_box(imd, &conf.current().box_config)?;
 
     // 8. Configuration validation (topology + coordinates together).
     validate(
@@ -536,8 +568,30 @@ pub fn prepare_system(
         physical_constants,
         box_dims,
         truncoct_box,
+        triclinic_box,
         notes,
     })
+}
+
+/// gromosXX `boundary_check_cutoff` (`math/boundary_checks.cc:35-101`, called from
+/// `configuration.cc:546`): every height of a periodic cell must exceed twice the long-range
+/// cutoff. newen checks every pair cutoff (RCUTP, RCUTL, RCRF), for every periodic box alike:
+/// below half the smallest height the nearest image is the unique shortest one (Lean
+/// `image_shortest_of_lt_half_height`), and newen's and gromosXX's triclinic reductions agree.
+fn check_cutoffs_fit_box(imd: &ImdParameters, box_config: &SimBox) -> Result<(), RunError> {
+    if imd.ntb == 0 || box_config.vectors.x_axis.x <= 0.0 {
+        return Ok(());
+    }
+    let h = box_heights(box_config.vectors);
+    let h_min = h.x.min(h.y).min(h.z);
+    let cutoff = imd.rcutp.max(imd.rcutl).max(imd.rcrf);
+    if 2.0 * cutoff >= h_min {
+        return Err(RunError::Inconsistent(format!(
+            "box is too small: the cutoff {cutoff} nm (largest of RCUTP, RCUTL, RCRF) is not \
+             below half the smallest cell height {h_min} nm"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether the `MPERTATOM` block of a perturbation topology can be merged (gromosXX
@@ -1252,6 +1306,31 @@ mod tests {
             ..Default::default()
         };
         prepare_system(&imd, build_topology(parsed), constants, coords, &inputs)
+    }
+
+    /// The largest of RCUTP, RCUTL and RCRF must stay below half the smallest cell height, for a
+    /// rectangular and a triclinic box alike (gromosXX `boundary_check_cutoff`).
+    #[test]
+    fn cutoffs_must_stay_below_half_the_smallest_cell_height() {
+        use newen_core::math::{box_heights, genbox_box};
+        let imd = |rcutp: f64, rcutl: f64, rcrf: f64| ImdParameters {
+            ntb: 2,
+            rcutp,
+            rcutl,
+            rcrf,
+            ..Default::default()
+        };
+        let rect = SimBox::rectangular(2.0, 2.0, 2.0);
+        assert!(check_cutoffs_fit_box(&imd(0.8, 0.9, 0.9), &rect).is_ok());
+        assert!(check_cutoffs_fit_box(&imd(0.8, 0.9, 1.0), &rect).is_err());
+        let m = genbox_box(Vec3::splat(2.092576336), Vec3::new(75.0, 80.0, 65.0));
+        let h = box_heights(m);
+        let h_min = h.x.min(h.y).min(h.z);
+        assert!((h_min - 1.855_136_663_696).abs() < 1e-9, "{h_min}");
+        let tric = SimBox::triclinic(m);
+        assert!(check_cutoffs_fit_box(&imd(0.7, 0.9, 0.9), &tric).is_ok());
+        let err = check_cutoffs_fit_box(&imd(0.7, 0.93, 0.9), &tric).unwrap_err();
+        assert!(err.to_string().contains("smallest cell height"), "{err}");
     }
 
     fn tmp_ptp(tag: &str, text: &str) -> PathBuf {

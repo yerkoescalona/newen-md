@@ -11,7 +11,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.0.74"
+version = "0.0.75"
 edition = "2021"
 authors = ["Yerko Escalona"]
 license = "GPL-2.0-or-later"
@@ -84,9 +84,8 @@ clap = { version = "4.5", features = ["derive"] }
 # arrays; its inverse divides by N, which P3M undoes (exact for a power of two). Default
 # features off: no rayon, the P3M lines are far below its parallel threshold.
 phastft = { version = "0.4.1", default-features = false }
-# rustfft: newen-analysis, and the unwired PME code in newen-forces (pme.rs), to be removed
+# rustfft: newen-analysis
 rustfft = "6.2"
-fftw = "0.8"
 num-complex = "0.4"
 
 # ============================================================

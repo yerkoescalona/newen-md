@@ -85,11 +85,14 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   the Lean pipeline, P3M against the direct Ewald sum within the force-error estimate, forces
   against central differences of the energy. Differences from gromosXX: see
   `docs/src/verification/index.md`, phase 3 (the NVT A term, the triclinic finite-difference
-  field, the triclinic wave vectors). rustfft stays only for the unwired PME code below.
-- **Unwired PME code, not GROMOS P3M:** `electrostatics.rs`, `pme.rs` and `pme_mpi.rs` implement a
-  PME/Ewald of their own that nothing outside them calls and that does not follow GROMOS (no
-  charge shapes, no `A`-terms, an Abramowitz–Stegun `erfc`; not gromosXX's P3M). Do not build on
-  them; they are to be removed once P3M is ported.
+  field, the triclinic wave vectors). The FFT is PhastFT only: the unwired SPME code
+  (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`, not GROMOS's P3M), its `use-fftw` feature and the
+  `rustfft`/`fftw` dependencies were removed (2026-10-22).
+- **Lattice sums against the patched oracle (2026-10-22):** the corrected gromosXX defects are
+  pinned by `_fixed` references: LS1 (NVT A term), LS2 (surface virial,
+  `water_216_npt_ewald_epsls_fixed`), LS3 (triclinic wave vectors,
+  `nacl_water_box_triclinic_p3m_fixed`, ik differentiation). The triclinic finite-difference
+  field (NFDORD > 0) is corrected in newen but has no patched oracle yet.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections

@@ -28,13 +28,11 @@ rayon = { workspace = true }
 # Logging
 log = { workspace = true }
 
-# FFT: PhastFT for P3M (NLRELE 3); rustfft only for the unwired PME code (pme.rs)
+# FFT: PhastFT for P3M (NLRELE 3)
 phastft = { workspace = true }
-rustfft = { workspace = true }
-fftw = { workspace = true, optional = true }
 num-complex = { workspace = true }
 
-# MPI for distributed PME
+# MPI
 mpi = { workspace = true, optional = true }
 
 # Serialization
@@ -47,7 +45,6 @@ tch = { version = "0.24.0", optional = true }
 
 [features]
 default = []
-use-fftw = ["fftw"]
 use-mpi = ["mpi"]
 mpi = ["dep:mpi"]
 gpu = []

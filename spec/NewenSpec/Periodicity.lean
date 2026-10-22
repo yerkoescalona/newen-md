@@ -12,7 +12,10 @@ Rust (spec keys in `spec/SPEC.toml`), all in `crates/newen-core/src/math.rs`:
   `rectangular_nearest_image` and `rectangular_put_into_box`;
 * `periodicity.triclinic_new`, `periodicity.triclinic_nearest_image`,
   `periodicity.triclinic_put_into_box`: `Triclinic::new` (glam's `DMat3::inverse`),
-  `triclinic_nearest_image` (gromosXX's z → y → x reduction) and `triclinic_put_into_box`.
+  `triclinic_nearest_image` (a z → y → x reduction of the fractional coordinates, as
+  gromosXX's comments intend; gromosXX itself reduces into a brick, the same image below half the
+  smallest height: `NewenTheory…Box.image_shortest_of_lt_half_height`) and
+  `triclinic_put_into_box`.
   The truncated octahedron is a triclinic box (`truncoct_triclinic_box`).
 
 Theory: `NewenTheory/Space/Periodicity.lean`.

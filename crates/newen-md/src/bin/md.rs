@@ -424,6 +424,12 @@ fn write_forces(
     result.map_err(|e| e.to_string())
 }
 
+/// The GENBOX of `state`'s box under the run's NTB: its NTB and box vectors; `None` in vacuum.
+fn genbox_of(ntb: i32, state: &newen::configuration::State) -> Option<(i32, newen::math::Mat3)> {
+    let vectors = state.box_config.vectors;
+    (ntb != 0 && vectors.x_axis.x > 0.0).then_some((ntb, vectors))
+}
+
 /// One NTWX frame of `state`'s positions; gromosXX writes a truncated octahedron in its cube frame
 /// (`truncoct_triclinic_rotmat(false)`), as the final configuration.
 fn write_positions(
@@ -431,15 +437,15 @@ fn write_positions(
     step: usize,
     time: f64,
     state: &newen::configuration::State,
+    ntb: i32,
 ) -> Result<(), String> {
-    let dims = state.box_config.dimensions();
-    let box_dims = (dims.x > 0.0).then_some(dims);
+    let genbox = genbox_of(ntb, state);
     let result = if state.box_config.box_type == BoxType::TruncatedOctahedral {
         let rot = truncoct_triclinic_rotmat(false);
         let pos: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
-        tw.write_trc_frame(step, time, &pos, box_dims)
+        tw.write_trc_frame_genbox(step, time, &pos, genbox)
     } else {
-        tw.write_trc_frame(step, time, &state.pos, box_dims)
+        tw.write_trc_frame_genbox(step, time, &state.pos, genbox)
     };
     result.map_err(|e| e.to_string())
 }
@@ -1232,7 +1238,7 @@ fn main() {
             // NSTEPS + 1.
             // the minimiser stopped before its buffer swap: step k's positions are `current`
             if let (true, Some(tw)) = (frames.positions, traj_writer.as_mut()) {
-                if let Err(e) = write_positions(tw, step, time, conf.current()) {
+                if let Err(e) = write_positions(tw, step, time, conf.current(), imd.ntb) {
                     eprintln!("Error writing final trajectory frame: {}", e);
                 }
             }
@@ -1302,7 +1308,7 @@ fn main() {
         // schedule (frame 0 is the input configuration).
         if let (true, Some(traj_writer)) = (due(step, nstxout) && step < n_steps, &mut traj_writer)
         {
-            if let Err(e) = write_positions(traj_writer, step, time, conf.old()) {
+            if let Err(e) = write_positions(traj_writer, step, time, conf.old(), imd.ntb) {
                 eprintln!("Error writing trajectory: {}", e);
             }
         }
@@ -1438,13 +1444,12 @@ fn main() {
         });
         let positions = rotated_pos.as_ref().unwrap_or(&conf.current().pos);
         let velocities = rotated_vel.as_ref().unwrap_or(&conf.current().vel);
-        let box_vec = conf.current().box_config.dimensions();
+        let genbox = genbox_of(imd.ntb, conf.current());
         let vels = if velocities.iter().any(|v| *v != Vec3::ZERO) {
             Some(velocities.as_slice())
         } else {
             None
         };
-        let box_opt = if box_vec.x > 0.0 { Some(box_vec) } else { None };
         // gromosXX `final_configuration` + `_print_title`: the run title, then the file's name
         let title = format!("\t{}\n\n\tfinal configuration", imd.title);
         // gromosXX `_print_timestep` (`out_configuration.cc:519`): the step counter and time
@@ -1500,8 +1505,8 @@ fn main() {
             if let Some(v) = vels {
                 w.write_velocities(v)?;
             }
-            if let Some(b) = box_opt {
-                w.write_box(b)?;
+            if let Some((ntb, vectors)) = genbox {
+                w.write_genbox(ntb, vectors)?;
             }
             if imd.ntg != 0 {
                 w.write_pertdata(topo.lambda)?;
@@ -1770,15 +1775,14 @@ mod tests {
         state.box_config = SimBox::truncated_octahedral(Mat3::from_diagonal(Vec3::splat(3.0)));
 
         let mut tw = TrajectoryWriter::new(path("helper"), "t", false, false).unwrap();
-        write_positions(&mut tw, 7, 0.014, &state).unwrap();
+        write_positions(&mut tw, 7, 0.014, &state, -1).unwrap();
         drop(tw);
 
         let rot = truncoct_triclinic_rotmat(false);
         let rotated: Vec<Vec3> = state.pos.iter().map(|p| rot * *p).collect();
-        let dims = state.box_config.dimensions();
         let mut expected = TrajectoryWriter::new(path("expected"), "t", false, false).unwrap();
         expected
-            .write_trc_frame(7, 0.014, &rotated, (dims.x > 0.0).then_some(dims))
+            .write_trc_frame_genbox(7, 0.014, &rotated, Some((-1, state.box_config.vectors)))
             .unwrap();
         drop(expected);
 

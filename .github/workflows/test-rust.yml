@@ -115,7 +115,6 @@ jobs:
         features:
           - "--no-default-features"
           - "--features simd"
-          - "--features use-fftw"
           - "--all-features"
 
     steps:

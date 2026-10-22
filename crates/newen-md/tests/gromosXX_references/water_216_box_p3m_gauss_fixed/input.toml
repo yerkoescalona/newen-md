@@ -1,4 +1,4 @@
-# Expected output from native gromosXX 247c95c4 + `patches/p3m_nvt_a_term.patch` (built as in
+# Expected output from native gromosXX 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` (built as in
 # `patches/BUILD.md`), generated with
 #   python3 scripts/regen_gromosXX_references.py --binary <patched md> water_216_box_p3m_gauss_fixed
 # The released binary freezes the A term of an NVT run at its step-0 value

@@ -119,6 +119,8 @@ impl Parts {
             positions: self.positions,
             velocities: self.velocities,
             box_dims: self.box_dims,
+            box_angles: Vec3::splat(90.0),
+            box_euler: Vec3::ZERO,
             pertdata: self.pertdata,
             aedssearch: self.aedssearch,
             nhcvariables: self.nhcvariables,

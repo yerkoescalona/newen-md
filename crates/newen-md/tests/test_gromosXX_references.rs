@@ -930,11 +930,18 @@ fn parse_pertdata(path: &Path) -> Option<f64> {
 /// rule *in the cube frame* (the cubic minimum image, then the body-centred (±L/2)³ shift), not
 /// with the triclinic lattice the engine works in.
 fn fold_into_box(path: &Path, d: [f64; 3]) -> [f64; 3] {
-    let Some((ntb, edges)) = parse_box(path) else {
+    let Some((ntb, edges, angles)) = parse_box(path) else {
         return d;
     };
     if edges[0] <= 0.0 || ntb == 0 {
         return d;
+    }
+    if ntb == 2 {
+        // a triclinic cell: fold the fractional coordinates
+        use newen_core::math::{genbox_box, Vec3};
+        let h = genbox_box(Vec3::from(edges), Vec3::from(angles));
+        let f = h.inverse() * Vec3::from(d);
+        return (h * (f - f.round())).to_array();
     }
     let mut r = [0.0; 3];
     for c in 0..3 {
@@ -957,8 +964,8 @@ fn fold_into_box(path: &Path, d: [f64; 3]) -> [f64; 3] {
     r
 }
 
-/// NTB and the box edge lengths of a `.cnf`'s GENBOX block, if it has one.
-fn parse_box(path: &Path) -> Option<(i32, [f64; 3])> {
+/// NTB, the box edge lengths and the angles of a `.cnf`'s GENBOX block, if it has one.
+fn parse_box(path: &Path) -> Option<(i32, [f64; 3], [f64; 3])> {
     let text = fs::read_to_string(path).ok()?;
     let mut lines = text
         .lines()
@@ -967,12 +974,17 @@ fn parse_box(path: &Path) -> Option<(i32, [f64; 3])> {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'));
     let ntb: i32 = lines.next()?.split_whitespace().next()?.parse().ok()?;
-    let v: Vec<f64> = lines
-        .next()?
-        .split_whitespace()
-        .filter_map(|x| x.parse().ok())
-        .collect();
-    (v.len() >= 3).then_some((ntb, [v[0], v[1], v[2]]))
+    let mut row = || -> Option<[f64; 3]> {
+        let v: Vec<f64> = lines
+            .next()?
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        (v.len() >= 3).then_some([v[0], v[1], v[2]])
+    };
+    let edges = row()?;
+    let angles = row().unwrap_or([90.0; 3]);
+    Some((ntb, edges, angles))
 }
 
 /// POSITION and VELOCITY blocks of a `.cnf`, as `[x, y, z]` per atom.
@@ -1069,6 +1081,13 @@ ref_test!(water_10_box, "water_10_box");
 ref_test!(nacl_3water_cutoff, "nacl_3water_cutoff");
 ref_test!(nacl_water_box, "nacl_water_box");
 ref_test!(nacl_water_box_shifted, "nacl_water_box_shifted");
+// GENBOX NTB 2 with angles 75/80/65: the box vectors from lengths and angles
+ref_test!(nacl_water_box_triclinic, "nacl_water_box_triclinic");
+// P3M in the same cell: the wave vectors Σ l_i b_i (patched oracle, LS3)
+ref_test!(
+    nacl_water_box_triclinic_p3m_fixed,
+    "nacl_water_box_triclinic_p3m_fixed"
+);
 
 // ── Constraint algorithms ────────────────────────────────────────────────────
 ref_test!(nacl_1water_settle, "nacl_1water_settle");
@@ -1090,6 +1109,12 @@ ref_test!(water_216_box_com_rot, "water_216_box_com_rot");
 // surface term of a dielectric boundary (EPSLS = 61). Expected output from @develop.
 ref_test!(water_216_box_ewald, "water_216_box_ewald");
 ref_test!(water_216_box_ewald_epsls, "water_216_box_ewald_epsls");
+// The same under Berendsen pressure coupling: the surface-term virial stored as −2Ξ with the whole
+// tensor (patched oracle, LS2).
+ref_test!(
+    water_216_npt_ewald_epsls_fixed,
+    "water_216_npt_ewald_epsls_fixed"
+);
 // P3M in bulk water: the finite-difference field (NFDORD 2) with NSHAPE 3, and the Gaussian
 // (a = 0.4 nm) with ik differentiation (NFDORD 0).
 ref_test!(water_216_box_p3m_fixed, "water_216_box_p3m_fixed");

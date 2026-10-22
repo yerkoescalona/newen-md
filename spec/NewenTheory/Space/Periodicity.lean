@@ -2,6 +2,7 @@ module
 
 public import Mathlib.Algebra.Order.Round
 public import Mathlib.Algebra.Order.Archimedean.Real.Basic
+public import Mathlib.Analysis.Real.Sqrt
 import Mathlib.Tactic.FieldSimp
 import Mathlib.Tactic.Linarith
 import Mathlib.Tactic.NormNum
@@ -23,7 +24,7 @@ GROMOS writes the box with `a` along `x` and `b` in the `xy` plane (`a = (aₓ, 
 are used:
 
 * the **centred cell**, fractional coordinates in `(−1/2, 1/2]` (`Box.InCell`), where the
-  nearest image of a pair lives (`Box.image`, gromosXX's triclinic `nearest_image`);
+  nearest image of a pair lives (`Box.image`, newen's triclinic `nearest_image`);
 * the **positive cell**, fractional coordinates in `[0, 1)` (`Box.InPositiveCell`), where
   newen's `put_into_box` puts a point (`Box.wrap`).
 
@@ -32,7 +33,11 @@ point that does (`image_eq_of`, `wrap_eq_of`), and so is unchanged when applied 
 
 The centred cell is a parallelepiped. For a rectangular box it is the set of shortest images,
 but not for a skewed box: there a lattice vector can make the image shorter
-(`image_not_shortest`). This is all gromosXX's triclinic reduction promises.
+(`image_not_shortest`). gromosXX's triclinic `nearest_image` is meant to be this reduction, but
+it reads `Box(i, j)` as component `i` of edge `j`, so its skew terms vanish and it reduces into the
+brick `|x| < aₓ/2, |y| < b_y/2, |z| < c_z/2` instead. Below half the smallest height of the box
+both return the vector itself, the unique shortest image (`image_shortest_of_lt_half_height`);
+beyond it the two can choose different images, neither of them always the shortest.
 
 The rectangular box is treated component by component: `rectImage L x = x − L·roundEven(x/L)`,
 with `roundEven` the round-to-nearest-even of IEEE 754 (C `rint`; Mathlib's `round` sends halves
@@ -493,6 +498,183 @@ theorem image_not_shortest :
   rw [image_of_inCell hB hr]
   simp [B, normSq]
   norm_num
+
+/-! ## Below half the smallest height both reductions agree
+
+The **height** of the box along `a` is the distance between the two faces spanned by `b` and `c`,
+`h_a = V / |b × c|` (likewise `h_b = V / |c × a|`, `h_c = V / |a × b|`). A fractional coordinate
+is the dot product with a reciprocal vector, `s_a = u_a · r` with `u_a = (b × c) / V`, so
+`|s_a| ≤ |r| / h_a`. A vector shorter than half the smallest height therefore has every
+fractional coordinate inside `(−1/2, 1/2)`: it is its own centred-cell image
+(`image_shortest_of_lt_half_height`), and every other image is longer. In a lower-triangular box
+it also lies in the brick `|x| < aₓ/2, |y| < b_y/2, |z| < c_z/2` (`h_a ≤ aₓ`, `h_b ≤ b_y`,
+`h_c = c_z`), the cell gromosXX's triclinic `nearest_image` reduces into (it reads
+`Box(i, j)` as component `i` of edge `j`, so its skew terms `b_z`, `a_y`, `a_z` vanish); so the
+two reductions return the same, shortest, image for every such pair.
+-/
+
+/-- The dot product. -/
+def dot (u v : Vec3 ℝ) : ℝ := u.x * v.x + u.y * v.y + u.z * v.z
+
+/-- Cauchy–Schwarz for three components. -/
+theorem dot_sq_le (u v : Vec3 ℝ) : dot u v ^ 2 ≤ normSq u * normSq v := by
+  simp only [dot, normSq]
+  nlinarith [sq_nonneg (u.y * v.z - u.z * v.y), sq_nonneg (u.z * v.x - u.x * v.z),
+    sq_nonneg (u.x * v.y - u.y * v.x)]
+
+/-- The cross product. -/
+def cross (u v : Vec3 ℝ) : Vec3 ℝ :=
+  ⟨u.y * v.z - u.z * v.y, u.z * v.x - u.x * v.z, u.x * v.y - u.y * v.x⟩
+
+/-- The reciprocal vector of `a` in a lower-triangular box: `(Box.frac r).x = recA · r`. -/
+noncomputable def recA (B : Box) : Vec3 ℝ :=
+  ⟨1 / B.a.x, -B.b.x / (B.a.x * B.b.y),
+    (B.b.x * B.c.y - B.b.y * B.c.x) / (B.a.x * B.b.y * B.c.z)⟩
+
+/-- The reciprocal vector of `b`: `(Box.frac r).y = recB · r`. -/
+noncomputable def recB (B : Box) : Vec3 ℝ := ⟨0, 1 / B.b.y, -B.c.y / (B.b.y * B.c.z)⟩
+
+/-- The reciprocal vector of `c`: `(Box.frac r).z = recC · r`. -/
+noncomputable def recC (B : Box) : Vec3 ℝ := ⟨0, 0, 1 / B.c.z⟩
+
+/-- The heights of the box: `1 / |u|` for each reciprocal vector `u` (`= V / |b × c|`, …). -/
+noncomputable def heightA (B : Box) : ℝ := (Real.sqrt (normSq B.recA))⁻¹
+noncomputable def heightB (B : Box) : ℝ := (Real.sqrt (normSq B.recB))⁻¹
+noncomputable def heightC (B : Box) : ℝ := (Real.sqrt (normSq B.recC))⁻¹
+
+/-- The smallest height. -/
+noncomputable def minHeight (B : Box) : ℝ := min (min B.heightA B.heightB) B.heightC
+
+/-- `u_a = (b × c) / V`, `u_b = (c × a) / V`, `u_c = (a × b) / V`, with `V = aₓ b_y c_z`. -/
+theorem rec_eq_cross (h : B.LowerTriangular) :
+    B.recA = (1 / (B.a.x * B.b.y * B.c.z)) • cross B.b B.c ∧
+      B.recB = (1 / (B.a.x * B.b.y * B.c.z)) • cross B.c B.a ∧
+      B.recC = (1 / (B.a.x * B.b.y * B.c.z)) • cross B.a B.b := by
+  have ha := h.ax_pos.ne'
+  have hb := h.by_pos.ne'
+  have hc := h.cz_pos.ne'
+  refine ⟨?_, ?_, ?_⟩ <;> ext <;> simp [recA, recB, recC, cross, h.ay, h.az, h.bz] <;>
+    field_simp
+
+theorem frac_eq_dot (h : B.LowerTriangular) (r : Vec3 ℝ) :
+    B.frac r = ⟨dot B.recA r, dot B.recB r, dot B.recC r⟩ := by
+  have ha := h.ax_pos.ne'
+  have hb := h.by_pos.ne'
+  have hc := h.cz_pos.ne'
+  ext <;> simp [frac, dot, recA, recB, recC] <;> field_simp <;> ring
+
+theorem normSq_nonneg (u : Vec3 ℝ) : 0 ≤ normSq u := by
+  simp only [normSq]; positivity
+
+/-- `|r| < h / 2` with `h = 1 / |u|`, squared: `4 |r|² |u|² < 1`. -/
+theorem sq_of_lt_half_height {u r : Vec3 ℝ} (hu : 0 < normSq u)
+    (hr : Real.sqrt (normSq r) < (Real.sqrt (normSq u))⁻¹ / 2) :
+    4 * (normSq r * normSq u) < 1 := by
+  have su := Real.sqrt_pos.mpr hu
+  have hr' : Real.sqrt (normSq r) * Real.sqrt (normSq u) < 1 / 2 := by
+    have m := mul_lt_mul_of_pos_right hr su
+    have e : (Real.sqrt (normSq u))⁻¹ / 2 * Real.sqrt (normSq u) = 1 / 2 := by
+      field_simp
+    linarith
+  have e : normSq r * normSq u = (Real.sqrt (normSq r) * Real.sqrt (normSq u)) ^ 2 := by
+    rw [mul_pow, Real.sq_sqrt (normSq_nonneg r), Real.sq_sqrt (normSq_nonneg u)]
+  rw [e]
+  have h0 : 0 ≤ Real.sqrt (normSq r) * Real.sqrt (normSq u) := by positivity
+  nlinarith [hr']
+
+theorem recA_pos (h : B.LowerTriangular) : 0 < normSq B.recA := by
+  have : 0 < (1 / B.a.x) ^ 2 := by have := h.ax_pos; positivity
+  simp only [normSq, recA]; nlinarith [sq_nonneg (-B.b.x / (B.a.x * B.b.y)),
+    sq_nonneg ((B.b.x * B.c.y - B.b.y * B.c.x) / (B.a.x * B.b.y * B.c.z))]
+
+theorem recB_pos (h : B.LowerTriangular) : 0 < normSq B.recB := by
+  have : 0 < (1 / B.b.y) ^ 2 := by have := h.by_pos; positivity
+  simp only [normSq, recB]; nlinarith [sq_nonneg (-B.c.y / (B.b.y * B.c.z))]
+
+theorem recC_pos (h : B.LowerTriangular) : 0 < normSq B.recC := by
+  have : 0 < (1 / B.c.z) ^ 2 := by have := h.cz_pos; positivity
+  simp only [normSq, recC]; nlinarith
+
+/-- A fractional coordinate `u · r` with `4 |r|² |u|² < 1` lies in `(−1/2, 1/2)`. -/
+theorem dot_mem_of_sq {u r : Vec3 ℝ} (hs : 4 * (normSq r * normSq u) < 1) :
+    dot u r ∈ Set.Ioc (-(1 / 2)) (1 / 2) := by
+  have cs := dot_sq_le u r
+  have : dot u r ^ 2 < 1 / 4 := by nlinarith
+  constructor <;> nlinarith [sq_nonneg (dot u r - 1 / 2), sq_nonneg (dot u r + 1 / 2)]
+
+/-- A non-zero lattice vector `w` is at least one height long along some reciprocal vector:
+`(u · w)² ≥ 1` for `u` one of `u_a, u_b, u_c`. -/
+theorem lattice_dot_ge (h : B.LowerTriangular) {w : Vec3 ℝ} (hw : B.Lattice w) (hw0 : w ≠ 0) :
+    1 ≤ dot B.recA w ^ 2 ∨ 1 ≤ dot B.recB w ^ 2 ∨ 1 ≤ dot B.recC w ^ 2 := by
+  obtain ⟨i, j, k, hijk⟩ := frac_of_lattice h hw
+  rw [frac_eq_dot h] at hijk
+  have hx : dot B.recA w = i := congrArg Vec3.x hijk
+  have hy : dot B.recB w = j := congrArg Vec3.y hijk
+  have hz : dot B.recC w = k := congrArg Vec3.z hijk
+  have one_le : ∀ n : ℤ, n ≠ 0 → (1 : ℝ) ≤ (n : ℝ) ^ 2 := by
+    intro n hn
+    have : (1 : ℤ) ≤ n ^ 2 := by nlinarith [sq_nonneg n, Int.one_le_abs hn, sq_abs n]
+    exact_mod_cast this
+  by_cases hi : i = 0
+  · by_cases hj : j = 0
+    · by_cases hk : k = 0
+      · exfalso; apply hw0
+        rw [← point_frac h w, frac_eq_dot h, hx, hy, hz, hi, hj, hk]
+        ext <;> simp [point]
+      · exact Or.inr (Or.inr (hz ▸ one_le k hk))
+    · exact Or.inr (Or.inl (hy ▸ one_le j hj))
+  · exact Or.inl (hx ▸ one_le i hi)
+
+/-- If `4 |d|² |u|² < 1` and `(u · w)² ≥ 1`, then `d − w` is longer than `d`. -/
+theorem longer_of {u d w : Vec3 ℝ} (hd : 4 * (normSq d * normSq u) < 1) (hw : 1 ≤ dot u w ^ 2) :
+    normSq d < normSq (d - w) := by
+  have csw := dot_sq_le u w
+  have csd := dot_sq_le d w
+  have hu : 0 < normSq u := by
+    by_contra hu; push Not at hu
+    have := normSq_nonneg u
+    have : normSq u = 0 := le_antisymm hu this
+    nlinarith [normSq_nonneg w]
+  -- |w|² ≥ 1/|u|² > 4|d|²
+  have hw2 : 4 * normSq d < normSq w := by
+    have h1 : 1 ≤ normSq u * normSq w := le_trans hw csw
+    nlinarith [normSq_nonneg d, normSq_nonneg w]
+  -- (d·w)² ≤ |d|²|w|² < |w|⁴/4, so 2 d·w < |w|²
+  have h2 : 2 * dot d w < normSq w := by
+    have hwpos : 0 < normSq w := by nlinarith [normSq_nonneg d]
+    have : (2 * dot d w) ^ 2 < normSq w ^ 2 := by nlinarith [normSq_nonneg d]
+    nlinarith [sq_nonneg (2 * dot d w + normSq w), abs_lt_of_sq_lt_sq' this hwpos.le]
+  have e : normSq (d - w) = normSq d - 2 * dot d w + normSq w := by
+    simp only [normSq, dot, sub_x, sub_y, sub_z]; ring
+  rw [e]; linarith
+
+/-- **Below half the smallest height the image is the vector itself, and the unique shortest
+one**: in a lower-triangular box, `|d| < h_min / 2` gives `image d = d`, and every other image
+`d − w` (`w` a non-zero lattice vector) is strictly longer. gromosXX's brick reduction returns
+the same vector (see the section note), so the two agree on every such pair. -/
+theorem image_shortest_of_lt_half_height (h : B.LowerTriangular) {d : Vec3 ℝ}
+    (hd : Real.sqrt (normSq d) < B.minHeight / 2) :
+    B.image d = d ∧ ∀ w : Vec3 ℝ, B.Lattice w → w ≠ 0 → normSq d < normSq (d - w) := by
+  have hA : Real.sqrt (normSq d) < B.heightA / 2 := by
+    have : B.minHeight ≤ B.heightA := le_trans (min_le_left _ _) (min_le_left _ _)
+    linarith
+  have hB : Real.sqrt (normSq d) < B.heightB / 2 := by
+    have : B.minHeight ≤ B.heightB := le_trans (min_le_left _ _) (min_le_right _ _)
+    linarith
+  have hC : Real.sqrt (normSq d) < B.heightC / 2 := by
+    have : B.minHeight ≤ B.heightC := min_le_right _ _
+    linarith
+  have sA := sq_of_lt_half_height (recA_pos h) hA
+  have sB := sq_of_lt_half_height (recB_pos h) hB
+  have sC := sq_of_lt_half_height (recC_pos h) hC
+  refine ⟨image_of_inCell h ?_, fun w hw hw0 => ?_⟩
+  · unfold InCell
+    rw [frac_eq_dot h]
+    exact ⟨dot_mem_of_sq sA, dot_mem_of_sq sB, dot_mem_of_sq sC⟩
+  · rcases lattice_dot_ge h hw hw0 with h1 | h1 | h1
+    · exact longer_of sA h1
+    · exact longer_of sB h1
+    · exact longer_of sC h1
 
 end Box
 

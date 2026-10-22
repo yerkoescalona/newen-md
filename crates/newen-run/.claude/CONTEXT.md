@@ -65,9 +65,20 @@ RunError                                                                 -> ever
   whose force field disagrees with the recipe's NLRELE (no lattice sum, Ewald or P3M) is refused
   (`check_plan_against_recipe`). References: `nacl_pair_box_ewald`, `water_216_box_ewald`,
   `water_216_box_ewald_epsls`; `nacl_pair_box_p3m_fixed`, `water_216_box_p3m_fixed`,
-  `water_216_box_p3m_gauss_fixed` (gromosXX + `patches/p3m_nvt_a_term.patch`). Note: newen's
-  GENBOX reader ignores the angles, so an NTB = 2 input with non-right angles runs a rectangular
-  box (any NLRELE; not specific to lattice sums).
+  `water_216_box_p3m_gauss_fixed` (gromosXX + `patches/LS1_p3m_nvt_a_term.patch`);
+  `water_216_npt_ewald_epsls_fixed` (LS2, surface virial), `nacl_water_box_triclinic_p3m_fixed`
+  (LS3, triclinic wave vectors, ik differentiation).
+- **GENBOX angles and the cell height (2026-10-22):** `Coordinates` carries the GENBOX angles and
+  Euler angles; `prepare_system` builds NTB = 2 with an angle ≠ 90° as `SimBox::triclinic`
+  (`newen_core::math::genbox_box`, gromosXX `in_configuration.cc:1977-2005`;
+  `Prepared::triclinic_box`, used by `periodicity_of`), keeps NTB = 2 with right angles
+  rectangular, refuses NTB = 1 with an angle ≠ 90° (gromosXX's message) and any non-zero Euler
+  angle (gromosXX stores them unapplied on input but rotates by them on output).
+  `check_cutoffs_fit_box` refuses a periodic run whose largest of RCUTP, RCUTL, RCRF is not below
+  half the smallest cell height (`newen_core::math::box_heights`; gromosXX
+  `boundary_check_cutoff` checks RCUTL alike, `boundary_checks.cc:35-101`). `md` writes GENBOX
+  (NTB, lengths, angles) into the trajectory and the final configuration, a truncated octahedron as
+  its cube. Reference: `nacl_water_box_triclinic`.
 - **Slow growth (1.8, 0.0.61):** `advance_lambda(&recipe, &mut topo)` (`build.rs`) is gromosXX's
   `Slow_Growth`: λ += DLAMT·Δt and `Topology::update_for_lambda`, a no-op unless NTG = 1 and
   DLAMT ≠ 0. It needs `&mut Topology`, so it is not an `Algorithm`: the callers (`md`, `Simulation`)

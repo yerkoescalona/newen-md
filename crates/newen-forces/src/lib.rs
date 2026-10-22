@@ -16,12 +16,10 @@
 #![allow(clippy::too_many_arguments, clippy::chunks_exact_to_as_chunks)]
 
 pub mod bonded;
-pub mod electrostatics;
 pub mod energy;
 pub mod nonbonded;
 pub mod orchestrator;
 pub mod orchestrator_algorithm;
-pub mod pme;
 pub mod provider;
 pub mod restraints;
 pub mod zones;
@@ -34,10 +32,6 @@ pub mod qmmm;
 // GPU acceleration (feature-gated)
 #[cfg(feature = "gpu")]
 pub mod gpu;
-
-// MPI-enabled PME (feature-gated)
-#[cfg(feature = "use-mpi")]
-pub mod pme_mpi;
 
 // Re-export main types
 pub use bonded::{

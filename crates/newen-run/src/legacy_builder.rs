@@ -229,12 +229,13 @@ fn push_constraint_algorithms(
     shake
 }
 
-/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box,
+/// The periodicity a prepared system runs under: triclinic for a truncated-octahedron box or a
+/// GENBOX box with an angle other than 90°,
 /// vacuum for an all-zero box, rectangular otherwise. Exposed for callers that attach extra
 /// algorithms needing the same boundary conditions as `Forcefield` (e.g. an ML term).
 fn periodicity_of(prepared: &Prepared) -> Periodicity {
     let b = prepared.box_dims;
-    if let Some(triclinic_box) = prepared.truncoct_box {
+    if let Some(triclinic_box) = prepared.truncoct_box.or(prepared.triclinic_box) {
         Periodicity::Triclinic(Triclinic::new(triclinic_box))
     } else if b.x == 0.0 && b.y == 0.0 && b.z == 0.0 {
         Periodicity::Vacuum(Vacuum)

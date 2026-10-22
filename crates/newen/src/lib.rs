@@ -79,11 +79,9 @@ pub mod interaction {
     pub use newen_forces::bonded;
     #[allow(ambiguous_glob_reexports)]
     pub use newen_forces::bonded::*;
-    pub use newen_forces::electrostatics;
     pub use newen_forces::nonbonded;
     #[allow(ambiguous_glob_reexports)]
     pub use newen_forces::nonbonded::*;
-    pub use newen_forces::pme;
     pub use newen_forces::restraints;
 }
 

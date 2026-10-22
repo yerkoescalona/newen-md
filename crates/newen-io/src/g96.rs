@@ -3,7 +3,7 @@
 //! GROMOS96 format is a block-based format with keywords like TITLE, POSITION, VELOCITY, BOX
 
 use crate::coordinate::G96Atom;
-use newen_core::math::Vec3;
+use newen_core::math::{genbox_lengths_angles, truncoct_triclinic_box, Mat3, Vec3};
 use newen_core::topology::Topology;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -30,6 +30,28 @@ fn atom_label(topo: &Topology, i: usize) -> (usize, &str, &str) {
         (i - n_solute) / per_molecule + 1
     };
     (resnum, a.residue_name.as_str(), a.name.as_str())
+}
+
+/// A GENBOX block as gromosXX's `_print_box` writes it (`out_configuration.cc:1802-1897`): the
+/// boundary type, the edge lengths, the angles between the box vectors, zero Euler angles and a
+/// zero origin. `box_matrix` holds the box vectors as columns; a truncated octahedron (NTB −1)
+/// is written as its cube (`truncoct_triclinic_box(…, false)`). A box with a zero edge gets
+/// zero angles.
+pub fn genbox_block(ntb: i32, box_matrix: Mat3) -> String {
+    let m = if ntb == -1 {
+        truncoct_triclinic_box(box_matrix, false)
+    } else {
+        box_matrix
+    };
+    let (l, a) = genbox_lengths_angles(m);
+    let row = |v: Vec3| format!("{:15.9}{:15.9}{:15.9}\n", v.x, v.y, v.z);
+    format!(
+        "GENBOX\n{ntb:>5}\n{}{}{}{}END\n",
+        row(l),
+        row(a),
+        row(Vec3::ZERO),
+        row(Vec3::ZERO)
+    )
 }
 
 /// Write a GROMOS96 format file
@@ -113,6 +135,12 @@ impl G96Writer {
 
         writeln!(self.writer, "END").map_err(|e| format!("Write error: {}", e))?;
         Ok(())
+    }
+
+    /// Write the GENBOX block of a periodic box ([`genbox_block`]).
+    pub fn write_genbox(&mut self, ntb: i32, box_matrix: Mat3) -> Result<(), String> {
+        write!(self.writer, "{}", genbox_block(ntb, box_matrix))
+            .map_err(|e| format!("Write error: {}", e))
     }
 
     /// Write box dimensions (for periodic boundary conditions)

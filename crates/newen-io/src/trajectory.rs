@@ -169,6 +169,21 @@ impl TrajectoryWriter {
         positions: &[Vec3],
         box_dims: Option<Vec3>,
     ) -> Result<(), IoError> {
+        let genbox = box_dims
+            .filter(|b| b.x > 0.0)
+            .map(|b| (1, newen_core::math::Mat3::from_diagonal(b)));
+        self.write_trc_frame_genbox(step, time, positions, genbox)
+    }
+
+    /// [`Self::write_trc_frame`] with the GENBOX of any box: its NTB and box vectors as columns
+    /// ([`crate::g96::genbox_block`]).
+    pub fn write_trc_frame_genbox(
+        &mut self,
+        step: usize,
+        time: f64,
+        positions: &[Vec3],
+        genbox: Option<(i32, newen_core::math::Mat3)>,
+    ) -> Result<(), IoError> {
         writeln!(self.writer, "TIMESTEP")?;
         writeln!(self.writer, "{:>15}{:20.9}", step, time)?;
         writeln!(self.writer, "END")?;
@@ -179,17 +194,8 @@ impl TrajectoryWriter {
         }
         writeln!(self.writer, "END")?;
 
-        if let Some(b) = box_dims {
-            if b.x > 0.0 {
-                // gromosXX GENBOX: NTB (1 rectangular), lengths, angles, Euler angles, origin
-                writeln!(self.writer, "GENBOX")?;
-                writeln!(self.writer, "{:>8}", 1)?;
-                writeln!(self.writer, "{:15.9}{:15.9}{:15.9}", b.x, b.y, b.z)?;
-                writeln!(self.writer, "{:15.9}{:15.9}{:15.9}", 90.0, 90.0, 90.0)?;
-                writeln!(self.writer, "{:15.9}{:15.9}{:15.9}", 0.0, 0.0, 0.0)?;
-                writeln!(self.writer, "{:15.9}{:15.9}{:15.9}", 0.0, 0.0, 0.0)?;
-                writeln!(self.writer, "END")?;
-            }
+        if let Some((ntb, m)) = genbox {
+            write!(self.writer, "{}", crate::g96::genbox_block(ntb, m))?;
         }
 
         self.step_count += 1;

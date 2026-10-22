@@ -43,6 +43,10 @@ pub struct CoordinateData {
     pub box_dims: Vec3,
     /// Box type from GENBOX (0=vacuum, 1=rectangular, 2=triclinic, 3=truncated octahedron)
     pub box_type: i32,
+    /// GENBOX angles α, β, γ in degrees (90° each for a BOX block or none)
+    pub box_angles: Vec3,
+    /// GENBOX Euler angles φ, θ, ψ in degrees (zero for a BOX block or none)
+    pub box_euler: Vec3,
     /// λ of a `PERTDATA` block (gromosXX writes it into the final configuration of a perturbed
     /// run; a run with NRDGL=1 starts from it).
     pub pertdata: Option<f64>,
@@ -71,6 +75,8 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
     let mut velocities = Vec::new();
     let mut box_dims = Vec3::ZERO;
     let mut box_type: i32 = -1; // unknown until parsed
+    let mut box_angles = Vec3::splat(90.0);
+    let mut box_euler = Vec3::ZERO;
     let mut pertdata: Option<f64> = None;
     let mut aedssearch: Option<Vec<String>> = None;
     let mut nhcvariables: Option<Vec<String>> = None;
@@ -200,12 +206,12 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
                 }
             },
             Section::GenBox => {
-                // GENBOX format:
-                //   line 0: box_type (int)
-                //   line 1: box dimensions (3 floats)
-                //   line 2: angles (3 floats) - ignored for rectangular
-                //   line 3: origin (3 floats) - ignored
-                //   line 4: origin2 (3 floats) - ignored
+                // GENBOX format (gromosXX `_read_genbox`):
+                //   line 0: box type (int)
+                //   line 1: edge lengths a, b, c
+                //   line 2: angles α, β, γ (degrees)
+                //   line 3: Euler angles φ, θ, ψ (degrees)
+                //   line 4: origin - ignored, as gromosXX does
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
                 match genbox_line_num {
                     0 => {
@@ -216,7 +222,13 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
                     1 if parts.len() >= 3 => {
                         box_dims = parse_vec3(&parts[..3])?;
                     },
-                    _ => {}, // angles, origin lines - skip for now
+                    2 if parts.len() >= 3 => {
+                        box_angles = parse_vec3(&parts[..3])?;
+                    },
+                    3 if parts.len() >= 3 => {
+                        box_euler = parse_vec3(&parts[..3])?;
+                    },
+                    _ => {},
                 }
                 genbox_line_num += 1;
             },
@@ -255,6 +267,8 @@ pub fn parse_coordinates(reader: impl BufRead) -> Result<CoordinateData, IoError
         velocities,
         box_dims,
         box_type,
+        box_angles,
+        box_euler,
         pertdata,
         aedssearch,
         nhcvariables,
@@ -696,6 +710,32 @@ END
         assert!((data.positions[0].x - 0.1).abs() < 1e-9);
         assert!((data.velocities[1].z - 0.006).abs() < 1e-9);
 
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn genbox_angles_and_euler_angles_are_read() {
+        let content = "\
+TITLE
+  triclinic GENBOX
+END
+POSITION
+    1 WAT    OW        1   0.100000000  0.200000000  0.300000000
+END
+GENBOX
+    2
+    2.000000000    2.200000000    2.400000000
+   75.000000000   80.000000000   65.000000000
+    0.000000000    5.000000000    0.000000000
+    0.000000000    0.000000000    0.000000000
+END
+";
+        let path = write_tmp(content, "genbox_tric");
+        let data = read_coordinates(&path).expect("Failed to parse GENBOX file");
+        assert_eq!(data.box_type, 2);
+        assert_eq!(data.box_dims, Vec3::new(2.0, 2.2, 2.4));
+        assert_eq!(data.box_angles, Vec3::new(75.0, 80.0, 65.0));
+        assert_eq!(data.box_euler, Vec3::new(0.0, 5.0, 0.0));
         std::fs::remove_file(path).ok();
     }
 

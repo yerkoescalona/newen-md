@@ -128,9 +128,12 @@ impl Triclinic {
     }
 }
 
-/// Iterative z -> y -> x lattice reduction, ported from
-/// `Boundary_Implementation<triclinic>::nearest_image`
-/// (GROMOS `math/boundary_implementation.cc`). Requires the GROMOS
+/// Iterative z -> y -> x lattice reduction of the fractional coordinates, as gromosXX's
+/// `Boundary_Implementation<triclinic>::nearest_image` (`math/boundary_implementation.cc`) is
+/// written to do. gromosXX's `Box(i, j)` is component `i` of edge `j`, so there the skew terms
+/// read `b.z`, `a.y`, `a.z` (zero) and the reduction is into the brick `|x| < a.x/2`,
+/// `|y| < b.y/2`, `|z| < c.z/2`; both give the same, shortest image for every vector shorter than
+/// half the smallest box height (Lean `image_shortest_of_lt_half_height`). Requires the GROMOS
 /// "lower triangular" box vector convention (a=(ax,0,0), b=(bx,by,0),
 /// c=(cx,cy,cz)), as guaranteed by GENBOX / `truncoct_triclinic_box`.
 ///
@@ -262,6 +265,66 @@ pub fn truncoct_triclinic(positions: &mut [Vec3], forward: bool) {
     for p in positions.iter_mut() {
         *p = rot * *p;
     }
+}
+
+/// The box vectors of a GENBOX block: edge lengths `a, b, c` and angles `α` (b,c), `β` (a,c),
+/// `γ` (a,b) in degrees, as gromosXX builds them (`in_configuration.cc:1977-2005`): `a` along x,
+/// `b` in the xy plane, entries below 10⁻¹² set to zero (`:2038-2043`, `math::epsilon`). Right
+/// angles give the diagonal box. The Euler angles of the block's third line are not applied.
+pub fn genbox_box(lengths: Vec3, angles_deg: Vec3) -> Mat3 {
+    let to_rad = |d: f64| std::f64::consts::PI * d / 180.0;
+    let (alpha, beta, gamma) = (
+        to_rad(angles_deg.x),
+        to_rad(angles_deg.y),
+        to_rad(angles_deg.z),
+    );
+    let cos_delta = (alpha.cos() - beta.cos() * gamma.cos()) / (beta.sin() * gamma.sin());
+    let sin_delta = (1.0 - cos_delta * cos_delta).sqrt();
+    let a = Vec3::new(lengths.x, 0.0, 0.0);
+    let b = Vec3::new(lengths.y * gamma.cos(), lengths.y * gamma.sin(), 0.0);
+    let c = Vec3::new(
+        lengths.z * beta.cos(),
+        lengths.z * cos_delta * beta.sin(),
+        lengths.z * sin_delta * beta.sin(),
+    );
+    let zero_small = |v: Vec3| {
+        let z = |x: f64| if x.abs() < 1e-12 { 0.0 } else { x };
+        Vec3::new(z(v.x), z(v.y), z(v.z))
+    };
+    Mat3::from_cols(zero_small(a), zero_small(b), zero_small(c))
+}
+
+/// The edge lengths and angles (degrees) a GENBOX block records for `box_matrix`, as gromosXX's
+/// `_print_box` computes them (`out_configuration.cc:1830-1845`): `|a|, |b|, |c|` and the
+/// angles between the vectors. A zero edge gives zero angles (`:1879-1883`).
+pub fn genbox_lengths_angles(box_matrix: Mat3) -> (Vec3, Vec3) {
+    let (a, b, c) = (box_matrix.x_axis, box_matrix.y_axis, box_matrix.z_axis);
+    let lengths = Vec3::new(a.length(), b.length(), c.length());
+    if lengths.x == 0.0 || lengths.y == 0.0 || lengths.z == 0.0 {
+        return (lengths, Vec3::ZERO);
+    }
+    let angle = |u: Vec3, v: Vec3, lu: f64, lv: f64| {
+        (u.dot(v) / (lu * lv)).clamp(-1.0, 1.0).acos() * 180.0 / std::f64::consts::PI
+    };
+    let angles = Vec3::new(
+        angle(b, c, lengths.y, lengths.z),
+        angle(a, c, lengths.x, lengths.z),
+        angle(a, b, lengths.x, lengths.y),
+    );
+    (lengths, angles)
+}
+
+/// The heights of the cell spanned by the columns `a, b, c` of `box_matrix`: the distance between
+/// opposite faces, `V/|b×c|`, `V/|c×a|`, `V/|a×b|` (gromosXX `boundary_check_cutoff`,
+/// `math/boundary_checks.cc:76-84`, with the same quantities written through the angles).
+pub fn box_heights(box_matrix: Mat3) -> Vec3 {
+    let (a, b, c) = (box_matrix.x_axis, box_matrix.y_axis, box_matrix.z_axis);
+    let v = a.dot(b.cross(c)).abs();
+    Vec3::new(
+        v / b.cross(c).length(),
+        v / c.cross(a).length(),
+        v / a.cross(b).length(),
+    )
 }
 
 /// Generic periodicity wrapper
@@ -490,5 +553,26 @@ mod tests {
         assert_relative_eq!(positions[0].x, 1.88114910011, epsilon = 1e-9);
         assert_relative_eq!(positions[0].y, 0.267543648603, epsilon = 1e-9);
         assert_relative_eq!(positions[0].z, 0.423126867767, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn genbox_right_angles_give_the_diagonal_box() {
+        let m = genbox_box(Vec3::new(2.0, 2.2, 2.4), Vec3::splat(90.0));
+        assert_eq!(m, Mat3::from_diagonal(Vec3::new(2.0, 2.2, 2.4)));
+    }
+
+    #[test]
+    fn genbox_box_round_trips_through_lengths_and_angles() {
+        let (lengths, angles) = (Vec3::new(2.0, 2.2, 2.4), Vec3::new(75.0, 80.0, 65.0));
+        let m = genbox_box(lengths, angles);
+        // a along x, b in the xy plane
+        assert_eq!((m.x_axis.y, m.x_axis.z, m.y_axis.z), (0.0, 0.0, 0.0));
+        let (l, a) = genbox_lengths_angles(m);
+        assert_relative_eq!(l.x, 2.0, epsilon = 1e-14);
+        assert_relative_eq!(l.y, 2.2, epsilon = 1e-14);
+        assert_relative_eq!(l.z, 2.4, epsilon = 1e-14);
+        assert_relative_eq!(a.x, 75.0, epsilon = 1e-12);
+        assert_relative_eq!(a.y, 80.0, epsilon = 1e-12);
+        assert_relative_eq!(a.z, 65.0, epsilon = 1e-12);
     }
 }
