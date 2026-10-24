@@ -7,7 +7,8 @@ The `md` binary (`newen-md`) and the Python binding (`pyo3-newen`) both call it 
 structural fix for the three drifting builders 3.8 found (drift guard G1 of 3.9).
 
 ## Inputs (consumes from)
-newen-core, newen-forces, newen-integrators, newen-io. No clap/log/env_logger, no MPI/CUDA.
+newen-core, newen-forces, newen-integrators, newen-io, newen-logic (the bath and dof decisions,
+energy-group lookup). No clap/log/env_logger, no MPI/CUDA.
 
 ## Outputs
 ```
@@ -22,6 +23,9 @@ instantiate(&[AlgorithmSpec], &Topology, &Configuration, &Periodicity) -> Instan
 build_sequence_from_recipe / build_sequence_from_imd                    -> Built { sequence, recipe, plan, diagnostics, summary }
 start(&mut sequence, &topo, &mut conf, &state)                          -> init + step 0        stage 3
 total_dof(topo, &ConstraintSelection, ntc, ndfmin)                      -> the one DOF formula
+bath_dofs(topo, sel, ntc, ndfmin, n_baths, &[BathRange], rottrans)      -> per-bath dof (newen-logic)
+read_imd / read_bundle / load_bundle / write_bundle                     -> the one IMD reader; run bundles
+advance_lambda(&recipe, &mut topo)                                       -> slow growth, after every step
 AlgorithmSpec::{KINDS, name, examples, rules}, TermSpec::{KINDS, name, examples, feature}
 RunError                                                                 -> every failure, as data
 ```
@@ -39,6 +43,13 @@ RunError                                                                 -> ever
   NTB = −1, gromosXX's FeatureChecker message) and `check_dihedral_phases` (NTBDN = 1 with a
   TORSDIHEDRALTYPE phase other than 0°/180°, `in_topology.cc:960-962`) in `plan.rs`, run by
   `build_plan` and `build_sequence_from_plan`. No reference input trips them.
+- **Baths and the schedule (2026-10-22):** per-bath dof are counted by `bath_dofs` over
+  `newen_logic::thermo::bath::{bath_half_dofs, ndfmin_spread}` (NDFMIN spread exactly, D40), for
+  one bath as for several; `thermostat_baths` decouples a bath with no degrees of freedom before
+  the spread, with gromosXX's warning (`decouple_empty_baths`, `empty_baths`), and refuses an
+  NDFMIN that removes every degree of freedom; Nosé–Hoover with several baths runs (0.0.73, one ζ
+  chain per bath; the refusal is gone). `check_outputs` refuses NTWV ≠ 0 in a minimisation
+  (`check_parameter.cc:62-65`).
 - **More refusals (2026-10-22):** `check_com_motion` (NTICOM outside 0..=2,
   `in_parameter.cc:1166`), `check_outputs` (NTWSE ≠ 0, parsed but never read),
   `check_perturbation` (NLAM ≤ 0 whatever NTG says, `in_parameter.cc:882`; RCRF ≤ 0 in a perturbed
@@ -71,6 +82,12 @@ RunError                                                                 -> ever
   virial), `nacl_water_box_triclinic_p3m_fixed` (D51/LS3, triclinic wave vectors, ik
   differentiation), `nacl_water_box_triclinic_p3m_fd_fixed` (D52/LS4, triclinic finite-difference
   field), `water_216_npt_p3m_fixed` (D53/LS5, NPT with NQEVAL 2, the box correction on a recomputation).
+  The other locks against the lattice sums (NLRELE 2/3/5): `check_perturbation` (individual λ),
+  `check_slow_growth`, `check_precalclam`, `check_eds`/`check_aeds`, and GaMD in `md`
+  (NLRELE ≠ 1).
+- **NLRELE −1 and 4:** −1 runs as 1, as gromosXX reads it. 4 (the shifted reaction field) is not
+  ported and `check_electrostatics` refuses it for every run ("not implemented"); before that a
+  plain NLRELE 4 input ran as the ordinary reaction field.
 - **SPME runs, experimental (2026-10-23):** NLRELE 5 (newen only; gromosXX's reader stops at 4,
   the shifted reaction field) is P3M's path with `spme: Option<SpmePlan>` (grid, NSPORD) in place
   of `p3m`, and `LatticeSumPlan::experimental = true` (serialised only when set, `serde(default)`)
@@ -133,17 +150,22 @@ RunError                                                                 -> ever
   mean "absent" (no MULTIBATH → no bath; no COMTRANSROT → `nscm = 0`, gromosXX `parameter.h`).
   `legacy_builder.rs` (`cfg(test)`) is the frozen step-1 builder: `build::tests::
   plan_matches_legacy_builder_bit_for_bit` proves the recipe path identical on all 41 references.
-- Step 3 (next): Python `Recipe`/`Term`/`Algorithm` over this data (pythonize), shims for the
-  factories/kwargs/presets, `newen.exceptions`. See 3.9.
+- **3.9 steps 3–5 ✓ (2026-08-29):** Python's `Recipe`/`Term`/`Algorithm`/`Plan` are these types
+  (pythonize; see the pyo3-newen and py-newen contracts), and `Term("xtb", …)` came in through
+  `TermSpec` alone.
 
 ## Key files
 ```
 src/lib.rs          — pipeline doc + re-exports
-src/prepare.rs      — prepare_system: pttopo merge, truncated-octahedron transform, NSM from
-                      coordinates, validation, initial velocities
-src/build.rs        — build_sequence_from_imd (the GROMOS step order), start, periodicity_of
+src/recipe.rs       — RunRecipe (the .imd grouped by concern), TermSpec, from_imd / to_imd
+src/plan.rs         — AlgorithmSpec, build_plan, validate_plan, every check_* refusal, thermostat_baths
+src/prepare.rs      — prepare_system: pttopo merge, truncated-octahedron transform, GENBOX angles,
+                      check_cutoffs_fit_box, NSM from coordinates, validation, initial velocities
+src/build.rs        — instantiate, build_sequence_from_imd (the GROMOS step order), start, periodicity_of
+src/bundle.rs       — read_imd, run bundles
+src/legacy_builder.rs — cfg(test): the frozen step-1 builder the plan is checked against
 src/constraints.rs  — ConstraintSelection::from_imd (NTC/NTCP/NTCS dispatch)
-src/dof.rs          — total_dof
+src/dof.rs          — total_dof, bath_dofs (over newen-logic)
 src/inputs.rs       — RunInputs (aux file paths), RunOptions / ParallelPolicy (not physics)
 src/error.rs        — RunError
 ```

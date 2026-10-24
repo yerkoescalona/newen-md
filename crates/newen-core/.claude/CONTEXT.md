@@ -4,7 +4,7 @@
 L0 data core. Owns `(Topology, Configuration)` shared by everything. No physics, no I/O.
 
 ## Inputs (consumes from)
-None — foundation crate.
+`newen-logic` only (the proven integer decisions: pair kinds, `due` for `PrecalcLambdas::active`).
 
 ## Outputs (public API)
 `Topology`, `Configuration`, `Vec3`/`Mat3`, `Periodicity` (Vacuum/Rectangular/Triclinic),
@@ -15,7 +15,10 @@ None — foundation crate.
 `PotentialProvider` seam, 2.6).
 
 ## Status
-- Boundary: Vacuum ✓, Rectangular ✓, Triclinic ✓ (NTB=-1 truncated-octahedron)
+- Boundary: Vacuum ✓, Rectangular ✓, Triclinic ✓ (NTB=-1 truncated-octahedron, and since
+  2026-10-22 GENBOX's NTB 2 cell with angles: `genbox_box` builds the box vectors,
+  `genbox_lengths_angles` writes them back with the `acos` argument clamped (D57),
+  `box_heights` gives the cell heights the run's cutoff check uses)
 - Boundary kernels checked against a Lean model (2026-10-22): `vacuum_nearest_image`,
   `Rectangular::new`, `rectangular_nearest_image`, `rectangular_put_into_box`, `Triclinic::new`,
   `triclinic_nearest_image`, `triclinic_put_into_box` (pure functions in `math.rs`, called by the
@@ -34,6 +37,9 @@ None — foundation crate.
 - Statistics: `stat.rs` — `Stat` with `ave()`, `rmsd()`, `ee()` (block averaging) ✓
 - Perturbation net charge (1.8, 0.0.59): `NetCharge` (A/B, `delta()`, per molecule);
   `Topology::apply_perturbation` returns the solute's, `perturbed_molecule_charges` per molecule
+- Pair tests: `Topology::is_excluded`, `pair_kind_of`, `is_excluded_or_14` (every pairlist
+  builder) call `newen_logic::topology::pairs::{contains_sorted, pair_kind}` and re-export
+  `PairKind`; `exclusions` and `one_four_pairs` are sorted and deduplicated.
 - Pairlist: `PairlistAlgorithm` enum wired everywhere (9a-0 ✓); `CellListPairlistAlgorithm` bit-identical to Standard (9a-1 ✓, margin=0); `water_1000_spc_gridcell` reference validates against gromosXX Grid_Cell_Pairlist
 - `SpatialIndex`: query-based neighbor service (`neighbor_pairs`, periodic-image shift per pair),
   independent of the MD pairlist's charge-group/twin-range/solvent-sentinel shape. Used by every
@@ -62,7 +68,7 @@ src/spatial_index.rs — SpatialIndex trait, ConfigurationSpatialIndex
 ## The instancing model
 
 `topology.rs` implements this; the comments there assume it rather than restate it. Phases 1–2e are
-built; the bonded loops over instances are the open part (board card `2.0`).
+built; the bonded loops over instances are the open part (item `2.0`).
 
 **The problem it solves.** GROMOS's solute/solvent split fuses two orthogonal concerns into one
 rigid boundary:

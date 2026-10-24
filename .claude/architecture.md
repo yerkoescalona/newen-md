@@ -36,6 +36,11 @@ Think in layers; keep them from leaking into each other.
 - **L4 — Facade & bindings.** The gromos++-style analysis API and py-newen are thin over L0–L3 and
   contain **zero physics** — and, since 3.9, zero run assembly: `newen.Recipe`/`Plan`/`Term` *are*
   the L3 data types (serde ↔ Python), and `Simulation` hands them to `newen-run`.
+- **Under all of them — decision logic.** The integer decisions every layer makes (which steps
+  write output or remove the centre-of-mass motion, the degrees of freedom per bath, which atom
+  belongs to which bath or energy group, which pair is excluded or 1-4) live in `newen-logic`,
+  which depends on nothing and is called by newen-core, newen-forces, newen-integrators,
+  newen-run and newen-md. Each function there is proven equal to a Lean model by Aeneas.
 
 The payoff: `ener` calls the same provider an MD step calls; `rmsd` calls shared geometry; gathering
 is one L0 service. The ~79k lines gromos++ spent re-implementing physics simply never get written.
@@ -76,12 +81,35 @@ more providers — additive, touching no existing physics. That is the whole poi
 
 - **Spatial index is a *service*, not an MD pairlist.** Give it a query API ("neighbors of these
   atoms within r, as pairs / as a graph") so one structure serves the MD pairlist, an ML model's
-  radial graph, and the QM-zone gather. (Board card `9e`.)
+  radial graph, and the QM-zone gather. (Item `9e`.)
 - **Typed units boundary.** GROMOS works in kJ/mol·nm; QM in Hartree/Bohr; ML in eV/Å. Make unit
   conversions explicit/typed so mismatches are caught, not silent force bugs.
 - **Representation vs role are orthogonal.** Instancing answers "stored once or many?"; role/attributes
   answer "treated how?". Keep them independent so one water can be promoted into the QM region (or to
   solute) without a data-model migration.
+
+## Where verified code goes
+
+`spec/` holds the Lean side (`NewenTheory`: the physics, organised like the physics; `NewenSpec`:
+models of the code, organised like the crates; `spec/SPEC.toml`: one entry per specified
+function). Two techniques, so two places for the Rust:
+
+- **Integer decision logic → `crates/newen-logic`.** Integers, booleans, slices and small structs
+  in and out, never `Topology` or `Configuration` (the caller adapts in a few lines), safe Rust in
+  the subset Charon and Aeneas translate. The proof covers every input. A caller that needs a
+  float threshold decides it and passes the boolean.
+- **Floating-point kernels → a pure function in their own crate** (newen-core, newen-forces,
+  newen-integrators), called by the algorithm or loop that books energies and virials, its doc
+  comment ending in `/// spec: <key>`. The Lean model is written once, polymorphic in the number
+  type: proven equal to the theory over ℝ and executed at `Float`, and a `*_spec` test requires
+  the compiled Rust to return the same 64 bits on the generated vectors. Keep such a kernel's
+  operation order: a reassociation fails its test. An FFT, whose rounding no model shares, is
+  compared within a stated tolerance (`kind = "float-tolerance"`).
+
+Verification gates promotion, not entry: a new method may start in the experimental zone (marked
+as experimental in the run's output and plan, self-consistency tests only; SPME is the first) and
+needs the model, theorem and test before it becomes a default or goes into a paper or tutorial.
+The checklist for adding a function is in `docs/src/verification/index.md`.
 
 ## Performance philosophy (don't chase C++ micro-opts)
 
