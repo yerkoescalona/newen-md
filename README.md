@@ -229,7 +229,9 @@ See our documentation:
 
 **THIS IS NOT AN OFFICIAL BIOMOS REPOSITORY**
 
-This repository is an **independent, educational reimplementation** of GROMOS functionality in Rust and Python. It is **fully based on gromosXX (md++) and gromosPlusPlus**, which are the official C++ implementations maintained by [Biomos b.v.](https://www.gromos.net).
+This repository is an **independent, educational reimplementation** of GROMOS functionality in Rust and Python. It is **based on gromosXX (md++) and gromosPlusPlus**, which are the official C++ implementations maintained by [Biomos b.v.](https://www.gromos.net).
+
+It is not a line-by-line copy. Where gromosXX or gromos++ compute something other than the GROMOS manual or the underlying physics intends, newen implements the intended behaviour, and every such divergence is listed, with the C++ source lines and the reference that pins it, in the [porting notes](.claude/porting.md).
 
 ### Purpose and Scope
 
