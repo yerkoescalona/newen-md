@@ -5,7 +5,8 @@ L3 orchestration. The `md` binary: composes newen-core + newen-forces + newen-in
 newen-io into a full MD simulation loop matching gromosXX output bit-for-bit.
 
 ## Inputs (consumes from)
-All lower crates (newen-core, newen-forces, newen-integrators, newen-io).
+newen-run (the run assembly) and the lower crates it drives (newen-core, newen-forces,
+newen-integrators, newen-io, newen-logic for the output schedule), plus the `newen` facade.
 
 ## Outputs
 `md` binary: runs GROMOS MD simulations; writes trajectories, energies, force trajectories
@@ -45,8 +46,11 @@ matching gromosXX to reference tolerances.
   gone. Timing: `scripts/bench_mpi.py`, BENCHMARKING.md §6.
 - Full MD loop ✓: NVE / NVT (Berendsen + NHC) / NPT
 - Force trajectory output (@trf) ✓: FREEFORCERED + CONSFORCERED, atom-by-atom tolerance 1e-6
-- **118 reference tests registered, all passing** in `tests/test_gromosXX_references.rs`
-  (GaMD: `aladip_gamd`, `_dual`, `_cmd_search`; the matrix is below)
+- **135 reference tests registered, none ignored, all passing** in
+  `tests/test_gromosXX_references.rs` (the matrix is below)
+- **Lattice sums and boxes (2026-10-22, 2026-10-23):** `md` writes GENBOX (NTB, lengths, angles)
+  into the trajectory and the final configuration, and prints "SPME is experimental: no gromosXX
+  oracle; …" with the header when the plan's lattice sum is experimental (NLRELE 5).
 - `PairlistAlgorithm::from_imd(imd.algorithm, …)` dispatches Standard/CellList here (9a-0/
   9a-1); CellList only activates on explicit `ALGORITHM grid_cell`, never via a size heuristic —
   every active reference system uses `standard` except `water_1000_spc_gridcell`.
@@ -58,9 +62,9 @@ matching gromosXX to reference tolerances.
 - **3.9 step 1 ✓ (2026-08-29): the run assembly left this crate.** `md.rs` (2060 → 1359
   lines) now calls `newen_run::{prepare_system, build_sequence_from_imd, start}` — the same functions
   `pyo3-newen` calls — and only keeps CLI parsing, printing (from `PrepareNote`/`BuildSummary`),
-  writers, and the GaMD/EDS in-loop application (still applied *after* `run_step`, still parsed
-  out-of-band; 3.9 A6). Do not add algorithm construction back here, and do not add a
-  second IMD reader.
+  writers, and the GaMD/EDS in-loop application (then still applied *after* `run_step`; since
+  moved: EDS into the recipe in 0.0.57, GaMD into the force field in 0.0.69). Do not add
+  algorithm construction back here, and do not add a second IMD reader.
 - **3.9 step 2 ✓ (2026-08-29).** The binary now runs from a `RunRecipe`
   (`newen_run::build_sequence_from_imd` = `from_imd` → `build_plan` → `validate_plan` →
   `instantiate`); it allows `GAMD`/`EDS` blocks to pass through the recipe because it applies them
@@ -102,19 +106,27 @@ tests/schnet_nve_loop.rs                    — SchNetInteraction + LeapFrog NVE
 - **Reference test oracle = gromosXX.** A change that alters wired, tested output is a regression until proven a deliberate, documented decision.
 - **DON'T edit `gromosXX_references/*/expected/`** — those are ground truth.
 - **All simulation parameters from `@input` .imd/.in file** (not CLI flags).
-- **CLI:** clap `#[derive(Parser)]` with `gromos_args()` pre-processor (`@key → --key`, `@f argfile` expansion). No custom arg parsers.
+- **CLI:** `md` still parses its `@key`s in a hand-rolled loop over `env::args()` (`parse_args`,
+  `src/bin/md.rs`), without `newen_io::normalize`, so no `@f` expansion: an exception to the
+  workspace CLI rule (overview, "CLI arg parsing"), not a pattern to copy. New binaries follow
+  the rule.
 - **Tolerances:** force_abs=1e-6, energy_rel=1e-8, position_abs=1e-9.
 
 ## Reference systems
 
-The per-system status matrix — which of the 123 registered systems pass and what each isolates —
+The per-system status matrix — which of the 135 registered systems pass and what each isolates —
 lives with the systems themselves: `tests/gromosXX_references/README.md`.
 
 ## How to add a reference test
 1. Create `tests/gromosXX_references/<name>/` with the `.imd` and an `input.toml` (copy a sibling's;
    inputs may live in `shared/`). Set `NTWG=1` in WRITETRAJ when the system perturbs (dH/dλ frames).
 2. `python3 scripts/regen_gromosXX_references.py <name>` — runs the native gromosXX
-   (`.local/gromosXX/md++/BUILD/program/md`) and writes `expected/`. Never re-run it without names:
-   the other systems' `expected/` files are the record.
+   (`.local/gromosXX/md++/BUILD/program/md`, released 247c95c4) and writes `expected/`. Never
+   re-run it without names: the other systems' `expected/` files are the record. Where newen
+   corrects a gromosXX defect, the system is `<name>_fixed` and is generated with
+   `--binary .local/gromosXX-patched/md++/BUILD/program/md` (D1, D2, D16, D25, D32, D40, D41,
+   LS1–LS5; `patches/BUILD.md`), its `input.toml` naming the patch. An Ewald input needs
+   gromosXX's `@develop` flag, which the script does not pass: run `md` by hand and record the
+   command in the `input.toml` header (see `nacl_pair_box_ewald/input.toml`).
 3. Add `ref_test!(name, "dir")` in `tests/test_gromosXX_references.rs` (or `ref_test!(ignore: …,
    "reason")` while it fails) and the name to `REFERENCE_SYSTEMS` in `py-newen/tests/test_gromosXX_references.py`.

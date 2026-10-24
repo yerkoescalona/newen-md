@@ -1157,6 +1157,11 @@ pub(crate) fn check_electrostatics(recipe: &RunRecipe) -> Result<(), RunError> {
     let ls = &nb.lattice_sum;
     let nlrele = nb.electrostatics;
     let err = |m: String| Err(RunError::Recipe(m));
+    // gromosXX's shifted reaction field (NLRELE 4, in_parameter.cc:4663-4674) is not ported;
+    // without this refusal the input would run as a plain reaction field.
+    if nlrele == 4 {
+        return err("the shifted reaction field (NLRELE 4) is not implemented".to_string());
+    }
     let range = |name: &str, value: String, should: &str| {
         err(format!(
             "NONBONDED block: {name} parameter is {value}, should be: {should}"

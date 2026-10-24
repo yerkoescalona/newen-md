@@ -5,15 +5,20 @@ L0 I/O service. All file format parsing and writing. The only place in the works
 GROMOS file formats are read or written.
 
 ## Inputs (consumes from)
-`newen-core` types only.
+`newen-core` types, and `newen-integrators` for the GaMD types (`input/gamd_block.rs`,
+`output/gamd_stats.rs`): a layering exception, not a pattern to extend.
 
 ## Outputs (public API)
 Parsers + writers for every GROMOS file format used in the workspace.
 
 ## Status
-- Topology parser ✓: all blocks (SOLUTEATOM, SOLVENTCONSTR, LJPARAMETERS, PRESSUREGROUPS, ...)
+- Topology parser ✓: all blocks (SOLUTEATOM, SOLVENTCONSTR, LJPARAMETERS, PRESSUREGROUPS, ...);
+  LJEXCEPTIONS with NEX > 0 is refused ("LJEXCEPTIONS block is not implemented",
+  `refuse_lj_exceptions`), an empty one read and dropped
 - Coordinate reader/writer ✓: POSITION, POSITIONRED, VELOCITY (labelled or three columns),
-  VELOCITYRED, GENBOX, PERTDATA, AEDSSEARCH (`parse_aedssearch`, `G96Writer::write_aedssearch`),
+  VELOCITYRED, GENBOX (NTB, lengths, the angles α, β, γ into `box_angles` and the Euler angles
+  into `box_euler`; `g96::genbox_block` writes NTB, lengths and angles back, zero Euler angles, a
+  truncated octahedron as its cube), PERTDATA, AEDSSEARCH (`parse_aedssearch`, `G96Writer::write_aedssearch`),
   NHCVARIABLES (`parse_nhcvariables`, `G96Writer::write_nhcvariables`, gromosXX's `%15.9f` rows)
 - IMD: the `AEDS` block (`AedsBlock`, `parse_aeds`, written by `write_imd`); ENERGY03 slots 34-39
   and the `# eds` offset column carry the A-EDS fields
@@ -51,7 +56,8 @@ src/imd.rs         — IMD parameter file parser
 - **Energy output:** full f64 scientific notation for exact comparison.
 - **NLRELE values (2026-10-23):** −1 reaction field (Vol. 4's "LSERF compatibility mode"; gromosXX
   reads it exactly as 1, `in_parameter.cc:4641-4648`), 0 none, 1 reaction field, 2 Ewald, 3 P3M,
-  4 shifted reaction field (`in_parameter.cc:4663-4674`), 5 SPME (newen only, experimental). Why 5
+  4 shifted reaction field (`in_parameter.cc:4663-4674`; read, not ported), 5 SPME (newen only,
+  experimental). Why 5
   for SPME: gromosXX's own 4 is the shifted reaction field, and its reader refuses everything
   outside −1..4 (`in_parameter.cc:4604`), so a gromosXX input can never be read as SPME. Vol. 4's
   notes "abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers of an older reading (in

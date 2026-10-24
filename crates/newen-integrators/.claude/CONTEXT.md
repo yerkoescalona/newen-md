@@ -5,7 +5,8 @@ L2 steppers. Mutating algorithms that advance state: integrators, constraints, t
 barostats, energy minimisation.
 
 ## Inputs (consumes from)
-`newen-core` + `newen-forces`.
+`newen-core` + `newen-forces` + `newen-logic` (`BathRange` is its `thermo::bath::DofRange`,
+re-exported).
 
 ## Outputs (public API)
 `LeapFrog`, `SteepestDescent`, `SHAKE`/`SETTLE`/`LINCS`, Berendsen + Nosé-Hoover thermostats,
@@ -45,12 +46,15 @@ Berendsen barostat, COM removal.
 - COM removal ✓: translational (NTICOM + NSCM) + rotational; uses min-image wrapped positions (gromosXX convention); periodic COM rotation suppressed in PBC
 - Berendsen thermostat ✓ (MULTIBATH)
 - Nosé-Hoover ✓: single NHC (algorithm=1) + chain NHC (algorithm=N≥2); both reference-tested;
-  `NoseHooverThermostat::new(params, ranges)` keeps one ζ chain per bath (MULTIBATH), as gromosXX
-  (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`)
+  `NoseHooverThermostat::new(params, ranges)` keeps one ζ chain per bath (MULTIBATH, since
+  0.0.73), as gromosXX (`aladip_multibath_nosehoover`, `aladip_multibath_nhc`). Each bath's `dof`
+  comes from newen-run (`bath_dofs` over `newen_logic::thermo::bath::bath_half_dofs`), which also
+  decouples a bath with no degrees of freedom before the thermostat sees it
 - Berendsen barostat ✓ (PRESSURESCALE), pressure/virial ✓
 - Steepest Descent EM ✓ (adaptive step, FLIM, DELE, NMIN; works with SHAKE + posres)
-- **Ewald (NLRELE 2) and P3M (NLRELE 3)** ✓ (2026-10-22): `Forcefield::lattice_sum:
-  Option<LatticeSum>` (`LatticeSum::{Ewald, P3m}`, built by newen-run; P3M's schedule reads the
+- **Ewald (NLRELE 2) and P3M (NLRELE 3)** ✓ (2026-10-22), SPME (NLRELE 5, experimental,
+  2026-10-23) on the same path: `Forcefield::lattice_sum: Option<LatticeSum>`
+  (`LatticeSum::{Ewald, P3m, Spme}`, built by newen-run; P3M's schedule reads the
   step, `sim.step`); with it, `apply` replaces every reaction-field pair term by
   `Forcefield::lattice_sum_terms` (LJ + real-space pairs into the pair storage; excluded pairs,
   k space, self, A, surface, 1-4 into the local storage; LJ-only long-range shell cached on
@@ -81,21 +85,22 @@ Berendsen barostat, COM removal.
 src/algorithms/       — Forcefield, LeapFrog*, Temperature, Energy
 src/algorithms/berendsen_thermostat.rs, nosehoover_thermostat.rs — the thermostat kernels
                         (`berendsen_scale`, `nose_hoover_scale`) and their `Algorithm`s
-src/algorithms/multibath.rs — atom → bath mapping, `ZERO_TEMPERATURE`
+src/algorithms/multibath.rs — atom → bath mapping (`in_bath`, `BathRange`), `ZERO_TEMPERATURE`
 tests/thermostat_spec.rs — kernels = Lean `Float` model, bit for bit
 src/algorithms/leap_frog.rs, temperature.rs, pressure_calculation.rs, berendsen_barostat.rs —
                         the dynamics kernels and their `Algorithm`s
 tests/dynamics_spec.rs — dynamics kernels = Lean `Float` model, bit for bit
 src/constraints.rs    — SHAKE, SETTLE, LINCS
-src/thermostats.rs    — Berendsen, Nosé-Hoover (+ chain NHC)
-src/barostats.rs      — Berendsen, Parrinello-Rahman
+src/thermostats.rs, barostats.rs — older free-function thermostats/barostats (Berendsen, Nosé-Hoover,
+                        Andersen; Berendsen, Parrinello-Rahman) for the `remd`/`gamd` binaries and
+                        the benches; a `newen-run` run uses `src/algorithms/` only
 ```
 
 ## Decisions logged
 - **Nosé-Hoover "small flexible constraints hack"** (`nosehoover_thermostat.cc:129,185`, also `berendsen_thermostat.cc:105`) **not ported** — only applies with flex-shake, which we don't support. Deliberate GROMOS quirk.
 - **NTINHT convention:** 0 = read from file, 1 = generate from scratch (opposite of intuition — matches gromosXX, don't "fix" it).
 - **IMD algorithm codes:** 0 = Berendsen, 1 = NHC, N = chain length (matches gromosXX after IMD parser bug fix).
-- **FEP/TI:** second-source the perturbed RF self-term before porting (see newen-forces rules + porting.md).
+- **FEP/TI:** the perturbed RF self term was second-sourced; gromosXX's "CHECK!" there is a false alarm (porting.md).
 - **Effective soft-core alpha = per-atom × global** (`in_perturbation.cc:1308`). The `.ptp` PERTATOMPARAM column ALJ/ACRF is a **per-atom scaling factor**, not the final alpha. gromosXX multiplies it by the global ALPHLJ/ALPHC from the `.imd` PERTURBATION block before storing: `lj_soft *= param.perturbation.soft_vdw`. `Forcefield.build_pert_info` must replicate this: `alpha_lj = pa.lj_soft * self.global_alphlj`. Failing to do so gives the wrong soft-core distance and off-by-2× errors in repulsive-regime pairs. Both `global_alphlj` and `global_alphc` must be set from `imd.alphlj`/`imd.alphc` before calling `init()`.
 - **gromosXX echoes effective (post-multiplication) alphas** in its startup output under `PERTURBATION TOPOLOGY`. If the echo says `LJ(soft) 0.25` but the `.ptp` file has `ALJ 0.5`, that is normal — it shows `0.5 × ALPHLJ_global = 0.5 × 0.5 = 0.25`. Trust the echo for debugging, not the raw `.ptp` value.
 - **Debugging FEP discrepancies: per-pair comparison is the right tool.** If total energies differ but the formula looks identical, add per-pair `eprintln!` for 5 representative pairs (one close/repulsive, one mid-range, one long-range) in both codes. If per-pair values match but totals differ, the pairlist counts or pairlist membership differ — check `GXX_OUTERLOOP call=N pairs=M` vs Rust diagnostic. If per-pair values also differ, the parameter (usually alpha) is wrong. In this case: start from gromosXX's echoed topology output, work backward from a single pair's energy to derive what parameter value gromosXX must be using, then trace where that value originates in the C++ source.

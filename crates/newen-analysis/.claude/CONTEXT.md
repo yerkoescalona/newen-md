@@ -5,7 +5,9 @@ L4 facade. GROMOS-style analysis programs as a thin layer over the shared engine
 Zero physics re-implementation — all physics comes from `newen-forces`.
 
 ## Inputs (consumes from)
-`newen-core` + `newen-io` + `newen-forces` (for `single_point_energy`).
+`newen-core` + `newen-io` + `newen-forces` (for `single_point_energy`) + `newen-run` (its
+`read_imd`, for `ext_ti_ana @imd`). `rustfft` is a dependency of this crate only (the
+`dGslv_pbsolv` FFT solver); the engine's FFT is PhastFT in newen-forces.
 
 ## Outputs
 Analysis binaries producing results comparable to GROMOS analysis tools.

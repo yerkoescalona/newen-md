@@ -10,6 +10,12 @@ All Rust crates.
 Python-callable API for running simulations and analysing trajectories.
 
 ## Status
+- **Triclinic boxes (0.0.76):** `Configuration` keeps the file's GENBOX angles and Euler angles
+  (`box_angles`, `box_euler`, `py_conf.rs`) and every run builds its `Coordinates` with them
+  (`simulation.rs`, `recipe.rs`), so a triclinic cell reaches the same `prepare_system` the binary
+  calls; the three triclinic references are in the Python list. **Open:** `Configuration.to_g96`
+  and `System.write` still write a GENBOX with right angles (`format_g96`), so a triclinic
+  configuration written from Python does not read back as the same cell.
 - **Charge-change corrections (1.8, 0.0.65–0.0.66):** `_charge_correction` and `_rf_self_energy`
   (`programs.rs`) bind `newen_analysis::free_energy::{charge_correction, rf_self_energy}` for
   `newen.analysis.charge_correction` / `rf_self_energy`.
@@ -32,7 +38,7 @@ Python-callable API for running simulations and analysing trajectories.
 - `System`, `Recipe`/`Term`/`Algorithm`/`Plan`, `Simulation(system, recipe[, plan=])` ✓ (3.9,
   2026-08-29); `InputParameters` and the `AlgorithmSequence.*` presets are deprecation shims
 - `sim.run(steps, ene_freq)` → numpy array; energy decomposition (bond/angle/dihedral/improper/lj/coulomb) ✓ (P3.3)
-- Python tests: 121 (118 passed, 2 documented position-mismatch skips) ✓ (`py-newen/tests/`)
+- Python tests ✓ (`py-newen/tests/`; the current counts are in each CHANGELOG entry)
 - `.pyi` stubs ✓
 - **3.6 ✓ done** — `build_simulation()` (`simulation.rs`) now dispatches every gromosXX
   feature that was already implemented lower in the stack but silently unwired from Python: NTIVEL=1

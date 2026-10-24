@@ -24,11 +24,12 @@ crates/newen-logic  the Rust; NewenSpec/Extracted/ is its Aeneas translation (ge
 - `NewenTheory` never imports `NewenSpec`. The divergence dossier (gromos-divergences repository)
   imports `NewenTheory` to state gromosXX's transcriptions against the same definitions.
 - The bridge theorems are where discretisation and bookkeeping enter (output steps, pairlist steps,
-  indices); that is where the 39 gromosXX divergences lived.
+  indices); that is where most of the dossier's gromosXX divergences lived (D1–D39 when the
+  scheme was set up; the dossier now runs to D59).
 
 ## Inputs (consumes from)
 Nothing. No workspace crate, no external crate in the default build (the one Charon translates; `serde` is an optional feature for the run plan's JSON), `#![forbid(unsafe_code)]`. It sits at the bottom of
-the dependency graph; newen-core, newen-run, newen-forces and newen-integrators call it.
+the dependency graph; newen-core, newen-forces, newen-integrators, newen-run and newen-md call it.
 
 ## Outputs
 ```
@@ -64,8 +65,8 @@ topology::groups::check_last_atoms(last_atoms: &[usize], n_atoms) -> LastAtomsCh
 topology::groups::energy_cell(eg_i, eg_j, n_groups) -> Option<usize>
                                                         spec: topology.groups.energy_cell
 ```
-`DofRange` is newen-integrators' `BathRange` (re-exported there, with `in_bath` a wrapper of
-`baths_of`); newen-run's `bath_dofs` adapts the topology to `bath_half_dofs` + `ndfmin_spread`,
+newen-integrators re-exports `DofRange` as `BathRange` (`algorithms/multibath.rs`; no struct of
+its own, `in_bath` a wrapper of `baths_of`); newen-run's `bath_dofs` adapts the topology to `bath_half_dofs` + `ndfmin_spread`,
 and its `thermostat_baths` decouples the baths `empty_baths` flags. The md binary writes its
 frames by `due`, `minimisation_stop` and `final_step`; `RemoveCOMMotion` asks `com_removal`;
 newen-core's `PrecalcLambdas::active` is `due`. newen-core's `Topology::is_excluded` /

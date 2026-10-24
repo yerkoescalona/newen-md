@@ -5,7 +5,8 @@ L1 pure compute. Every force and energy calculation for classical terms.
 Single source of physics — both MD engine and analysis facade call this layer.
 
 ## Inputs (consumes from)
-`newen-core`: Topology, Configuration, BoundaryCondition, pairlist algorithms.
+`newen-core`: Topology, Configuration, BoundaryCondition, pairlist algorithms. `newen-logic`:
+`topology::groups::energy_cell` (`EnergyGroups::cell`).
 
 ## Outputs (public API)
 Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energy()`;
@@ -85,9 +86,10 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   the Lean pipeline, P3M against the direct Ewald sum within the force-error estimate, forces
   against central differences of the energy. Differences from gromosXX: see
   `docs/src/verification/index.md`, phase 3 (the NVT A term, the triclinic finite-difference
-  field, the triclinic wave vectors). The FFT is PhastFT only: the unwired SPME code
-  (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`, not GROMOS's P3M), its `use-fftw` feature and the
-  `rustfft`/`fftw` dependencies were removed (2026-10-22).
+  field, the triclinic wave vectors). The FFT is PhastFT only. Removed 2026-10-22: the unwired
+  SPME code that was not GROMOS's P3M (removed: `electrostatics.rs`, `pme.rs`, `pme_mpi.rs`),
+  removed with it the `use-fftw` feature and both FFT dependencies, `fftw` and `rustfft` (rustfft
+  stays in newen-analysis only).
 - **Lattice sums against the patched oracle (2026-10-22, 2026-10-23):** the corrected gromosXX
   defects are pinned by `_fixed` references: D49/LS1 (NVT A term), D50/LS2 (surface virial,
   `water_216_npt_ewald_epsls_fixed`), D51/LS3 (triclinic wave vectors,
@@ -108,6 +110,9 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   gradient, `spme_force_is_minus_grad` in `NewenTheory/Interactions/SPME.lean`), the virial against
   the deformation derivative, and SPME against the direct Ewald sum and P3M (measured errors in
   `docs/src/verification/index.md`, "smooth PME, experimental").
+- **Electrostatics by NLRELE:** −1 and 1 reaction field (newen-run reads −1 as 1), 0 none, 2
+  `LatticeSum::Ewald`, 3 `LatticeSum::P3m`, 5 `LatticeSum::Spme` (experimental). 4, gromosXX's
+  shifted reaction field, has no kernel here.
 - LJ + CRF nonbonded ✓; 1-4 interactions ✓; twin-range (RCUTP/RCUTL) ✓
 - All bonded types ✓: quartic/harmonic bonds, cos-harmonic/harmonic angles, dihedrals, impropers, cross-dihedrals
 - Perturbed nonbonded ✓: soft-core LJ+CRF, pairlist correction, self/excluded/1-4/PERTATOMPAIR corrections
@@ -115,8 +120,11 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   perturbed partners (TI-EDS, 0.0.58) the soft-core A/B pair per state and its ∂V_s/∂λ
 - Position restraints ✓; distance restraints ✓
 - `energy.rs` ✓ — `single_point_energy(topo, positions, box_dims, params)` — used by `ener` analysis binary
-- ⚠️ Perturbed RF self-term needs second-sourcing from GROMOS book (`perturbed_nonbonded_term.cc:596,749,1444`)
-- Dihedral restraints: **not yet** — next after CellList wiring (P1.6)
+- Perturbed RF self term: second-sourced, the "Chris: CHECK!" comment is a false alarm
+  (`porting.md`; pinned by `rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term`)
+- Dihedral restraints: `DihedralRestraint(s)` exist in `restraints.rs` (beside the angle, J-value
+  and RDC restraints) but no run uses them; `aladip_dihedral_restraints_match_the_check_suite`
+  (`newen-md/tests/gromos_check_suite.rs`) stays ignored until they are wired (item 1.6)
 - **QM/MM + ML seam (2.6-P2.8), pieces built and reference-tested, not yet wired into an
   MD binary:**
   - `PotentialProvider` trait (`provider.rs`) — `contribute(region, topo, conf, neigh) ->

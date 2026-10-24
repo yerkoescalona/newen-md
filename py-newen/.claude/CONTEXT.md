@@ -13,7 +13,11 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   - `__init__.py` — top-level API surface
   - `md_runners.py` — high-level simulation runner wrappers
   - `tools/` — the gromos++ system-preparation programs, in process (3.10)
-  - `analysis.py` — the old subprocess stub; `newen.analysis` replaces it in 3.10 step 6
+  - `analysis.py` — `newen.analysis`: the in-process bindings (`bar`, `ext_ti_ana`,
+    `ext_ti_merge`, `mbar`, `ti_trapezoid`, `dgslv_pbsolv`, `charge_correction`,
+    `rf_self_energy`, `corrected_charging_dg`) next to the old subprocess wrappers, mostly stubs
+  - `free_energy.py` — λ windows, TI/BAR/MBAR; `education/` — the teaching layer (toy systems,
+    experiments with checks, a live viewer; no physics)
   - `newen.pyi` — type stubs for IDE support
 - `notebooks/` — Jupyter notebooks (education + demonstration)
 - `tests/` — Python-level integration tests
@@ -101,14 +105,19 @@ simulation runners, analysis helpers, notebooks, and examples. Built with `matur
   through the module and gromosXX on the same recipes' `.imd`. `tests/test_free_energy_charge.py`:
   CH4 → CH4⁺ in 999 SPC, seven windows, TI/BAR/MBAR within 2σ, the `dGslv_pbsolv` correction on
   the end states against gromos++ (0.01 kJ/mol).
+- **Triclinic configurations (0.0.76):** a `System` read from a file with GENBOX angles runs in
+  that cell (the angles reach `prepare_system`); `nacl_water_box_triclinic`,
+  `_triclinic_p3m_fixed` and `_triclinic_p3m_fd_fixed` are in `REFERENCE_SYSTEMS`. Open:
+  `Configuration.to_g96` and `System.write` drop the angles (see pyo3-newen's contract).
 - Charge-change correction chain (1.8, 0.0.66): `newen.analysis.charge_correction`,
   `rf_self_energy` (the reaction-field self term the raw ΔG holds), `corrected_charging_dg`
   ([raw − self] + PB(B) − PB(A) + C1 + C2, or + the five analytic terms); user guide "Correcting
   a charge change". `scripts/na_hydration.py` runs Na⁺ → dummy in SPC through the whole chain
   (`docs/free_energy_validation.md`).
 - Remaining P3 items:
-  - [ ] `newen.analysis` over the 82 analysis programs — 3.10 steps 6–8. The stub
-        `analysis.py` (subprocess, mostly `NotImplementedError`) is deleted in step 6.
+  - [ ] `newen.analysis` over the registry of converted analysis programs — 3.10 steps 6–8;
+        until then `analysis.py`'s subprocess wrappers (mostly `NotImplementedError`) stay next
+        to the in-process bindings.
   - [ ] Rich `__repr__` / `_repr_html_` for Jupyter (Topology, Configuration, Energy)
 
 ## Key files
@@ -119,7 +128,8 @@ python/newen/exceptions.py      — RecipeError / PlanError / MissingFeatureErro
 python/newen/timeseries.py      — EnergyTimeseries over run()'s array
 python/newen/free_energy.py     — λ windows: Perturbation, LambdaSchedule, run_windows (parallel), TI, BAR, MBAR
 python/newen/tools/             — the gromos++ programs: run()/programs() + the typed prep chain
-python/newen/analysis.py        — the old subprocess stub; replaced by newen/analysis/ in 3.10 step 6
+python/newen/analysis.py        — newen.analysis: in-process free-energy bindings + old subprocess stubs
+python/newen/education/         — teaching layer: toy systems, experiments with checks, the viewer
 python/newen/system_builder.py  — P3 design sketch: ForceField→BuildingBlock→Topology algebra
 stubtest_allowlist_no_ml.txt     — the ml-only names, for stubtest on a default build
 tests/test_gromosXX_references.py, test_front_end_parity.py, test_recipe.py, test_xtb_term.py,

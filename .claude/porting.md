@@ -2,7 +2,7 @@
 
 How to translate gromosXX/gromos++ into newen so the result is *both* faithful (matches GROMOS
 where it should) and *correct* (doesn't inherit 30 years of accreted C++ defects). These are
-guidelines, not tasks — the live work is on the project board, and the A/B/C classification below is
+guidelines, not tasks — the live work is in the private work queue, and the A/B/C classification below is
 the discipline itself, not a summary of it.
 
 ## The bit-for-bit invariant
@@ -35,7 +35,9 @@ what it computes; see the list below.)
 FEP (fixed λ, `LAMBDAS`, `PRECALCLAM`, slow growth), EDS and A-EDS left this list in 1.8: they run
 through the recipe and are pinned by native and patched-oracle references. Lattice sums (Ewald,
 P3M) and GENBOX triclinic boxes left it on 2026-10-22: audited against Vol. 2 and the C++, with
-Lean models of their kernels, native and patched-oracle references (LS1–LS3) and the entries below.
+Lean models of their kernels, native and patched-oracle references (LS1–LS5, every lattice-sum
+path since 2026-10-23) and the entries below. SPME (NLRELE 5) has no gromosXX counterpart, so no
+oracle can cover it: it runs as experimental, checked against the Lean Ewald model and P3M.
 
 So the standing rule: **write the gromosXX reference test *before* wiring an unwired path, not
 after.** The test is what converts un-audited surface into oracle-covered surface.
