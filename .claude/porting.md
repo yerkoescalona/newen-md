@@ -338,10 +338,19 @@ Each entry: what gromosXX does, which bucket, what newen does.
   −½·FPEPSI·crf_cut·(q_B² − q_A²) (`perturbed_self_energy_correction` ↔
   `newen_analysis::free_energy::rf_self_energy`, test
   `rf_self_energy_is_the_ti_integral_of_the_perturbed_self_term`). Reproduced as is.
-- **Soft improper ζ wrap** (C, ours, dossier candidate). newen's soft improper caller wraps ζ into
-  `[ζ0 − π, ζ0 + π]` before the soft kernel, as the plain and perturbed impropers do;
-  gromosXX's `perturbed_soft_improper_interaction.cc:134-138` does not wrap, so a ζ a turn away
-  from ζ0 gets the energy of the long way round there. newen keeps the wrap.
+- **Harmonic bond angle with θ₀ = π at θ ≈ 0** (B, D55; reproduced). The `|sin θ| < ε` branch of
+  `harm_angle_interaction.cc:112-127` is meant for θ ≈ π but also fires at θ ≈ 0, where it returns
+  `K(1 + cos θ)` = 2K instead of K/2·π² ≈ 4.93K; the force is 0 by geometry. A degenerate geometry
+  no real topology reaches; newen's `harmonic_angle` does the same and says so in its doc comment.
+- **Symmetric dihedral with m = 0 or m > 6** (B, D56; reproduced for m = 0, not for m > 6).
+  `dihedral_interaction.cc:111-170` takes cos(0·φ) = 0, so an m = 0 term has energy K instead of
+  K(1 + cos δ) (the topology reader rejects NP ≤ 0, so unreachable); m > 6 falls through the
+  `switch` to energy K and no force, where newen drops the term with a warning.
+- **Soft improper ζ wrap** (C, ours, D54; no patched oracle, no reference reaches
+  `|ζ − ζ0| > π`). newen's soft improper caller wraps ζ into `[ζ0 − π, ζ0 + π]` before the soft
+  kernel, as the plain and perturbed impropers do; gromosXX's
+  `perturbed_soft_improper_interaction.cc:134-138` does not wrap, so a ζ a turn away from ζ0 gets
+  the energy of the long way round there. newen keeps the wrap.
 - **LJEXCEPTIONS** (refused, not implemented). gromosXX moves each pair into `all_exclusion` and
   gives it its own C6/C12 (`in_topology.cc:2111`); newen's topology reader refuses a block with
   NEX > 0 ("LJEXCEPTIONS block is not implemented") instead of skipping it as an unknown block.
@@ -374,7 +383,7 @@ Each entry: what gromosXX does, which bucket, what newen does.
   commented out), but rotates box, positions and velocities by them on output
   (`out_configuration.cc:1814-1823` and the `_print_*` functions), so a file with non-zero angles
   does not read back as written. newen refuses non-zero Euler angles (`prepare_system`).
-- **`math::costest`** (note). `gmath.h:1061-1068` clamps an `acos` argument only when it is beyond
+- **`math::costest`** (note, D57). `gmath.h:1061-1068` clamps an `acos` argument only when it is beyond
   `1 + ε`; one in `(1, 1 + ε]` is returned as it is and `acos` gives NaN (the condition is
   inverted). Used for the GENBOX angles on output; newen clamps (`genbox_lengths_angles`).
 - **Solvent images: per atom or per molecule** (note). With the standard solvent loops
@@ -389,17 +398,17 @@ Each entry: what gromosXX does, which bucket, what newen does.
   with `|k|²` (`kspace.cc:72, 90`: `k_cut2`, "k cutoff squared for faster comparison"; the column
   was called NK2 in older inputs, and gromosXX's own inputs use values like 100 that only make
   sense squared); Vol. 2 describes a cutoff on `|k|`. newen follows the code (`k_vectors`,
-  `newen-forces/src/nonbonded/ewald.rs`); the references choose KCUT so. A documentation note
-  for the dossier.
-- **NVT self and A terms frozen at step 0** (A, LS1; corrected; patched oracle
-  `tests/gromosXX_references/patches/LS1_p3m_nvt_a_term.patch`, dossier ID pending).
+  `newen-forces/src/nonbonded/ewald.rs`); the references choose KCUT so. In the dossier's manual
+  and comment issues (no id).
+- **NVT self and A terms frozen at step 0** (A, D49; corrected; patched oracle
+  `tests/gromosXX_references/patches/LS1_p3m_nvt_a_term.patch`).
   `configuration/energy.cc:576-580` reports the step-0 self and A terms every step of a run
   without pressure scaling: exact for Ewald, stale for P3M, whose `Ã2` moves with the charges
   (2.2·10⁻⁷ relative after 8 steps in `nacl_pair_box_p3m_fixed`). newen reports the step's terms.
   Pinned by the four P3M `_fixed` references. (gromosXX also adds the self and A virials only on
   the steps it computes them; newen every step. Not patched: no reference prints a virial there.)
-- **Triclinic wave vectors** (A, LS3; corrected; patched oracle `LS3_triclinic_kvectors.patch`,
-  dossier ID pending). gromosXX builds the reciprocal basis `M = 2π/V (b×c, c×a, a×b)` as columns
+- **Triclinic wave vectors** (A, D51; corrected; patched oracle `LS3_triclinic_kvectors.patch`).
+  gromosXX builds the reciprocal basis `M = 2π/V (b×c, c×a, a×b)` as columns
   and applies it with `math::product`, which computes `Mᵀ·l` (`gmath.h:925-931`):
   `kspace.cc:128-135` (`l_to_k_matrix`, also the P3M `Ã2` at `nonbonded_outerloop.cc:2390-2449`),
   `influence_function.cc:390/424` and `latticesum.cc:538/566` (the `ik` field); and at
@@ -411,15 +420,15 @@ Each entry: what gromosXX does, which bucket, what newen does.
   Lean `latticeVector_reciprocal_dot`). Pinned by `nacl_water_box_triclinic_p3m_fixed` (released
   binary: k-space 2021.89 instead of 2031.45 kJ/mol at step 0, forces up to 27.6 kJ mol⁻¹ nm⁻¹
   apart).
-- **Surface virial without the −2** (A, LS2; corrected; patched oracle
-  `LS2_surface_virial.patch`, dossier ID pending). `nonbonded_outerloop.cc:2676-2686` adds the
+- **Surface virial without the −2** (A, D50; corrected; patched oracle
+  `LS2_surface_virial.patch`). `nonbonded_outerloop.cc:2676-2686` adds the
   diagonal of `Ξ = ½ p M⊗M − ¼ p |M|² 1` to the virial as it is, where every other lattice-sum
   term adds `−2 Ξ` (`:2057, 2594, 2611`). newen stores `−2 Ξ`, whole tensor (`surface_term`,
   `newen-forces/src/nonbonded/lattice_sum.rs`). Pinned by `water_216_npt_ewald_epsls_fixed`
   (Ewald, EPSLS 61, Berendsen NPT: released step-0 pressure −305.43 instead of −296.61
   kJ mol⁻¹ nm⁻³).
-- **Finite-difference field in a skewed cell** (A, LS4; corrected; patched oracle
-  `LS4_fd_field_triclinic.patch`, dossier ID pending). `latticesum.cc:626-641` divides the
+- **Finite-difference field in a skewed cell** (A, D52; corrected; patched oracle
+  `LS4_fd_field_triclinic.patch`). `latticesum.cc:626-641` divides the
   potential difference along grid axis `α` by `2q·|box(α)/N_α|` (`box(α)` is edge `α`,
   `Box::operator()(int)`) and stores it as Cartesian component `α`: the derivative along each
   lattice direction, the gradient only for orthogonal edges. gromosXX's own influence function maps
@@ -430,8 +439,8 @@ Each entry: what gromosXX does, which bucket, what newen does.
   box (the rectangular `_fixed` references regenerate byte for byte). Pinned by
   `nacl_water_box_triclinic_p3m_fd_fixed` (NFDORD 2; LS4 alone moves the step-0 forces by up to
   25.45 kJ mol⁻¹ nm⁻¹, the energies not at all).
-- **Box correction on a recompute step** (A, LS5; corrected; patched oracle
-  `LS5_box_correction_recompute.patch`, dossier ID pending). When the influence function is
+- **Box correction on a recompute step** (A, D53; corrected; patched oracle
+  `LS5_box_correction_recompute.patch`). When the influence function is
   recomputed at an NQEVAL step under pressure scaling, gromosXX keeps the box deviation it set
   before the recomputation (`setBox` at `nonbonded_outerloop.cc:2138`, `tbox_dev = tL − tL_0` at
   `influence_function.cc:60-65`, while `calculate` resets only `tL_0`), so the new `Ĝ` is
@@ -442,7 +451,7 @@ Each entry: what gromosXX does, which bucket, what newen does.
 - **Nyquist planes in ik differentiation** (B, reproduced). gromosXX keeps `l = N/2` in `−i k φ̂`;
   the real part of the backward transform keeps only the Hermitian part, which is the usual
   treatment with those components zero, so it is harmless. newen does the same (`field_ik`).
-- **NA2CLC 4 aliased to 3** (B, reproduced). gromosXX reads 4 as 3 (`in_parameter.cc:4718`), so
+- **NA2CLC 4 aliased to 3** (B, D59; reproduced). gromosXX reads 4 as 3 (`in_parameter.cc:4718`), so
   its averaged-grid `Ã2` branch is unreachable; newen stores 4 as 3 (`LatticeSumPlan`).
 - **NASORD 1 at a half-integer** (B, reproduced). `|x| < 1/2` (`latticesum.h:512`) gives a charge
   exactly half-way between two grid points weight zero on both; newen alike
@@ -453,7 +462,7 @@ Each entry: what gromosXX does, which bucket, what newen does.
   atomic cutoff and matches the table to its printed digits.
 - **P3M grids are powers of two** (newen restriction, not a divergence). PhastFT transforms powers
   of two only; newen refuses any other grid with a message, gromosXX accepts any even size.
-- **LJ-exception pairs under lattice sums** (note). gromosXX moves an LJEXCEPTIONS pair into the
+- **LJ-exception pairs under lattice sums** (note, D58, inferred). gromosXX moves an LJEXCEPTIONS pair into the
   exclusions and computes only its LJ (`nonbonded_set.cc:232`, `lj_exception_innerloop`), so under
   a lattice sum it loses its real-space electrostatics while the k-space term keeps it. newen
   refuses LJEXCEPTIONS with NEX > 0 anyway (entry above).

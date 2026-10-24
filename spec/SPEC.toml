@@ -233,7 +233,7 @@ vectors = "spec/vectors/topology.json"
 key = "topology.pairs.pair_kind"
 rust = "crates/newen-logic/src/topology/pairs.rs::pair_kind"
 used_by = ["crates/newen-core/src/topology.rs::Topology::pair_kind_of", "crates/newen-core/src/topology.rs::Topology::is_excluded_or_14 (every pairlist builder in crates/newen-core/src/pairlist.rs)"]
-origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority; LJEXCEPTIONS pairs, which gromosXX also moves into all_exclusion (in_topology.cc:2111), are refused by newen's topology reader (crates/newen-io/src/topology.rs::refuse_lj_exceptions)"
+origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority; LJEXCEPTIONS pairs, which gromosXX also moves into all_exclusion (in_topology.cc:2111), are refused by newen's topology reader (crates/newen-io/src/topology.rs::refuse_lj_exceptions); under a lattice sum gromosXX drops their real-space electrostatics (D58)"
 # Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
 theory = "NewenTheory.Topology.Pairs.pairKind (pairKind_symm, pairKind_excluded_iff, pairKind_normal_iff)"
 model = "NewenSpec.Topology.Pairs.pairKindModel"
@@ -438,7 +438,7 @@ key = "bonded.dihedral_chebyshev"
 kind = "float"
 rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_chebyshev"
 used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_forces_grouped (COVALENTFORM NTBDN = 1)"]
-origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1; for m > 6 gromosXX's switch leaves cos(m phi) = 0 (energy K, no force), newen's kernel returns nothing and its caller drops the term with a warning; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
+origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1 (D56); for m > 6 gromosXX's switch leaves cos(m phi) = 0 (energy K, no force), newen's kernel returns nothing and its caller drops the term with a warning; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
 # Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; f_i and f_l = -grad E; sum zero, no torque
 theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_force_is_minus_grad, chebyshev_conservation)"
 model = "NewenSpec.Bonded.dihedralChebyshevModel (at Float: dihedralChebyshevFloat)"
@@ -769,7 +769,7 @@ key = "bonded.chebyshev"
 kind = "float"
 rust = "crates/newen-forces/src/bonded/perturbed.rs::chebyshev"
 used_by = ["crates/newen-forces/src/bonded/perturbed.rs::perturbed_dihedral_term"]
-origin = "gromosXX perturbed_dihedral_interaction.cc:134-168; gromosXX forms the powers as cos^2, cos^2*cos, cos^3*cos (newen: powi); both give 0 for m = 0, where cos(0 phi) = 1"
+origin = "gromosXX perturbed_dihedral_interaction.cc:134-168; gromosXX forms the powers as cos^2, cos^2*cos, cos^3*cos (newen: powi); both give 0 for m = 0, where cos(0 phi) = 1 (as D56)"
 theory = "NewenTheory.Interactions.PerturbedBonded.chebT, chebDT (chebT_cos, chebT_hasDerivAt)"
 model = "NewenSpec.PerturbedBonded.chebyshevModel (at Float: chebyshevFloat)"
 theorem = "NewenSpec.PerturbedBonded.chebyshevModel_real_eq, chebyshevModel_zero"
@@ -911,7 +911,7 @@ key = "lattice_sum.reciprocal_box"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::reciprocal_box"
 used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms)", "crates/newen-forces/src/nonbonded/lattice_sum.rs::lattice_vector (the wave vector of l in this basis)"]
-origin = "gromosXX math::volume (math/volume.cc:33-52) and configuration::KSpace_Utils::l_to_k_matrix (kspace.cc:128-136); gromosXX then multiplies l by the transpose of this basis (kspace.cc:88, nonbonded_outerloop.cc:2449), which is the same vector only in a rectangular box; newen's lattice_vector takes l_x b1 + l_y b2 + l_z b3"
+origin = "gromosXX math::volume (math/volume.cc:33-52) and configuration::KSpace_Utils::l_to_k_matrix (kspace.cc:128-136); gromosXX then multiplies l by the transpose of this basis (kspace.cc:88, nonbonded_outerloop.cc:2449), which is the same vector only in a rectangular box (D51); newen's lattice_vector takes l_x b1 + l_y b2 + l_z b3"
 # Theorems over R: the model equals V = (a x b) . c and 2 pi / V (b x c, c x a, a x b); for diag(Lx, Ly, Lz) the rectangular |a||b||c| is (a x b) . c; the reciprocal basis is dual to the box (k . a = 2 pi l_x, ...), so one atom moved by a lattice vector leaves C(k)^2 + S(k)^2 unchanged
 theory = "NewenTheory.Interactions.LatticeSum.boxVolume, reciprocal, latticeVector (latticeVector_reciprocal_dot, structureFactorSq_lattice_shift)"
 model = "NewenSpec.LatticeSum.reciprocalBoxModel, latticeVectorModel (at Float: reciprocalBoxFloat)"
@@ -995,7 +995,7 @@ key = "lattice_sum.surface_term"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::surface_term"
 used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate (unwrapped positions, centre a/2 + b/2 + c/2)"]
-origin = "gromosXX _ls_surface_outerloop (nonbonded_outerloop.cc:2652-2688); gromosXX adds only the diagonal of the virial and without the factor -2 of every other lattice-sum term (newen: the whole tensor, -2 Xi); GROMOS Vol. 2 e_srf, e_srf_forces"
+origin = "gromosXX _ls_surface_outerloop (nonbonded_outerloop.cc:2652-2688); gromosXX adds only the diagonal of the virial and without the factor -2 of every other lattice-sum term (D50; newen: the whole tensor, -2 Xi); GROMOS Vol. 2 e_srf, e_srf_forces"
 # Theorems over R: zero for EPSLS = 0; otherwise the theory's surface and surfaceForce with eps0 = 1/eps0_inv; force = -grad E
 theory = "NewenTheory.Interactions.LatticeSum.surface, surfaceForce, dipole (surface_force_is_minus_grad)"
 model = "NewenSpec.LatticeSum.surfaceModel, dipoleModel (at Float: surfaceFloat)"
@@ -1078,7 +1078,7 @@ key = "p3m.assign_squared_charges"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
-origin = "gromosXX Lattice_Sum::calculate_squared_charge_grid (latticesum.cc:170-258): around the grid origin, s = u - n0 (odd p) or u - n0 - 1/2 (even p), stencil -(p-1)..p-1, R += f_x f_y f_z (1/V_cell) q^2; GROMOS Vol. 2 f_g_func. Only for NA2CLC 3 (and 4, which gromosXX reads as 3, in_parameter.cc:4718; the averaged grid of NA2CLC 4 is never used by gromosXX)"
+origin = "gromosXX Lattice_Sum::calculate_squared_charge_grid (latticesum.cc:170-258): around the grid origin, s = u - n0 (odd p) or u - n0 - 1/2 (even p), stencil -(p-1)..p-1, R += f_x f_y f_z (1/V_cell) q^2; GROMOS Vol. 2 f_g_func. Only for NA2CLC 3 (and 4, which gromosXX reads as 3, in_parameter.cc:4718, D59; the averaged grid of NA2CLC 4 is never used by gromosXX)"
 model = "NewenSpec.P3M.assignSquaredModel (at Float: assignSquaredFloat)"
 # Rust = model at Float, bit for bit, as assign_charges (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"
@@ -1117,7 +1117,7 @@ key = "p3m.influence_at"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_at"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::influence_function"]
-origin = "gromosXX Influence_Function::calculate (influence_function.cc:91-344) for one l: D_hat (ik or finite differences, :156-171), the alias sums over m in [-NALIAS, NALIAS]^3 (:173-224), the denominator 1 for p = 1, G_hat = 0 below |D|^2 < 1e-12 (math::epsilon), the derivative tensor (:237-249), q (:276); GROMOS Vol. 2 optim_influ, alias_def, big_gammahat_def, q_calc_2. k_l = l_x b1 + l_y b2 + l_z b3 (phase 2's lattice_vector); gromosXX multiplies by the transpose of the reciprocal basis, the same vector in a rectangular box"
+origin = "gromosXX Influence_Function::calculate (influence_function.cc:91-344) for one l: D_hat (ik or finite differences, :156-171), the alias sums over m in [-NALIAS, NALIAS]^3 (:173-224), the denominator 1 for p = 1, G_hat = 0 below |D|^2 < 1e-12 (math::epsilon), the derivative tensor (:237-249), q (:276); GROMOS Vol. 2 optim_influ, alias_def, big_gammahat_def, q_calc_2. k_l = l_x b1 + l_y b2 + l_z b3 (phase 2's lattice_vector); gromosXX multiplies by the transpose of the reciprocal basis, the same vector in a rectangular box (D51)"
 # Theorems over R: the optimal influence function over a set of alias vectors (Vol. 2 optim_influ); for one alias with ik differentiation it is gamma_hat(a|k|)/(|k|^2 P_hat(k)^2)
 theory = "NewenTheory.Interactions.P3M.influence (influence_single_alias)"
 model = "NewenSpec.P3M.influenceAtModel, aliasSumsModel, dHatModel (at Float: influenceAtFloat; the whole grid influenceFunctionFloat)"
@@ -1142,7 +1142,7 @@ key = "p3m.influence_box_correction"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_box_correction"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (a box that differs from the one the influence function was computed in)"]
-origin = "gromosXX Influence_Function::operator() (influence_function.h:140-148): G - tr(Gamma tL0^-1 (tL - tL0)), the matrix products summed from zero; GROMOS Vol. 2 gammahat_upd. gromosXX computes the deviation in setBox before a recomputation at an NQEVAL step and does not reset it after, so on that step the new function is corrected by the deviation from the old box; newen takes the deviation from the box of the last computation"
+origin = "gromosXX Influence_Function::operator() (influence_function.h:140-148): G - tr(Gamma tL0^-1 (tL - tL0)), the matrix products summed from zero; GROMOS Vol. 2 gammahat_upd. gromosXX computes the deviation in setBox before a recomputation at an NQEVAL step and does not reset it after, so on that step the new function is corrected by the deviation from the old box (D53); newen takes the deviation from the box of the last computation"
 model = "NewenSpec.P3M.boxCorrectionModel (at Float: boxCorrectionFloat)"
 # Rust = model at Float, bit for bit, 100 random rows (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"
@@ -1201,7 +1201,7 @@ key = "p3m.field_fd"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::field_fd"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NFDORD 1-5"]
-origin = "gromosXX Lattice_Sum::calculate_electric_field, finite differences (latticesum.cc:581-640), after the backward transform of phi_hat. gromosXX divides the difference along grid axis a by 2 j |box(a)/N_a| and stores it as Cartesian component a, which is not the gradient in a triclinic box; newen sums g_a = sum_j (c_j/sqrt(N)) (phi(n - j e_a) - phi(n + j e_a))/(2j) and maps it through H^-1 (E = sum_a g_a h*_a), the operator whose transform is the D_hat of the influence function; in a rectangular box the two differ only in rounding"
+origin = "gromosXX Lattice_Sum::calculate_electric_field, finite differences (latticesum.cc:581-640), after the backward transform of phi_hat. gromosXX divides the difference along grid axis a by 2 j |box(a)/N_a| and stores it as Cartesian component a, which is not the gradient in a triclinic box (D52); newen sums g_a = sum_j (c_j/sqrt(N)) (phi(n - j e_a) - phi(n + j e_a))/(2j) and maps it through H^-1 (E = sum_a g_a h*_a), the operator whose transform is the D_hat of the influence function; in a rectangular box the two differ only in rounding"
 model = "NewenSpec.P3M.fieldFdModel (at Float: fieldFdFloat)"
 # Rust = model at Float, bit for bit, q = 1..5 on small grids in random (triclinic included) boxes (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"
@@ -1223,7 +1223,7 @@ key = "p3m.a2_tilde"
 kind = "float"
 rust = "crates/newen-forces/src/nonbonded/p3m.rs::a2_tilde_p3m"
 used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NA2CLC 3 and 4"]
-origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges: newen reports the A term of the step (the P3M references use gromosXX + patches/LS1_p3m_nvt_a_term.patch)"
+origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges (D49): newen reports the A term of the step (the P3M references use gromosXX + patches/LS1_p3m_nvt_a_term.patch)"
 model = "NewenSpec.P3M.a2TildeModel (at Float: a2TildeFloat)"
 # Rust = model at Float, bit for bit (cargo test)
 differential = "crates/newen-forces/tests/p3m_spec.rs"

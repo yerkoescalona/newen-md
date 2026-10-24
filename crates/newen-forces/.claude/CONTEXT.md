@@ -89,10 +89,10 @@ Bonded + nonbonded force/energy; pairlist; restraint forces; `single_point_energ
   (`electrostatics.rs`, `pme.rs`, `pme_mpi.rs`, not GROMOS's P3M), its `use-fftw` feature and the
   `rustfft`/`fftw` dependencies were removed (2026-10-22).
 - **Lattice sums against the patched oracle (2026-10-22, 2026-10-23):** the corrected gromosXX
-  defects are pinned by `_fixed` references: LS1 (NVT A term), LS2 (surface virial,
-  `water_216_npt_ewald_epsls_fixed`), LS3 (triclinic wave vectors,
-  `nacl_water_box_triclinic_p3m_fixed`, ik differentiation), LS4 (triclinic finite-difference
-  field, `nacl_water_box_triclinic_p3m_fd_fixed`), LS5 (box correction on a recomputation step,
+  defects are pinned by `_fixed` references: D49/LS1 (NVT A term), D50/LS2 (surface virial,
+  `water_216_npt_ewald_epsls_fixed`), D51/LS3 (triclinic wave vectors,
+  `nacl_water_box_triclinic_p3m_fixed`, ik differentiation), D52/LS4 (triclinic finite-difference
+  field, `nacl_water_box_triclinic_p3m_fd_fixed`), D53/LS5 (box correction on a recomputation step,
   `water_216_npt_p3m_fixed`, NQEVAL 2). Open: the Lennard-Jones lattice sum (NLRLJ), in neither
   engine.
 - **SPME (NLRELE 5, newen only, experimental), wired (2026-10-23):** `nonbonded/spme.rs`: P3M's

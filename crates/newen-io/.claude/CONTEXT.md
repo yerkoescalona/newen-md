@@ -54,9 +54,10 @@ src/imd.rs         — IMD parameter file parser
   4 shifted reaction field (`in_parameter.cc:4663-4674`), 5 SPME (newen only, experimental). Why 5
   for SPME: gromosXX's own 4 is the shifted reaction field, and its reader refuses everything
   outside −1..4 (`in_parameter.cc:4604`), so a gromosXX input can never be read as SPME. Vol. 4's
-  notes "abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers of an older reading;
-  gromosXX's enum has `el_spme` (`simulation/parameter.h:480`), which nothing sets; NSPORD is read
-  into `spme_bspline` (`in_parameter.cc:4624`) and used nowhere. newen reads NSPORD into
+  notes "abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers of an older reading (in
+  the dossier's manual and comment issues, no id); gromosXX's enum has `el_spme`
+  (`simulation/parameter.h:480`), which nothing sets; NSPORD is read into `spme_bspline`
+  (`in_parameter.cc:4624`) and used nowhere. newen reads NSPORD into
   `NonbondedExtra::nspord` as before; only NLRELE 5 uses it.
 - **Energy layout lives in code, not in the data file:** `data/ene_ana.md++.lib` is generated from
   `energy_traj::LAYOUTS` and a test keeps the checked-in copy byte-equal. A layout change is a new

@@ -132,8 +132,8 @@ the ENERGY03 A-term row (16) and the totals that contain it differ.
 
 ## Lattice-sum patches added (2026-10-22)
 
-`p3m_nvt_a_term.patch` became `LS1_p3m_nvt_a_term.patch` (the `<defect>_<name>` style; its dossier ID
-is pending), and `LS2_surface_virial.patch` (`nonbonded_outerloop.cc`) and
+`p3m_nvt_a_term.patch` became `LS1_p3m_nvt_a_term.patch` (the `<defect>_<name>` style; its dossier ID,
+D49, came later), and `LS2_surface_virial.patch` (`nonbonded_outerloop.cc`) and
 `LS3_triclinic_kvectors.patch` (`configuration/kspace.cc`, `configuration/influence_function.cc`,
 `interaction/nonbonded/interaction/latticesum.cc`) were written. All three were applied to the same
 working tree, then holding D1, D2, D16, D25, D32, D40 and D41, and the binary rebuilt in place:

@@ -675,7 +675,7 @@ The Rust follows newen where it differs from gromosXX in the order of operations
 reference tolerances (each listed in the `origin` of its `SPEC.toml` entry): the cosine-angle
 force is `(r_kj · (1/d_kj) − r_ij · (cos θ/d_ij)) · (df/d_ij)` where gromosXX writes
 `df/d_ij · (r_kj/d_kj − r_ij/d_ij · cos θ)`; the Chebyshev force groups `k_i` with the scalars; the
-NTBDN = 0 force divides the scalar `k_i · d_kj` by `|r_mj|²` before scaling `r_mj`. One oddity is
+NTBDN = 0 force divides the scalar `k_i · d_kj` by `|r_mj|²` before scaling `r_mj`. One oddity (D56) is
 shared with gromosXX and stated in the theory: for `m = 0` the Chebyshev form takes `cos mφ = 0`,
 not `cos 0 = 1`, so its energy is `K` where the NTBDN = 0 form gives `K (1 + cos δ)`; the force is
 zero in both.
@@ -1208,7 +1208,7 @@ reaction-field references give byte-identical output files before and after the 
 
 What newen does differently from gromosXX, each reported as found:
 
-- **Triclinic wave vectors.** gromosXX builds `k` as `math::product(l_to_k, l)`, which for a
+- **Triclinic wave vectors** (D51). gromosXX builds `k` as `math::product(l_to_k, l)`, which for a
   `Matrix` multiplies with the transpose (`gmath.h:925-932`: `k_x = m(0,0) l_x + m(1,0) l_y +
   m(2,0) l_z`) of a matrix built column-wise from `b × c`, `c × a`, `a × b` (`kspace.cc:128-135`):
   `k_x = (b × c)·l` instead of `l_x (b × c)_x + l_y (c × a)_x + l_z (a × b)_x`, and the same in the
@@ -1218,7 +1218,7 @@ What newen does differently from gromosXX, each reported as found:
   65°), so its k-space energy changes when an atom crosses the box (127.3 → 237.7 kJ/mol for a
   Na⁺Cl⁻ pair moved by a lattice vector). newen takes `l_x b₁ + l_y b₂ + l_z b₃`
   (`lattice_vector`, `latticeVector_reciprocal_dot`).
-- **The surface virial.** gromosXX adds `½ p M_i² − ¼ p |M|²` to the diagonal of its virial
+- **The surface virial** (D50). gromosXX adds `½ p M_i² − ¼ p |M|²` to the diagonal of its virial
   storage as it is (`nonbonded_outerloop.cc:2676-2685`), where every other lattice-sum term adds
   `−2 Ξ` ("multiply by −2 because of multiplication with −0.5 in pressure calculation"): the
   surface virial enters the pressure with the wrong sign and half its size, and without its
@@ -1235,8 +1235,9 @@ What newen does differently from gromosXX, each reported as found:
   newen follows the code; the references choose KCUT accordingly.
 
 Corrected in the oracle since (patches in `tests/gromosXX_references/patches/`): the triclinic
-wave vectors (`LS3_triclinic_kvectors.patch`, pinned by `nacl_water_box_triclinic_p3m_fixed`) and
-the surface virial (`LS2_surface_virial.patch`, pinned by `water_216_npt_ewald_epsls_fixed`: under
+wave vectors (D51, `LS3_triclinic_kvectors.patch`, pinned by `nacl_water_box_triclinic_p3m_fixed`)
+and the surface virial (D50, `LS2_surface_virial.patch`, pinned by
+`water_216_npt_ewald_epsls_fixed`: under
 Berendsen pressure scaling with EPSLS 61 the released binary's step-0 pressure is −305.43 instead
 of −296.61 kJ mol⁻¹ nm⁻³).
 
@@ -1354,7 +1355,7 @@ What newen does differently from gromosXX:
   on (2.2·10⁻⁷ relative after 8 steps in `nacl_pair_box_p3m_fixed`). newen reports the step's A
   term. The references come from gromosXX with `patches/LS1_p3m_nvt_a_term.patch`, which removes that
   one line; with the released binary their forces, trajectories and every other energy row are
-  identical. Not yet in the dossier.
+  identical. Dossier D49.
 - **`Ã2` every step.** gromosXX computes the P3M `Ã2` at step 0, under pressure scaling and on
   energy-output steps (`nonbonded_outerloop.cc:2184-2188`), and the self and A terms only on those
   steps; newen computes them every step. The written numbers are the same.
@@ -1363,7 +1364,7 @@ What newen does differently from gromosXX:
   (`latticesum.cc:636-641`), the gradient only when the cell edges are orthogonal. newen maps the
   per-axis differences through `H⁻¹`, the operator whose transform is the `D̂` of the influence
   function, as gromosXX's influence function itself does. In a rectangular box the two differ in
-  rounding only. Corrected in the oracle by `LS4_fd_field_triclinic.patch` (the axis derivatives
+  rounding only. Corrected in the oracle by `LS4_fd_field_triclinic.patch` (D52; the axis derivatives
   mapped through the inverse of the matrix of unit axis vectors, the identity in a rectangular box,
   where the earlier references regenerate byte for byte); `nacl_water_box_triclinic_p3m_fd_fixed`
   (NFDORD 2) agrees with newen, while without LS4 the step-0 forces are up to
@@ -1373,7 +1374,7 @@ What newen does differently from gromosXX:
   `latticesum.cc:566`); newen uses `lattice_vector`. Read with gromosXX's `Box(i, j)` convention:
   `tL_0 = transpose(Matrix(box))` has the box vectors as rows, so `product(2π tL_0⁻¹, l) =
   2π L⁻¹ l = (u_a·l, u_b·l, u_c·l)`, the same transposed product. Corrected in the oracle by
-  `LS3_triclinic_kvectors.patch`; `nacl_water_box_triclinic_p3m_fixed` (ik differentiation)
+  `LS3_triclinic_kvectors.patch` (D51); `nacl_water_box_triclinic_p3m_fixed` (ik differentiation)
   agrees with newen, while the released binary gives a k-space energy of 2021.89 instead of
   2031.45 kJ/mol at step 0 and forces up to 27.6 kJ mol⁻¹ nm⁻¹ apart.
 - **The Nyquist planes of `ik` differentiation.** gromosXX keeps `l = N/2` in `−i k φ̂`. That is
@@ -1384,7 +1385,7 @@ What newen does differently from gromosXX:
   NQEVAL step, gromosXX keeps the box deviation it set before the recomputation, so on that step
   the new `Ĝ` is corrected by the deviation from the old box; newen measures the deviation from
   the box the current `Ĝ` was computed in. Corrected in the oracle by
-  `LS5_box_correction_recompute.patch` (the box set again after the recomputation);
+  `LS5_box_correction_recompute.patch` (D53; the box set again after the recomputation);
   `water_216_npt_p3m_fixed` (`water_216_npt`'s Berendsen thermostat and barostat with the
   Gaussian P3M of `water_216_box_p3m_gauss_fixed`, NQEVAL 2, FACCUR 0.15385 kJ mol⁻¹ nm⁻¹, 10
   steps) recomputes `Ĝ` once, at step 6, and agrees with newen; the released binary gives a
@@ -1409,7 +1410,8 @@ accepts NLRELE −1 … 4 (`in_parameter.cc:4604`), and 4 is not a mesh method b
 reaction field (`in_parameter.cc:4663-4674`: `use_shift`, `lj_shifted_crf_corr_func`,
 `m_crf = 4`). Vol. 4 lists
 NLRELE −1 … 3 and calls NSPORD "order of the SPME B-spline function (not available)"; its notes
-"abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers from an older reading. gromosXX's
+"abs(NLRELE) = 3,4" (`vol4.tex:7785`, `:7792`) are leftovers from an older reading (in the dossier's manual and
+comment issues, no id). gromosXX's
 enum has `el_spme` (`simulation/parameter.h:480`), which nothing sets, and it reads NSPORD into
 `spme_bspline` (`in_parameter.cc:4624`), which nothing uses. So SPME takes 5, a value gromosXX
 refuses outright: a gromosXX input can never be misread as SPME, and NLRELE 4 keeps its gromosXX
@@ -1528,7 +1530,7 @@ moment:
 
 | Level | Compares | Runs when | Catches | Example from this pilot |
 |---|---|---|---|---|
-| 0. Dossier | a formula as gromosXX transcribed it (written into Lean by hand) vs the formula of the paper or manual | when someone writes the transcription | wrong physics in someone else's code | the 39 rows D1–D39 in the gromos-divergences repository |
+| 0. Dossier | a formula as gromosXX transcribed it (written into Lean by hand) vs the formula of the paper or manual | when someone writes the transcription | wrong physics in someone else's code | the rows D1–D59 in the gromos-divergences repository |
 | 1. Meaning ⇔ model | `Misses` vs `missesModel` (`missesModel_iff`) | `lake build` | a formula that does not mean what you think | "warn when `NTWG % NSNB != 0`" looks right but is wrong for NTWG = 1 (every step is written, nothing is missed): the theorem cannot be proved, so the mistake is caught before any Rust exists |
 | 2. Rust ⇔ model | the Aeneas translation of the Rust vs `missesModel`, for **every** pair of `usize` | `spec/scripts/extract.sh`, then `lake build` | transcription mistakes, possible panics | swapping the two `%` in one place, `nsnb <= 1` written as `nsnb < 1`, or deleting the `ntwg == 0` guard (Aeneas translates `%` by zero as `fail`, so "always returns `ok`" becomes unprovable) |
 | 3. Binary ⇔ meaning | the compiled function vs a step-by-step simulation and the Lean vectors, on all pairs up to 200 | `cargo test`, no Lean needed | the same transcription mistakes, and mistranslation by Charon or Aeneas themselves | replacing the last line with `ntwg % nsnb != 0` fails both tests; the mismatches include `(5, 1)` |
@@ -1871,13 +1873,13 @@ Planned, in the order chosen:
   [phase 3](#lattice-sum-electrostatics-phase-3-p3m)). Phase 4, done: GENBOX boxes with their
   angles (NTB 2, `nacl_water_box_triclinic`), the cutoff refused at half the smallest cell height
   with the theorem that both triclinic reductions give the shortest image below it, the patched
-  oracle for the three gromosXX defects (LS1 the NVT A term, LS2 the surface virial with
-  `water_216_npt_ewald_epsls_fixed`, LS3 the triclinic wave vectors with
+  oracle for the three gromosXX defects (D49/LS1 the NVT A term, D50/LS2 the surface virial with
+  `water_216_npt_ewald_epsls_fixed`, D51/LS3 the triclinic wave vectors with
   `nacl_water_box_triclinic_p3m_fixed`), and the unwired smooth-PME code (`electrostatics.rs`,
   `pme.rs`, `pme_mpi.rs`), its `use-fftw` feature and the `rustfft`/`fftw` dependencies of
   `newen-forces` removed. Since then: the patched oracle for the triclinic finite-difference
-  field (LS4, `nacl_water_box_triclinic_p3m_fd_fixed`) and for the box correction on a
-  recomputation step (LS5, `water_216_npt_p3m_fixed`, NPT with NQEVAL 2), and two more Ewald
+  field (D52/LS4, `nacl_water_box_triclinic_p3m_fd_fixed`) and for the box correction on a
+  recomputation step (D53/LS5, `water_216_npt_p3m_fixed`, NPT with NQEVAL 2), and two more Ewald
   references (`nacl_water_box_ewald_na2clc1`, `Ã2` from the k-space sum;
   `nacl_pair_box_ewald_rect`, `A2` over shells in a non-cubic box). Open: the Lennard-Jones
   lattice sum (NLRLJ), implemented in neither engine.

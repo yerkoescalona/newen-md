@@ -22,8 +22,8 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   within 8.8e-6 relative at order 8 on a 16³ grid (table in the verification chapter); SPME's
   forces are 30 to 90 times less accurate than P3M's at the same order and grid. The run prints
   that the method is experimental and has no gromosXX oracle; the plan records it.
-- **Every lattice-sum path has a reference**: LS4 (the finite-difference field in a triclinic box)
-  and LS5 (the box correction on a recompute step) patched in the oracle, with
+- **Every lattice-sum path has a reference**: LS4 (D52, the finite-difference field in a triclinic
+  box) and LS5 (D53, the box correction on a recompute step) patched in the oracle, with
   `nacl_water_box_triclinic_p3m_fd_fixed` and `water_216_npt_p3m_fixed`; Ewald with NA2CLC 1
   (`nacl_water_box_ewald_na2clc1`) and in a non-cubic box (`nacl_pair_box_ewald_rect`, the A2 shell
   sum). 135 references, none ignored.
@@ -53,13 +53,13 @@ and this project adheres to [Conventional Commits](https://www.conventionalcommi
   written back as gromosXX does; reference `nacl_water_box_triclinic`. Cutoffs reaching half the
   smallest cell height are refused for every box type.
 
-### Fixed (corrected in newen, patched in the oracle: LS1–LS3, dossier ids pending)
+### Fixed (corrected in newen, patched in the oracle: LS1–LS3, dossier D49–D51)
 
 - gromosXX freezes the self and A terms of an NVT run at step 0 (wrong for P3M), stores the
   surface virial without the factor every other lattice-sum virial has, and builds triclinic
   k vectors from the transposed reciprocal matrix. Also corrected without a patch yet: the
-  finite-difference field's lattice-axis spacing assigned to Cartesian components, and the box
-  correction applied relative to the old box on a recompute step.
+  finite-difference field's lattice-axis spacing assigned to Cartesian components (D52), and the
+  box correction applied relative to the old box on a recompute step (D53).
 
 ### Removed
 

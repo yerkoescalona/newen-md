@@ -46,7 +46,7 @@ RunError                                                                 -> ever
   refuses a repeated DOFSET LAST (the ranges must increase strictly) and ROTTRANS atoms
   `1..=RTCLAST` spread over more than one bath pair (`topology.cc:1370-1394`); one bath is
   counted by `bath_dofs` like several. newen-io's topology reader refuses LJEXCEPTIONS with
-  NEX > 0. No reference input trips them.
+  NEX > 0 (D58). No reference input trips them.
 - **Ewald and P3M runs (2026-10-22):** `check_electrostatics` (`plan.rs`, called by
   `build_plan` and `build_sequence_from_plan`) checks the NONBONDED lattice-sum ranges gromosXX
   reads for every NLRELE (NSHAPE −1..10, ASHAPE > 0, NA2CLC 0..4, TOLA2 > 0, EPSLS 0 or ≥ 1,
@@ -67,15 +67,15 @@ RunError                                                                 -> ever
   `water_216_box_ewald_epsls`, `nacl_water_box_ewald_na2clc1` (NA2CLC 1),
   `nacl_pair_box_ewald_rect` (A2 over shells); `nacl_pair_box_p3m_fixed`,
   `water_216_box_p3m_fixed`, `water_216_box_p3m_gauss_fixed` (gromosXX +
-  `patches/LS1_p3m_nvt_a_term.patch`); `water_216_npt_ewald_epsls_fixed` (LS2, surface virial),
-  `nacl_water_box_triclinic_p3m_fixed` (LS3, triclinic wave vectors, ik differentiation),
-  `nacl_water_box_triclinic_p3m_fd_fixed` (LS4, triclinic finite-difference field),
-  `water_216_npt_p3m_fixed` (LS5, NPT with NQEVAL 2, the box correction on a recomputation).
+  `patches/LS1_p3m_nvt_a_term.patch`, D49); `water_216_npt_ewald_epsls_fixed` (D50/LS2, surface
+  virial), `nacl_water_box_triclinic_p3m_fixed` (D51/LS3, triclinic wave vectors, ik
+  differentiation), `nacl_water_box_triclinic_p3m_fd_fixed` (D52/LS4, triclinic finite-difference
+  field), `water_216_npt_p3m_fixed` (D53/LS5, NPT with NQEVAL 2, the box correction on a recomputation).
 - **SPME runs, experimental (2026-10-23):** NLRELE 5 (newen only; gromosXX's reader stops at 4,
   the shifted reaction field) is P3M's path with `spme: Option<SpmePlan>` (grid, NSPORD) in place
   of `p3m`, and `LatticeSumPlan::experimental = true` (serialised only when set, `serde(default)`)
   for provenance. `check_electrostatics` adds: NSPORD an even order 4..=12, powers-of-two grids,
-  NA2CLC 4 read as 3, P3M's locks ("does not work with SPME electrostatics"); every other
+  NA2CLC 4 read as 3 (D59), P3M's locks ("does not work with SPME electrostatics"); every other
   `2 | 3` lattice-sum check (EDS, A-EDS, individual λ, PRECALCLAM, the RF excluded/self terms) now
   includes 5. NASORD, NFDORD, NALIAS, NQEVAL and FACCUR are range-checked as for every NLRELE and
   unused. `instantiate_forcefield` builds `LatticeSum::Spme`; `md` prints "SPME is experimental:
