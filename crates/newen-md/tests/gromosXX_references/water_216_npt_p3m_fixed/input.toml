@@ -1,0 +1,44 @@
+# Expected output from native gromosXX 247c95c4 + `patches/LS5_box_correction_recompute.patch`
+# (built as in `patches/BUILD.md`), generated with
+#   python3 scripts/regen_gromosXX_references.py --binary <patched md> water_216_npt_p3m_fixed
+# gromosXX v1.6.0, double precision, 648 atoms. `water_216_npt`'s Berendsen thermostat and barostat
+# with the P3M parameters of `water_216_box_p3m_gauss_fixed` (NSHAPE -1, ASHAPE 0.4 nm, grid 32^3,
+# NASORD 3, NFDORD 0, NALIAS 3, NA2CLC 3) and NQEVAL 2, 10 steps, every step written. Between
+# evaluations the influence function is corrected to first order for the scaled box. FACCUR 0.15385
+# kJ/(mol nm) lies between the step-0 force-error estimate (0.1537723) and the estimate at step 6
+# (0.1539241), so the function is recomputed once, at step 6 (any FACCUR in [0.15377232, 0.15392]
+# gives the same output; with 1.0 it is never recomputed). On a recomputation the released binary
+# keeps the box deviation it set before it (`nonbonded_outerloop.cc:2138`,
+# `influence_function.cc:60-65`), so the new function is corrected by the deviation from the old
+# box; the patch sets the box again after the recomputation.
+# newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
+# within the standard tolerances, not byte for byte.
+
+[system]
+name = "water_216_npt_p3m_fixed"
+description = "Level 3: 216 waters NPT, P3M (NLRELE 3) with NQEVAL 2"
+level = 3
+natoms = 648
+isolates = "P3M influence function under pressure scaling: box correction and re-evaluation (LS5)"
+
+[input]
+topology = "../water_216_box/water_216_box.topo"
+configuration = "../water_216_box/water_216_box.conf"
+parameters = "water_216_npt_p3m_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

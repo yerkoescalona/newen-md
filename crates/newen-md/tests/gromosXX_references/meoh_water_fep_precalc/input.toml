@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "meoh_water_fep_precalc"
+description = "methanol in water with energies at 11 precalculated lambdas"
+level = 4
+isolates = "PRECALCLAM A/B CRF per lambda: pair, RF self and RF exclusion ext terms with charge changes"
+
+[input]
+topology = "../shared/meoh_spc.top"
+configuration = "../shared/meoh_spc.cnf"
+parameters = "meoh_water_fep_precalc.in"
+pttopo = "../shared/meoh_spc_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

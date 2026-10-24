@@ -1,0 +1,13 @@
+diff --git a/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc b/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
+index af781b8..5a50df5 100644
+--- a/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
++++ b/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
+@@ -2161,6 +2161,8 @@ void interaction::Nonbonded_Outerloop
+         conf.lattice_sum().influence_function.template calculate<configuration::ParallelMesh > (topo, conf, sim);
+       else
+         conf.lattice_sum().influence_function.template calculate<configuration::Mesh > (topo, conf, sim);
++      // the box deviation is measured from the box the influence function was just computed in
++      conf.lattice_sum().influence_function.setBox(conf.current().box);
+ 
+       const double new_rms_force_error = conf.lattice_sum().influence_function.rms_force_error();
+       if (rank == 0)

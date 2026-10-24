@@ -1,0 +1,44 @@
+# Expected output from the released gromosXX binary, generated with
+#   python3 scripts/regen_gromosXX_references.py nacl_water_box_triclinic
+# gromosXX v1.6.0, double precision, 62 atoms. `nacl_water_box` in a triclinic cell of the same
+# volume (8 nm^3): GENBOX NTB 2, edges 2.092576336 nm, angles 75/80/65 degrees; each ion and each
+# water moved rigidly to the same fractional position of the new cell. Smallest cell height
+# 1.855 nm; RCUTP = RCUTL = RCRF = 0.7 nm, so with charge-group (first-atom) cutoffs every atom
+# pair of the pairlist is shorter than 0.7 + 2 x 0.1 = 0.9 nm < 1.855 / 2: below half the
+# smallest height, where newen's fractional reduction and gromosXX's brick reduction give the
+# same, shortest image (Lean `image_shortest_of_lt_half_height`). With 0.8/0.9 nm, pairs up to
+# 1.1 nm occur and the two engines pick different images for some of them.
+
+[system]
+name = "nacl_water_box_triclinic"
+description = "Level 2: Na+ Cl- + 20 SPC waters in a triclinic box"
+level = 2
+natoms = 62
+isolates = "GENBOX lengths and angles (NTB 2), triclinic nearest image under RF"
+
+[input]
+topology = "../nacl_water_box/nacl_water_box.topo"
+configuration = "nacl_water_box_triclinic.conf"
+parameters = "nacl_water_box_triclinic.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+# gromosXX internal: double (64-bit)
+# Output positions: 9 decimal digits fixed-point
+# Output forces: 9 decimal digits fixed-point
+# Output energies: 10 significant digits scientific
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+# Recommended tolerances for newen comparison
+force_abs = 1e-6        # kJ/(mol*nm)
+energy_rel = 1e-8       # relative
+position_abs = 1e-9     # nm

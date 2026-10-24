@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Does gromosXX accept what gromos-rs writes? (PLAN.md 3.9 assumption A7, guard G3)
+"""Does gromosXX accept what newen writes? (3.9 assumption A7, guard G3)
 
-For every reference system: read its `.in` with gromos-rs, write it back with `write_imd`
-(`cargo run -p gromos-io --example imd_roundtrip`), run the *real* gromosXX on the rewritten
+For every reference system: read its `.in` with newen, write it back with `write_imd`
+(`cargo run -p newen-io --example imd_roundtrip`), run the *real* gromosXX on the rewritten
 file with the system's own topology/coordinates/auxiliary inputs, and compare the energies it
 produces with a fresh gromosXX run of the **original** `.in` made in the same session — the
 numbers must be identical, because the rewritten file describes the same run.
@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REF_DIR = REPO_ROOT / "crates" / "gromos-md" / "tests" / "gromosXX_references"
+REF_DIR = REPO_ROOT / "crates" / "newen-md" / "tests" / "gromosXX_references"
 DEFAULT_MD = REPO_ROOT / ".local" / "gromosXX" / "md++" / "BUILD" / "program" / "md"
 ROUNDTRIP = REPO_ROOT / "target" / "release" / "examples" / "imd_roundtrip"
 
@@ -54,7 +54,7 @@ def numeric_lines(path: Path) -> list[str]:
 
 def build_tool() -> None:
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "gromos-io", "--example", "imd_roundtrip"],
+        ["cargo", "build", "--release", "-p", "newen-io", "--example", "imd_roundtrip"],
         check=True, cwd=REPO_ROOT, capture_output=True,
     )
 

@@ -3,7 +3,7 @@
 SchNetPack library — to TorchScript.
 
 Earlier version of this script hand-rolled a single cfconv block by hand to
-prove the `PotentialProvider` seam (`crates/gromos-forces/src/nonbonded/
+prove the `PotentialProvider` seam (`crates/newen-forces/src/nonbonded/
 schnet.rs`) could load *some* TorchScript model. That was necessary at the
 time: GROMOS's own real trained tutorial model (SchNetPack v1, see
 `.local/gromos_tutorial_livecoms/tutorial_files/t_06`) fails to
@@ -37,7 +37,7 @@ Tensor], not positional args**, matching `schnetpack.properties`:
 
 Requires `pip install schnetpack` (pulls in `pytorch-lightning`, heavier
 than the previous plain-`torch` script) in the same `torch==2.11.0` venv
-used to build gromos-forces with `--features ml`. Run from the repo root:
+used to build newen-forces with `--features ml`. Run from the repo root:
 
     python3 scripts/export_toy_schnet.py [output_path]
 """

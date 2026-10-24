@@ -1,0 +1,38 @@
+[package]
+name = "newen-io"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "File I/O for newen molecular dynamics"
+
+[dependencies]
+newen-core = { workspace = true }
+newen-integrators = { workspace = true }
+
+# Logging
+log = { workspace = true }
+
+# Binary I/O
+byteorder = { workspace = true }
+flate2 = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+
+# Serialization
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+# Networking for IMD
+thiserror = "1.0"
+
+[features]
+default = []
+serde = ["dep:serde", "dep:serde_json", "newen-core/serde"]
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "io_bench"
+harness = false

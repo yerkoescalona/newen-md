@@ -1,0 +1,46 @@
+# Expected output from native gromosXX 247c95c4 + `patches/LS3_triclinic_kvectors.patch` and
+# `patches/LS1_p3m_nvt_a_term.patch` (built as in `patches/BUILD.md`), generated with
+#   python3 scripts/regen_gromosXX_references.py --binary <patched md> nacl_water_box_triclinic_p3m_fixed
+# gromosXX v1.6.0, double precision, 62 atoms. `nacl_water_box_triclinic`'s cell (edges
+# 2.092576336 nm, angles 75/80/65, smallest height 1.855 nm) under P3M with the parameters of
+# `nacl_pair_box_p3m_fixed` but ik differentiation: NSHAPE 3, ASHAPE 1.4 nm, grid 32^3, NASORD 3,
+# NFDORD 0, NALIAS 3, NA2CLC 3, NQEVAL 0; atomic cutoff 0.9 nm, below half the smallest height.
+# The released binary builds the wave vectors as M^T l instead of M l = sum l_i b_i
+# (`kspace.cc:128-135`, `influence_function.cc:130, 390`, `latticesum.cc:538`), which in a skewed
+# cell is not a reciprocal-lattice vector.
+# newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
+# within the standard tolerances, not byte for byte.
+
+[system]
+name = "nacl_water_box_triclinic_p3m_fixed"
+description = "Level 2: Na+ Cl- + 20 SPC waters in a triclinic box, P3M"
+level = 2
+natoms = 62
+isolates = "P3M reciprocal-lattice vectors in a skewed cell (LS3)"
+
+[input]
+topology = "../nacl_water_box/nacl_water_box.topo"
+configuration = "../nacl_water_box_triclinic/nacl_water_box_triclinic.conf"
+parameters = "nacl_water_box_triclinic_p3m_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+# gromosXX internal: double (64-bit)
+# Output positions: 9 decimal digits fixed-point
+# Output forces: 9 decimal digits fixed-point
+# Output energies: 10 significant digits scientific
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+# Recommended tolerances for newen comparison
+force_abs = 1e-6        # kJ/(mol*nm)
+energy_rel = 1e-8       # relative
+position_abs = 1e-9     # nm

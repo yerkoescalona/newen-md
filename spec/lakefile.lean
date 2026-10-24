@@ -1,0 +1,32 @@
+import Lake
+open Lake DSL
+
+-- The Aeneas Lean library: the `Result` monad and the machine integers (`Std.Usize`, ...) the
+-- extracted Rust is written in. It brings Mathlib along and fixes the toolchain
+-- (`lean-toolchain` must equal the one in Aeneas' `backends/lean`). Keep the commit equal to
+-- the Aeneas binary `scripts/extract.sh` runs (`aeneas -version`).
+require aeneas from git
+  "https://github.com/AeneasVerif/aeneas" @ "e62dd83d133d9043e7d3628096838b7430f36565" / "backends/lean"
+
+package «newen-spec»
+
+/-- The physics and bookkeeping of GROMOS, organised like the physics. Imports neither
+`NewenSpec` nor Aeneas. -/
+@[default_target] lean_lib NewenTheory
+
+/-- What newen computes: models of `crates/newen-logic`, bridges to `NewenTheory`, and the
+Aeneas refinement proofs. -/
+@[default_target] lean_lib NewenSpec
+
+/-- Writes `vectors/schedule.json`, `vectors/schedule2.json`, `vectors/dof.json`,
+`vectors/bath.json`, `vectors/bath_empty.json` and `vectors/topology.json` (the Lean models on the
+grids the Rust tests sweep), `vectors/thermostat.json`, `vectors/nonbonded.json`,
+`vectors/bonded.json`, `vectors/dynamics.json`, `vectors/periodicity.json`,
+`vectors/softcore.json`, `vectors/perturbed_bonded.json`, `vectors/lattice_sum.json` and
+`vectors/ewald.json` (the thermostat, LJ + reaction-field, bonded, leap-frog, kinetic-energy,
+temperature, pressure, barostat, periodic-boundary, soft-core, perturbed bonded, lattice-sum and
+Ewald models at `Float` on grids and random inputs, as bits), `vectors/p3m.json` (the P3M
+kernels, and the direct discrete Fourier transform the FFT is compared with) and
+`vectors/spme.json` (the SPME kernels). -/
+lean_exe «spec-vectors» where
+  root := `SpecVectors

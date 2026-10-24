@@ -1,0 +1,20 @@
+diff --git a/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc b/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
+index af781b86..2c90bd13 100644
+--- a/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
++++ b/md++/src/interaction/nonbonded/interaction/nonbonded_outerloop.cc
+@@ -2680,10 +2680,12 @@ void interaction::Nonbonded_Outerloop
+     math::Matrix virial(0.0);
+     const double isotropic_term = -0.25 * prefactor * abs2_box_dipole_moment;
+     for (unsigned int i = 0; i < 3; ++i) {
+-      virial(i, i) = isotropic_term
+-              + 0.5 * prefactor * box_dipole_moment(i) * box_dipole_moment(i);
++      for (unsigned int j = 0; j < 3; ++j) {
++        virial(i, j) = 0.5 * prefactor * box_dipole_moment(i) * box_dipole_moment(j);
++      }
++      virial(i, i) += isotropic_term;
+     }
+-    storage.virial_tensor += virial;
++    storage.virial_tensor += (-2.0 * virial);
+     DEBUG(6, "surface term virial: " << math::m2s(virial));
+   }
+ }

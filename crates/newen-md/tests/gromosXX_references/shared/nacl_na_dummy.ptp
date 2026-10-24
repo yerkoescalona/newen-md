@@ -1,0 +1,38 @@
+TITLE
+Na+ -> neutral dummy perturbation topology for nacl_water_box (54A7 types)
+State A: NA+ (IAC 34, +1.0)
+State B: dummy (IAC 19 DUM, charge 0), mass unchanged: net charge +1 -> 0 (dQ = -1)
+END
+PERTATOMPARAM
+# number of perturbed atoms
+   1
+#  NR  RES  NAME IAC(A) MASS(A) CHARGE(A) IAC(B)  MASS(B) CHARGE(B)  ALJ  ACRF
+    1    1   NA+   34   22.98980   1.00000   19   22.98980  0.00000   0.5   0.5
+END
+PERTATOMPAIR
+   0
+END
+PERTBONDSTRETCH
+   0
+END
+PERTBONDSTRETCHH
+   0
+END
+PERTBONDANGLE
+   0
+END
+PERTBONDANGLEH
+   0
+END
+PERTIMPROPERDIH
+   0
+END
+PERTIMPROPERDIHH
+   0
+END
+PERTPROPERDIH
+   0
+END
+PERTPROPERDIHH
+   0
+END

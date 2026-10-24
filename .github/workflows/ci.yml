@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
       - ci
   pull_request:
 
@@ -47,11 +48,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Check Python formatting
-        working-directory: py-gromos
+        working-directory: py-newen
         run: |
           uv run ruff check python/ tests/
           uv run ruff format --check python/ tests/
@@ -96,11 +97,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Lint Python
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv run ruff check python/ tests/
 
   test-integration:
@@ -146,12 +147,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies (builds extension via maturin)
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
         continue-on-error: true
 
       - name: Run Python tests
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv run pytest tests/ -v
         continue-on-error: true
 
@@ -210,15 +211,15 @@ jobs:
         run: uv pip install --system maturin
 
       - name: Build Python wheel (all features)
-        working-directory: py-gromos
-        run: maturin build --release --features gromos-rs/use-fftw,gromos-rs/use-mpi
+        working-directory: py-newen
+        run: maturin build --release --features newen/use-mpi
         continue-on-error: true
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: py-gromos/target/wheels/*.whl
+          path: py-newen/target/wheels/*.whl
 
   test-notebooks:
     name: Test Notebooks
@@ -245,11 +246,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies (builds extension via maturin)
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Test notebooks
-        working-directory: py-gromos
+        working-directory: py-newen
         run: |
           cd notebooks
           for notebook in *.ipynb; do
@@ -293,17 +294,17 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies (builds extension via maturin)
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Generate Python coverage
-        working-directory: py-gromos
-        run: uv run pytest tests/ --cov=gromos --cov-report=xml
+        working-directory: py-newen
+        run: uv run pytest tests/ --cov=newen --cov-report=xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./lcov-rust.info,./py-gromos/coverage.xml
+          files: ./lcov-rust.info,./py-newen/coverage.xml
           flags: integration
           name: full-coverage

@@ -1,0 +1,26 @@
+[package]
+name = "newen-run"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Run assembly for newen: RunRecipe (a .imd as data) + topology + coordinates -> plan -> AlgorithmSequence. The one builder shared by the md binary and py-newen (3.9)."
+
+[dependencies]
+newen-core = { workspace = true }
+newen-forces = { workspace = true }
+# `serde`: the plan carries `BathRange` (the DOFSET ranges) as data
+newen-integrators = { workspace = true, features = ["serde"] }
+newen-io = { workspace = true }
+newen-logic = { workspace = true }
+log = { workspace = true }
+
+# The recipe and the plan are plain data: serde is the Rust<->Python bridge (3.9 A12),
+# TOML the human-readable echo (`<run>.recipe.toml`), JSON the machine dump (`md @dump`).
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+[features]
+default = []
+ml = ["newen-forces/ml"]

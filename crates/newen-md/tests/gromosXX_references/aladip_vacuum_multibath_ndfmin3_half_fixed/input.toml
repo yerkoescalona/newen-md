@@ -1,0 +1,23 @@
+# gromosXX md++ 247c95c4 + patches/D40_ndfmin_total.patch (.local/gromosXX-patched/md++/BUILD/program/md), item D40
+[system]
+name = "aladip_vacuum_multibath_ndfmin3_half_fixed"
+description = "Aladip in vacuum, two weak-coupling baths (1-7 | 8-12), NTC 3, NDFMIN 3: bath dof 14.5 and 10.5 before NDFMIN"
+level = 5
+natoms = 12
+isolates = "NDFMIN spread over baths with half-integer bath dof, exact total (D40 corrected): 12.76 and 9.24"
+
+[input]
+topology = "aladip_tg7.topo"
+configuration = "../aladip_vacuum_multibath_ndfmin3/aladip_vacuum_vel.conf"
+parameters = "aladip_vacuum_multibath_ndfmin3_half_fixed.imd"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

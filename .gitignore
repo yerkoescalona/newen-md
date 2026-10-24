@@ -7,6 +7,9 @@ gromos_tutorial_livecoms/
 md++/
 gromosPlusPlus/
 
+# Lean (Lake dependencies and builds)
+spec/.lake/
+
 # Rust build artifacts
 target/
 Cargo.lock
@@ -51,6 +54,8 @@ Desktop.ini
 
 # Logs and databases
 *.log
+# gromos++ @verbose logs are reference data of the dGslv_pbsolv test
+!crates/newen-analysis/tests/data/dgslv_pbsolv/*.log
 *.sql
 *.sqlite
 *.db
@@ -80,7 +85,7 @@ md.trc
 md.trg
 docs/book
 .gitignore
-py-gromos/site/
+py-newen/site/
 
 # Benchmarking (BENCHMARKING.md): per-run scratch and generated systems are not tracked;
 # raw results (bench/results/*.json) and the GPU probe source are.

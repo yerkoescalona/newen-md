@@ -2,7 +2,7 @@
 """
 Build a large solvated benchmark system for BENCHMARKING.md Phase 0.5, using
 the project's own `sim_box` (the gromos++ solvation program, ported in
-gromos-tools) — this script only prepares its inputs and writes the MD input.
+newen-tools) — this script only prepares its inputs and writes the MD input.
 
 `sim_box` tiles the *equilibrated* 1000-SPC reference box to fill a target
 box, drops solvent overlapping the solute, and writes the coordinates. The
@@ -15,7 +15,7 @@ Writes `bench/systems/<name>/{<name>.cnf,<name>.imd,input.toml}` in the layout
     scripts/make_solvated_box.py --replicate 2   # ~8 000 waters, ~24 000 atoms, 6.2 nm
     scripts/make_solvated_box.py --replicate 3   # ~27 000 waters, ~81 000 atoms, 9.3 nm
 
-Requires `cargo build --release -p gromos-tools --bin sim_box`.
+Requires `cargo build --release -p newen-tools --bin sim_box`.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-REF = REPO / "crates/gromos-md/tests/gromosXX_references"
+REF = REPO / "crates/newen-md/tests/gromosXX_references"
 WATER_CNF = REF / "water_1000_spc_gridcell/water_1000_spc.cnf"
 CH4_TOP = REF / "shared/ch4_spc.top"
 CH4_CNF = REF / "shared/ch4_spc.cnf"
@@ -62,7 +62,7 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=REPO / "bench/systems")
     args = ap.parse_args()
     if not SIM_BOX.exists():
-        raise SystemExit(f"{SIM_BOX} not found: cargo build --release -p gromos-tools --bin sim_box")
+        raise SystemExit(f"{SIM_BOX} not found: cargo build --release -p newen-tools --bin sim_box")
 
     n = args.replicate
     genbox, (lx, ly, lz) = genbox_lengths(WATER_CNF)

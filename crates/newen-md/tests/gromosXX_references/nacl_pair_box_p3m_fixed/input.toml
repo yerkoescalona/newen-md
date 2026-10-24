@@ -1,0 +1,39 @@
+# Expected output from native gromosXX 247c95c4 + `patches/LS1_p3m_nvt_a_term.patch` (built as in
+# `patches/BUILD.md`), generated with
+#   python3 scripts/regen_gromosXX_references.py --binary <patched md> nacl_pair_box_p3m_fixed
+# The released binary freezes the A term of an NVT run at its step-0 value
+# (`configuration/energy.cc:576-580`), which is exact for Ewald but not for P3M, whose Ã2 (NA2CLC 3)
+# moves with the charges; the patch reports the A term of the step. With the released binary
+# every other block agrees (ENERGY03 rows 15, 14, 17, 18, the forces, the trajectory).
+# gromosXX v1.6.0, double precision. NSHAPE 3 with ASHAPE 1.4 nm as gromosXX's check suite (aladip_ls), grid 32^3, NASORD 3, NFDORD 2, NALIAS 3, NQEVAL 0, FACCUR 1.0, NA2CLC 3 (Ã2 from the grid, A2 cubic).
+# newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
+# within the standard tolerances, not byte for byte.
+
+[system]
+name = "nacl_pair_box_p3m_fixed"
+description = "Level 1: Na+ Cl- in PBC box, P3M (NLRELE 3)"
+level = 1
+natoms = 2
+isolates = "P3M: charge assignment, influence function, FFT, finite-difference field, P3M Ã2, cubic A2, NSHAPE 3, atomic cutoff"
+
+[input]
+topology = "../nacl_pair_box/nacl_pair_box.topo"
+configuration = "../nacl_pair_box/nacl_pair_box.conf"
+parameters = "nacl_pair_box_p3m_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

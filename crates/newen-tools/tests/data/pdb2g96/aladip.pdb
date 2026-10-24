@@ -1,0 +1,14 @@
+TITLE     alanine dipeptide (solute), from shared/aladip.conf, nm -> Angstrom
+ATOM      1 CB   GLY A   1      25.316   6.179  15.716  1.00  0.00
+ATOM      2 C    GLY A   1      26.302   7.285  15.375  1.00  0.00
+ATOM      3 O    GLY A   1      27.331   7.122  14.724  1.00  0.00
+ATOM      4 N    ALA A   2      25.874   8.480  15.790  1.00  0.00
+ATOM      5 H    ALA A   2      25.063   8.588  16.358  1.00  0.00
+ATOM      6 CA   ALA A   2      26.610   9.643  15.273  1.00  0.00
+ATOM      7 CB   ALA A   2      25.605  10.737  15.065  1.00  0.00
+ATOM      8 C    ALA A   2      27.611  10.119  16.368  1.00  0.00
+ATOM      9 O    ALA A   2      27.230  10.753  17.248  1.00  0.00
+ATOM     10 N    GLY A   3      28.872   9.766  16.028  1.00  0.00
+ATOM     11 H    GLY A   3      29.101   9.495  15.097  1.00  0.00
+ATOM     12 CB   GLY A   3      30.015   9.967  16.935  1.00  0.00
+END

@@ -1,4 +1,4 @@
-# gromos-rs
+# newen
 
 Project guidance lives under `.claude/`. Imported here so it loads automatically:
 

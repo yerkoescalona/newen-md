@@ -1,0 +1,1367 @@
+# Rust functions that carry a Lean specification. One [[function]] per function; the key is the
+# `/// spec:` line of its Rust doc comment. See README.md for what each layer checks.
+# kind = "float": a floating-point kernel; no Aeneas, the Lean model is tested bit for bit instead.
+# kind = "float-tolerance": floating-point code whose operations differ from the model's (the FFT); the
+# Rust is compared with the model within a stated bound, and `origin` gives the measured maximum.
+
+[[function]]
+key = "schedule.output_misses_longrange"
+rust = "crates/newen-logic/src/schedule/mod.rs::output_misses_longrange"
+used_by = ["crates/newen-run/src/prepare.rs::precalclam_longrange_gaps"]
+origin = "D34: gromosXX perturbed_nonbonded_set.cc:86-96 (PRECALCLAM rows without long-range terms)"
+# Misses quantifies over all output steps, so it can warn for a run shorter than the first incomplete row (NSTLIM is not considered); a variant bounded by NSTLIM is a follow-up
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.Misses"
+model = "NewenSpec.Schedule.missesModel"
+theorem = "NewenSpec.Schedule.missesModel_iff"
+# Layer 2, Rust = model (Aeneas)
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output_misses_longrange"
+refinement = "NewenSpec.Refinement.output_misses_longrange_eq"
+# Layer 3, Rust = meaning and Rust = model on 1 <= nsnb, ntwg <= 200 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule.json"
+
+[[function]]
+key = "schedule.output.due"
+rust = "crates/newen-logic/src/schedule/output.rs::due"
+used_by = ["crates/newen-md/src/bin/md.rs (every trajectory, energy, free-energy and force frame)", "crates/newen-logic/src/schedule/output.rs::minimisation_stop", "crates/newen-core/src/lambdas.rs::PrecalcLambdas::active"]
+origin = "gromosXX out_configuration.cc:324-488 (`steps % every == 0`, 0 = off); 0-based steps"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.Due (due_iff_dvd)"
+model = "NewenSpec.Schedule.dueModel"
+theorem = "NewenSpec.Schedule.dueModel_iff"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.due"
+refinement = "NewenSpec.Refinement.due_eq (due_iff)"
+# Layer 3, Rust = walking the multiples and Rust = model on 0 <= every <= 64, 0 <= step <= 256 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.frames_in"
+rust = "crates/newen-logic/src/schedule/output.rs::frames_in"
+used_by = []
+origin = "the number of frames an output written every `every` steps has after `n_steps` steps: ceil(n_steps / every)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.framesIn (framesIn_eq_card, framesIn_eq_ceil)"
+model = "NewenSpec.Schedule.framesInModel"
+theorem = "NewenSpec.Schedule.framesInModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs (the + 1 cannot overflow)
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.frames_in"
+refinement = "NewenSpec.Refinement.frames_in_eq (frames_in_eq_card)"
+# Layer 3, Rust = frames counted step by step and Rust = model on 0 <= every <= 64, 0 <= n_steps <= 256 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.minimisation_stop"
+rust = "crates/newen-logic/src/schedule/output.rs::minimisation_stop"
+used_by = ["crates/newen-md/src/bin/md.rs (the convergence branch of the step loop)"]
+origin = "gromosXX writes the top-of-loop frames of the stop step (out_configuration.cc:324-488: positions of k, forces/energies/free energy of k - 1) and its final frames of k - 1 (out_configuration.cc:624-641); no velocities (check_parameter.cc:62-65 refuses NTWV != 0 in a minimisation)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.topOfLoopPositions, topOfLoopLagged, endOfStepPositions, endOfStepLagged (stop_positions_eq, stop_lagged_eq)"
+model = "NewenSpec.Schedule.minimisationStopModel"
+theorem = "NewenSpec.Schedule.minimisationStopModel_frames (minimisationStopModel_isSome)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.minimisation_stop"
+refinement = "NewenSpec.Refinement.minimisation_stop_eq (minimisation_stop_frames)"
+# Layer 3, Rust = gromosXX's writer simulated against an end-of-step writer, and Rust = model, on step < 16, nmin < 4, NTW* < 4 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.output.final_step"
+rust = "crates/newen-logic/src/schedule/output.rs::final_step"
+used_by = ["crates/newen-md/src/bin/md.rs (the final configuration's TIMESTEP)"]
+origin = "gromosXX _print_timestep (out_configuration.cc:519): sim.steps() after the loop, NSTLIM or the step a minimisation stopped at"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.finalStep (finalStep_eq_loopCounter: the number of steps the loop integrated)"
+model = "NewenSpec.Schedule.finalStepModel"
+theorem = "NewenSpec.Schedule.finalStepModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.output.final_step"
+refinement = "NewenSpec.Refinement.final_step_eq"
+# Layer 3, Rust = model on 0 <= n_steps, stopped_at <= 20 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "schedule.com.com_removal"
+rust = "crates/newen-logic/src/schedule/com.rs::com_removal"
+used_by = ["crates/newen-integrators/src/algorithms/remove_com_motion.rs::RemoveCOMMotion::apply"]
+origin = "gromosXX Remove_COM_Motion::apply (remove_com_motion.cc:240-262), NTICOM and the sign of NSCM (in_parameter.cc:1306-1317), no periodic rotation removal under PBC (configuration.cc:555-560)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.Schedule.comRemoval (com_step0, com_period)"
+model = "NewenSpec.Schedule.comRemovalModel"
+theorem = "NewenSpec.Schedule.comRemovalModel_eq"
+# Layer 2, Rust = model (Aeneas), for nscm > i64::MIN and |nscm| <= usize::MAX (callers pass i32)
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.schedule.com.com_removal"
+refinement = "NewenSpec.Refinement.com_removal_eq (com_removal_eq_theory)"
+# Layer 3, Rust = RemoveCOMMotion's former flag rule and Rust = model on step <= 60, -1 <= NTICOM <= 3, |NSCM| <= 6 (cargo test)
+test = "crates/newen-logic/tests/schedule_spec.rs"
+vectors = "spec/vectors/schedule2.json"
+
+[[function]]
+key = "thermo.dof.total_dof"
+rust = "crates/newen-logic/src/thermo/dof.rs::total_dof"
+used_by = ["crates/newen-run/src/dof.rs::total_dof"]
+origin = "3·N − constraints − NDFMIN for one bath (gromosXX multibath.cc:43-184, topology.cc:1053-1416); signed, so a non-physical input is negative instead of a wrapped usize"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.dof"
+model = "NewenSpec.Thermo.Dof.totalDofModel"
+theorem = "NewenSpec.Thermo.Dof.totalDofModel_eq_dof"
+# Layer 2, Rust = model (Aeneas), for 3·n_atoms + solvent + solute + |ndfmin| <= i64::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.dof.total_dof"
+refinement = "NewenSpec.Refinement.total_dof_eq"
+# Layer 3, Rust = molecule-by-molecule count and Rust = model on 0 <= counts <= 10, -3 <= ndfmin <= 6 (cargo test)
+test = "crates/newen-logic/tests/dof_spec.rs"
+vectors = "spec/vectors/dof.json"
+
+[[function]]
+key = "thermo.bath.baths_of"
+rust = "crates/newen-logic/src/thermo/bath.rs::baths_of"
+used_by = ["crates/newen-integrators/src/algorithms/multibath.rs::in_bath", "crates/newen-logic/src/thermo/bath.rs::bath_half_dof"]
+origin = "gromosXX Multibath::in_bath (multibath.h:159-171): the first DOFSET range whose last atom reaches the atom; None where gromosXX asserts"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.BathSystem"
+model = "NewenSpec.Thermo.Bath.bathsOfModel"
+theorem = "NewenSpec.Thermo.Bath.bathsOf_some_iff"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.baths_of"
+refinement = "NewenSpec.Refinement.baths_of_eq"
+# Layer 3, Rust = atom scan on n <= 6 atoms, 1-3 ranges (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.groups_starting_in"
+rust = "crates/newen-logic/src/thermo/bath.rs::groups_starting_in"
+used_by = ["crates/newen-logic/src/thermo/bath.rs::bath_half_dof"]
+origin = "gromosXX Multibath::calculate_degrees_of_freedom (multibath.cc:106-121): temperature groups starting in a DOFSET range"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf"
+model = "NewenSpec.Thermo.Bath.groupsStartingInModel"
+theorem = "NewenSpec.Thermo.Bath.groupsStartingIn_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.groups_starting_in"
+refinement = "NewenSpec.Refinement.groups_starting_in_eq"
+# Layer 3, through bath_half_dofs on n <= 6 atoms (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.bath_half_dof"
+rust = "crates/newen-logic/src/thermo/bath.rs::bath_half_dof"
+used_by = ["crates/newen-logic/src/thermo/bath.rs::bath_half_dofs"]
+origin = "gromosXX multibath.cc:84-136 (per range: 3 per group to the COM bath, the rest to the IR bath), topology.cc:1053-1215 (1/2 per constraint end to the IR bath; solute, solvent, perturbed), topology.cc:1380-1402 (rottrans: 3 from each bath of atom 0); in half degrees of freedom"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf, NewenTheory.Dynamics.DegreesOfFreedom.irHalf (bathHalf_partition, bathHalf_single)"
+model = "NewenSpec.Thermo.Bath.bathHalfDofModel"
+theorem = "NewenSpec.Thermo.Bath.bathHalfDofModel_eq_of_wellFormed"
+# Layer 2, Rust = model (Aeneas), for BathHalfDofInRange: 6·Σ_r(n_r + 2·g_r) + 2·C + 12 <= i64::MAX, no last_atom = usize::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.bath_half_dof"
+refinement = "NewenSpec.Refinement.bath_half_dof_eq"
+# Layer 3, through bath_half_dofs (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.bath_half_dofs"
+rust = "crates/newen-logic/src/thermo/bath.rs::bath_half_dofs"
+used_by = ["crates/newen-run/src/dof.rs::bath_dofs"]
+origin = "gromosXX Multibath::calculate_degrees_of_freedom (multibath.cc:84-136) with Topology::calculate_constraint_dof (topology.cc:1053-1416), every bath"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.comHalf, NewenTheory.Dynamics.DegreesOfFreedom.irHalf"
+model = "NewenSpec.Thermo.Bath.bathHalfDofsModel"
+theorem = "NewenSpec.Thermo.Bath.bathHalfDofsModel_eq"
+# Layer 2, Rust = model (Aeneas), for BathHalfDofInRange
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.bath_half_dofs"
+refinement = "NewenSpec.Refinement.bath_half_dofs_eq"
+# Layer 3, Rust = atom-by-atom count on n <= 6 atoms, 1-3 ranges and baths, <= 3 groups, <= 2 constraints; Rust = model on 1722 vector rows (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.ndfmin_spread"
+rust = "crates/newen-logic/src/thermo/bath.rs::ndfmin_spread"
+used_by = ["crates/newen-run/src/dof.rs::bath_dofs"]
+origin = "D40: gromosXX multibath.cc:141-153 spreads NDFMIN in proportion to each bath's dof but sums the total in an int, truncating half-integer baths; here the exact rational"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.spreadNumerators (spread_sum, spread_zero, spread_total_nonpos)"
+model = "NewenSpec.Thermo.Bath.ndfminSpreadModel"
+theorem = "NewenSpec.Thermo.Bath.ndfminSpreadModel_eq"
+# Layer 2, Rust = model (Aeneas), for SpreadInRange: (Σ|h_b| + 2·|ndfmin| + 2)^2 <= i64::MAX
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.ndfmin_spread"
+refinement = "NewenSpec.Refinement.ndfmin_spread_eq"
+# Layer 3, Rust = exact rational by i128 cross-multiplication, and Rust = model (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath.json"
+
+[[function]]
+key = "thermo.bath.empty_baths"
+rust = "crates/newen-logic/src/thermo/bath.rs::empty_baths"
+used_by = ["crates/newen-run/src/plan.rs::decouple_empty_baths (both paths of thermostat_baths)"]
+origin = "gromosXX topology.cc:1404-1411: a bath with dof <= 0 is decoupled (tau = -1), decided before multibath.cc:139-153 spreads NDFMIN"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Dynamics.DegreesOfFreedom.EmptyBath (emptyBath_of_unused, emptyBath_iff)"
+model = "NewenSpec.Thermo.Bath.emptyBathsModel"
+theorem = "NewenSpec.Thermo.Bath.emptyBathsModel_eq"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.thermo.bath.empty_baths"
+refinement = "NewenSpec.Refinement.empty_baths_eq"
+# Layer 3, Rust = h <= 0 and = the spread numerators' sign on every bath.json and grid system, Rust = model on 781 rows (cargo test)
+test = "crates/newen-logic/tests/bath_spec.rs"
+vectors = "spec/vectors/bath_empty.json"
+
+[[function]]
+key = "topology.pairs.contains_sorted"
+rust = "crates/newen-logic/src/topology/pairs.rs::contains_sorted"
+used_by = ["crates/newen-logic/src/topology/pairs.rs::pair_kind", "crates/newen-core/src/topology.rs::Topology::is_excluded"]
+origin = "gromosXX Exclusions::is_excluded (exclusions.h:79-90): empty or last entry below j is false at once, then a linear search"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "List membership (NewenTheory.Topology.Pairs.pairKind is stated over it)"
+model = "NewenSpec.Topology.Pairs.containsSortedModel"
+theorem = "NewenSpec.Topology.Pairs.containsSortedModel_iff (for an ascending list)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.pairs.contains_sorted"
+refinement = "NewenSpec.Refinement.contains_sorted_eq (contains_sorted_iff)"
+# Layer 3, Rust = membership on every ascending subset of 0..10, j <= 11; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.pairs.pair_kind"
+rust = "crates/newen-logic/src/topology/pairs.rs::pair_kind"
+used_by = ["crates/newen-core/src/topology.rs::Topology::pair_kind_of", "crates/newen-core/src/topology.rs::Topology::is_excluded_or_14 (every pairlist builder in crates/newen-core/src/pairlist.rs)"]
+origin = "gromosXX all_exclusion (exclusions and 1-4 pairs, topology.h), PERTATOMPAIR pairs off the pairlist (in_perturbation.cc:1207-1224), EDS atoms' pairs (in_perturbation.cc:1757-1777); newen keeps the three lists apart and decides by priority; LJEXCEPTIONS pairs, which gromosXX also moves into all_exclusion (in_topology.cc:2111), are refused by newen's topology reader (crates/newen-io/src/topology.rs::refuse_lj_exceptions); under a lattice sum gromosXX drops their real-space electrostatics (D58)"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Pairs.pairKind (pairKind_symm, pairKind_excluded_iff, pairKind_normal_iff)"
+model = "NewenSpec.Topology.Pairs.pairKindModel"
+theorem = "NewenSpec.Topology.Pairs.pairKindModel_eq (for ascending lists)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.pairs.pair_kind"
+refinement = "NewenSpec.Refinement.pair_kind_eq (pair_kind_eq_theory)"
+# Layer 3, Rust = membership by priority on every triple of ascending subsets of 0..5, j <= 6; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.group_of"
+rust = "crates/newen-logic/src/topology/groups.rs::group_of"
+used_by = ["crates/newen-run/src/prepare.rs::assign_energy_groups"]
+origin = "gromosXX in_topology.cc:449-458 (atom_energy_group filled from the energy groups' last atoms, topology.h:716-743); the same rule as thermo.bath.baths_of"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.groupOf (groupOf_eq_some_iff, groupOf_some_iff, groupOf_contiguous, groupOf_mono)"
+model = "NewenSpec.Topology.Groups.groupOfModel"
+theorem = "NewenSpec.Topology.Groups.groupOfModel_eq (bathsOf_eq_groupOf ties thermo.bath.baths_of to it)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.group_of"
+refinement = "NewenSpec.Refinement.group_of_eq (group_of_eq_theory)"
+# Layer 3, Rust = least index on every list of <= 4 entries from 0..7, atoms <= 8; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.check_last_atoms"
+rust = "crates/newen-logic/src/topology/groups.rs::check_last_atoms"
+used_by = ["crates/newen-run/src/prepare.rs::assign_energy_groups"]
+origin = "FORCE NRE (in_parameter.cc:984-995, in_topology.cc:433-447): the last energy group must end at the last atom, and the NRE must increase strictly (gromosXX: 'FORCE block: energy groups are not in order', in_parameter.cc:989-993); newen refuses the same inputs"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.LastAtomsOk"
+model = "NewenSpec.Topology.Groups.checkLastAtomsModel"
+theorem = "NewenSpec.Topology.Groups.checkLastAtomsModel_iff (checkLastAtomsModel_empty_iff, checkLastAtomsModel_notIncreasing_iff, checkLastAtomsModel_lastNotFinal_iff: the refusals in the Rust's check order)"
+# Layer 2, Rust = model (Aeneas), for all inputs
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.check_last_atoms"
+refinement = "NewenSpec.Refinement.check_last_atoms_eq (check_last_atoms_ok_iff)"
+# Layer 3, Rust = adjacent-window check on every list of <= 4 entries from 0..7, n_atoms <= 8; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "topology.groups.energy_cell"
+rust = "crates/newen-logic/src/topology/groups.rs::energy_cell"
+used_by = ["crates/newen-forces/src/nonbonded/params.rs::EnergyGroups::cell"]
+origin = "gromosXX Energy::lj_energy[eg(i)][eg(j)] (configuration/energy.h:416), stored row-major in newen"
+# Layer 1, model = meaning (core Lean, no Mathlib); the meaning lives in NewenTheory
+theory = "NewenTheory.Topology.Groups.energyCell (energyCell_lt, energyCell_injective)"
+model = "NewenSpec.Topology.Groups.energyCellModel"
+theorem = "NewenSpec.Topology.Groups.energyCellModel_eq"
+# Layer 2, Rust = model (Aeneas), for EnergyCellInRange: eg_i * n_groups + eg_j <= usize::MAX when both are in range
+extracted = "NewenSpec.Extracted.NewenLogic: newen_logic.topology.groups.energy_cell"
+refinement = "NewenSpec.Refinement.energy_cell_eq (energy_cell_eq_theory)"
+# Layer 3, Rust = every cell of n_groups <= 6, distinct; Rust = model (cargo test)
+test = "crates/newen-logic/tests/topology_spec.rs"
+vectors = "spec/vectors/topology.json"
+
+[[function]]
+key = "thermostat.berendsen_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::berendsen_scale"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_thermostat.rs::BerendsenThermostat::apply"]
+origin = "gromosXX Berendsen_Thermostat::calc_scaling (berendsen_thermostat.cc:95-135); tau = 0 is instantaneous scaling, which gromosXX does only through its `immediate` argument (a tau of 0 there divides by zero)"
+# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out (and the radicand is not negative: below it Rust and Float return NaN)
+theory = "NewenTheory.Dynamics.Thermostats.berendsenScale (berendsen_relax, berendsen_fixed, berendsen_between, berendsen_contraction)"
+model = "NewenSpec.Thermostat.berendsenModel (at Float: berendsenFloat)"
+theorem = "NewenSpec.Thermostat.berendsenModel_real_eq (berendsenModel_real_instant, berendsenModel_uncoupled)"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-integrators/tests/thermostat_spec.rs"
+vectors = "spec/vectors/thermostat.json"
+
+[[function]]
+key = "thermostat.nose_hoover_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/nosehoover_thermostat.rs::nose_hoover_scale"
+used_by = ["crates/newen-integrators/src/algorithms/nosehoover_thermostat.rs::NoseHooverThermostat::apply"]
+origin = "gromosXX NoseHoover_Thermostat::calc_scaling (nosehoover_thermostat.cc:142-143, one link) and calc_chain_scaling (nosehoover_thermostat.cc:180-218, a chain); free_temp and its fallback as in Berendsen"
+# Theorems over R: the theory's meaning, and the model at R equal to it once the fallbacks are ruled out
+theory = "NewenTheory.Dynamics.Thermostats.nhStep (nh_fixed, nh_feedback, nh_scale_lt_one_iff), NewenTheory.Dynamics.Thermostats.nhcStep (nhc_single_link)"
+model = "NewenSpec.Thermostat.noseHooverModel (at Float: noseHooverFloat)"
+theorem = "NewenSpec.Thermostat.noseHooverModel_real_eq (one link), noseHooverModel_real_eq_chain, noseHooverModel_uncoupled"
+# Rust = model at Float, bit for bit on the generated rows, chains iterated 1-8 steps (cargo test)
+differential = "crates/newen-integrators/tests/thermostat_spec.rs"
+vectors = "spec/vectors/thermostat.json"
+
+[[function]]
+key = "nonbonded.crf_parameters"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/params.rs::CRFParameters::new"
+used_by = ["crates/newen-run/src/build.rs (epsilon = 1)", "crates/newen-run/src/legacy_builder.rs", "crates/newen-forces/src/energy.rs::single_point_energy", "crates/newen-forces/src/nonbonded/interaction.rs::LjCrfInteraction"]
+origin = "gromosXX Nonbonded_Term::init (nonbonded_term.cc:57-104); gromosXX forms (kappa R)^2 as kappa*R*kappa*R, newen as (kappa*R)*(kappa*R)"
+# Theorems over R: the theory's meaning, and the model at R equal to it outside the two sentinels (R <= 0, eps_rf = 0)
+theory = "NewenTheory.Interactions.ReactionField.crfConstant (crf_eps_rf_eq_eps, crf_conducting_limit)"
+model = "NewenSpec.Nonbonded.crfParametersModel (at Float: crfParametersFloat)"
+theorem = "NewenSpec.Nonbonded.crfParametersModel_real_eq (crfParametersModel_real_conducting, crfDerivedModel_real)"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.lj_crf_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_pair"
+used_by = ["crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_interaction (every scalar pair loop)", "crates/newen-forces/src/nonbonded/innerloops.rs::lj_crf_interaction_x4 (four lanes, checked equal to lj_crf_pair bit for bit by its unit test)"]
+origin = "gromosXX Nonbonded_Term::lj_crf_interaction (nonbonded_term.cc:219-248); gromosXX's LJ force is (c12/r^6 + c12/r^6 - c6) * 6 / r^6 / r^2, newen's (12 c12/r^6 - 6 c6) / r^6 / r^2 (last-bit differences); the guard r^2 < 1e-10 is newen's"
+# Theorems over R: the theory's meaning (force = -dE/dr), and the model at R equal to it outside the guard
+theory = "NewenTheory.Interactions.LennardJones.ljEnergy, ljForce (lj_force_is_minus_grad, lj_zero_at_sigma, lj_minimum); NewenTheory.Interactions.ReactionField.crfEnergy, crfForce (crf_force_is_minus_grad, crf_energy_zero_at_cutoff)"
+model = "NewenSpec.Nonbonded.ljCrfPairModel (at Float: ljCrfPairFloat)"
+theorem = "NewenSpec.Nonbonded.ljCrfPairModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.rf_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_pair"
+used_by = ["crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_interactions (solute excluded pairs)"]
+origin = "gromosXX Nonbonded_Term::rf_interaction (nonbonded_term.cc:537-545)"
+# Theorems over R: the excluded-pair term is the CRF pair term without its Coulomb part, and its force is -dE/dr
+theory = "NewenTheory.Interactions.ReactionField.rfExcludedEnergy, rfExcludedForce (rf_excluded_is_crf_minus_coulomb, rf_excluded_force_is_minus_grad)"
+model = "NewenSpec.Nonbonded.rfExcludedPairModel (at Float: rfExcludedPairFloat)"
+theorem = "NewenSpec.Nonbonded.rfExcludedPairModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "nonbonded.rf_self_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/excluded.rs::rf_self_term"
+used_by = ["crates/newen-forces/src/nonbonded/excluded.rs::rf_excluded_interactions (solute atoms)"]
+origin = "gromosXX RF_excluded_interaction_innerloop self term (nonbonded_innerloop.cc:1692-1707): 0.5 times rf_interaction at r = 0 with charge product q_i^2; newen writes -0.5 q_i q_i four_pi_eps_i crf_cut, the same bits outside underflow (scaling by 0.5 is exact)"
+# Theorems over R: the self term is half the excluded-pair energy of the atom with itself at r = 0
+theory = "NewenTheory.Interactions.ReactionField.rfSelfEnergy (rf_self_is_half_excluded)"
+model = "NewenSpec.Nonbonded.rfSelfTermModel (at Float: rfSelfTermFloat)"
+theorem = "NewenSpec.Nonbonded.rfSelfTermModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/nonbonded_spec.rs"
+vectors = "spec/vectors/nonbonded.json"
+
+[[function]]
+key = "bonded.quartic_bond"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/bonds.rs::quartic_bond"
+used_by = ["crates/newen-forces/src/bonded/bonds.rs::calculate_bond_forces_quartic_grouped (COVALENTFORM NTBBH = 0)"]
+origin = "gromosXX Quartic_Bond_Interaction (quartic_bond_interaction.cc:71-113), the same operations in the same order"
+# Theorems over R: force = -grad V, and the quartic/harmonic match at b0
+theory = "NewenTheory.Interactions.Bonded.quarticBond, radialForce (quarticBond_force_is_minus_grad, quartic_harmonic_match)"
+model = "NewenSpec.Bonded.quarticBondModel (at Float: quarticBondFloat)"
+theorem = "NewenSpec.Bonded.quarticBondModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.harmonic_bond"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/bonds.rs::harmonic_bond"
+used_by = ["crates/newen-forces/src/bonded/bonds.rs::calculate_bond_forces_harmonic_grouped (COVALENTFORM NTBBH = 1)"]
+origin = "gromosXX Harmonic_Bond_Interaction (harmonic_bond_interaction.cc:71-107), the same operations in the same order; the guard b < 1e-10 (no term) is newen's, gromosXX asserts b != 0"
+# Theorems over R: force = -grad V
+theory = "NewenTheory.Interactions.Bonded.harmonicBond, radialForce (harmonicBond_force_is_minus_grad)"
+model = "NewenSpec.Bonded.harmonicBondModel (at Float: harmonicBondFloat)"
+theorem = "NewenSpec.Bonded.harmonicBondModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.cosine_angle"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/angles.rs::cosine_angle"
+used_by = ["crates/newen-forces/src/bonded/angles.rs::calculate_angle_forces_grouped (COVALENTFORM NTBAH = 0; cos theta0 computed once per angle type)"]
+origin = "gromosXX Angle_Interaction (angle_interaction.cc:75-139); gromosXX writes f_i = df/d_ij * (r_kj/d_kj - r_ij/d_ij * cos), newen (r_kj * (1/d_kj) - r_ij * (cos/d_ij)) * (df/d_ij) (last-bit differences); the clamp of cos to [-1, 1] and the guard d < 1e-10 are newen's"
+# Theorems over R: forces = -grad V on all three atoms, sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.cosineAngle, cosineAngleForces (cosineAngle_force_is_minus_grad, cosineAngle_forces_sum_zero, cosineAngle_torque_zero)"
+model = "NewenSpec.Bonded.cosineAngleModel (at Float: cosineAngleFloat)"
+theorem = "NewenSpec.Bonded.cosineAngleModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.harmonic_angle"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/angles.rs::harmonic_angle"
+used_by = ["crates/newen-forces/src/bonded/angles.rs::calculate_harmonic_angle_forces_grouped (COVALENTFORM NTBAH = 1)"]
+origin = "gromosXX Harm_Angle_Interaction (harm_angle_interaction.cc:73-163); the linear test is |sin theta| < 1e-10 in newen, sin theta < 1e-12 (math::epsilon) in gromosXX; the clamp and the guard d < 1e-10 are newen's"
+# Theorems over R: forces = -grad E for 0 < theta < pi, sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.harmonicAngle, harmonicAngleForces (harmonicAngle_force_is_minus_grad, harmonicAngle_conservation)"
+model = "NewenSpec.Bonded.harmonicAngleModel (at Float: harmonicAngleFloat)"
+theorem = "NewenSpec.Bonded.harmonicAngleModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (acos, sin: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.dihedral_chebyshev"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_chebyshev"
+used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_forces_grouped (COVALENTFORM NTBDN = 1)"]
+origin = "gromosXX Dihedral_Interaction (dihedral_interaction.cc:74-171): the powers of cos phi as gromosXX forms them (cos^2 = c*c, cos^3 = cos^2*c, cos^4 = cos^3*c); m = 0 gives cos(m phi) = 0 there and here, not 1 (D56); for m > 6 gromosXX's switch leaves cos(m phi) = 0 (energy K, no force), newen's kernel returns nothing and its caller drops the term with a warning; gromosXX writes f_i = k_i * (r_ln/d_ln - r_im/d_im * cos), newen r_ln * (k_i/d_ln) - r_im * (k_i*cos/d_im); the clamp and the guards are newen's"
+# Theorems over R: the polynomials are cos(m phi) and its derivative, equal to the NTBDN = 0 form for delta in {0, pi}; f_i and f_l = -grad E; sum zero, no torque
+theory = "NewenTheory.Interactions.Bonded.dihedral, cosMultiple, chebyshevForces (cosMultiple_eq_cos, dcosMultiple_is_deriv, dihedral_new_eq_dihedral, chebyshev_force_is_minus_grad, chebyshev_conservation)"
+model = "NewenSpec.Bonded.dihedralChebyshevModel (at Float: dihedralChebyshevFloat)"
+theorem = "NewenSpec.Bonded.dihedralChebyshevModel_real_eq (cosMultipleModel_real)"
+# Rust = model at Float, bit for bit on the generated rows; forces = -dE/dx by finite differences (cargo test); reference butane_vacuum_ntbdn1
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.dihedral_new"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/dihedrals.rs::dihedral_new"
+used_by = ["crates/newen-forces/src/bonded/dihedrals.rs::calculate_dihedral_new_forces_grouped (COVALENTFORM NTBDN = 0, the default)"]
+origin = "gromosXX Dihedral_new_Interaction (dihedral_new_interaction.cc:73-153); gromosXX forms f_i as ((k_i*d_kj) * r_mj) / d_mj2, newen r_mj * (k_i*d_kj/d_mj2) (last-bit differences); gromosXX drops f_i when d_mj2 < 1e-10 d_kj2, newen keeps it only when d_mj2 > 1e-10 d_kj2 (equality differs); the guards |r_kj|, |r_im|, |r_ln| < 1e-10 are newen's"
+# Theorems over R: equal to the Chebyshev form for delta in {0, pi}; sum zero, no torque away from a linear bond angle
+theory = "NewenTheory.Interactions.Bonded.dihedralNew, signedDihedral, newDihedralForces (dihedral_new_eq_dihedral, newDihedral_conservation)"
+model = "NewenSpec.Bonded.dihedralNewModel (at Float: dihedralNewFloat)"
+theorem = "NewenSpec.Bonded.dihedralNewModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (acos, cos, sin: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "bonded.improper_dihedral"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/improper.rs::improper_dihedral"
+used_by = ["crates/newen-forces/src/bonded/improper.rs::calculate_improper_dihedral_forces_grouped"]
+origin = "gromosXX Improper_Dihedral_Interaction (improper_dihedral_interaction.cc:70-173), the same operations in the same order; gromosXX clamps cos zeta only within 1e-12 of +-1 and reports anything further out as critical, newen clamps silently; the guard |r_mj|, |r_nk| < 1e-10 is newen's (gromosXX asserts they are nonzero)"
+# Theorems over R: sum zero, no torque away from a linear bond angle; the two while loops are wrapZeta for |zeta0| <= 2 fuel pi
+theory = "NewenTheory.Interactions.Bonded.improper, improperAngle, improperForces, wrapZeta (improper_conservation, wrapZeta_mem, wrapZeta_sub_eq_int_mul, wrapZeta_idem)"
+model = "NewenSpec.Bonded.improperModel (at Float: improperFloat)"
+theorem = "NewenSpec.Bonded.improperModel_real_eq (wrap_real_eq_wrapZeta)"
+# Rust = model at Float, bit for bit on the generated rows (acos: same C library); forces = -dE/dx by finite differences (cargo test)
+differential = "crates/newen-forces/tests/bonded_spec.rs"
+vectors = "spec/vectors/bonded.json"
+
+[[function]]
+key = "dynamics.leap_frog_velocity"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/leap_frog.rs::leap_frog_velocity"
+used_by = ["crates/newen-integrators/src/algorithms/leap_frog.rs::LeapFrogVelocity::apply (serial and parallel loops)"]
+origin = "gromosXX Leap_Frog_Velocity::apply (leap_frog.cc): v + f * dt / m; newen computes v + f * m^-1 * dt with m^-1 from Topology::compute_inverse_masses (0 for m <= 0, where gromosXX divides by zero), last-bit differences"
+# Theorems over R: leap-frog is time-reversible, exact for constant acceleration, area preserving in 1-D; the model at R is the theory's step
+theory = "NewenTheory.Dynamics.Integration.leapFrog (leapFrog_reversible, reverse_comp_leapFrog_involutive, leapFrog_exact_constant, leapFrog_iterate_exact, leapFrog_jacobian: one-dimensional, x and v real)"
+model = "NewenSpec.Dynamics.leapFrogVelocityModel (at Float: leapFrogVelocityFloat)"
+theorem = "NewenSpec.Dynamics.leapFrogModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.leap_frog_position"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/leap_frog.rs::leap_frog_position"
+used_by = ["crates/newen-integrators/src/algorithms/leap_frog.rs::LeapFrogPosition::apply (serial and parallel loops)"]
+origin = "gromosXX Leap_Frog_Position::apply (leap_frog.cc): x + v * dt"
+theory = "NewenTheory.Dynamics.Integration.leapFrog (with leap_frog_velocity)"
+model = "NewenSpec.Dynamics.leapFrogPositionModel (at Float: leapFrogPositionFloat)"
+theorem = "NewenSpec.Dynamics.leapFrogModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.kinetic_energy"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::kinetic_energy"
+used_by = ["crates/newen-integrators/src/algorithms/temperature.rs::TemperatureCalculation::apply (kinetic_total, kinetic_energy_new)"]
+origin = "gromosXX Temperature_Calculation: E_kin = 1/2 m (|v_old|^2 + |v_new|^2)/2 per atom; newen sums in atom order"
+# Theorems over R: the half-step average is the energy of the full-step (velocity-Verlet) velocity plus m dt^2 |a|^2/8
+theory = "NewenTheory.Dynamics.Integration.halfStepKinetic (halfStep_average, halfStep_vs_verlet)"
+model = "NewenSpec.Dynamics.kineticEnergyModel (at Float: kineticEnergyFloat)"
+theorem = "NewenSpec.Dynamics.kineticEnergyModel_real_eq (sumModel_real)"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.group_kinetic_energy"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::group_kinetic_energy"
+used_by = ["crates/newen-integrators/src/algorithms/temperature.rs::TemperatureCalculation::apply (com/ir per bath, kinetic_energy_new_bath)"]
+origin = "gromosXX state_properties.cc:153-186 (molecular_translational_ekin): centre-of-mass velocity of the averaged velocities, total over the half-step average"
+# Theorems over R: Koenig's split; the internal part GROMOS books (total - com) is never negative
+theory = "NewenTheory.Dynamics.Integration.groupKinetic (koenig, kinetic_shift, group_split, group_internal_nonneg)"
+model = "NewenSpec.Dynamics.groupKineticModel (at Float: groupKineticFloat)"
+theorem = "NewenSpec.Dynamics.groupKineticModel_real_eq (comModel_real_eq, toE_momentum)"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.kinetic_temperature"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/temperature.rs::kinetic_temperature"
+used_by = ["crates/newen-md/src/bin/md.rs::volume_pressure (bath temperatures written to the energy trajectory)", "crates/newen-md/src/bin/md.rs (total temperature of the energy check)"]
+origin = "gromosXX out_configuration.cc:3293-3301: 2 * ekin / k_B / dof, 0 for dof == 0; newen gives 0 for every dof <= 0 (gromosXX prints a negative temperature for a negative dof), as the thermostats; the thermostats use 2 * ekin / (dof * k_B) (berendsen_scale, nose_hoover_scale), as gromosXX's thermostats do"
+# Theorems over R: equipartition inverted
+theory = "NewenTheory.Dynamics.Integration.temperatureOf (temperatureOf_iff)"
+model = "NewenSpec.Dynamics.kineticTemperatureModel (at Float: kineticTemperatureFloat)"
+theorem = "NewenSpec.Dynamics.kineticTemperatureModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.pressure_tensor"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/pressure_calculation.rs::pressure_tensor"
+used_by = ["crates/newen-integrators/src/algorithms/pressure_calculation.rs::PressureCalculation::apply"]
+origin = "gromosXX Pressure_Calculation::apply (pressure_calculation.cc): tot_cg_factor * (K + 0.5 W) * (2 / V); newen omits tot_cg_factor (1 without coarse graining, an exact factor) and skips V < 1e-30, where gromosXX divides"
+# Theorems over R: the virial theorem P = 2/V (K - Xi), its scalar form and the ideal gas
+theory = "NewenTheory.Dynamics.Pressure.pressureTensor (scalarPressure_virial, ideal_gas)"
+model = "NewenSpec.Dynamics.pressureTensorModel (at Float: pressureTensorFloat)"
+theorem = "NewenSpec.Dynamics.pressureTensorModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.scalar_pressure"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/pressure_calculation.rs::scalar_pressure"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_barostat.rs::BerendsenBarostat::apply"]
+origin = "gromosXX Berendsen_Barostat::apply (berendsen_barostat.cc, isotropic): (P_xx + P_yy + P_zz) / 3; newen_core Configuration::pressure computes the same expression for output"
+theory = "NewenTheory.Dynamics.Pressure.scalarPressure (scalarPressure_virial)"
+model = "NewenSpec.Dynamics.scalarPressureModel (at Float: scalarPressureFloat)"
+theorem = "NewenSpec.Dynamics.scalarPressureModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "dynamics.berendsen_barostat_scale"
+kind = "float"
+rust = "crates/newen-integrators/src/algorithms/berendsen_barostat.rs::berendsen_barostat_scale"
+used_by = ["crates/newen-integrators/src/algorithms/berendsen_barostat.rs::BerendsenBarostat::apply"]
+origin = "gromosXX Berendsen_Barostat::apply (berendsen_barostat.cc, isotropic): pow(1 - comp * dt / tau * (P0 - P), 1/3); calls powf, the platform pow (not correctly rounded; Rust and Lean both call libm)"
+# Theorems over R: fixed point at P0, the box grows exactly when P > P0, the volume scales by the radicand, and the pressure relaxes by dt/tau under linear response; the model at R is the theory for a non-negative radicand (below it Rust and Float return NaN)
+theory = "NewenTheory.Dynamics.Pressure.barostatScale (barostat_fixed, barostat_grows_iff, barostat_shrinks_iff, barostat_volume, barostat_relax)"
+model = "NewenSpec.Dynamics.berendsenBarostatModel (at Float: berendsenBarostatFloat)"
+theorem = "NewenSpec.Dynamics.berendsenBarostatModel_real_eq"
+differential = "crates/newen-integrators/tests/dynamics_spec.rs"
+vectors = "spec/vectors/dynamics.json"
+
+[[function]]
+key = "periodicity.vacuum_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::vacuum_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Vacuum::nearest_image (through Periodicity::Vacuum; Vacuum::put_into_box is the identity, checked on the same rows)"]
+origin = "gromosXX Boundary_Implementation<vacuum>::nearest_image (boundary_implementation.cc:212-219)"
+# Theorem over R: the plain difference (no lattice, so no theory beyond it)
+theory = "none"
+model = "NewenSpec.Periodicity.vacuumNearestImageModel (at Float: vacuumNearestImageFloat)"
+theorem = "NewenSpec.Periodicity.vacuumNearestImageModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_new"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::Rectangular::new"
+used_by = ["crates/newen-run/src/build.rs", "crates/newen-run/src/legacy_builder.rs", "crates/newen-run/src/prepare.rs", "crates/newen-core/src/spatial_index.rs"]
+origin = "gromosXX Boundary_Implementation<rectangular> constructor (boundary_implementation.cc:61-67: half box only); the reciprocal edges are newen's"
+# Theorem over R: half edges and reciprocals; the reciprocals are how the rectangular kernels form x/L
+theory = "NewenTheory.Space.Periodicity.rectImage, rectWrap (through x * (1/L) = x/L)"
+model = "NewenSpec.Periodicity.rectangularNewModel (at Float: rectangularNewFloat)"
+theorem = "NewenSpec.Periodicity.rectangularNewModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; every rectangular row rebuilds the box through it (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::rectangular_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Rectangular::nearest_image (through Periodicity::nearest_image: pairlists, every force kernel, gathering)"]
+origin = "gromosXX Boundary_Implementation<rectangular>::nearest_image (boundary_implementation.cc:224-261): while x > L/2 subtract L, while x < -L/2 add L; newen subtracts L * rint(x * (1/L)) in one step, the same image except at x = ±3L/2, ±7L/2, ... (a box length apart, equally long) and up to rounding"
+# Theorems over R: lattice, in [-L/2, L/2], idempotent, shortest; the model at R is rectImage per component
+theory = "NewenTheory.Space.Periodicity.rectImage, roundEven (rectImage_lattice, rectImage_mem, rectImage_idem, rectImage_shortest, rectImageVec_shortest)"
+model = "NewenSpec.Periodicity.rectangularNearestImageModel (at Float: rectangularNearestImageFloat)"
+theorem = "NewenSpec.Periodicity.rectangularNearestImageModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.rectangular_put_into_box"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::rectangular_put_into_box"
+used_by = ["crates/newen-core/src/math.rs::Rectangular::put_into_box (through Periodicity::put_into_box: crates/newen-integrators/src/algorithms/lattice_shift.rs)"]
+origin = "newen's [0, L) convention; gromosXX's Periodicity::put_into_box (periodicity.cc:36-41) is the nearest image of the origin, [-L/2, L/2], which newen-core/src/gather.rs computes as nearest_image(v, 0)"
+# Theorems over R: lattice, in [0, L), idempotent; the model at R is rectWrap per component
+theory = "NewenTheory.Space.Periodicity.rectWrap (rectWrap_lattice, rectWrap_mem, rectWrap_idem)"
+model = "NewenSpec.Periodicity.rectangularPutIntoBoxModel (at Float: rectangularPutIntoBoxFloat)"
+theorem = "NewenSpec.Periodicity.rectangularPutIntoBoxModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_new"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::Triclinic::new"
+used_by = ["crates/newen-run/src/build.rs", "crates/newen-run/src/legacy_builder.rs", "crates/newen-run/src/prepare.rs"]
+origin = "glam 0.24 DMat3::inverse (cross products over the determinant, transposed); gromosXX stores the scaled cross products instead (boundary_implementation.cc:72-82)"
+# Theorem over R: the inverse applied to r gives the fractional coordinates of a lower-triangular box
+theory = "NewenTheory.Space.Periodicity.Box.frac"
+model = "NewenSpec.Periodicity.inverseModel (at Float: triclinicNewFloat)"
+theorem = "NewenSpec.Periodicity.mulVec_inverseModel_real"
+# Rust = model at Float, bit for bit on the generated rows, general and singular matrices included (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_nearest_image"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::triclinic_nearest_image"
+used_by = ["crates/newen-core/src/math.rs::Triclinic::nearest_image (through Periodicity::nearest_image; triclinic and truncated-octahedron boxes)"]
+origin = "gromosXX Boundary_Implementation<triclinic>::nearest_image (boundary_implementation.cc:277-318) as its comments intend: newen reduces the fractional coordinates (z by c, then y − (c_y/c_z)z by b, then the rest of x by a: the centred parallelepiped). gromosXX itself reads m_box(i, j) as component i of edge j (math::Box::operator(), gmath.h:592-596), so its skew terms are b_z, a_y, a_z = 0 and it reduces raw z by c_z, y by b_y, x by a_x: a brick. Both give the same, shortest image for every vector shorter than half the smallest height (image_shortest_of_lt_half_height); they can differ beyond"
+# Theorems over R: lattice, in the centred cell (fractional coordinates in (-1/2, 1/2]), unique, idempotent; not always the shortest image (image_not_shortest)
+theory = "NewenTheory.Space.Periodicity.Box.image (image_lattice, image_inCell, inCell_unique, image_eq_of, image_idem, image_not_shortest, image_shortest_of_lt_half_height)"
+model = "NewenSpec.Periodicity.triclinicNearestImageModel (at Float: triclinicNearestImageFloat, fuel 100000)"
+theorem = "NewenSpec.Periodicity.triclinicNearestImageModel_real_eq (triclinicNearestImageModel_real_idem), for lower-triangular boxes and fuel above every fractional coordinate plus one"
+# Rust = model at Float, bit for bit on the generated rows (rectangular, truncated-octahedron, reduced, skewed and monoclinic boxes) (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "periodicity.triclinic_put_into_box"
+kind = "float"
+rust = "crates/newen-core/src/math.rs::triclinic_put_into_box"
+used_by = ["crates/newen-core/src/math.rs::Triclinic::put_into_box (through Periodicity::put_into_box: crates/newen-integrators/src/algorithms/lattice_shift.rs)"]
+origin = "newen's positive cell (fractional coordinates in [0, 1)); gromosXX's put_into_box is the triclinic nearest image of the origin"
+# Theorems over R: lattice, in the positive cell, idempotent; the model at R is Box.wrap
+theory = "NewenTheory.Space.Periodicity.Box.wrap (wrap_lattice, wrap_inPositiveCell, wrap_eq_of, wrap_idem)"
+model = "NewenSpec.Periodicity.triclinicPutIntoBoxModel (at Float: triclinicPutIntoBoxFloat)"
+theorem = "NewenSpec.Periodicity.triclinicPutIntoBoxModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-core/tests/periodicity_spec.rs"
+vectors = "spec/vectors/periodicity.json"
+
+[[function]]
+key = "nonbonded.perturbed_lambda_params"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::PerturbedLambdaParams::from_lambda"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PerturbedLambdaParams::fill_table (one table per pair of energy groups)"]
+origin = "gromosXX Eds_Nonbonded_Term::set_lambda (perturbed_nonbonded_term.cc:322-347); pow(x, n) is the C library pow on both sides (Rust powf, Lean Float.pow), not powi"
+# Theorems over R: at natural NLAM n, powf is the power, so the table holds (1 - L)^n, L^n, (1 - L)^(n-1) L', ...
+theory = "NewenTheory.Interactions.SoftCore (the weights (1 - L)^n, L^n and softness L_s^2, (1 - L_s)^2 of pertLjEnergy, pertCrfEnergy)"
+model = "NewenSpec.SoftCore.lambdaParamsModel (at Float: lambdaParamsFloat)"
+theorem = "NewenSpec.SoftCore.lambdaParamsModel_real"
+# Rust = model at Float, bit for bit on the generated rows (cargo test)
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_lj_crf_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_pair"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_lj_crf_interaction_scaled (pairlist, 1-4 and PERTATOMPAIR corrections)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS perturbed partners)"]
+origin = "gromosXX Eds_Nonbonded_Term::eds_pert_lj_crf_interaction (perturbed_nonbonded_term.cc:387-510): no distance guard (a soft-core pair is finite at r = 0 where alpha * softness * C12/C6 > 0), C12/C6 = 0 only for C6 == 0 (perturbed_nonbonded_term.cc:401-404), as the ext kernel; newen forms crf/2 as crf_2cut3i * cut^3 (gromosXX: m_crf_2)"
+# Theorems over R: dV/dlambda is the derivative of V (individual lambda, chain rule), force = -dV/dr, lambda = 0, 1 are the plain LJ + CRF pair of states A, B
+theory = "NewenTheory.Interactions.SoftCore.pertLjEnergy, pertCrfEnergy (softcore_dvdl_is_deriv, softcore_dvdl_is_deriv_lj, softcore_dvdl_is_deriv_crf, softcore_force_is_minus_grad, softcore_lambda_zero, softcore_lambda_one)"
+model = "NewenSpec.SoftCore.perturbedLjCrfPairModel (at Float: perturbedLjCrfPairFloat)"
+theorem = "NewenSpec.SoftCore.perturbedLjCrfPairModel_real_eq, perturbedLjCrfPairModel_dvdl_is_deriv"
+# Rust = model at Float, bit for bit; dV/dlambda and force against central differences (cargo test)
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.rf_soft_interaction"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::rf_soft_interaction"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::atom_pair_state (excluded PERTATOMPAIR states)", "crates/newen-forces/src/nonbonded/eds.rs (TI-EDS excluded pairs)"]
+origin = "gromosXX Eds_Nonbonded_Term::rf_soft_interaction (perturbed_nonbonded_term.cc:718-765) without the self-term correction; crf/2 formed as crf_2cut3i * cut^3"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy, pertRfExclForce (softcore_dvdl_is_deriv_rf_excluded, softcore_rf_excluded_force_is_minus_grad, softcore_lambda_zero, softcore_lambda_one)"
+model = "NewenSpec.SoftCore.rfSoftModel (at Float: rfSoftFloat)"
+theorem = "NewenSpec.SoftCore.rfSoftModel_real_eq"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_rf_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_rf_excluded_pair"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_excluded_correction"]
+origin = "gromosXX rf_soft_interaction (perturbed_nonbonded_term.cc:718-765), as the excluded-pair correction rounds it: crf_2cut3i * sqrt((cut2/cut2soft)^3) with powi(3), where rf_soft_interaction has crf_2cut3i * cut^3 / sqrt(cut2soft^3); equal over R"
+theory = "NewenTheory.Interactions.SoftCore.pertRfExclEnergy, pertRfExclForce (softcore_dvdl_is_deriv_rf_excluded, softcore_rf_excluded_force_is_minus_grad)"
+model = "NewenSpec.SoftCore.perturbedRfExcludedModel (at Float: perturbedRfExcludedFloat)"
+theorem = "NewenSpec.SoftCore.perturbedRfExcludedModel_real_eq"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.perturbed_rf_self_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_rf_self_term"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::perturbed_self_energy_correction"]
+origin = "gromosXX rf_soft_interaction at r = 0 with selfterm_correction (perturbed_nonbonded_term.cc:718-765, innerloop.cc:3367-3453); newen sums (-(1-L)^n qa2 - L^n qb2 + qa2) crf_cut fpe in another order than gromosXX"
+theory = "NewenTheory.Interactions.SoftCore.rfSelfChange (rf_self_dvdl_is_deriv, rfSelfChange_ends)"
+model = "NewenSpec.SoftCore.perturbedRfSelfModel (at Float: perturbedRfSelfFloat)"
+theorem = "NewenSpec.SoftCore.perturbedRfSelfModel_real_eq, perturbedRfSelfModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.lj_crf_soft_interaction_ext"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::lj_crf_soft_interaction_ext"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PrecalcNonbonded::add_lj_crf_ext (PRECALCLAM)"]
+origin = "gromosXX Eds_Nonbonded_Term::lj_crf_soft_interaction_ext (perturbed_nonbonded_term.cc:614-716); A_de = +dE_A/dlambda, B_de = -dE_B/dlambda"
+theory = "NewenTheory.Interactions.SoftCore.scLjEnergy, scCrfEnergy (scLj_hasDerivAt_s, scCrf_hasDerivAt_s)"
+model = "NewenSpec.SoftCore.ljCrfSoftExtModel (at Float: ljCrfSoftExtFloat)"
+theorem = "NewenSpec.SoftCore.ljCrfSoftExtModel_real_eq, ljCrfSoftExtModel_de_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "nonbonded.rf_soft_interaction_ext"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/perturbed.rs::rf_soft_interaction_ext"
+used_by = ["crates/newen-forces/src/nonbonded/perturbed.rs::PrecalcNonbonded::add_rf_ext (PRECALCLAM)"]
+origin = "gromosXX Eds_Nonbonded_Term::rf_soft_interaction_ext (perturbed_nonbonded_term.cc:853-881)"
+theory = "NewenTheory.Interactions.SoftCore.scRfExclEnergy (scRfExcl_hasDerivAt_s)"
+model = "NewenSpec.SoftCore.rfSoftExtModel (at Float: rfSoftExtFloat)"
+theorem = "NewenSpec.SoftCore.rfSoftExtModel_real_eq, rfSoftExtModel_de_is_deriv"
+differential = "crates/newen-forces/tests/softcore_spec.rs"
+vectors = "spec/vectors/softcore.json"
+
+[[function]]
+key = "bonded.chebyshev"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::chebyshev"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::perturbed_dihedral_term"]
+origin = "gromosXX perturbed_dihedral_interaction.cc:134-168; gromosXX forms the powers as cos^2, cos^2*cos, cos^3*cos (newen: powi); both give 0 for m = 0, where cos(0 phi) = 1 (as D56)"
+theory = "NewenTheory.Interactions.PerturbedBonded.chebT, chebDT (chebT_cos, chebT_hasDerivAt)"
+model = "NewenSpec.PerturbedBonded.chebyshevModel (at Float: chebyshevFloat)"
+theorem = "NewenSpec.PerturbedBonded.chebyshevModel_real_eq, chebyshevModel_zero"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_quartic_bond_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_quartic_bond_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_bond_forces_grouped"]
+origin = "gromosXX perturbed_quartic_bond_interaction.cc:102-157; gromosXX's e_lambda mixes K and b0 as K_A + lambda K_diff, r0_A + lambda b_diff and recomputes Delta (newen reuses the energy's K, b0, Delta)"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertQuarticEnergy (pert_quartic_dvdl_is_deriv, quartic_force_is_minus_grad, pert_quartic_ends)"
+model = "NewenSpec.PerturbedBonded.quarticModel (at Float: quarticFloat)"
+theorem = "NewenSpec.PerturbedBonded.quarticModel_real_eq, quarticModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_angle_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_angle_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_angle_forces_grouped"]
+origin = "gromosXX perturbed_angle_interaction.cc:110-154; gromosXX writes e_lambda as 0.5 L' (-2 K cos_diff d + K_diff d d), newen as 0.5 L' (K_diff d d - 2 K cos_diff d)"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends)"
+model = "NewenSpec.PerturbedBonded.angleModel (at Float: angleFloat)"
+theorem = "NewenSpec.PerturbedBonded.angleModel_real_eq, angleModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_improper_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_improper_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_improper_dihedral_forces_grouped"]
+origin = "gromosXX perturbed_improper_dihedral_interaction.cc:129-182, the wrap of zeta into [q0 - pi, q0 + pi] included"
+theory = "NewenTheory.Interactions.PerturbedBonded.pertHarmonicEnergy (pert_harmonic_dvdl_is_deriv, harmonic_df_is_minus_grad, pert_harmonic_ends); NewenTheory.Interactions.Bonded.wrapZeta"
+model = "NewenSpec.PerturbedBonded.improperModel (at Float: improperFloat)"
+theorem = "NewenSpec.PerturbedBonded.improperModel_real_eq (wrapModel_real_eq; improperModel_dvdl_is_deriv away from the wrap's jump)"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.perturbed_dihedral_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::perturbed_dihedral_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_perturbed_dihedral_forces_grouped"]
+origin = "gromosXX perturbed_dihedral_interaction.cc:134-262 (energies mixed, e_lambda = L' (E_B - E_A))"
+theory = "NewenTheory.Interactions.PerturbedBonded.dihedralEnergy, mix (pert_dihedral_dvdl_is_deriv, chebT_cos)"
+model = "NewenSpec.PerturbedBonded.dihedralModel (at Float: dihedralFloat)"
+theorem = "NewenSpec.PerturbedBonded.dihedralModel_real_eq"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "bonded.soft_perturbed_term"
+kind = "float"
+rust = "crates/newen-forces/src/bonded/perturbed.rs::soft_perturbed_term"
+used_by = ["crates/newen-forces/src/bonded/perturbed.rs::calculate_soft_bond_forces_grouped", "calculate_soft_angle_forces_grouped", "calculate_soft_improper_forces_grouped", "BondedPrecalc::add_soft (PRECALCLAM)"]
+origin = "gromosXX perturbed_soft_bond_interaction.cc:106-162 (and the soft angle and improper files): energy 0.5 K_soft diff^2, force K_eff diff, the e_lambda formula"
+theory = "NewenTheory.Interactions.PerturbedBonded.softEnergy (soft_dvdl_is_deriv, soft_grad_is_deriv, soft_ends)"
+model = "NewenSpec.PerturbedBonded.softModel (at Float: softFloat)"
+theorem = "NewenSpec.PerturbedBonded.softModel_real_eq, softModel_dvdl_is_deriv"
+differential = "crates/newen-forces/tests/perturbed_bonded_spec.rs"
+vectors = "spec/vectors/perturbed_bonded.json"
+
+[[function]]
+key = "lattice_sum.shape_switch"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_switch"
+used_by = ["crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair", "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair"]
+origin = "gromosXX Lattice_Sum::charge_shape_switch (latticesum.h:86-252); GROMOS Vol. 2 eta_function_def, tables ls_switch_function and ls_switch_prime; erfc is C erfc"
+# Theorems over R: eta' is the derivative of eta for every shape and xi (across the support edge too), compact support, eta(0) = 1, eta'' = 4 xi pi gamma (the eta and gamma tables agree), unit charge
+theory = "NewenTheory.Interactions.LatticeSum.eta, etaDeriv (eta_hasDerivAt, eta_compact_support, eta_zero_eq_one, etaPoly_derivative_two, chargeShape_normalized; erfc defined by its integral, erfc_hasDerivAt)"
+model = "NewenSpec.LatticeSum.shapeSwitchModel (at Float: shapeSwitchFloat)"
+theorem = "NewenSpec.LatticeSum.shapeSwitchModel_real_eq"
+# Rust = model at Float, bit for bit on the generated rows; eta' against central differences of eta; eta(0) = 1 (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.shape_fourier"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::shape_fourier"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::k_vectors", "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_shells"]
+origin = "gromosXX Lattice_Sum::charge_shape_fourier (latticesum.h:309-467, the corrected lines after the three 'wrong!!!' comments); GROMOS Vol. 2 latsum_gamma_ft, tables ls_fcoef and ls_fcoef_prime; kappa = 0 divides by zero for the polynomial shapes (Vol. 2 sets gamma_hat(0) = 1)"
+# Theorems over R: the tabulated gamma_hat' is the derivative of the tabulated gamma_hat at every kappa != 0, gamma_hat(0) = 1
+theory = "NewenTheory.Interactions.LatticeSum.gammaHat, gammaHatDeriv (gammaHat_hasDerivAt, gammaHat_zero_eq_one, fourierForm_hasDerivAt)"
+model = "NewenSpec.LatticeSum.shapeFourierModel (at Float: shapeFourierFloat)"
+theorem = "NewenSpec.LatticeSum.shapeFourierModel_real_eq (kappa != 0)"
+# Rust = model at Float, bit for bit; gamma_hat' against central differences, gamma_hat against a quadrature of the Fourier transform of Vol. 2's shape (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.lj_ls_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::lj_ls_pair"
+used_by = ["crates/newen-forces/src/nonbonded/ls_real_space.rs::lj_ls_pairs", "crates/newen-forces/src/nonbonded/ls_real_space.rs::one_four_ls_pairs", "crates/newen-forces/src/nonbonded/ls_real_space.rs::lj_only_pairs (no charge: the LJ of the long-range shell)"]
+origin = "gromosXX Nonbonded_Term::lj_ls_interaction (nonbonded_term.cc:361-388), its LJ force (c12/r^6 + c12/r^6 - c6) * 6 / r^6 / r^2 included; no zero-distance guard (gromosXX asserts r^2 != 0); GROMOS Vol. 2 e_eta_approx, e_eta_approx_force"
+# Theorems over R: the real-space force is -dE/dr; the model at R equals the theory for r > 0, a != 0
+theory = "NewenTheory.Interactions.LatticeSum.realSpacePair, realSpacePairForce (realSpacePair_force_is_minus_grad); NewenTheory.Interactions.LennardJones.ljEnergy, ljForce"
+model = "NewenSpec.LatticeSum.ljLsPairModel (at Float: ljLsPairFloat)"
+theorem = "NewenSpec.LatticeSum.ljLsPairModel_real_eq"
+# Rust = model at Float, bit for bit; the force against central differences of the energy in r (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.ls_excluded_pair"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::ls_excluded_pair"
+used_by = ["crates/newen-forces/src/nonbonded/ls_real_space.rs::ls_excluded_pairs"]
+origin = "gromosXX Nonbonded_Term::ls_excluded_interaction (nonbonded_term.cc:393-411); GROMOS Vol. 2 e_eta_approx (second sum)"
+# Theorems over R: the excluded-pair force is -dE/dr; the model at R equals the theory for r > 0, a != 0
+theory = "NewenTheory.Interactions.LatticeSum.realSpaceExcluded, realSpaceExcludedForce (realSpaceExcluded_force_is_minus_grad)"
+model = "NewenSpec.LatticeSum.lsExcludedPairModel (at Float: lsExcludedPairFloat)"
+theorem = "NewenSpec.LatticeSum.lsExcludedPairModel_real_eq"
+# Rust = model at Float, bit for bit; the force against central differences of the energy in r (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.self_constants"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::self_constants"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms)"]
+origin = "gromosXX Nonbonded_Outerloop::ls_self_outerloop (nonbonded_outerloop.cc:2291-2353: the A1, A3 table, a1 *= -pi a^2 / V, a3 *= -1/a); GROMOS Vol. 2 latsum_a1_def, latsum_a3_def, table ls_acst; the cubic Wigner constant -2.83729748 (outerloop.cc:2379; Vol. 2 prints -2.83792748) is NewenTheory.Interactions.LatticeSum.wignerCube"
+# Theorems over R: the model equals A1 = -pi a^2 Ã1 / V, A3 = -Ã3 / a; Ã3 = -eta'(0) for every shape
+theory = "NewenTheory.Interactions.LatticeSum.a1, a3, a1Tilde, a3Tilde (a3Tilde_eq_neg_etaDeriv_zero), selfTerm, aTerm"
+model = "NewenSpec.LatticeSum.selfConstantsModel (at Float: selfConstantsFloat)"
+theorem = "NewenSpec.LatticeSum.selfConstantsModel_real_eq"
+# Rust = model at Float, bit for bit; Ã1 = 4 ∫ xi eta(xi) dxi and Ã3 = -eta'(0) against the Rust switch function (cargo test)
+differential = "crates/newen-forces/tests/lattice_sum_spec.rs"
+vectors = "spec/vectors/lattice_sum.json"
+
+[[function]]
+key = "lattice_sum.reciprocal_box"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::reciprocal_box"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms)", "crates/newen-forces/src/nonbonded/lattice_sum.rs::lattice_vector (the wave vector of l in this basis)"]
+origin = "gromosXX math::volume (math/volume.cc:33-52) and configuration::KSpace_Utils::l_to_k_matrix (kspace.cc:128-136); gromosXX then multiplies l by the transpose of this basis (kspace.cc:88, nonbonded_outerloop.cc:2449), which is the same vector only in a rectangular box (D51); newen's lattice_vector takes l_x b1 + l_y b2 + l_z b3"
+# Theorems over R: the model equals V = (a x b) . c and 2 pi / V (b x c, c x a, a x b); for diag(Lx, Ly, Lz) the rectangular |a||b||c| is (a x b) . c; the reciprocal basis is dual to the box (k . a = 2 pi l_x, ...), so one atom moved by a lattice vector leaves C(k)^2 + S(k)^2 unchanged
+theory = "NewenTheory.Interactions.LatticeSum.boxVolume, reciprocal, latticeVector (latticeVector_reciprocal_dot, structureFactorSq_lattice_shift)"
+model = "NewenSpec.LatticeSum.reciprocalBoxModel, latticeVectorModel (at Float: reciprocalBoxFloat)"
+theorem = "NewenSpec.LatticeSum.reciprocalBoxModel_real_eq, reciprocalBoxModel_rectangular_volume, latticeVectorModel_real_eq"
+# Rust = model at Float, bit for bit; k . edge_j = 2 pi l_j in a triclinic box (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "ewald.k_vectors"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/ewald.rs::k_vectors"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: at the first step and whenever the box changes)"]
+origin = "gromosXX configuration::calculate_k_space (kspace.cc:48-126): l in [-NKX, NKX] x [-NKY, NKY] x [-NKZ, NKZ], k != 0 and |k|^2 <= KCUT (gromosXX compares |k|^2 with KCUT, kspace.cc:72, 90; Vol. 2 cuts at |k| <= k_c); an empty set is an error (kspace.cc:122-125)"
+# Theorems over R: the model's set of k is kSet (the theory's filter on the box of triples); every cached field is consistent (k2 = |k|^2 != 0, gamma_hat(sqrt(k2) a), ...); the set is symmetric under k -> -k
+theory = "NewenTheory.Interactions.LatticeSum.kSet, lBox (kSet_symmetric)"
+model = "NewenSpec.LatticeSum.kVectorsModel (at Float: kVectorsFloat)"
+theorem = "NewenSpec.LatticeSum.kVectorsModel_real_toFinset, kVectorsModel_real_wf"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "ewald.kspace"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/ewald.rs::ewald_kspace"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate (every step of an NLRELE 2 run)"]
+origin = "gromosXX Nonbonded_Outerloop::_ls_ewald_kspace_outerloop (nonbonded_outerloop.cc:1946-2059), positions put into the box first; GROMOS Vol. 2 e_gamma_ewald, ewald_reci_force, vir_ew, a_2_tilde_ew"
+# Theorems over R: energy = (2 eps0 V)^-1 sum gamma_hat/k^2 (C^2 + S^2) and forces = kSpaceForce over the cached wave vectors (kSpace over their set when no k repeats), A2~ = 4 pi / V sum gamma_hat/k^2; force = -grad E over kSet; C^2 + S^2 is even in k, so the (2 eps0 V)^-1 over a symmetric set is (eps0 V)^-1 over half of it; translation invariance
+theory = "NewenTheory.Interactions.LatticeSum.kSpace, kSpaceForce (ewald_total_force_is_minus_grad, kSpace_force_is_minus_grad, structureFactorSq_neg, kSpace_half_space, kSpace_translation_invariant)"
+model = "NewenSpec.LatticeSum.ewaldKspaceModel (at Float: ewaldKspaceFloat)"
+theorem = "NewenSpec.LatticeSum.ewaldKspaceModel_real_energy, ewaldKspaceModel_real_eq_kSpace, ewaldKspaceModel_real_forces, ewaldKspaceModel_real_a2Tilde"
+# Rust = model at Float, bit for bit; forces against central differences of the energy; the virial against the derivative of the energy under a deformation of box and positions; the energy unchanged by a common translation and, in a triclinic box, by moving one atom by a lattice vector (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.a2_cubic"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_cubic"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: NA2CLC 2, 3 in a cube)"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2370-2385): a rectangular box with equal edges, wigner = -2.83729748 (Vol. 2 prints -2.83792748)"
+# Theorems over R: the model equals a2Cube; A1 + A2 + A3 = wigner / L
+theory = "NewenTheory.Interactions.LatticeSum.a2Cube, wignerCube (a1_add_a2Cube_add_a3)"
+model = "NewenSpec.LatticeSum.a2CubicModel (at Float: a2CubicFloat)"
+theorem = "NewenSpec.LatticeSum.a2CubicModel_real_eq"
+# Rust = model at Float, bit for bit; agrees with the shell sum to 1e-7 for the Gaussian (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.a2_shells"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::a2_shells"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum (box_terms: NA2CLC 2, 3 in a box that is not a cube)"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2387-2537): half shells of growing l_max, doubled, until |term / A2| <= TOLA2 (unbounded in gromosXX; here at most max_shells, A2_MAX_SHELLS = 300 in a run); GROMOS Vol. 2 latsum_a2_calc"
+# Theorems over R: one half shell of the model is the sum over the theory's face (gromosXX's enumeration, each triple once); A2 over the shells the model ran is a2Shells; the shells partition the cube without 0 and a shell is a face and its mirror image, so a2Shells = 4 pi / V sum over the cube without 0
+theory = "NewenTheory.Interactions.LatticeSum.a2Shells, a2Term, cube, shell, face (a2Shells_eq_cube, sum_cube_erase_zero, shell_eq_face_union_neg)"
+model = "NewenSpec.LatticeSum.a2ShellsModel, a2ShellsLoop, a2ShellModel, faceTriples (at Float: a2ShellsFloat)"
+theorem = "NewenSpec.LatticeSum.a2ShellsModel_real_eq (width != 0, no triple l != 0 sent to k = 0), a2ShellModel_real_eq, faceTriples_toFinset"
+# Rust = model at Float, bit for bit, runs that converge and runs stopped by max_shells (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.self_and_a_terms"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::self_and_a_terms"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate"]
+origin = "gromosXX ls_self_outerloop (nonbonded_outerloop.cc:2588, 2605), Topology::squared_sum_charges and sum_squared_charges (topology.cc:1572-1586); the virials (self_and_a_virials, nonbonded_outerloop.cc:2357-2366, 2384, 2519, 2555-2607) are in the model and the vectors, without a theorem; GROMOS Vol. 2 e_slf, e_a_def"
+# Theorems over R: the model equals selfTerm and aTerm with eps0 = 1/eps0_inv; charge_sums is (sum q, sum q^2)
+theory = "NewenTheory.Interactions.LatticeSum.selfTerm, aTerm"
+model = "NewenSpec.LatticeSum.selfATermsModel, chargeSumsModel, selfAVirialsModel (at Float: selfATermsFloat, chargeSumsFloat, selfAVirialsFloat)"
+theorem = "NewenSpec.LatticeSum.selfATermsModel_real_eq, chargeSumsModel_real_eq"
+# Rust = model at Float, bit for bit (charge_sums, self_and_a_terms, self_and_a_virials) (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "lattice_sum.surface_term"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/lattice_sum.rs::surface_term"
+used_by = ["crates/newen-forces/src/nonbonded/ewald.rs::EwaldSum::evaluate (unwrapped positions, centre a/2 + b/2 + c/2)"]
+origin = "gromosXX _ls_surface_outerloop (nonbonded_outerloop.cc:2652-2688); gromosXX adds only the diagonal of the virial and without the factor -2 of every other lattice-sum term (D50; newen: the whole tensor, -2 Xi); GROMOS Vol. 2 e_srf, e_srf_forces"
+# Theorems over R: zero for EPSLS = 0; otherwise the theory's surface and surfaceForce with eps0 = 1/eps0_inv; force = -grad E
+theory = "NewenTheory.Interactions.LatticeSum.surface, surfaceForce, dipole (surface_force_is_minus_grad)"
+model = "NewenSpec.LatticeSum.surfaceModel, dipoleModel (at Float: surfaceFloat)"
+theorem = "NewenSpec.LatticeSum.surfaceModel_real_eq (EPSLS != 0), surfaceModel_real_zero"
+# Rust = model at Float, bit for bit; forces against central differences, the virial against the deformation derivative (cargo test)
+differential = "crates/newen-forces/tests/ewald_spec.rs"
+vectors = "spec/vectors/ewald.json"
+
+[[function]]
+key = "p3m.assignment_1d"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assignment_1d"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_charges", "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces", "crates/newen-forces/src/nonbonded/p3m.rs::assignment_weights"]
+origin = "gromosXX Lattice_Sum::charge_assignment_1d (latticesum.h:508-565); GROMOS Vol. 2 assign_p3m, table of the weights. Every branch reads |x| or x^2, so w(-x) has the bits of w(x) (gromosXX assigns with u - n and interpolates with n - u). The strict |x| < 1/2 of order 1 gives a charge exactly half-way between two grid points weight zero on both (w1_half_integer)"
+# Theorems over R: w_p >= 0, zero for |x| >= p/2, and a partition of unity: the grid points around a charge carry weights adding up to one for p = 2..5, and for p = 1 away from the half-integers
+theory = "NewenTheory.Interactions.P3M.w (w_nonneg, w_support, w_partition_of_unity, w1_partition_of_unity, w1_half_integer)"
+model = "NewenSpec.P3M.assignmentModel (at Float: assignmentFloat)"
+theorem = "NewenSpec.P3M.assignmentModel_real_eq"
+# Rust = model at Float, bit for bit, p = 1..5 on a grid of x in [-3, 3] and the doubles on either side of the branch points (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.nearest_grid_point"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::nearest_grid_point"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_charges", "crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges", "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces"]
+origin = "gromosXX latticesum.cc:96-106: rint for odd orders, truncation (C int()) for even orders"
+model = "NewenSpec.P3M.nearestModel, nearestIntModel (at Float: nearestIntFloat)"
+# Rust = model at Float, bit for bit (as integers), with the stencil weights (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assignment_weights"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assignment_weights"
+used_by = ["crates/newen-forces/tests/p3m_spec.rs"]
+origin = "gromosXX latticesum.cc:108-128: the stencil -(p-1)/2 ..= p/2 around the nearest grid point"
+model = "NewenSpec.P3M.weightsModel (at Float: weightsFloat)"
+# Rust = model at Float, bit for bit, u on a grid of [-1, 1], half-integers and random u in [0, 32); the weights of an in-box u add up to one within 1e-14 (but at the half-integers of p = 1) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.mesh"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::Mesh::new"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate", "crates/newen-forces/src/nonbonded/p3m.rs::influence_function"]
+origin = "gromosXX latticesum.cc:57-64: H = Matrix(box(0)/Nx, box(1)/Ny, box(2)/Nz) (rows), H_inv = math::inverse (gmath.h:1211-1223, adjugate times 1/det), cell volume det(transpose(H)) (gmath.h:1197-1205); grid coordinates math::product(H_inv, r) = H_inv^T r"
+model = "NewenSpec.P3M.meshModel, M3.inv, M3.det, M3.tmulVec (at Float: meshFloat)"
+# Rust = model at Float, bit for bit, on random cubic, rectangular and triclinic boxes and grids 2..32 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assign_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assign_charges"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_charge_density (latticesum.cc:46-139), atoms in order, stencil x slowest, rho += (w_x w_y w_z / V_cell) q; GROMOS Vol. 2 assign_p3m"
+model = "NewenSpec.P3M.assignChargesModel (at Float: assignChargesFloat)"
+# Rust = model at Float, bit for bit, on 4x4x4, 8x4x2 and 2x4x8 grids in random boxes; the grid carries the total charge (sum rho V_cell = sum q within 1e-12) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.selfterm_fp"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::selfterm_fp"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges"]
+origin = "gromosXX Lattice_Sum::p3m_selfterm_fp (latticesum.h:672-769); GROMOS Vol. 2 f_g_x and table f_p_func. gromosXX's doc comment lists order 4 as n = 0, 2, 3, 4; the code and Vol. 2 have n = 0, 1, 2, 3"
+model = "NewenSpec.P3M.selftermFpModel (at Float: selftermFpFloat)"
+# Rust = model at Float, bit for bit, every order and |n|, both signs of n, s on a grid of [-1/2, 1/2] (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.assign_squared_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::assign_squared_charges"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_squared_charge_grid (latticesum.cc:170-258): around the grid origin, s = u - n0 (odd p) or u - n0 - 1/2 (even p), stencil -(p-1)..p-1, R += f_x f_y f_z (1/V_cell) q^2; GROMOS Vol. 2 f_g_func. Only for NA2CLC 3 (and 4, which gromosXX reads as 3, in_parameter.cc:4718, D59; the averaged grid of NA2CLC 4 is never used by gromosXX)"
+model = "NewenSpec.P3M.assignSquaredModel (at Float: assignSquaredFloat)"
+# Rust = model at Float, bit for bit, as assign_charges (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.fd_coefficients"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::fd_coefficients"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::d_hat", "crates/newen-forces/src/nonbonded/p3m.rs::field_fd"]
+origin = "gromosXX Lattice_Sum::finite_difference_constants (latticesum.h:598-633); GROMOS Vol. 2 tab:fd_coef"
+# Theorem over R: the operator of order q = 1..5 differentiates every polynomial of degree <= 2q exactly
+theory = "NewenTheory.Interactions.P3M.fdCoeff, fdDeriv (fd_exact_on_polynomials, fd_exact_1 .. fd_exact_5)"
+model = "NewenSpec.P3M.fdCoefficientsModel (at Float: fdCoefficientsFloat)"
+theorem = "NewenSpec.P3M.fdCoefficientsModel_real_eq"
+# Rust = model at Float, bit for bit, q = 0..5 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.sinc_power"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::sinc_power"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::alias_sums"]
+origin = "gromosXX Lattice_Sum::fourier_charge_assignment_1d (latticesum.h:583-589): 1 at x = 0, else pow(2/x sin(x/2), p) with C pow (declared extern C in p3m.rs, as Lean's Float.pow); GROMOS Vol. 2 wei_product"
+# Theorems over R: sincPow 0 = 1 and sincPow is continuous at 0 (the code's value is the limit); sincPow x p = sinc(x/2)^p
+theory = "NewenTheory.Interactions.P3M.sincPow (sincPow_zero, sincPow_tendsto_zero, sincPow_eq_sinc)"
+model = "NewenSpec.P3M.sincPowModel (at Float: sincPowFloat)"
+theorem = "NewenSpec.P3M.sincPowModel_real_eq"
+# Rust = model at Float, bit for bit, p = 1..5 on a grid of [-12, 12] (0 included) and random x in [-40, 40] (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.influence_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_at"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::influence_function"]
+origin = "gromosXX Influence_Function::calculate (influence_function.cc:91-344) for one l: D_hat (ik or finite differences, :156-171), the alias sums over m in [-NALIAS, NALIAS]^3 (:173-224), the denominator 1 for p = 1, G_hat = 0 below |D|^2 < 1e-12 (math::epsilon), the derivative tensor (:237-249), q (:276); GROMOS Vol. 2 optim_influ, alias_def, big_gammahat_def, q_calc_2. k_l = l_x b1 + l_y b2 + l_z b3 (phase 2's lattice_vector); gromosXX multiplies by the transpose of the reciprocal basis, the same vector in a rectangular box (D51)"
+# Theorems over R: the optimal influence function over a set of alias vectors (Vol. 2 optim_influ); for one alias with ik differentiation it is gamma_hat(a|k|)/(|k|^2 P_hat(k)^2)
+theory = "NewenTheory.Interactions.P3M.influence (influence_single_alias)"
+model = "NewenSpec.P3M.influenceAtModel, aliasSumsModel, dHatModel (at Float: influenceAtFloat; the whole grid influenceFunctionFloat)"
+theorem = "NewenSpec.P3M.influenceAtModel_real_single"
+# Rust = model at Float, bit for bit: 250 wave vectors (grids 4^3 and 8^3, every order, NFDORD 0-3, NALIAS 0-2, NSHAPE -1, 0, 3, 7, widths 0.4 and 1.4, cubic, rectangular and triclinic boxes, with and without the tensor) and six whole 4^3 grids with Q (influence_function, the planes summed in gromosXX's order) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.quality_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::quality_at"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::influence_quality"]
+origin = "gromosXX Influence_Function::evaluate_quality (influence_function.cc:355-526) for one l: the two terms added to Q in turn; no epsilon test for ik differentiation; GROMOS Vol. 2 q_calc_2"
+model = "NewenSpec.P3M.qualityAtModel (at Float: qualityAtFloat)"
+# Rust = model at Float, bit for bit, 80 wave vectors (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.influence_box_correction"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::influence_box_correction"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (a box that differs from the one the influence function was computed in)"]
+origin = "gromosXX Influence_Function::operator() (influence_function.h:140-148): G - tr(Gamma tL0^-1 (tL - tL0)), the matrix products summed from zero; GROMOS Vol. 2 gammahat_upd. gromosXX computes the deviation in setBox before a recomputation at an NQEVAL step and does not reset it after, so on that step the new function is corrected by the deviation from the old box (D53); newen takes the deviation from the box of the last computation"
+model = "NewenSpec.P3M.boxCorrectionModel (at Float: boxCorrectionFloat)"
+# Rust = model at Float, bit for bit, 100 random rows (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.force_error"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::force_error_estimate"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"]
+origin = "gromosXX influence_function.cc:311: four_pi_eps_i S~^2 sqrt(Q/(V N_atoms)); GROMOS Vol. 2 deserno"
+model = "NewenSpec.P3M.forceErrorModel (at Float: forceErrorFloat)"
+theorem = "NewenSpec.P3M.forceErrorModel_real_eq"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.kspace_energy"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::kspace_energy"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_potential_and_energy (latticesum.cc:384-422): |rho_hat|^2/N, E += G |rho_hat|^2/N, virial (Gamma + G 1)|rho_hat|^2/N, E = 0.5 E V_cell eps0_inv, virial scaled -0.25 eps0_inv V_cell and stored -2x; GROMOS Vol. 2 e_gamma_p3m, reci_space_virial"
+# Theorems over R: the k-space energy 1/2 V_cell eps0^-1 sum G |rho_hat|^2/N, and the complex sum it is written from is real for a real charge density; the model's energy is the theory's p3mEnergy given the transform of a real grid
+theory = "NewenTheory.Interactions.P3M.p3mEnergy (p3m_energy_real, dft_neg_eq_conj)"
+model = "NewenSpec.P3M.kspaceEnergyModel (at Float: kspaceEnergyFloat)"
+theorem = "NewenSpec.P3M.kspaceEnergyModel_real_eq, kspaceEnergyModel_real_p3mEnergy"
+# Rust = model at Float, bit for bit, 64-point grids with and without the virial (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.potential_hat"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::potential_hat"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX latticesum.cc:392: phi_hat = eps0_i G rho_hat / sqrt(N)"
+model = "NewenSpec.P3M.potentialHatModel (at Float: potentialHatFloat)"
+# Rust = model at Float, bit for bit, on the kspace_energy rows (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.field_ik"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::field_ik"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NFDORD 0"]
+origin = "gromosXX Lattice_Sum::calculate_electric_field, ik branch (latticesum.cc:544-580): E_hat = k_l (-i phi_hat / sqrt(N)), the Nyquist planes l = N/2 kept, then three backward transforms whose real parts are the field. Keeping the Nyquist planes is harmless: the real part keeps the Hermitian part of E_hat, which has the Nyquist components of l set to zero. k_l as in influence_at"
+model = "NewenSpec.P3M.fieldIkModel (at Float: fieldIkFloat)"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.field_fd"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::field_fd"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NFDORD 1-5"]
+origin = "gromosXX Lattice_Sum::calculate_electric_field, finite differences (latticesum.cc:581-640), after the backward transform of phi_hat. gromosXX divides the difference along grid axis a by 2 j |box(a)/N_a| and stores it as Cartesian component a, which is not the gradient in a triclinic box (D52); newen sums g_a = sum_j (c_j/sqrt(N)) (phi(n - j e_a) - phi(n + j e_a))/(2j) and maps it through H^-1 (E = sum_a g_a h*_a), the operator whose transform is the D_hat of the influence function; in a rectangular box the two differ only in rounding"
+model = "NewenSpec.P3M.fieldFdModel (at Float: fieldFdFloat)"
+# Rust = model at Float, bit for bit, q = 1..5 on small grids in random (triclinic included) boxes (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.interpolate_forces"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::interpolate_forces"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run)"]
+origin = "gromosXX Lattice_Sum::calculate_force (latticesum.cc:690-778): E_i = sum w(n - u) E(n), F_i = q_i E_i; GROMOS Vol. 2 force_from_field_p3m, force_interpol"
+model = "NewenSpec.P3M.interpolateModel (at Float: interpolateFloat)"
+# Rust = model at Float, bit for bit; P3M forces against the direct Ewald sum within the rms force-error estimate and against central differences of the P3M energy (with the A term's Ã2 part) within 0.5 % of the rms force (cargo test) (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.a2_tilde"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::a2_tilde_p3m"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate (every step of an NLRELE 3 run), NA2CLC 3 and 4"]
+origin = "gromosXX Lattice_Sum::calculate_p3m_selfterm (latticesum.cc:440-489): a2_tilde = 4 pi sum G Re(R_hat) / N / S~^2 and its derivative; GROMOS Vol. 2 u_ga_slf_def_p3m. gromosXX computes it at step 0, under pressure scaling and on energy-output steps (nonbonded_outerloop.cc:2184-2188), newen every step; and gromosXX reports the A term of an NVT run at its step-0 value every step (configuration/energy.cc:576-580), which is exact for Ewald but not for P3M, whose Ã2 moves with the charges (D49): newen reports the A term of the step (the P3M references use gromosXX + patches/LS1_p3m_nvt_a_term.patch)"
+model = "NewenSpec.P3M.a2TildeModel (at Float: a2TildeFloat)"
+# Rust = model at Float, bit for bit (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.fft3"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::Fft3::forward"
+used_by = ["crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"]
+origin = "FFTW's unnormalised complex 3-D transforms (configuration/mesh.cc:62-68, 142-147), here by one-dimensional PhastFT transforms along z, y, x; PhastFT's inverse divides by N, which is multiplied back (exact for a power of two). Not bit-exact: the butterflies are neither FFTW's nor the model's. Measured maximum relative difference (max |a - b| / max |b|) from the direct transform dftFloat: 3.1e-16 (4^3), 5.9e-16 (8^3), 3.6e-16 (8x4x2), 3.0e-15 (16^3); bound 1e-12"
+# Theorems over R: the backward transform of the forward one is N times the grid, a shift multiplies the transform by a phase, a real grid has a Hermitian transform
+theory = "NewenTheory.Interactions.P3M.dftBackward over Mathlib's ZMod.dft (dft_inv, dft_shift, dft_neg_eq_conj)"
+model = "NewenSpec.P3M.dftFloat (the direct O(N^2) transform, Float only)"
+# Rust within 1e-12 of the direct transform on 4^3, 8^3, 8x4x2 and 16^3 grids, forward and backward; backward(forward) = N times the grid within 1e-14 (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "p3m.kspace"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/p3m.rs::P3m::evaluate"
+used_by = ["crates/newen-integrators/src/algorithms/forcefield.rs::Forcefield::lattice_sum_terms (NLRELE 3)"]
+origin = "gromosXX Nonbonded_Outerloop::_ls_p3m_kspace_outerloop (nonbonded_outerloop.cc:2076-2267): positions put into the box, the influence function at step 0 (refused above FACCUR) and every NQEVAL steps, Ã2, charge assignment, forward transform, energy, potential, field, forces. Measured maximum relative difference of the k-space energy (assign_charges, fft3, kspace_energy) from the Lean pipeline with dftFloat on 8^3 grids: 6.3e-16; bound 1e-11. Against gromosXX (FFTW) on the three P3M references: every ENERGY03 value to the printed digits, forces to the last printed digit (1e-9), positions identical"
+model = "NewenSpec.P3M (assignChargesFloat, influenceFunctionFloat, dftFloat, kspaceEnergyFloat; the p3m_energy rows)"
+# the k-space energy within 1e-11 of the Lean pipeline (cargo test)
+differential = "crates/newen-forces/tests/p3m_spec.rs"
+vectors = "spec/vectors/p3m.json"
+
+[[function]]
+key = "spme.bspline"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::bspline"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::bspline_and_deriv", "crates/newen-forces/src/nonbonded/spme.rs::euler_spline_factor"]
+origin = "Essmann et al., J. Chem. Phys. 103, 8577 (1995), eq. 4.1 and the recursion after it: M_1 = 1 on [0, 1), M_n(u) = (u M_{n-1}(u) + (n - u) M_{n-1}(u - 1)) / (n - 1). Newen only (NLRELE 5, experimental): gromosXX has no SPME"
+# Theorems over R: zero outside [0, n), non-negative, a partition of unity for every n >= 1 (over a window of n grid points and over Z), continuous for n >= 2; P3M's w_p is M_p(x + p/2) for p = 2..5 everywhere and for p = 1 away from x = -1/2
+theory = "NewenTheory.Interactions.SPME.bspline (bspline_support, bspline_nonneg, bspline_partition_of_unity, bspline_tsum_eq_one, bspline_continuous, bspline_eq_p3m_w, bspline_eq_p3m_w_one, p3m_w_one_half)"
+model = "NewenSpec.SPME.bsplineModel (at Float: bsplineFloat)"
+theorem = "NewenSpec.SPME.bsplineModel_real_eq"
+# Rust = model at Float, bit for bit, n = 2..12 on a grid of u in [-1, n + 1] and the doubles at and on either side of every knot (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.bspline_and_deriv"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::bspline_and_deriv"
+used_by = ["crates/newen-forces/tests/spme_spec.rs (the reference the spline table is checked against)"]
+origin = "Essmann et al. after eq. 4.1: M_n'(u) = M_{n-1}(u) - M_{n-1}(u - 1)"
+# Theorems over R: the derivative of M_n is M_{n-1}(u) - M_{n-1}(u - 1) for n >= 3 at every u (the knots included), for n = 2 away from the integers
+theory = "NewenTheory.Interactions.SPME.bsplineDeriv (bspline_deriv, bspline_deriv_two)"
+model = "NewenSpec.SPME.bsplineDerivModel (at Float: bsplineDerivFloat)"
+theorem = "NewenSpec.SPME.bsplineDerivModel_real_eq"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.spline_weights"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spline_weights"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_assign", "crates/newen-forces/src/nonbonded/spme.rs::spme_assign_squared_charges", "crates/newen-forces/src/nonbonded/spme.rs::spme_forces"]
+origin = "The recursion of M_n on the table M_k(w + j), j = 0..k-1, w = u - floor(u), order by order (Essmann's fill of the theta arrays), with the derivatives from the table of order n - 1"
+# Theorem over R: entry j is M_n(fract u + j), derivative j is M_{n-1}(fract u + j) - M_{n-1}(fract u + j - 1), for n >= 2 (tableModel_real_eq: the table after order r + 1 is M_{r+1}(w + j) for j <= r and 0 above)
+theory = "NewenTheory.Interactions.SPME.bspline, bsplineDeriv"
+model = "NewenSpec.SPME.splineWeightsModel (at Float: splineWeightsFloat)"
+theorem = "NewenSpec.SPME.splineWeightsModel_real_eq"
+# Rust = model at Float, bit for bit, n = 2..12 at special and random u in [-4, 32); the weights sum to 1 and the derivatives to 0 within 1e-14, and equal bspline / bspline_and_deriv within 1e-14 / 1e-13 (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.euler_spline_factor"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::euler_spline_factor"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_influence_at", "crates/newen-forces/src/nonbonded/spme.rs::euler_factors"]
+origin = "Essmann et al. eqs. 4.4, 4.7: |b(m)|^2 = 1 / |sum_{j=0}^{n-2} M_n(j+1) e^{2 pi i m j / K}|^2 (the numerator has modulus one); real and imaginary parts summed in j order"
+# Theorems over R: positive where the denominator does not vanish, 1 at m = 0 (the partition of unity at the grid points); the re/im form the code sums (eulerFactor_eq_re_im). Not proved: that the denominator never vanishes for even n
+theory = "NewenTheory.Interactions.SPME.eulerFactor (eulerFactor_pos, eulerFactor_zero, eulerFactor_eq_re_im)"
+model = "NewenSpec.SPME.eulerModel (at Float: eulerFloat)"
+theorem = "NewenSpec.SPME.eulerModel_real_eq"
+# Rust = model at Float, bit for bit, n = 4, 6, 8, 10, 12 on axes of 4, 8, 16, 32 points, every wave index (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.influence_at"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_influence_at"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::spme_influence_function (the same kernel with the Euler factors of every storage position)"]
+origin = "Essmann et al. eqs. 4.7, 4.8 with GROMOS's charge shapes: G(k_l) = gamma_hat(a|k_l|)/k_l^2 B(l), k_l = l_x b1 + l_y b2 + l_z b3; Gamma_hat = B (a k gamma_hat' - 2 gamma_hat)/k^4 k (x) k, the Ewald virial tensor times B (exact: B depends on the integer l only). For the Gaussian, gamma_hat(a k) = exp(-a^2 k^2 / 4) is Essmann's exp(-pi^2 m^2 / beta^2) with beta = 1/a"
+# Theorem over R: G = gamma_hat(a|k|)/|k|^2 times the theory's Euler factors of the three axes, for k != 0 and a != 0
+theory = "NewenTheory.Interactions.LatticeSum.gammaHat, NewenTheory.Interactions.SPME.eulerFactor"
+model = "NewenSpec.SPME.influenceAtModel (at Float: influenceAtFloat; the whole grid: influenceFunctionFloat)"
+theorem = "NewenSpec.SPME.influenceAtModel_real_eq (influenceFromModel_real_eq)"
+# Rust = model at Float, bit for bit: 150 wave vectors on 4^3 and 8^3 grids (orders 4..12, four shapes, widths 0.4 and 1.4 nm, cubic, rectangular and triclinic boxes), whole 4^3 and 8^3 grids (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.assign"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_assign"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"]
+origin = "Essmann et al. eq. 4.6, divided by the cell volume as P3M's assign_charges: rho(floor(u) - j) += (theta_x theta_y theta_z / V_cell) q"
+# The grid carries the charges: sum rho V_cell = sum q (cargo test); the partition of unity behind it is bspline_partition_of_unity
+model = "NewenSpec.SPME.assignModel (at Float: assignFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.assign_squared_charges"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_assign_squared_charges"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate (NA2CLC 3 and 4)"]
+origin = "The autocorrelation of each charge's weights, around the grid origin, as P3M's assign_squared_charges (latticesum.cc:170-258) with the B-spline overlaps in place of f_p, so that a2_tilde_p3m gives each charge's interaction with itself through the grid: E_gamma of a single charge equals minus the A2~ part of the A term to 1e-12 (cargo test)"
+model = "NewenSpec.SPME.assignSquaredModel (at Float: assignSquaredFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.forces"
+kind = "float"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::spme_forces"
+used_by = ["crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"]
+origin = "Essmann et al. eq. 4.9: F_i = -(q_i eps0_inv / N) H^-1 g, g_beta = sum over the n^3 points of the spline derivative along beta times the other two splines times the convolution Re backward(G rho_hat)"
+# Theorem over R: the force is minus the derivative of the mesh energy with respect to every coordinate of every charge, for n >= 3, at every configuration, for every symmetric kernel and set of periodic images; P3M's k-space energy is such a mesh energy (p3mEnergy_eq_meshEnergy, p3mKernel_symm). Measured: central differences of the mesh energy (h = 1e-5 nm) agree within 1.2e-9 of the rms force, n = 4..12 (cargo test)
+theory = "NewenTheory.Interactions.SPME.spmeForce (spme_force_is_minus_grad, spme_force_is_minus_grad_grid, p3mEnergy_eq_meshEnergy)"
+model = "NewenSpec.SPME.forceModel (at Float: forceFloat)"
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"
+
+[[function]]
+key = "spme.kspace"
+kind = "float-tolerance"
+rust = "crates/newen-forces/src/nonbonded/spme.rs::Spme::evaluate"
+used_by = ["crates/newen-integrators/src/algorithms/forcefield.rs::Forcefield::lattice_sum_terms (NLRELE 5)"]
+origin = "P3M's pipeline (positions into the box, A2~, assignment, forward transform, kspace_energy) with the SPME influence function recomputed whenever the box changes and one backward transform for the forces. No gromosXX oracle. Measured maximum relative difference of the k-space energy (spme_assign, fft3, kspace_energy) from the Lean pipeline with dftFloat on 8^3 grids: 1.3e-15; bound 1e-11. Against the direct Ewald sum (16 charges, cubic, rectangular, triclinic boxes, Gaussian a = 0.4 nm), worst relative rms force error: 3.6e-3 (16^3, n 4), 1.2e-4 (16^3, n 6), 8.8e-6 (16^3, n 8), 5.9e-4 (32^3, n 4), 2.9e-6 (32^3, n 6), 2.9e-8 (32^3, n 8). The k-space virial with the SPME Gamma_hat equals half the deformation derivative of the mesh energy within 1.5e-8 relative"
+model = "NewenSpec.SPME (assignFloat, influenceFunctionFloat, NewenSpec.P3M.dftFloat, kspaceEnergyFloat; the spme_energy rows)"
+# the k-space energy within 1e-11 of the Lean pipeline (cargo test)
+differential = "crates/newen-forces/tests/spme_spec.rs"
+vectors = "spec/vectors/spme.json"

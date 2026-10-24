@@ -1,20 +1,10 @@
 # cargo-audit configuration.
 #
-# The first four advisories are one chain, and none of it is linked into the engine: the
-# `use-fftw` feature pulls fftw-src, whose build script downloads the FFTW sources over FTP.
-#   fftw-src 0.8.0 -> ftp 3.0.1 -> chrono 0.2.25 + regex 0.1.80 -> thread_local 0.2.7
-#   chrono 0.2.25 -> time 0.1.45
-# Dropping them means linking a system FFTW instead of building it from source.
-#
-# The last two are pyo3 0.21.2, pending an upgrade to pyo3 >= 0.29 with numpy and pythonize
+# The two advisories are pyo3 0.21.2, pending an upgrade to pyo3 >= 0.29 with numpy and pythonize
 # moving in step. Neither vulnerable API is reachable here: no `PyCFunction::new_closure` and
-# no `PyString::from_object` anywhere in crates/ or py-gromos/.
+# no `PyString::from_object` anywhere in crates/ or py-newen/.
 [advisories]
 ignore = [
-    "RUSTSEC-2020-0159", # chrono 0.2.25, via fftw-src -> ftp
-    "RUSTSEC-2022-0013", # regex 0.1.80, via fftw-src -> ftp
-    "RUSTSEC-2022-0006", # thread_local 0.2.7, via regex 0.1.80
-    "RUSTSEC-2020-0071", # time 0.1.45, via chrono 0.2.25
     "RUSTSEC-2025-0020", # pyo3 0.21.2 PyString::from_object — unused here
     "RUSTSEC-2026-0177", # pyo3 0.21.2 PyCFunction::new_closure — unused here
 ]

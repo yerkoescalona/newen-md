@@ -1,0 +1,2645 @@
+# READ: schemeELEC RF
+# READ: rcut 1.4
+# READ: probe_rad 0.14
+# READ: hydrogen_rad 0.05
+# READ: radscal 1
+# READ: epssolvent 66.6
+# READ: epsRF 78.5
+# READ: epsNPBC 78.4
+# READ: maxiter 600
+# READ: rminORsigma 0
+# READ: fftcub 4
+# READ: atomsTOcharge 
+# READ: mol 0 NA
+# READ: gridspacing 0.1
+# READ: NPBCsize 5
+# Boxsize: 3.10574
+# Adapted gridspacing: 0.1
+# Calculated number of gridpoints PBC (x,y,z): 32 32 32
+# Calculated number of gridpoints NPBC (x,y,z): 50 50 50
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# READ: probe_iac 5
+# RADII: based on probe_iac 5
+# RADII: based on rmin
+# ************************************************** 
+# *** FD LS NPBC VAC *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 1 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 1
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.1
+# GPX 50
+# GPY 50
+# GPZ 50
+# epssolvent 1
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# maxcoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# GPX 50
+# GPY 50
+# GPZ 50
+# Calculating new gridstart
+# gridstart[0] -3.86543
+# gridstart[1] -4.08016
+# gridstart[2] -3.61608
+# gridcenter x,y,z = -1.31543 -1.53016 -1.06608
+# gridstart x,y,z = -3.86543 -4.08016 -3.61608
+# gridspacing 0.1
+# @chargegridtrilinear: znorm : 10
+# Entering FDPoissonBoltzmann::DebyeHueckel ...
+# epsi4PI: 0.0795775
+# epss4PI: 0.0795775
+# @ ZNORM 383.874
+# iter anorm acceptance*znorm 44 0.000267961 0.000383874
+# CONVERGED AFTER 44 iterations...
+# Exit: solveforpotential()
+# Average potential [kJ/mol] 66.1272
+# atom  1 charge 1 ele. pot. 1571.49
+# DG RETURNED [kJ/mol]: 785.743
+# ************************************************** 
+# *** FD LS NPBC EPSSOLV *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.1
+# GPX 50
+# GPY 50
+# GPZ 50
+# epssolvent 78.4
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# maxcoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# GPX 50
+# GPY 50
+# GPZ 50
+# Calculating new gridstart
+# gridstart[0] -3.86543
+# gridstart[1] -4.08016
+# gridstart[2] -3.61608
+# gridcenter x,y,z = -1.31543 -1.53016 -1.06608
+# gridstart x,y,z = -3.86543 -4.08016 -3.61608
+# gridspacing 0.1
+# @chargegridtrilinear: znorm : 10
+# Entering FDPoissonBoltzmann::DebyeHueckel ...
+# epsi4PI: 0.0795775
+# epss4PI: 6.23887
+# @ ZNORM 383.874
+# iter anorm acceptance*znorm 44 0.000266188 0.000383874
+# CONVERGED AFTER 44 iterations...
+# Exit: solveforpotential()
+# Average potential [kJ/mol] 0.950778
+# atom  1 charge 1 ele. pot. 977.754
+# DG RETURNED [kJ/mol]: 488.877
+# DGRESULT NPBC -296.866
+# ************************************************** 
+# *** FD LS PBC VAC *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 1 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 1
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.1
+# GPX 32
+# GPY 32
+# GPZ 32
+# epssolvent 1
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# maxcoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# GPX 32
+# GPY 32
+# GPZ 32
+# Calculating new gridstart
+# gridstart[0] -2.96543
+# gridstart[1] -3.18016
+# gridstart[2] -2.71608
+# gridcenter x,y,z = -1.31543 -1.53016 -1.06608
+# gridstart x,y,z = -2.96543 -3.18016 -2.71608
+# gridspacing 0.1
+# @@@@@@@@@@@@@@@ pbc-> subtract aver 
+# @chargegridtrilinear: znorm : 19.9951
+# epsi4PI: 0.0795775
+# epss4PI: 0.0795775
+# @ ZNORM 19.9951
+# iter anorm acceptance*znorm 43 1.98124e-05 1.99951e-05
+# CONVERGED AFTER 43 iterations...
+# Exit: solveforpotential()
+# Average potential [kJ/mol] 0.558889
+# AVERAGE POTENTIAL SUBTRACTED [kJ/mol]: 0.558889 -> 2.09284e-14
+# atom  1 charge 1 ele. pot. 1448.46
+# DG RETURNED [kJ/mol]: 724.229
+# ************************************************** 
+# *** FD LS PBC EPSSOLV *** 
+# ************************************************** 
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# gridspacing 0.1
+# GPX 32
+# GPY 32
+# GPZ 32
+# epssolvent 66.6
+# Calculating gridcenter for npbc based on cog
+# mincoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# maxcoordinates of all atoms: -1.31543 -1.53016 -1.06608
+# GPX 32
+# GPY 32
+# GPZ 32
+# Calculating new gridstart
+# gridstart[0] -2.96543
+# gridstart[1] -3.18016
+# gridstart[2] -2.71608
+# gridcenter x,y,z = -1.31543 -1.53016 -1.06608
+# gridstart x,y,z = -2.96543 -3.18016 -2.71608
+# gridspacing 0.1
+# @@@@@@@@@@@@@@@ pbc-> subtract aver 
+# @chargegridtrilinear: znorm : 19.9951
+# epsi4PI: 0.0795775
+# epss4PI: 5.29986
+# @ ZNORM 19.9951
+# iter anorm acceptance*znorm 45 1.60843e-05 1.99951e-05
+# CONVERGED AFTER 45 iterations...
+# Exit: solveforpotential()
+# Average potential [kJ/mol] 0.42855
+# AVERAGE POTENTIAL SUBTRACTED [kJ/mol]: 0.42855 -> -7.45386e-15
+# atom  1 charge 1 ele. pot. 976.472
+# DG RETURNED [kJ/mol]: 488.236
+# ************************************************** 
+# DGRESULT PBC -235.993
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# ************************************************** 
+# *** FFT LS (PBC) *** 
+# ************************************************** 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# BOUNDARY PARAMETERS
+# -------------------
+# TYPE 0
+# STYPE LS
+# HAT CHARGE SHAPING FUNCTION
+# ALPHA1: 0.15
+# ALPHA2: 0.05
+# NALIAS1: 2
+# NALIAS2: 8
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# FFTPoissonIterator: lambda 1.5
+# FFTPoissonIterator: maxsteps 600
+# FFTPoissonIterator: ls_boundary_eps 0
+# FFTPoissonIterator: rf_boundary_eps 66.6
+# FFTPoissonIterator: sc_boundary_eps 1
+# FFTPoissonIterator: epssolvent 66.6
+# FFTPoissonIterator: get InterxTensor for LS 
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# FFTDipoleDipole: epsS 66.6
+# FFTDipoleDipole: epsB 0
+# initialising PB_Parameters using epsilon of 66.6 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 66.6
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# FFTPoissonIterator setup ... make fftplans 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1
+# PB_PARAMS: tiny_real 1e-10
+# PB_PARAMS: tinfoil_boundary 0
+# PB_PARAMS: vacuum_boundary 1
+# PB_PARAMS: adjusted_boundary 78.4
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.05
+# PB_PARAMS: alpha1 0.15
+# PB_PARAMS: alpha2 0.05
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.5
+# PB_PARAMS: kappa 0
+# PB_PARAMS: convergence_fd 1e-06
+# PB_PARAMS: convergence_fft 0.3
+# PB_PARAMS: quadr 0.0082
+# PB_PARAMS: tole 1e-06
+# PB_PARAMS: rcut 0.9
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.8373
+# epssolvent 66.6
+# atom 0 charge 1
+# atom 0 radius 0.212832
+# FFTPoisson setup ... center atoms 
+# initial min max center x,y,z = -1.31543 -1.53016 -1.06608
+translation vector x,y,z = 2.91543 3.13016 2.66608
+# gridcenter x,y,z = 1.6 1.6 1.6
+# final mmcenterAtoms (after centering on grid) x,y,z = 1.6 1.6 1.6
+# call solve_poisson ...
+# GRIDCHECK for atom 1 radius 0.2128320 charge  1.000 pos 1.600 1.600 1.600
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTPoisson setup ...  insideoutside
+# FFTPoisson setup ... done insideoutside
+# FFTPoisson setup ... grid
+# FFTPoisson setup ... done gridresizing
+# FFTPoisson setup ... setup vacfield 
+# setting up vacuum field ... 
+# bc.type is: 0
+# need LS field 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTVacuumField : cstype 0
+# FFTVacuumField : csfunc->HatType 0
+# FFTVacuumField : csfunc->ParabolaType 1
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# IONLIST 1: NUMBER OF ENTRIES: 1
+# list 1 : entry 0 has ion_list1[ 0 ] = 0 and radius 0.213
+# IONLIST 2: NUMBER OF ENTRIES: 0
+# FFTVacuumField_LS::calcVacField :  Calculating vac field from scratch ...
+# Computing position-independent part of the vacuum field due to big ions, with alpha 0.150
+# FFTVacuumField_LS::positionIndependentVacField : slice 0
+# FFTVacuumField_LS::positionIndependentVacField : slice 1
+# FFTVacuumField_LS::positionIndependentVacField : slice 2
+# FFTVacuumField_LS::positionIndependentVacField : slice 3
+# FFTVacuumField_LS::positionIndependentVacField : slice 4
+# FFTVacuumField_LS::positionIndependentVacField : slice 5
+# FFTVacuumField_LS::positionIndependentVacField : slice 6
+# FFTVacuumField_LS::positionIndependentVacField : slice 7
+# FFTVacuumField_LS::positionIndependentVacField : slice 8
+# FFTVacuumField_LS::positionIndependentVacField : slice 9
+# FFTVacuumField_LS::positionIndependentVacField : slice 10
+# FFTVacuumField_LS::positionIndependentVacField : slice 11
+# FFTVacuumField_LS::positionIndependentVacField : slice 12
+# FFTVacuumField_LS::positionIndependentVacField : slice 13
+# FFTVacuumField_LS::positionIndependentVacField : slice 14
+# FFTVacuumField_LS::positionIndependentVacField : slice 15
+# FFTVacuumField_LS::positionIndependentVacField : slice 16
+# FFTVacuumField_LS::positionIndependentVacField : slice 17
+# FFTVacuumField_LS::positionIndependentVacField : slice 18
+# FFTVacuumField_LS::positionIndependentVacField : slice 19
+# FFTVacuumField_LS::positionIndependentVacField : slice 20
+# FFTVacuumField_LS::positionIndependentVacField : slice 21
+# FFTVacuumField_LS::positionIndependentVacField : slice 22
+# FFTVacuumField_LS::positionIndependentVacField : slice 23
+# FFTVacuumField_LS::positionIndependentVacField : slice 24
+# FFTVacuumField_LS::positionIndependentVacField : slice 25
+# FFTVacuumField_LS::positionIndependentVacField : slice 26
+# FFTVacuumField_LS::positionIndependentVacField : slice 27
+# FFTVacuumField_LS::positionIndependentVacField : slice 28
+# FFTVacuumField_LS::positionIndependentVacField : slice 29
+# FFTVacuumField_LS::positionIndependentVacField : slice 30
+# FFTVacuumField_LS::positionIndependentVacField : slice 31
+# after positionIndependentVacField: Vx1_store[0] 0.000
+# after positionIndependentVacField: Vy1_store[0] 0.000
+# after positionIndependentVacField: Vz1_store[0] 0.000
+# after positionIndependentVacField: Vx1_store[100] -0.000
+# after positionIndependentVacField: Vy1_store[100] -92.602
+# after positionIndependentVacField: Vz1_store[100] -123.520
+# FFTVacuumField_LS::recyclefield: Recycling vacuum field
+# after recyclefield: fldx_k[0] 0.000
+# after recyclefield: fldy_k[0] 0.000
+# after recyclefield: fldz_k[0] 0.000
+# after recyclefield: fldx_k[100] -0.000
+# after recyclefield: fldy_k[100] -0.000
+# after recyclefield: fldz_k[100] 0.000
+# after setupfield: vx[0] -0.000
+# after setupfield: vy[0] 0.000
+# after setupfield: vz[0] 0.000
+# after setupfield: vx[100] -0.000
+# after setupfield: vy[100] -3.519
+# after setupfield: vz[100] 3.731
+# FFTInsideOutside::integr_inside: gridpoints: 32768
+# FFTInsideOutside::integr_inside: inPoints_noB: 19
+# FFTInsideOutside::integr_inside: integral 40.361
+# FFTInsideOutside::integr_inside: normalized integral 0.001
+# START ITERATION ... 
+# ITER 1
+# lambda 1.500
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.000
+# FT_EFY -0.000 -0.000 0.000
+# FT_EFZ -0.000 0.000 -0.063
+# RS_EFX 0.000 -0.000 0.104
+# RS_EFY 0.000 -0.000 0.104
+# RS_EFZ 0.000 -0.140 -0.000
+# deltaSigma = 0.000
+# Continuing with lambda: 1.800
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 2
+# lambda 1.800
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.006
+# FT_EFY -0.000 -0.000 0.006
+# FT_EFZ -0.000 0.000 -0.066
+# RS_EFX 0.000 0.000 0.082
+# RS_EFY 0.000 0.000 0.082
+# RS_EFZ 0.000 -0.140 0.001
+# deltaSigma = 94.193
+# Continuing with lambda: 2.160
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 3
+# lambda 2.160
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.001
+# FT_EFY -0.000 -0.000 -0.001
+# FT_EFZ -0.000 0.000 -0.070
+# RS_EFX 0.000 -0.000 0.074
+# RS_EFY 0.000 -0.000 0.074
+# RS_EFZ 0.000 -0.140 0.001
+# deltaSigma = 9.613
+# Continuing with lambda: 2.592
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 4
+# lambda 2.592
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.013
+# FT_EFY -0.000 -0.000 0.013
+# FT_EFZ -0.000 0.000 -0.074
+# RS_EFX 0.000 -0.000 0.072
+# RS_EFY 0.000 -0.000 0.072
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 7.709
+# Continuing with lambda: 3.110
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 5
+# lambda 3.110
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.024
+# FT_EFY -0.000 -0.000 0.024
+# FT_EFZ -0.000 0.000 -0.077
+# RS_EFX 0.000 -0.000 0.062
+# RS_EFY 0.000 -0.000 0.062
+# RS_EFZ 0.000 -0.140 0.001
+# deltaSigma = 6.878
+# Continuing with lambda: 3.732
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 6
+# lambda 3.732
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.033
+# FT_EFY -0.000 -0.000 -0.033
+# FT_EFZ -0.000 0.000 -0.079
+# RS_EFX 0.000 -0.000 0.066
+# RS_EFY 0.000 -0.000 0.066
+# RS_EFZ 0.000 -0.140 -0.001
+# deltaSigma = 1.010
+# Continuing with lambda: 4.479
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 7
+# lambda 4.479
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.186
+# FT_EFY -0.000 -0.000 0.186
+# FT_EFZ -0.000 0.000 -0.083
+# RS_EFX 0.000 -0.000 0.049
+# RS_EFY 0.000 -0.000 0.049
+# RS_EFZ 0.000 -0.140 0.004
+# deltaSigma = -34.538
+# Continuing with lambda: 2.239
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 8
+# lambda 2.239
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.239
+# FT_EFY -0.000 0.000 -0.239
+# FT_EFZ -0.000 0.000 -0.080
+# RS_EFX 0.000 -0.000 0.060
+# RS_EFY 0.000 -0.000 0.060
+# RS_EFZ 0.000 -0.140 -0.003
+# deltaSigma = -1.986
+# Continuing with lambda: 1.120
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 9
+# lambda 1.120
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.033
+# FT_EFY -0.000 -0.000 0.033
+# FT_EFZ -0.000 0.000 -0.082
+# RS_EFX 0.000 -0.000 0.059
+# RS_EFY 0.000 -0.000 0.059
+# RS_EFZ 0.000 -0.140 -0.000
+# deltaSigma = 54.248
+# Continuing with lambda: 1.344
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 10
+# lambda 1.344
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.005
+# FT_EFY -0.000 -0.000 -0.005
+# FT_EFZ -0.000 0.000 -0.082
+# RS_EFX 0.000 -0.000 0.057
+# RS_EFY 0.000 -0.000 0.057
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 2.543
+# Continuing with lambda: 1.612
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 11
+# lambda 1.612
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.004
+# FT_EFY -0.000 -0.000 0.004
+# FT_EFZ -0.000 0.000 -0.082
+# RS_EFX 0.000 -0.000 0.056
+# RS_EFY 0.000 -0.000 0.056
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.518
+# Continuing with lambda: 1.935
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 12
+# lambda 1.935
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.006
+# FT_EFY -0.000 -0.000 -0.006
+# FT_EFZ -0.000 0.000 -0.083
+# RS_EFX 0.000 -0.000 0.056
+# RS_EFY 0.000 -0.000 0.056
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.566
+# Continuing with lambda: 2.322
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 13
+# lambda 2.322
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.001
+# FT_EFY -0.000 -0.000 0.001
+# FT_EFZ -0.000 0.000 -0.083
+# RS_EFX 0.000 -0.000 0.056
+# RS_EFY 0.000 -0.000 0.056
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.621
+# Continuing with lambda: 2.786
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 14
+# lambda 2.786
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.015
+# FT_EFY -0.000 -0.000 -0.015
+# FT_EFZ -0.000 0.000 -0.083
+# RS_EFX 0.000 -0.000 0.055
+# RS_EFY 0.000 -0.000 0.055
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.481
+# Continuing with lambda: 3.344
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 15
+# lambda 3.344
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.011
+# FT_EFY -0.000 -0.000 0.011
+# FT_EFZ -0.000 0.000 -0.083
+# RS_EFX 0.000 -0.000 0.055
+# RS_EFY 0.000 -0.000 0.055
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.020
+# Continuing with lambda: 4.012
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 16
+# lambda 4.012
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.072
+# FT_EFY -0.000 -0.000 -0.072
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.055
+# RS_EFY 0.000 -0.000 0.055
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -9.088
+# Continuing with lambda: 2.006
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 17
+# lambda 2.006
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.048
+# FT_EFY -0.000 -0.000 0.048
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.055
+# RS_EFY 0.000 -0.000 0.055
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.397
+# Continuing with lambda: 2.407
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 18
+# lambda 2.407
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.098
+# FT_EFY -0.000 -0.000 -0.098
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -6.419
+# Continuing with lambda: 1.204
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 19
+# lambda 1.204
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.002
+# FT_EFY -0.000 -0.000 0.002
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 18.435
+# Continuing with lambda: 1.444
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 20
+# lambda 1.444
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.022
+# FT_EFY -0.000 -0.000 -0.022
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.950
+# Continuing with lambda: 1.733
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 21
+# lambda 1.733
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.010
+# FT_EFY -0.000 -0.000 -0.010
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.582
+# Continuing with lambda: 2.080
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 22
+# lambda 2.080
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.021
+# FT_EFY -0.000 -0.000 -0.021
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.326
+# Continuing with lambda: 2.496
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 23
+# lambda 2.496
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.009
+# FT_EFY -0.000 -0.000 -0.009
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -0.060
+# Continuing with lambda: 1.248
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 24
+# lambda 1.248
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.019
+# FT_EFY -0.000 -0.000 -0.019
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.979
+# Continuing with lambda: 1.498
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 25
+# lambda 1.498
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.016
+# FT_EFY -0.000 -0.000 -0.016
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.247
+# Continuing with lambda: 1.797
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 26
+# lambda 1.797
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.018
+# FT_EFY -0.000 -0.000 -0.018
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.228
+# Continuing with lambda: 2.156
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 27
+# lambda 2.156
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.017
+# FT_EFY -0.000 -0.000 -0.017
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.235
+# Continuing with lambda: 2.588
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 28
+# lambda 2.588
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.225
+# Continuing with lambda: 3.105
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 29
+# lambda 3.105
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.016
+# FT_EFY -0.000 -0.000 -0.016
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.089
+# Continuing with lambda: 3.726
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 30
+# lambda 3.726
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.026
+# FT_EFY -0.000 -0.000 -0.026
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -0.810
+# Continuing with lambda: 1.863
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 31
+# lambda 1.863
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.013
+# FT_EFY -0.000 -0.000 -0.013
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.323
+# Continuing with lambda: 2.236
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 32
+# lambda 2.236
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.027
+# FT_EFY -0.000 -0.000 -0.027
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -0.297
+# Continuing with lambda: 1.118
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 33
+# lambda 1.118
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.019
+# FT_EFY -0.000 -0.000 -0.019
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 1.474
+# Continuing with lambda: 1.342
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 34
+# lambda 1.342
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.084
+# Continuing with lambda: 1.610
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 35
+# lambda 1.610
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.061
+# Continuing with lambda: 1.932
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 36
+# lambda 1.932
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.064
+# Continuing with lambda: 2.318
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 37
+# lambda 2.318
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.067
+# Continuing with lambda: 2.782
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 38
+# lambda 2.782
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.021
+# FT_EFY -0.000 -0.000 -0.021
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.063
+# Continuing with lambda: 3.338
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 39
+# lambda 3.338
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.017
+# Continuing with lambda: 4.006
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 40
+# lambda 4.006
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.023
+# FT_EFY -0.000 -0.000 -0.023
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -0.297
+# Continuing with lambda: 2.003
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 41
+# lambda 2.003
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.018
+# FT_EFY -0.000 -0.000 -0.018
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = 0.018
+# Continuing with lambda: 2.403
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 42
+# lambda 2.403
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.024
+# FT_EFY -0.000 -0.000 -0.024
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# deltaSigma = -0.220
+# Continuing with lambda: 1.202
+# UP_VFX -0.000 0.000 -0.000
+# UP_VFY 0.000 0.000 -0.000
+# UP_VFZ 0.000 -9.349 0.000
+# ITER 43
+# lambda 1.202
+# done FT vacuum field 
+# FT_VFX -0.000 0.000 -0.000
+# FT_VFY 0.000 0.000 -0.000
+# FT_VFZ 0.000 -9.349 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 0.000 -0.084
+# RS_EFX 0.000 -0.000 0.054
+# RS_EFY 0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.140 0.000
+# POST_FT_EFX -0.000 -0.000 -0.020
+# POST_FT_EFY -0.000 -0.000 -0.020
+# POST_FT_EFZ -0.000 0.000 -0.084
+# POST_RS_EFX 0.000 -0.000 0.054
+# POST_RS_EFY 0.000 -0.000 0.054
+# POST_RS_EFZ 0.000 -0.140 0.000
+# Convergence after 43 steps with dG [kJ/mol]: # atom  0 charge 1.000 ele. pot. -337.620
+-168.810
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# ************************************************** 
+# *** FFT RF (PBC) *** 
+# ************************************************** 
+# WITH REACTION FIELD CORRECTION : RF ... 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using epsilon of 66.600 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 66.600
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using epsilon of 66.600 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 66.600
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTPoissonIterator: lambda 1.500
+# FFTPoissonIterator: maxsteps 600
+# FFTPoissonIterator: ls_boundary_eps 0.000
+# FFTPoissonIterator: rf_boundary_eps 66.600
+# FFTPoissonIterator: sc_boundary_eps 1.000
+# FFTPoissonIterator: epssolvent 66.600
+# FFTPoissonIterator: get InterxTensor for RF 
+# initialising PB_Parameters using epsilon of 66.600 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 66.600
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTDipoleDipole: epsS 66.600
+# FFTDipoleDipole: epsB 66.600
+# initialising PB_Parameters using epsilon of 66.600 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 66.600
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTDipoleDipole: epsS 66.600
+# FFTDipoleDipole: epsB 66.600
+# FFTDipoleDipole_RF : epsB 66.600
+# FFTDipoleDipole_RF : epsS 66.600
+# initialising PB_Parameters using epsilon of 66.600 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 66.600
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTChargeDipole_RF: epssolvent 66.600
+# FFTChargeDipole_RF: epsB 66.600
+# FFTPoissonIterator setup ... make fftplans 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# epssolvent 66.600
+# atom 0 charge 1.000
+# atom 0 radius 0.213
+# BOUNDARY PARAMETERS
+# -------------------
+# TYPE 1
+# STYPE RF
+# HAT CHARGE SHAPING FUNCTION
+# ALPHA1: 0.150
+# ALPHA2: 0.050
+# NALIAS1: 2
+# NALIAS2: 8
+# call solve_poisson ...
+# GRIDCHECK for atom 1 radius 0.2128320 charge  1.000 pos 1.600 1.600 1.600
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# FFTPoisson setup ...  insideoutside
+# FFTPoisson setup ... done insideoutside
+# FFTPoisson setup ... grid
+# FFTPoisson setup ... done gridresizing
+# FFTPoisson setup ... setup vacfield 
+# setting up vacuum field ... 
+# bc.type is: 1
+# need RF field 
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# initialising PB_Parameters using default epsilon of 78.4 for adjusted boundary conditions
+# PB_PARAMS: epssolute 1.000
+# PB_PARAMS: tiny_real 0.000
+# PB_PARAMS: tinfoil_boundary 0.000
+# PB_PARAMS: vacuum_boundary 1.000
+# PB_PARAMS: adjusted_boundary 78.400
+# PB_PARAMS: ddg_conv -0.001
+# PB_PARAMS: hradius 0.050
+# PB_PARAMS: alpha1 0.150
+# PB_PARAMS: alpha2 0.050
+# PB_PARAMS: nalias1 2
+# PB_PARAMS: nalias2 8
+# PB_PARAMS: FFTlambda 1.500
+# PB_PARAMS: kappa 0.000
+# PB_PARAMS: convergence_fd 0.000
+# PB_PARAMS: convergence_fft 0.300
+# PB_PARAMS: quadr 0.008
+# PB_PARAMS: tole 0.000
+# PB_PARAMS: rcut 0.900
+# PB_PARAMS: kmax 64
+# PB_PARAMS: xiew -2.837
+# computing vacuum field with epsilon 78.500
+# Warning: The vacuum field on a grid point hosting a particle will be set to zero ...
+# after setupfield: vx[0] 0.000
+# after setupfield: vy[0] 0.000
+# after setupfield: vz[0] 0.000
+# after setupfield: vx[100] 0.000
+# after setupfield: vy[100] 0.000
+# after setupfield: vz[100] 0.000
+# FFTInsideOutside::integr_inside: gridpoints: 32768
+# FFTInsideOutside::integr_inside: inPoints_noB: 19
+# FFTInsideOutside::integr_inside: integral 40.361
+# FFTInsideOutside::integr_inside: normalized integral 0.001
+# START ITERATION ... 
+# ITER 1
+# lambda 1.500
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.000
+# FT_EFY -0.000 -0.000 -0.000
+# FT_EFZ -0.000 -0.000 -0.063
+# RS_EFX -0.000 0.000 0.102
+# RS_EFY -0.000 -0.000 0.102
+# RS_EFZ -0.000 -0.128 -0.000
+# deltaSigma = 0.000
+# Continuing with lambda: 1.800
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 2
+# lambda 1.800
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 0.005
+# FT_EFY -0.000 -0.000 0.005
+# FT_EFZ -0.000 -0.000 -0.066
+# RS_EFX -0.000 0.000 0.082
+# RS_EFY -0.000 0.000 0.082
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 94.358
+# Continuing with lambda: 2.160
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 3
+# lambda 2.160
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.002
+# FT_EFY -0.000 0.000 -0.002
+# FT_EFZ -0.000 -0.000 -0.071
+# RS_EFX -0.000 -0.000 0.073
+# RS_EFY -0.000 -0.000 0.073
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 9.605
+# Continuing with lambda: 2.592
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 4
+# lambda 2.592
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 0.013
+# FT_EFY -0.000 -0.000 0.013
+# FT_EFZ -0.000 -0.000 -0.074
+# RS_EFX -0.000 -0.000 0.071
+# RS_EFY -0.000 -0.000 0.071
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 7.696
+# Continuing with lambda: 3.110
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 5
+# lambda 3.110
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.024
+# FT_EFY -0.000 0.000 0.024
+# FT_EFZ -0.000 -0.000 -0.078
+# RS_EFX -0.000 -0.000 0.061
+# RS_EFY -0.000 -0.000 0.061
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 6.868
+# Continuing with lambda: 3.732
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 6
+# lambda 3.732
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.033
+# FT_EFY -0.000 -0.000 -0.033
+# FT_EFZ -0.000 -0.000 -0.079
+# RS_EFX -0.000 -0.000 0.064
+# RS_EFY -0.000 -0.000 0.064
+# RS_EFZ -0.000 -0.128 -0.001
+# deltaSigma = 1.021
+# Continuing with lambda: 4.479
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 7
+# lambda 4.479
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.185
+# FT_EFY -0.000 0.000 0.185
+# FT_EFZ -0.000 -0.000 -0.083
+# RS_EFX -0.000 -0.000 0.050
+# RS_EFY -0.000 -0.000 0.050
+# RS_EFZ -0.000 -0.128 0.002
+# deltaSigma = -34.411
+# Continuing with lambda: 2.239
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 8
+# lambda 2.239
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.239
+# FT_EFY -0.000 -0.000 -0.239
+# FT_EFZ -0.000 -0.000 -0.081
+# RS_EFX -0.000 0.000 0.057
+# RS_EFY -0.000 0.000 0.057
+# RS_EFZ -0.000 -0.128 -0.001
+# deltaSigma = -1.946
+# Continuing with lambda: 1.120
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 9
+# lambda 1.120
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.032
+# FT_EFY -0.000 -0.000 0.032
+# FT_EFZ -0.000 -0.000 -0.082
+# RS_EFX -0.000 -0.000 0.058
+# RS_EFY -0.000 -0.000 0.058
+# RS_EFZ -0.000 -0.128 -0.000
+# deltaSigma = 54.043
+# Continuing with lambda: 1.344
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 10
+# lambda 1.344
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.005
+# FT_EFY -0.000 -0.000 -0.005
+# FT_EFZ -0.000 -0.000 -0.083
+# RS_EFX -0.000 -0.000 0.055
+# RS_EFY -0.000 -0.000 0.055
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 2.535
+# Continuing with lambda: 1.612
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 11
+# lambda 1.612
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.003
+# FT_EFY -0.000 -0.000 0.003
+# FT_EFZ -0.000 -0.000 -0.083
+# RS_EFX -0.000 -0.000 0.055
+# RS_EFY -0.000 -0.000 0.055
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.515
+# Continuing with lambda: 1.935
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 12
+# lambda 1.935
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.006
+# FT_EFY -0.000 -0.000 -0.006
+# FT_EFZ -0.000 -0.000 -0.083
+# RS_EFX -0.000 -0.000 0.055
+# RS_EFY -0.000 -0.000 0.055
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.564
+# Continuing with lambda: 2.322
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 13
+# lambda 2.322
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.000
+# FT_EFY -0.000 -0.000 0.000
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.054
+# RS_EFY -0.000 -0.000 0.054
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.619
+# Continuing with lambda: 2.786
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 14
+# lambda 2.786
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.016
+# FT_EFY -0.000 -0.000 -0.016
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.054
+# RS_EFY -0.000 -0.000 0.054
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.480
+# Continuing with lambda: 3.344
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 15
+# lambda 3.344
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.011
+# FT_EFY -0.000 -0.000 0.011
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.054
+# RS_EFY -0.000 -0.000 0.054
+# RS_EFZ 0.000 -0.128 0.000
+# deltaSigma = 0.028
+# Continuing with lambda: 4.012
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 16
+# lambda 4.012
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.072
+# FT_EFY -0.000 -0.000 -0.072
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 -0.000
+# deltaSigma = -9.042
+# Continuing with lambda: 2.006
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 17
+# lambda 2.006
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.047
+# FT_EFY -0.000 0.000 0.047
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ 0.000 -0.128 0.000
+# deltaSigma = 0.397
+# Continuing with lambda: 2.407
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 18
+# lambda 2.407
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.098
+# FT_EFY -0.000 -0.000 -0.098
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 -0.000
+# deltaSigma = -6.392
+# Continuing with lambda: 1.204
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 19
+# lambda 1.204
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 0.002
+# FT_EFY -0.000 -0.000 0.002
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ 0.000 -0.128 0.000
+# deltaSigma = 18.356
+# Continuing with lambda: 1.444
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 20
+# lambda 1.444
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.022
+# FT_EFY -0.000 -0.000 -0.022
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.941
+# Continuing with lambda: 1.733
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 21
+# lambda 1.733
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.011
+# FT_EFY -0.000 0.000 -0.011
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.580
+# Continuing with lambda: 2.080
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 22
+# lambda 2.080
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.022
+# FT_EFY -0.000 -0.000 -0.022
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.326
+# Continuing with lambda: 2.496
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 23
+# lambda 2.496
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.009
+# FT_EFY -0.000 0.000 -0.009
+# FT_EFZ -0.000 -0.000 -0.084
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = -0.058
+# Continuing with lambda: 1.248
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 24
+# lambda 1.248
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.019
+# FT_EFY -0.000 -0.000 -0.019
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ 0.000 -0.128 0.000
+# deltaSigma = 0.974
+# Continuing with lambda: 1.498
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 25
+# lambda 1.498
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.017
+# FT_EFY -0.000 -0.000 -0.017
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.247
+# Continuing with lambda: 1.797
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 26
+# lambda 1.797
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.019
+# FT_EFY -0.000 -0.000 -0.019
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.227
+# Continuing with lambda: 2.156
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 27
+# lambda 2.156
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.018
+# FT_EFY -0.000 -0.000 -0.018
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.235
+# Continuing with lambda: 2.588
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 28
+# lambda 2.588
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.224
+# Continuing with lambda: 3.105
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 29
+# lambda 3.105
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.017
+# FT_EFY -0.000 -0.000 -0.017
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.090
+# Continuing with lambda: 3.726
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 30
+# lambda 3.726
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.027
+# FT_EFY -0.000 -0.000 -0.027
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = -0.805
+# Continuing with lambda: 1.863
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 31
+# lambda 1.863
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.014
+# FT_EFY -0.000 -0.000 -0.014
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.321
+# Continuing with lambda: 2.236
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 32
+# lambda 2.236
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.027
+# FT_EFY -0.000 -0.000 -0.027
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = -0.295
+# Continuing with lambda: 1.118
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 33
+# lambda 1.118
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.019
+# FT_EFY -0.000 0.000 -0.019
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 1.467
+# Continuing with lambda: 1.342
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 34
+# lambda 1.342
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.084
+# Continuing with lambda: 1.610
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 35
+# lambda 1.610
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.061
+# Continuing with lambda: 1.932
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 36
+# lambda 1.932
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.021
+# FT_EFY -0.000 -0.000 -0.021
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.064
+# Continuing with lambda: 2.318
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 37
+# lambda 2.318
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.067
+# Continuing with lambda: 2.782
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 38
+# lambda 2.782
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.021
+# FT_EFY -0.000 -0.000 -0.021
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.063
+# Continuing with lambda: 3.338
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 39
+# lambda 3.338
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.018
+# Continuing with lambda: 4.006
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 40
+# lambda 4.006
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.023
+# FT_EFY -0.000 -0.000 -0.023
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = -0.296
+# Continuing with lambda: 2.003
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 41
+# lambda 2.003
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 0.000 -0.019
+# FT_EFY -0.000 0.000 -0.019
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = 0.018
+# Continuing with lambda: 2.403
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 42
+# lambda 2.403
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.024
+# FT_EFY -0.000 -0.000 -0.024
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# deltaSigma = -0.219
+# Continuing with lambda: 1.202
+# UP_VFX 0.000 0.000 0.000
+# UP_VFY 0.000 0.000 0.000
+# UP_VFZ 0.000 0.000 0.000
+# ITER 43
+# lambda 1.202
+# done FT vacuum field 
+# FT_VFX 0.000 0.000 0.000
+# FT_VFY 0.000 0.000 0.000
+# FT_VFZ 0.000 0.000 0.000
+# done compute Efield from vacuum field 
+# FT_EFX -0.000 -0.000 -0.020
+# FT_EFY -0.000 -0.000 -0.020
+# FT_EFZ -0.000 -0.000 -0.085
+# RS_EFX -0.000 -0.000 0.053
+# RS_EFY -0.000 -0.000 0.053
+# RS_EFZ -0.000 -0.128 0.000
+# POST_FT_EFX -0.000 -0.000 -0.020
+# POST_FT_EFY -0.000 -0.000 -0.020
+# POST_FT_EFZ -0.000 -0.000 -0.085
+# POST_RS_EFX -0.000 -0.000 0.053
+# POST_RS_EFY -0.000 -0.000 0.053
+# POST_RS_EFZ -0.000 -0.128 0.000
+# Convergence after 43 steps with dG [kJ/mol]: # atom  0 charge 1.000 ele. pot. -303.889
+-151.944

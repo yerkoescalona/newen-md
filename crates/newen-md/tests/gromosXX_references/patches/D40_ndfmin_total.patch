@@ -1,0 +1,25 @@
+diff --git a/md++/src/simulation/multibath.cc b/md++/src/simulation/multibath.cc
+index 6363c739..1293ac79 100644
+--- a/md++/src/simulation/multibath.cc
++++ b/md++/src/simulation/multibath.cc
+@@ -142,14 +142,16 @@ void simulation::Multibath
+   //
+   // Martin Stroet edit:
+   //     loop over baths and remove bath_dof/total_dof from every bath
+-  int dof_total = 0;
++  double dof_total = 0;
+   for (simulation::Multibath::iterator it = begin(), to = end();
+             it != to; ++it) {
+     dof_total += it->dof;
+   }
+-  for (simulation::Multibath::iterator it = begin(), to = end();
+-       it != to; ++it) {
+-    it->dof -= dof_to_subtract*(it->dof/dof_total);
++  if (dof_total > 0) {
++    for (simulation::Multibath::iterator it = begin(), to = end();
++         it != to; ++it) {
++      it->dof -= dof_to_subtract*(it->dof/dof_total);
++    }
+   }
+ 
+   //dof_to_subtract /= double(size());

@@ -1,0 +1,8 @@
+TITLE
+	atominfo
+
+END
+ATOMS
+#        Atom    GROMOS   Residue   Residue      Atom     Integer    Charge
+#   Specifier    number    number      name      name   Atom Code
+END

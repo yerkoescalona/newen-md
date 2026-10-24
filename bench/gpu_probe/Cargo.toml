@@ -7,5 +7,5 @@ wgpu = "24"
 pollster = "0.4"
 bytemuck = "1"
 
-# Standalone: not a member of the gromos-rs workspace.
+# Standalone: not a member of the newen workspace.
 [workspace]

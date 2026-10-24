@@ -1,14 +1,14 @@
 [book]
-title = "gromos-rs"
+title = "newen"
 authors = ["Yerko Escalona"]
-description = "Scientific documentation for gromos-rs — a GROMOS-faithful molecular dynamics engine in Rust"
+description = "Scientific documentation for newen — a GROMOS-faithful molecular dynamics engine in Rust"
 language = "en"
 src = "src"
 
 [output.html]
-site-url = "/gromos-rs/"
-git-repository-url = "https://github.com/yescalona/gromos-rs"
-edit-url-template = "https://github.com/yescalona/gromos-rs/edit/main/docs/{path}"
+site-url = "/newen/"
+git-repository-url = "https://github.com/yerkoescalona/newen-md"
+edit-url-template = "https://github.com/yerkoescalona/newen-md/edit/main/docs/{path}"
 
 [output.html.fold]
 enable = true

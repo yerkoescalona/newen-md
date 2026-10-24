@@ -1,0 +1,24 @@
+# gromosXX md++ 2023-04-15 (native binary), item 1.8
+[system]
+name = "ch4_water_fep_nrdgl"
+description = "CH4 in water, lambda read from the configuration"
+level = 4
+isolates = "NRDGL=1 reads PERTDATA and evaluates everything at that lambda"
+
+[input]
+topology = "../shared/ch4_spc.top"
+configuration = "../ch4_water_fep_l025/expected/final.conf"
+parameters = "ch4_water_fep_nrdgl.in"
+pttopo = "../shared/ch4_spc_dummy.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

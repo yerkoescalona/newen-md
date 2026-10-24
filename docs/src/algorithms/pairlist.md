@@ -28,7 +28,7 @@ approximation.
 > **Implementation note.** The cutoff test is performed on the **center of geometry (COG)** of
 > each charge group. If two CG COGs are within the cutoff, *all* atom pairs between those two
 > CGs are added to the pairlist — regardless of the individual atom-atom distances. This is the
-> GROMOS standard and is reproduced exactly in gromos-rs.
+> GROMOS standard and is reproduced exactly in newen.
 
 ## Twin-range cutoffs
 
@@ -65,7 +65,7 @@ distance (typically 0.1 nm). Any pair that enters the true cutoff before the nex
 already in the list.
 
 The skin introduces a trade-off: larger skin → safer (fewer missed pairs) but larger pairlist →
-more force evaluations. The displacement-triggered rebuild criterion (Dim 9c) resolves this
+more force evaluations. The displacement-triggered rebuild criterion resolves this
 more precisely: rebuild when `2 · max_displacement > skin`.
 
 The factor of **2** is load-bearing. Two atoms can each move `max_displacement` toward each
@@ -121,9 +121,9 @@ Every change to the pairlist must pass two independent checks:
    summation order and may cause marginal failures here — the acceptable margin must be measured
    empirically before lowering the auto-select threshold below the largest reference system.
 
-## Dim 9 roadmap
+## Cell-list roadmap
 
-See [PLAN.md §1.5](../../PLAN.md) for the full implementation sequence. The sub-dimensions in order:
+The cell-list cards (`9b`–`9e`) on the board carry the implementation sequence. The sub-dimensions in order:
 
 - **9a-0**: Add `PairlistAlgorithm` enum; wire dispatch; all reference systems keep Standard → zero float change.
 - **9a-1**: Measure Standard vs CellList energy margin over 100 steps; lower threshold if safe.

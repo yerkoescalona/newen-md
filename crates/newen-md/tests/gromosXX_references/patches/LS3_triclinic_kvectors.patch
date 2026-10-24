@@ -1,0 +1,47 @@
+diff --git a/md++/src/configuration/influence_function.cc b/md++/src/configuration/influence_function.cc
+index 579a31cf..37427d36 100644
+--- a/md++/src/configuration/influence_function.cc
++++ b/md++/src/configuration/influence_function.cc
+@@ -127,7 +127,8 @@ const simulation::Simulation & sim) {
+   const double volume = math::volume(conf.current().box, conf.boundary_type);
+   tL_0 = math::transpose(math::Matrix(conf.current().box));
+   tLi_0 = math::inverse(tL_0);
+-  math::Matrix tL_inv_2pi = tLi_0 * (2.0 * math::Pi);
++  // product(L^-1, l) = L^-T l = sum_i l_i b_i, the reciprocal-lattice vector
++  math::Matrix tL_inv_2pi = math::transpose(tLi_0) * (2.0 * math::Pi);
+ 
+   MeshType & potential = *reinterpret_cast<MeshType*> (conf.lattice_sum().potential);
+ 
+@@ -390,7 +391,7 @@ const simulation::Simulation & sim) {
+   math::Matrix tL_inv_2pi(
+           math::cross(box(1), box(2)) * volume_i_2pi,
+           math::cross(box(2), box(0)) * volume_i_2pi,
+-          math::cross(box(0), box(1)) * volume_i_2pi, true /* column wise */);
++          math::cross(box(0), box(1)) * volume_i_2pi, false /* row wise: product(M, l) = sum_i l_i b_i */);
+ 
+   MeshType & potential = *reinterpret_cast<MeshType*> (conf.lattice_sum().potential);
+ 
+diff --git a/md++/src/configuration/kspace.cc b/md++/src/configuration/kspace.cc
+index a9051ccc..e54cd65f 100644
+--- a/md++/src/configuration/kspace.cc
++++ b/md++/src/configuration/kspace.cc
+@@ -132,5 +132,5 @@ math::Matrix configuration::KSpace_Utils::l_to_k_matrix(const math::Box & box,
+   return math::Matrix(
+           math::cross(box(1), box(2)) * volume_i_2pi,
+           math::cross(box(2), box(0)) * volume_i_2pi,
+-          math::cross(box(0), box(1)) * volume_i_2pi, true /* column wise */);  
++          math::cross(box(0), box(1)) * volume_i_2pi, false /* row wise: product(M, l) = sum_i l_i b_i */);  
+ }
+diff --git a/md++/src/interaction/nonbonded/interaction/latticesum.cc b/md++/src/interaction/nonbonded/interaction/latticesum.cc
+index 167fe321..81de6e6c 100644
+--- a/md++/src/interaction/nonbonded/interaction/latticesum.cc
++++ b/md++/src/interaction/nonbonded/interaction/latticesum.cc
+@@ -538,7 +538,7 @@ void interaction::Lattice_Sum::calculate_electric_field(const topology::Topology
+   math::Matrix tL_inv_2pi(
+           math::cross(box(1), box(2)) * volume_i_2pi,
+           math::cross(box(2), box(0)) * volume_i_2pi,
+-          math::cross(box(0), box(1)) * volume_i_2pi, true /* column wise */);
++          math::cross(box(0), box(1)) * volume_i_2pi, false /* row wise: product(M, l) = sum_i l_i b_i */);
+ 
+ 
+ if (finite_difference_order == 0) {

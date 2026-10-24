@@ -1,0 +1,30 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_vacuum_eds_multis"
+description = "aladip vacuum, EDS FORM 2 over three end states, released gromosXX: end-state energies only"
+level = 4
+isolates = "EDS multi-s end-state energies at frame 0"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_eds_multis.in"
+pttopo = "../shared/aladip_eds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+# The released gromosXX's FORM 2 force weights are defective (zero-seeded log-sum-exp,
+# missing "- max", pairs (0, j>=2) skipped, which also makes its V_R wrong for N >= 3;
+# patches/D2_eds_weights.patch), so its forces, V_R and trajectory are not compared: only
+# the end-state energies (the `# eds` rows) of frame 0, the only frame whose configuration
+# does not depend on those forces.
+# `aladip_vacuum_eds_multis_fixed` pins the whole run.
+compare = "frame0_eds_states"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

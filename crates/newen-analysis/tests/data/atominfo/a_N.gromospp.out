@@ -1,0 +1,10 @@
+TITLE
+	atominfo
+	1:4,10
+END
+ATOMS
+#        Atom    GROMOS   Residue   Residue      Atom     Integer    Charge
+#   Specifier    number    number      name      name   Atom Code
+          1:4         4         2       ALA         N           5     -0.28
+         1:10        10         3       GLY         N           5     -0.28
+END

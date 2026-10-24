@@ -1,0 +1,677 @@
+//! Nosé-Hoover (chain) thermostat algorithm.
+//!
+//! Implements both single NHC (nhc=1) and NHC chain (nhc≥2), equivalent to
+//! GROMOS `algorithm::NoseHoover_Thermostat`.
+//!
+//! Placed between LeapFrogVelocity and LeapFrogPosition in the sequence.
+//! Uses the "new" kinetic energy from the previous step's TemperatureCalculation
+//! (stored in energies.kinetic_energy_new, equivalent to GROMOS multibath.bath.ekin).
+//!
+//! # Single NHC (nhc = 1)
+//! ```text
+//!   T_free = 2·E_kin / (dof·k_B)
+//!   ζ[0]  += dt/τ² · (T_free/T₀ - 1)
+//!   scale  = 1 - ζ[0]·dt
+//! ```
+//!
+//! # NHC chain (nhc = N ≥ 2)  — chain updated from tail to head
+//! ```text
+//!   τ_vec[0]   = τ²
+//!   τ_vec[i>0] = τ²/dof
+//!
+//!   ζ[N-1] += (τ_vec[N-2]·ζ[N-2]² - 1/dof) / τ_vec[N-1] · dt
+//!   for i in (N-2)..1:
+//!     ζ[i] += ((τ_vec[i-1]·ζ[i-1]² - 1/dof)/τ_vec[i] - ζ[i]·ζ[i+1]) · dt
+//!   ζ[0] += ((T_free/T₀ - 1)/τ_vec[0] - ζ[1]·ζ[0]) · dt
+//!   scale = 1 - ζ[0]·dt
+//! ```
+//!
+//! Source: md++/src/algorithm/temperature/nosehoover_thermostat.cc
+//!         md++/src/algorithm/temperature/thermostat.cc (scale method)
+
+use newen_core::algorithm::{Algorithm, SimulationState};
+use newen_core::configuration::Configuration;
+use newen_core::topology::Topology;
+use newen_core::units::kB;
+
+use super::multibath::{BathRange, ZERO_TEMPERATURE};
+
+/// One Nosé–Hoover step of one bath (gromosXX `NoseHoover_Thermostat::calc_scaling` for one
+/// link, `calc_chain_scaling` for more): updates the chain `zeta` in place and returns the
+/// velocity scaling factor `1 − ζ[0]·dt`. `T_free` is Berendsen's (see [`berendsen_scale`]).
+///
+/// ```text
+///   one link:  ζ[0] += dt/(τ·τ) · (T_free/T₀ − 1)
+///   N links:   τ_0 = τ·τ, τ_i = τ·τ/N_df
+///              ζ[N−1] += (τ_{N−2}·ζ[N−2]·ζ[N−2] − 1/N_df) / τ_{N−1} · dt
+///              ζ[i]   += ((τ_{i−1}·ζ[i−1]·ζ[i−1] − 1/N_df) / τ_i − ζ[i]·ζ[i+1]) · dt,  i = N−2 … 1
+///              ζ[0]   += ((T_free/T₀ − 1) / τ_0 − ζ[1]·ζ[0]) · dt
+/// ```
+///
+/// τ < 0 (no coupling) returns 1 and leaves `zeta` alone. `zeta` must not be empty.
+///
+/// [`berendsen_scale`]: super::berendsen_scale
+///
+/// spec: thermostat.nose_hoover_scale
+pub fn nose_hoover_scale(
+    zeta: &mut [f64],
+    ekin: f64,
+    dof: f64,
+    temperature: f64,
+    tau: f64,
+    dt: f64,
+) -> f64 {
+    if tau < 0.0 {
+        return 1.0;
+    }
+    debug_assert!(
+        !zeta.is_empty(),
+        "a Nosé–Hoover chain has at least one link"
+    );
+    let mut free_temp = if dof > 0.0 {
+        2.0 * ekin / (dof * kB)
+    } else {
+        0.0
+    };
+    if free_temp < ZERO_TEMPERATURE {
+        free_temp = temperature;
+    }
+
+    let nhc = zeta.len();
+    if nhc == 1 {
+        zeta[0] += dt / (tau * tau) * (free_temp / temperature - 1.0);
+        return 1.0 - zeta[0] * dt;
+    }
+
+    let tau2 = tau * tau;
+    let tv = |i: usize| if i == 0 { tau2 } else { tau2 / dof };
+    // tail to head: each link reads the new value of the link above, the old one of the link below
+    zeta[nhc - 1] += (tv(nhc - 2) * zeta[nhc - 2] * zeta[nhc - 2] - 1.0 / dof) / tv(nhc - 1) * dt;
+    for i in (1..nhc - 1).rev() {
+        zeta[i] += ((tv(i - 1) * zeta[i - 1] * zeta[i - 1] - 1.0 / dof) / tv(i)
+            - zeta[i] * zeta[i + 1])
+            * dt;
+    }
+    zeta[0] += ((free_temp / temperature - 1.0) / tv(0) - zeta[1] * zeta[0]) * dt;
+    1.0 - zeta[0] * dt
+}
+
+/// Nosé-Hoover thermostat parameters for a single temperature bath.
+#[derive(Debug, Clone)]
+pub struct NoseHooverThermostatParams {
+    /// Reference temperature T₀ (K)
+    pub temperature: f64,
+    /// Coupling time constant τ (ps). τ < 0 → no coupling
+    pub tau: f64,
+    /// Degrees of freedom for this bath
+    pub dof: f64,
+    /// Chain length: 1 = single NHC, N ≥ 2 = NHC chain
+    pub nhc: usize,
+}
+
+/// The ζ a run starts from, given the start configuration's `NHCVARIABLES` rows (`saved`, one
+/// per bath) for `n_baths` baths with chains of `nhc`. Every link of every bath is restored,
+/// plain Nosé–Hoover included (D41).
+pub fn restored_zeta(
+    saved: &[Vec<f64>],
+    n_baths: usize,
+    nhc: usize,
+) -> Result<Vec<Vec<f64>>, String> {
+    let mut zeta = vec![vec![0.0; nhc]; n_baths];
+    if saved.len() != n_baths {
+        return Err(format!(
+            "NHCVARIABLES block has {} line(s), the run has {n_baths} temperature bath(s)",
+            saved.len()
+        ));
+    }
+    for (b, (row, z)) in saved.iter().zip(&mut zeta).enumerate() {
+        if row.len() != nhc {
+            return Err(format!(
+                "NHCVARIABLES line {} has {} value(s), the chain has {nhc}",
+                b + 1,
+                row.len()
+            ));
+        }
+        z.copy_from_slice(row);
+    }
+    Ok(zeta)
+}
+
+/// Nosé-Hoover (chain) thermostat.
+///
+/// GROMOS sequence position: after Leap_Frog_Velocity, before Leap_Frog_Position.
+///
+/// The ζ chain state is persisted across steps in `zeta` and mirrored into
+/// `Configuration::nose_hoover`. It starts at zero (gromosXX `init`), or, with
+/// `read_variables`, from the start configuration's `NHCVARIABLES`.
+#[derive(Debug, Clone)]
+pub struct NoseHooverThermostat {
+    pub params: Vec<NoseHooverThermostatParams>,
+    /// The DOFSET ranges that map atoms to `params` (gromosXX `bath_index`), in file order.
+    pub ranges: Vec<BathRange>,
+    /// NTINHT = 0: start from the configuration's variables (`Configuration::nose_hoover`).
+    pub read_variables: bool,
+    /// Scaling factor per bath of the current step.
+    scale: Vec<f64>,
+    /// Per-bath ζ chain state — length = nhc per bath
+    zeta: Vec<Vec<f64>>,
+}
+
+impl NoseHooverThermostat {
+    /// The scaling factor of every bath at the last step (gromosXX `bath_struct::scale`).
+    pub fn scales(&self) -> &[f64] {
+        &self.scale
+    }
+
+    /// The ζ chain of every bath.
+    pub fn zeta(&self) -> &[Vec<f64>] {
+        &self.zeta
+    }
+
+    /// Create a Nosé–Hoover thermostat from resolved baths and the DOFSET ranges that assign the
+    /// atoms to them. Every bath keeps its own ζ chain of `nhc` links, starting at zero, as
+    /// gromosXX keeps `bath_struct::zeta` per bath (`nosehoover_thermostat.cc`).
+    pub fn new(params: Vec<NoseHooverThermostatParams>, ranges: Vec<BathRange>) -> Self {
+        Self {
+            scale: vec![1.0; params.len()],
+            zeta: params.iter().map(|p| vec![0.0; p.nhc]).collect(),
+            params,
+            ranges,
+            read_variables: false,
+        }
+    }
+
+    /// Create a single-bath Nosé-Hoover thermostat with chain length 1.
+    ///
+    /// The bath covers all atoms `[0, n_atoms)`.
+    pub fn new_single_bath(temperature: f64, tau: f64, dof: f64, n_atoms: usize) -> Self {
+        Self::new(
+            vec![NoseHooverThermostatParams {
+                temperature,
+                tau,
+                dof,
+                nhc: 1,
+            }],
+            whole_system(n_atoms),
+        )
+    }
+
+    /// Create a single-bath Nosé-Hoover chain thermostat with chain length `nhc ≥ 2`.
+    ///
+    /// The bath covers all atoms `[0, n_atoms)`.
+    ///
+    /// # Panics
+    /// Panics in debug mode if `nhc < 2`. Use [`new_single_bath`] for the single-NHC case.
+    ///
+    /// [`new_single_bath`]: NoseHooverThermostat::new_single_bath
+    pub fn new_chain_bath(
+        temperature: f64,
+        tau: f64,
+        dof: f64,
+        n_atoms: usize,
+        nhc: usize,
+    ) -> Self {
+        debug_assert!(
+            nhc >= 2,
+            "new_chain_bath requires nhc >= 2; use new_single_bath for nhc=1"
+        );
+        Self::new(
+            vec![NoseHooverThermostatParams {
+                temperature,
+                tau,
+                dof,
+                nhc,
+            }],
+            whole_system(n_atoms),
+        )
+    }
+}
+
+impl Algorithm for NoseHooverThermostat {
+    fn init(
+        &mut self,
+        _topo: &Topology,
+        conf: &mut Configuration,
+        _sim: &SimulationState,
+    ) -> Result<(), String> {
+        let nhc = self.params.first().map_or(1, |p| p.nhc);
+        if self.read_variables {
+            // without a block the run starts from zero
+            if let Some(saved) = conf.nose_hoover.as_deref() {
+                self.zeta = restored_zeta(saved, self.params.len(), nhc)?;
+            }
+        }
+        conf.nose_hoover = Some(self.zeta.clone());
+        Ok(())
+    }
+
+    fn apply(
+        &mut self,
+        _topo: &Topology,
+        conf: &mut Configuration,
+        sim: &SimulationState,
+    ) -> Result<(), String> {
+        let dt = sim.dt;
+
+        self.scale.resize(self.params.len(), 1.0);
+        for bath_idx in 0..self.params.len() {
+            let NoseHooverThermostatParams {
+                temperature,
+                tau,
+                dof,
+                ..
+            } = self.params[bath_idx];
+            let zeta = &mut self.zeta[bath_idx];
+
+            if tau >= 0.0 && zeta.is_empty() {
+                return Err(format!("NoseHoover bath {bath_idx}: nhc must be >= 1"));
+            }
+
+            // E_kin from previous step (set by TemperatureCalculation): per bath with several
+            // baths, the total with one
+            let ekin = conf
+                .current()
+                .energies
+                .kinetic_energy_new_bath
+                .get(bath_idx)
+                .copied()
+                .unwrap_or(conf.current().energies.kinetic_energy_new);
+
+            let scale = nose_hoover_scale(zeta, ekin, dof, temperature, tau, dt);
+
+            log::debug!(
+                "  NoseHoover bath {}: E_kin={:.6e}, T0={:.2}, scale={:.10}, zeta={:?}",
+                bath_idx,
+                ekin,
+                temperature,
+                scale,
+                zeta,
+            );
+
+            self.scale[bath_idx] = scale;
+        }
+
+        // gromosXX `Thermostat::scale`: every DOFSET range is scaled by its bath
+        let mut first = 0;
+        for r in &self.ranges {
+            let scale = self.scale[r.com_bath];
+            if (scale - 1.0).abs() >= 1e-15 {
+                for v in &mut conf.current_mut().vel[first..=r.last_atom] {
+                    *v *= scale;
+                }
+            }
+            first = r.last_atom + 1;
+        }
+
+        match conf.nose_hoover.as_mut() {
+            Some(z) => z.clone_from(&self.zeta),
+            None => conf.nose_hoover = Some(self.zeta.clone()),
+        }
+        Ok(())
+    }
+
+    fn name(&self) -> &str {
+        "NoseHoover_Thermostat"
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+/// One DOFSET range over all `n_atoms`, coupled to bath 0.
+fn whole_system(n_atoms: usize) -> Vec<BathRange> {
+    vec![BathRange {
+        last_atom: n_atoms - 1,
+        com_bath: 0,
+        ir_bath: 0,
+    }]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use newen_core::algorithm::SimulationState;
+    use newen_core::configuration::Configuration;
+    use newen_core::math::Vec3;
+    use newen_core::topology::Topology;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_sim(dt: f64) -> SimulationState {
+        SimulationState::new(dt, 1)
+    }
+
+    /// Build a Configuration with `n_atoms` atoms all carrying velocity (1,0,0),
+    /// and set `kinetic_energy_new` to the given value.
+    fn make_conf(n_atoms: usize, ekin: f64) -> (Topology, Configuration) {
+        let topo = Topology::new();
+        let mut conf = Configuration::new(n_atoms, 1, 1);
+        for i in 0..n_atoms {
+            conf.current_mut().vel[i] = Vec3::new(1.0, 0.0, 0.0);
+        }
+        conf.current_mut().energies.kinetic_energy_new = ekin;
+        (topo, conf)
+    }
+
+    // ── Single NHC (nhc = 1) ─────────────────────────────────────────────────
+
+    /// Setup chosen so that the arithmetic is exact in f64:
+    ///
+    ///   T₀   = 300 K, τ = 0.1 ps, dof = 3, dt = 0.002 ps
+    ///   ekin = T₀ · 2 · dof · k_B / 2  (free_temp = 2·T₀ = 600 K)
+    ///
+    ///   Δζ[0] = dt/τ² · (T_free/T₀ - 1) = 0.002/0.01 · 1 = 0.2
+    ///   scale = 1 - 0.2·0.002 = 0.9996
+    #[test]
+    fn test_single_nhc_zeta_and_scale() {
+        const T0: f64 = 300.0;
+        const TAU: f64 = 0.1;
+        const DOF: f64 = 3.0;
+        const DT: f64 = 0.002;
+        const N: usize = 2;
+
+        // ekin that gives free_temp = 2·T₀ = 600 K
+        let ekin = 2.0 * T0 * DOF * kB / 2.0; // = 600·3·k_B/2
+
+        let (topo, mut conf) = make_conf(N, ekin);
+        let sim = make_sim(DT);
+
+        let mut nhc = NoseHooverThermostat::new_single_bath(T0, TAU, DOF, N);
+        nhc.apply(&topo, &mut conf, &sim).unwrap();
+
+        // Expected: Δζ = 0.002/0.01 · 1.0 = 0.2
+        let expected_zeta = 0.2_f64;
+        let expected_scale = 1.0 - expected_zeta * DT; // = 0.9996
+
+        assert!(
+            (nhc.zeta[0][0] - expected_zeta).abs() < 1e-12,
+            "zeta[0] = {}, expected {expected_zeta}",
+            nhc.zeta[0][0]
+        );
+
+        // All velocities should be scaled by `scale`
+        for i in 0..N {
+            let vx = conf.current().vel[i].x;
+            assert!(
+                (vx - expected_scale).abs() < 1e-12,
+                "vel[{i}].x = {vx}, expected {expected_scale}"
+            );
+        }
+    }
+
+    /// When the system is cooler than T₀ the thermostat should add energy
+    /// (scale > 1, ζ[0] decreases / goes negative).
+    #[test]
+    fn test_single_nhc_cold_bath_increases_scale() {
+        const T0: f64 = 300.0;
+        const TAU: f64 = 0.1;
+        const DOF: f64 = 3.0;
+        const DT: f64 = 0.002;
+        const N: usize = 2;
+
+        // ekin gives free_temp = T₀/2 = 150 K (system is cold)
+        let ekin = (T0 / 2.0) * DOF * kB / 2.0;
+
+        let (topo, mut conf) = make_conf(N, ekin);
+        let sim = make_sim(DT);
+
+        let mut nhc = NoseHooverThermostat::new_single_bath(T0, TAU, DOF, N);
+        nhc.apply(&topo, &mut conf, &sim).unwrap();
+
+        // Δζ = dt/τ² · (T_free/T₀ - 1) = 0.008 · (0.5 - 1) = −0.004  → scale > 1
+        assert!(
+            nhc.zeta[0][0] < 0.0,
+            "ζ[0] should be negative for a cold bath, got {}",
+            nhc.zeta[0][0]
+        );
+        let scale = 1.0 - nhc.zeta[0][0] * DT;
+        assert!(
+            scale > 1.0,
+            "scale should be > 1 for a cold bath, got {scale}"
+        );
+    }
+
+    /// τ < 0 must skip coupling entirely — velocities must not change.
+    #[test]
+    fn test_single_nhc_no_coupling_when_tau_negative() {
+        const N: usize = 3;
+        let ekin = 10.0;
+
+        let (topo, mut conf) = make_conf(N, ekin);
+        let sim = make_sim(0.002);
+
+        let mut nhc = NoseHooverThermostat::new_single_bath(300.0, -1.0, 3.0, N);
+        nhc.apply(&topo, &mut conf, &sim).unwrap();
+
+        // ζ and velocities must remain unchanged
+        assert_eq!(nhc.zeta[0][0], 0.0);
+        for i in 0..N {
+            assert_eq!(conf.current().vel[i].x, 1.0);
+        }
+    }
+
+    // ── Several baths ────────────────────────────────────────────────────────
+
+    /// Each bath keeps its own chain and is driven by its own kinetic energy, T₀ and τ; each
+    /// DOFSET range is scaled by its bath.
+    #[test]
+    fn every_bath_has_its_own_chain() {
+        const DT: f64 = 0.002;
+        let bath = |temperature, tau| NoseHooverThermostatParams {
+            temperature,
+            tau,
+            dof: 3.0,
+            nhc: 3,
+        };
+        let ranges = vec![
+            BathRange {
+                last_atom: 0,
+                com_bath: 0,
+                ir_bath: 0,
+            },
+            BathRange {
+                last_atom: 1,
+                com_bath: 1,
+                ir_bath: 1,
+            },
+        ];
+        let mut nh = NoseHooverThermostat::new(vec![bath(300.0, 0.1), bath(350.0, 0.2)], ranges);
+        assert_eq!(nh.zeta(), &[vec![0.0; 3], vec![0.0; 3]]);
+
+        let (topo, mut conf) = make_conf(2, 0.0);
+        // bath 0 at 2·T₀, bath 1 at T₀
+        conf.current_mut().energies.kinetic_energy_new_bath =
+            vec![600.0 * 3.0 * kB / 2.0, 350.0 * 3.0 * kB / 2.0];
+        nh.apply(&topo, &mut conf, &make_sim(DT)).unwrap();
+
+        let (mut one, mut two) = (vec![0.0; 3], vec![0.0; 3]);
+        let s0 = nose_hoover_scale(&mut one, 600.0 * 3.0 * kB / 2.0, 3.0, 300.0, 0.1, DT);
+        let s1 = nose_hoover_scale(&mut two, 350.0 * 3.0 * kB / 2.0, 3.0, 350.0, 0.2, DT);
+        assert_eq!(nh.zeta(), &[one, two]);
+        assert_eq!(nh.scales(), &[s0, s1]);
+        assert_ne!(s0, s1);
+        assert_eq!(conf.current().vel[0].x, s0);
+        assert_eq!(conf.current().vel[1].x, s1);
+        assert_eq!(conf.nose_hoover.as_deref(), Some(nh.zeta()));
+    }
+
+    // ── Restart (NHCVARIABLES) ───────────────────────────────────────────────
+
+    /// Every link of every bath is restored, plain NH included (D41).
+    #[test]
+    fn restart_restores_every_link() {
+        let saved = vec![vec![0.883220231, 20.087328305, 72.553842985]];
+        assert_eq!(restored_zeta(&saved, 1, 3).unwrap(), saved);
+        let plain = vec![vec![2.6075]];
+        assert_eq!(restored_zeta(&plain, 1, 1).unwrap(), plain);
+        // a chain of another length, a missing bath
+        assert!(restored_zeta(&plain, 1, 3).is_err());
+        assert!(restored_zeta(&[], 1, 3).is_err());
+    }
+
+    /// `init` takes the configuration's variables when NTINHT = 0, ignores them otherwise, and
+    /// mirrors the thermostat's ζ into the configuration from then on.
+    #[test]
+    fn init_reads_the_configuration_and_apply_mirrors_zeta() {
+        let (topo, mut conf) = make_conf(2, 1.0);
+        let sim = make_sim(0.002);
+        conf.nose_hoover = Some(vec![vec![0.5, 1.5, 2.5]]);
+        let mut ignore = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        ignore.init(&topo, &mut conf.clone(), &sim).unwrap();
+        assert_eq!(ignore.zeta(), &[vec![0.0; 3]]);
+
+        let mut nh = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        nh.read_variables = true;
+        nh.init(&topo, &mut conf, &sim).unwrap();
+        assert_eq!(nh.zeta(), &[vec![0.5, 1.5, 2.5]]);
+        nh.apply(&topo, &mut conf, &sim).unwrap();
+        assert_eq!(conf.nose_hoover.as_deref(), Some(nh.zeta()));
+        assert_ne!(nh.zeta()[0][0], 0.5);
+
+        // without the block the chain starts from zero
+        let (_, mut bare) = make_conf(2, 1.0);
+        let mut intended = NoseHooverThermostat::new_chain_bath(300.0, 0.1, 3.0, 2, 3);
+        intended.read_variables = true;
+        intended.init(&topo, &mut bare, &sim).unwrap();
+        assert_eq!(intended.zeta(), &[vec![0.0; 3]]);
+    }
+
+    // ── NHC chain (nhc = 3) ───────────────────────────────────────────────────
+
+    /// Chain of length 3, all ζ = 0, free_temp = 2·T₀.
+    ///
+    /// First step from all-zero ζ with T_free = 2·T₀:
+    ///
+    ///   τ_vec = [τ², τ²/dof, τ²/dof] = [0.01, 0.01/3, 0.01/3]
+    ///
+    ///   Tail  (i=2): Δζ = (τ_vec[1]·0² - 1/dof) / τ_vec[2] · dt
+    ///                   = (0 - 1/3) / (1/3) · 0.002 / 100 · 300
+    ///                   = -1 · 0.2 = -0.2
+    ///
+    ///   Mid   (i=1): Δζ = ((τ_vec[0]·0² - 1/dof)/τ_vec[1] - 0·(-0.2)) · dt
+    ///                   = (-1/3)/(1/300) · 0.002  [same arithmetic] = -0.2
+    ///
+    ///   Head  (i=0): Δζ = ((T_free/T₀ - 1)/τ_vec[0] - ζ[1]·0) · dt
+    ///                   = (1/0.01) · 0.002 = 0.2
+    ///
+    ///   scale = 1 - 0.2·0.002 = 0.9996
+    #[test]
+    fn test_chain_nhc_first_step_from_zeros() {
+        const T0: f64 = 300.0;
+        const TAU: f64 = 0.1;
+        const DOF: f64 = 3.0;
+        const DT: f64 = 0.002;
+        const NHC: usize = 3;
+        const N: usize = 2;
+
+        let ekin = 2.0 * T0 * DOF * kB / 2.0; // free_temp = 2·T₀
+
+        let (topo, mut conf) = make_conf(N, ekin);
+        let sim = make_sim(DT);
+
+        let mut nhc = NoseHooverThermostat::new_chain_bath(T0, TAU, DOF, N, NHC);
+        nhc.apply(&topo, &mut conf, &sim).unwrap();
+
+        let z = &nhc.zeta[0];
+        assert!((z[0] - 0.2).abs() < 1e-12, "ζ[0] = {}, expected 0.2", z[0]);
+        assert!(
+            (z[1] - (-0.2)).abs() < 1e-12,
+            "ζ[1] = {}, expected -0.2",
+            z[1]
+        );
+        assert!(
+            (z[2] - (-0.2)).abs() < 1e-12,
+            "ζ[2] = {}, expected -0.2",
+            z[2]
+        );
+
+        let expected_scale = 1.0 - 0.2 * DT; // 0.9996
+        for i in 0..N {
+            let vx = conf.current().vel[i].x;
+            assert!(
+                (vx - expected_scale).abs() < 1e-12,
+                "vel[{i}].x = {vx}, expected {expected_scale}"
+            );
+        }
+    }
+
+    /// Second step — verifies that chain coupling produces different ζ[0] than
+    /// the single-NHC would after two steps of identical forcing.
+    ///
+    /// We apply two steps with the same ekin and check that ζ[1] and ζ[2]
+    /// remain non-trivially updated (the chain term −ζ[i]·ζ[i+1] is non-zero
+    /// from step 2 onward), confirming propagation through the chain.
+    #[test]
+    fn test_chain_nhc_propagates_across_two_steps() {
+        const T0: f64 = 300.0;
+        const TAU: f64 = 0.1;
+        const DOF: f64 = 3.0;
+        const DT: f64 = 0.002;
+        const NHC: usize = 3;
+        const N: usize = 2;
+
+        let ekin = 2.0 * T0 * DOF * kB / 2.0; // free_temp = 2·T₀
+
+        let (topo, mut conf) = make_conf(N, ekin);
+        // Keep ekin fixed for both steps (we're testing the chain, not the
+        // velocity update that would follow in a real MD loop).
+        conf.current_mut().energies.kinetic_energy_new = ekin;
+
+        let sim = make_sim(DT);
+
+        let mut nhc_chain = NoseHooverThermostat::new_chain_bath(T0, TAU, DOF, N, NHC);
+        nhc_chain.apply(&topo, &mut conf, &sim).unwrap();
+
+        // Reset ekin for second step (velocities were scaled, but we want to
+        // test chain arithmetic independently).
+        conf.current_mut().energies.kinetic_energy_new = ekin;
+        // Reset velocities so the scaling test is clean.
+        for i in 0..N {
+            conf.current_mut().vel[i] = Vec3::new(1.0, 0.0, 0.0);
+        }
+
+        nhc_chain.apply(&topo, &mut conf, &sim).unwrap();
+
+        // After step 1: ζ = [0.2, −0.2, −0.2]
+        // Step 2 tail uses ζ[1]² > 0, so the tail term is not just −1/dof
+        // anymore — ζ[2] must differ from −0.4 (what two identical tail steps
+        // with zero coupling would give).
+        //
+        // Exact value from the recurrence:
+        //   Δζ₂ = (τ_vec[1]·(−0.2)² − 1/3) / τ_vec[2] · dt
+        //        = ((0.01/3)·0.04 − 1/3) / (0.01/3) · 0.002
+        //        = (0.04 − 100) · 0.002        [after dividing by 0.01/3]
+        //
+        // (0.01/3)·0.04 = 0.0004/3; divided by 0.01/3 = *300 → 0.04
+        // −1/3 divided by 0.01/3 = −100
+        // total: (0.04 − 100)·0.002 = −99.96·0.002 = −0.19992
+        // ζ[2] = −0.2 + (−0.19992) = −0.39992
+
+        let z = &nhc_chain.zeta[0];
+
+        assert!(
+            (z[2] - (-0.39992)).abs() < 1e-9,
+            "ζ[2] after step 2 = {}, expected ≈ -0.39992",
+            z[2]
+        );
+
+        // The chain cross-term (−ζ[i]·ζ[i+1]) is non-zero in the middle update,
+        // so ζ[1] after step 2 must differ from what two identical single-NHC
+        // steps (no chain coupling) would produce.
+        // For a sanity check: ζ[1] must be negative and more negative than −0.2.
+        assert!(
+            z[1] < -0.2,
+            "ζ[1] after step 2 should be < −0.2 (chain coupling active), got {}",
+            z[1]
+        );
+
+        // ζ[0] must be positive and larger than after step 1 (system still hot).
+        assert!(
+            z[0] > 0.2,
+            "ζ[0] after step 2 should be > 0.2 (continued driving), got {}",
+            z[0]
+        );
+    }
+}

@@ -1,0 +1,47 @@
+# Expected output from native gromosXX 247c95c4 + `patches/LS4_fd_field_triclinic.patch`,
+# `patches/LS3_triclinic_kvectors.patch` and `patches/LS1_p3m_nvt_a_term.patch` (built as in
+# `patches/BUILD.md`), generated with
+#   python3 scripts/regen_gromosXX_references.py --binary <patched md> nacl_water_box_triclinic_p3m_fd_fixed
+# gromosXX v1.6.0, double precision, 62 atoms. `nacl_water_box_triclinic_p3m_fixed` with the
+# finite-difference field, NFDORD 2. The released binary divides the difference along lattice
+# axis a by the axis step |box(a)/N_a| and stores it as Cartesian component a
+# (`latticesum.cc:626-641`), the gradient only when the axes are orthogonal; the patch maps the
+# three axis derivatives to the field through the inverse of the matrix of unit axis vectors,
+# which equals H^-T applied to the derivatives in grid units and is the operator of its own
+# influence function (`influence_function.cc:186-190`).
+# newen's FFT is PhastFT, gromosXX's FFTW: the two agree to rounding, so the comparison is
+# within the standard tolerances, not byte for byte.
+
+[system]
+name = "nacl_water_box_triclinic_p3m_fd_fixed"
+description = "Level 2: Na+ Cl- + 20 SPC waters in a triclinic box, P3M with finite differences"
+level = 2
+natoms = 62
+isolates = "P3M finite-difference field in a skewed cell (LS4)"
+
+[input]
+topology = "../nacl_water_box/nacl_water_box.topo"
+configuration = "../nacl_water_box_triclinic/nacl_water_box_triclinic.conf"
+parameters = "nacl_water_box_triclinic_p3m_fd_fixed.in"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[precision]
+# gromosXX internal: double (64-bit)
+# Output positions: 9 decimal digits fixed-point
+# Output forces: 9 decimal digits fixed-point
+# Output energies: 10 significant digits scientific
+internal = "f64"
+position_digits = 9
+force_digits = 9
+energy_sigfigs = 10
+
+[tolerances]
+# Recommended tolerances for newen comparison
+force_abs = 1e-6        # kJ/(mol*nm)
+energy_rel = 1e-8       # relative
+position_abs = 1e-9     # nm

@@ -4,16 +4,17 @@ on:
   push:
     branches:
       - main
+      - develop
       - ci
     paths:
-      - 'py-gromos/**'
+      - 'py-newen/**'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/test-python.yml'
   pull_request:
     paths:
-      - 'py-gromos/**'
+      - 'py-newen/**'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -86,31 +87,31 @@ jobs:
           enable-cache: true
 
       - name: Sync Python dependencies (builds extension via maturin)
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Lint and format Python code (ruff)
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        working-directory: py-gromos
+        working-directory: py-newen
         run: |
           uv run ruff check python/ tests/
           uv run ruff format --check python/ tests/
 
       - name: Clippy (Rust bindings)
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        working-directory: py-gromos
+        working-directory: py-newen
         run: cargo clippy --all-targets -- -W warnings
         continue-on-error: true
 
       - name: Run Python tests
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv run pytest tests/ -v
         continue-on-error: true
 
       - name: Run Python tests with coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        working-directory: py-gromos
-        run: uv run pytest tests/ --cov=gromos --cov-report=xml --cov-report=term
+        working-directory: py-newen
+        run: uv run pytest tests/ --cov=newen --cov-report=xml --cov-report=term
         continue-on-error: true
 
       - name: Upload coverage to Codecov
@@ -118,7 +119,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: py-gromos/coverage.xml
+          file: py-newen/coverage.xml
           flags: python
           name: python-${{ matrix.python-version }}
         continue-on-error: true
@@ -177,15 +178,15 @@ jobs:
       # than the pip a venv gets from ensurepip here — and would pull in the very dev
       # tooling this job exists to do without. Debug on purpose: whether the extension
       # imports is not a question an optimised build answers any better.
-      - name: Build and install py-gromos
-        working-directory: py-gromos
+      - name: Build and install py-newen
+        working-directory: py-newen
         run: |
           maturin build --out dist
           uv pip install --no-deps dist/*.whl
 
       - name: Test import
         run: |
-          python -c "import gromos; print(f'gromos version: {gromos.__version__}')"
+          python -c "import newen; print(f'newen version: {newen.__version__}')"
 
   benchmark:
     name: Benchmarks
@@ -212,9 +213,9 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Sync Python dependencies (builds extension via maturin)
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv sync --all-groups
 
       - name: Run benchmarks
-        working-directory: py-gromos
+        working-directory: py-newen
         run: uv run pytest tests/ --benchmark-only || echo "No benchmarks available"

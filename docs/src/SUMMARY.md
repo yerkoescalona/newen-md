@@ -24,6 +24,12 @@
 
 ---
 
+# Verification
+
+- [Verifying newen against its theory](verification/index.md)
+
+---
+
 # Tutorials
 
 - [Running Your First MD Simulation](tutorials/first-md.md)

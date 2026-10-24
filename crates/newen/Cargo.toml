@@ -1,0 +1,40 @@
+[package]
+name = "newen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "newen molecular dynamics engine - facade crate"
+
+[lib]
+# rlib only: a `cdylib`/`staticlib` here writes target/libnewen.{so,a}, the same paths
+# py-newen's extension module (`[lib] name = "newen"`) writes. Building both in one
+# `cargo test --workspace` raced and clobbered them, and the compiler then reported
+# "multiple different versions of crate newen_core". Nothing consumes a C library from
+# this facade crate — it has no `extern "C"` surface.
+crate-type = ["rlib"]
+
+[dependencies]
+# Re-export all sub-crates
+newen-core = { workspace = true }
+newen-forces = { workspace = true }
+newen-integrators = { workspace = true }
+newen-io = { workspace = true }
+# NOTE: newen-analysis is NOT re-exported here to avoid circular dependencies.
+# Analysis bins live in the newen-analysis crate and depend on newen-core/newen-io directly.
+
+# Optional features passed through
+mpi = { workspace = true, optional = true }
+cudarc = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+
+[features]
+default = ["simd"]
+simd = []
+use-mpi = ["mpi", "newen-forces/use-mpi"]
+use-cuda = ["cudarc"]
+mimalloc = ["dep:mimalloc"]
+serde = ["newen-core/serde", "newen-forces/serde", "newen-io/serde"]
+
+[dev-dependencies]
+env_logger = { workspace = true }

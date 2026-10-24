@@ -17,8 +17,8 @@ and two different layouts in the wild carry the same one.
 
 The profile therefore states:
 
-> **Same grammar, stricter rules.** Every file gromos-rs writes is a valid GROMOS file that
-> gromos++ and gromosXX read unchanged; every file gromos-rs reads is checked against a
+> **Same grammar, stricter rules.** Every file newen writes is a valid GROMOS file that
+> gromos++ and gromosXX read unchanged; every file newen reads is checked against a
 > fingerprint of the layout it was written with, and a library that disagrees with that
 > fingerprint is refused with a diff — never applied.
 
@@ -26,12 +26,12 @@ The profile therefore states:
 
 | Part | State |
 |---|---|
-| §1 Grammar, reader, expression evaluation | implemented (`gromos_io::energy_traj`, 0.0.46), byte-identical to gromos++ on the reference cases |
+| §1 Grammar, reader, expression evaluation | implemented (`newen_io::energy_traj`, 0.0.46), byte-identical to gromos++ on the reference cases |
 | §2 Canonical form, fingerprint, self-description lines | implemented (0.0.47): `Schema::fingerprint`, `md` writes R3 and R8 lines, the fingerprint of the layout in code equals md++'s own library |
 | §3 Reader tiers and refusals | implemented (0.0.47): `EnergyTraj::bind`; the LiveCoMS tutorial's stale library is refused at open with the diff |
-| §4 Official library from `gromos-io` | implemented (0.0.47): `crates/gromos-io/data/ene_ana.md++.lib`, generated from the layout in code, `ene_ana` uses it without `@library`, `@print_library` prints it |
+| §4 Official library from `newen-io` | implemented (0.0.47): `crates/newen-io/data/ene_ana.md++.lib`, generated from the layout in code, `ene_ana` uses it without `@library`, `@print_library` prints it |
 
-Implementation is tracked in `PLAN.md` §2.10.
+Implementation landed in 0.0.47 (item 2.10; see CHANGELOG.md).
 
 ## 1. The grammar — unchanged from gromos++
 
@@ -49,7 +49,7 @@ everywhere (gromos++ `Ginstream.cc:165-172`).
 | `FRENERTRJ` | schema of a free-energy trajectory (`@fr_files`) |
 | `VARIABLES` | derived quantities, one `name = expression` per line |
 
-gromos++ ignores blocks it does not know (`ene_ana.cc:404-423`); so does gromos-rs.
+gromos++ ignores blocks it does not know (`ene_ana.cc:404-423`); so does newen.
 
 ### 1.2 Schema declarations
 
@@ -96,7 +96,7 @@ and reordering rather than parentheses; the grammar has none.
 
 ### 1.4 The canonical md++ layout — `ENEVERSION 2023-04-15`
 
-The layout gromosXX has written since 2023 and gromos-rs's `md` writes (`gromos_io::energy`):
+The layout gromosXX has written since 2023 and newen's `md` writes (`newen_io::energy`):
 
 `ENERTRJ` (`.tre`)
 
@@ -123,17 +123,17 @@ The layout gromosXX has written since 2023 and gromos-rs's `md` writes (`gromos_
 extra leading `subblock RLAM 1 1` (λ), the subblocks prefixed `FREE`, and no
 `VOLUMEPRESSURE03`.
 
-Any layout gromos-rs knows how to write or check is listed in this section; a new upstream
+Any layout newen knows how to write or check is listed in this section; a new upstream
 layout gets a new row group under its own `ENEVERSION`, never an edit to an existing one.
 
 ## 2. Profile rules
 
-Normative; "must" is a requirement on gromos-rs, "may" an option left open. Rationale follows
+Normative; "must" is a requirement on newen, "may" an option left open. Rationale follows
 each rule in one sentence.
 
 ### R1 — Compatibility
 
-Every trajectory and library gromos-rs writes must be read unchanged by gromos++ `ene_ana` and,
+Every trajectory and library newen writes must be read unchanged by gromos++ `ene_ana` and,
 for trajectories, be indistinguishable to gromosXX from its own output. All profile additions
 are lines whose first character is `#`.
 
@@ -178,7 +178,7 @@ verify by hand with `sha256sum`.
 
 ### R3 — Trajectory self-description
 
-A trajectory written by gromos-rs must carry, once, immediately after the `END` of its
+A trajectory written by newen must carry, once, immediately after the `END` of its
 `ENEVERSION` block and before the first `TIMESTEP`:
 
 ```
@@ -214,7 +214,7 @@ A library may carry, anywhere outside a block:
 ```
 
 If present, each must equal the fingerprint of the library's own declaration of that file type.
-A library gromos-rs generates always carries them. A reader that finds one unequal must refuse
+A library newen generates always carries them. A reader that finds one unequal must refuse
 the library: *"schema section edited after generation"*.
 
 *Why:* this catches the tutorial's failure mode exactly — a copied library whose schema drifted
@@ -229,7 +229,7 @@ it. Exactly one tier applies, the first that matches:
 | Tier | Condition | Authority for the layout | Library schema … |
 |---|---|---|---|
 | **a** | file carries `energy-schema` (R3) | the file | must match the file's fingerprint → else **error with a diff** |
-| **b** | no self-description; `ENEVERSION` is one gromos-rs knows (§1.4) | the built-in layout for that version | must match its fingerprint → else **error with a diff** |
+| **b** | no self-description; `ENEVERSION` is one newen knows (§1.4) | the built-in layout for that version | must match its fingerprint → else **error with a diff** |
 | **c** | neither | the library | accepted with the warning *"layout unverified"*; R6 checks are the only guard |
 
 The diff names each differing declaration on both sides:
@@ -239,7 +239,7 @@ energy library does not describe this trajectory
   ENERGY03 ENER:   library 26 x 2,   file 52 x 1
   ENERGY03 SPECIAL: library NUM_ENERGY_GROUPS x 12,   file NUM_ENERGY_GROUPS x 13
   library:    tutorial/ene_ana.md++.lib  (ENEVERSION 2023-04-15)
-  trajectory: md.tre  (ENEVERSION 2023-04-15, written by gromos-rs md 0.0.47)
+  trajectory: md.tre  (ENEVERSION 2023-04-15, written by newen md 0.0.47)
 ```
 
 There is no option to override tiers **a** or **b**. The layout is a fact about the bytes; the
@@ -275,7 +275,7 @@ unverified and may mislabel the values"; under **a**/**b** "the layout is verifi
 writer composed these totals inconsistently". It is a warning, not a refusal, because a
 verified layout is a fact about where the values sit while the identity is a fact about how
 the writer computed them: a file whose slots are proven right must stay readable even if its
-writer summed badly (gromos-rs' own `.tre` files before 0.0.47 wrote the special total two
+writer summed badly (newen' own `.tre` files before 0.0.47 wrote the special total two
 slots early and would otherwise be unreadable).
 
 *Why:* the first two turn an allocation or a silent shift into an error; the marker check
@@ -285,9 +285,9 @@ hold for any partitioning of the system.
 
 ### R7 — The official library
 
-`gromos-io` provides the library for every layout it knows (§1.4): the schema sections are
+`newen-io` provides the library for every layout it knows (§1.4): the schema sections are
 generated from the layout definition in code, the `VARIABLES` section is md++'s. `ene_ana`
-uses it when `@library` is absent. A copy is checked in at `crates/gromos-io/data/` for people
+uses it when `@library` is absent. A copy is checked in at `crates/newen-io/data/` for people
 who need the file — for gromos++, for editing — and a test asserts the copy equals what the
 code generates, so the two cannot drift.
 
@@ -295,17 +295,17 @@ A user library may:
 
 - carry a full schema (gromos++-compatible) — checked by R5;
 - carry **only** `VARIABLES` — the schema then comes from tier **a** or **b**; such a library
-  is gromos-rs-only, since gromos++ needs `ENERTRJ`.
+  is newen-only, since gromos++ needs `ENERTRJ`.
 
 *Why:* the thing anyone can edit is never the thing the reader trusts; the source of truth is
 code, and the file is derived from it and verified against it.
 
 ### R8 — Provenance
 
-A trajectory written by gromos-rs should carry, after the layout lines:
+A trajectory written by newen should carry, after the layout lines:
 
 ```
-# energy-provenance writer gromos-rs md 0.0.47
+# energy-provenance writer newen md 0.0.47
 # energy-provenance topology sha256:<hex>   <path as given>
 # energy-provenance energy-groups 1-63 64-3000
 ```
@@ -365,7 +365,7 @@ Warnings go to stderr; the analysis output is unchanged.
 
 ## 4. Workflows
 
-**Analyse a gromos-rs or gromosXX run** — no library argument:
+**Analyse a newen or gromosXX run** — no library argument:
 
 ```sh
 ene_ana @en_files md.tre @prop totene totkin totpot @topo sys.top

@@ -1,0 +1,20 @@
+TITLE
+	atominfo
+	1:1-12
+END
+ATOMS
+#        Atom    GROMOS   Residue   Residue      Atom     Integer    Charge
+#   Specifier    number    number      name      name   Atom Code
+          1:1         1         1       GLY        CB          14         0
+          1:2         2         1       GLY         C          11      0.38
+          1:3         3         1       GLY         O           1     -0.38
+          1:4         4         2       ALA         N           5     -0.28
+          1:5         5         2       ALA         H          18      0.28
+          1:6         6         2       ALA        CA          12         0
+          1:7         7         2       ALA        CB          14         0
+          1:8         8         2       ALA         C          11      0.38
+          1:9         9         2       ALA         O           1     -0.38
+         1:10        10         3       GLY         N           5     -0.28
+         1:11        11         3       GLY         H          18      0.28
+         1:12        12         3       GLY        CB          14         0
+END

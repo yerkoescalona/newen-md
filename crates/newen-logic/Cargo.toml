@@ -1,0 +1,15 @@
+[package]
+name = "newen-logic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Small integer decision functions of newen, each mirrored by a Lean model in spec/ and checked against it (Lean theorem, Aeneas refinement, exhaustive test)."
+
+# Kept to the Rust subset Charon and Aeneas translate: no dependencies in the default build (the
+# one Charon translates), no floats, no unsafe. `serde` is optional, for the run plan's JSON.
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]

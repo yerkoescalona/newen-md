@@ -1,0 +1,26 @@
+# [provenance] native gromosXX 247c95c4 + D2 patch (tests/gromosXX_references/patches/D2_eds_weights.patch), binary .local/gromosXX-patched/md++/BUILD/program/md (branch divergences-fix), item 1.8
+[system]
+name = "aladip_eds_solv_ti_multis_fixed"
+description = "aladip_eds_solv_ti with EDS FORM 2 (multi s); the D2 patch books Sum p_i dV_i/dlambda as FORM 1 does"
+level = 4
+isolates = "TI-EDS under FORM 2: dV_R/dlambda = Sum p_i dV_i/dlambda in slot 35 (the released gromosXX books 0)"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_eds_solv_ti_multis_fixed.in"
+pttopo = "../aladip_eds_solv_ti/aladip_eds_solv_ti.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+# newen's EDS atom owns every EDS-perturbed pair, gromosXX's perturbed atom owns the 1-4 and
+# excluded ones: same terms, different summation order
+force_abs = 1e-8
+energy_rel = 1e-10
+position_abs = 1e-9

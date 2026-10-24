@@ -1,0 +1,22 @@
+TITLE
+aladip solvated, TI-EDS: EDS end states of N4 and H11, perturbed atoms CB1, C8, N10, CB12
+(EDS-perturbed pairs: excluded 4-1, 4-8, 11-8, 11-10, 11-12; 1-4 pair 4-10; pairlist 4-12, 1-11)
+END
+PERTATOMPARAM
+# NJLA
+    4
+# JLA RESNR ATNAM IACA      WMA      CGA IACB      WMB      CGB ALPHAJ  ALPHACRF
+    1     1 CB      14  15.0350    0.000   12  15.0350    0.150    0.3       0.6
+    8     2 C       11  12.0110    0.380   11  12.0110    0.250    0.5       0.4
+   10     3 N        5  14.0067   -0.280    1  14.0067   -0.400    0.2       0.7
+   12     3 CB      14  15.0350    0.000   18  15.0350    0.100    0.4       0.5
+END
+MPERTATOM
+# NJLA NPTB
+    2    2
+# state names
+  stateA  stateB
+# NR  NAME  IAC1  CHARGE1  IAC2  CHARGE2
+   4  N        5   -0.280    19    0.200
+  11  H       18    0.300    14    0.000
+END

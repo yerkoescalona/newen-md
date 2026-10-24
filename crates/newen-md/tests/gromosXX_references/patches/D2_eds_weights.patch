@@ -1,0 +1,92 @@
+D2 (gromosXX 247c95c4): EDS multi_s and pair_s force weights and lambda derivative.
+md++/src/algorithm/integration/eds.cc:518/:620 seed the per-state log-prefactors with 0.0 (an extra e^0) instead of -inf;
+:550-551/:647-648 first-pair update lacks "- max" (gives a + ln 2 for a >= 0); :557 multi_s loop starts at state_i = 1, so pairs
+(0, j>=2) never enter V_R or the weights; :603-604/:704-705 add pi * eds_vr (zero at that point) to lj_energy[0][0], so
+sum_i p_i dV_i/dl is never booked. Fix: -inf seed, "- max", multi_s loop over all pairs (skipping (0,1), done before the loop),
+and eds_vr += pi * eds_vi[state] as single_s does at :444-445.
+
+diff --git a/md++/src/algorithm/integration/eds.cc b/md++/src/algorithm/integration/eds.cc
+index 68600bea..62f27f1d 100644
+--- a/md++/src/algorithm/integration/eds.cc
++++ b/md++/src/algorithm/integration/eds.cc
+@@ -27,6 +27,8 @@
+ 
+ #include "../../stdheader.h"
+ 
++#include <limits>
++
+ #include "../../algorithm/algorithm.h"
+ #include "../../topology/topology.h"
+ #include "../../simulation/simulation.h"
+@@ -515,7 +517,7 @@ int algorithm::EDS
+     case simulation::multi_s:
+     {
+       // interactions have been calculated - now apply eds Hamiltonian
+-      std::vector<double> prefactors(numstates, 0.0);
++      std::vector<double> prefactors(numstates, -std::numeric_limits<double>::infinity());
+       // get beta
+       double beta = 0.0;
+       if(!sim.param().stochastic.sd){
+@@ -548,14 +550,17 @@ int algorithm::EDS
+       double pre_i_force = partA + elem2;
+       double pre_j_force = partB + elem2;
+       prefactors[state_i] = std::max(prefactors[state_i], pre_i_force)
+-              + log(1 + exp(std::min(prefactors[state_i], pre_i_force)));
++              + log(1 + exp(std::min(prefactors[state_i], pre_i_force)
++              - std::max(prefactors[state_i], pre_i_force)));
+       prefactors[state_j] = std::max(prefactors[state_j], pre_j_force)
+               + log(1 + exp(std::min(prefactors[state_j], pre_j_force)
+               - std::max(prefactors[state_j], pre_j_force)));
+       DEBUG(7, "pre_i_force = " << pre_i_force << ", pre_j_force " << pre_j_force);
+       DEBUG(7, "s_" << state_i << state_j << " = " << s[pair_index]);
+-      for (state_i = 1; state_i < (numstates - 1); state_i++) {
++      for (state_i = 0; state_i < (numstates - 1); state_i++) {
+         for (state_j = state_i + 1; state_j < numstates; state_j++) {
++          // pair (0,1) was handled above
++          if (state_i == 0 && state_j == 1) continue;
+           pair_index = (state_i * (2 * numstates - state_i - 1)) / 2 + state_j - state_i - 1;
+           DEBUG(7, "index of pair " << state_i << " - " << state_j << " = " << pair_index);
+           // get the correct s_ij value
+@@ -599,9 +604,8 @@ int algorithm::EDS
+           conf.current().force(i) += pi * conf.special().eds.force_endstates[state](i);
+         }
+ 	      // ... to lambda derivatives
+-        // we only stored the totals, we put it in the first energy group of the lj.
+-        conf.current().perturbed_energy_derivatives.lj_energy[0][0] +=
+-           pi * conf.current().perturbed_energy_derivatives.eds_vr;
++        conf.current().perturbed_energy_derivatives.eds_vr +=
++           pi * conf.current().perturbed_energy_derivatives.eds_vi[state];
+ 
+         // ... to virial
+         for (int a = 0; a < 3; ++a) {
+@@ -617,7 +621,7 @@ int algorithm::EDS
+     case simulation::pair_s:
+     {
+       // interactions have been calculated - now apply eds Hamiltonian
+-      std::vector<double> prefactors(numstates, 0.0);
++      std::vector<double> prefactors(numstates, -std::numeric_limits<double>::infinity());
+       // get beta
+       double beta = 0.0;
+       if(!sim.param().stochastic.sd){
+@@ -645,7 +649,8 @@ int algorithm::EDS
+       double pre_i_force = partA + elem2;
+       double pre_j_force = partB + elem2;
+       prefactors[state_i] = std::max(prefactors[state_i], pre_i_force)
+-              + log(1 + exp(std::min(prefactors[state_i], pre_i_force)));
++              + log(1 + exp(std::min(prefactors[state_i], pre_i_force)
++              - std::max(prefactors[state_i], pre_i_force)));
+       prefactors[state_j] = std::max(prefactors[state_j], pre_j_force)
+               + log(1 + exp(std::min(prefactors[state_j], pre_j_force)
+               - std::max(prefactors[state_j], pre_j_force)));
+@@ -700,9 +705,8 @@ int algorithm::EDS
+           DEBUG(7, "force = " << math::v2s(conf.special().eds.force_endstates[state](i)));
+         }
+         // ... to lambda derivatives
+-        // we only stored the totals, we put it in the first energy group of the lj.
+-        conf.current().perturbed_energy_derivatives.lj_energy[0][0] +=
+-           pi * conf.current().perturbed_energy_derivatives.eds_vr;
++        conf.current().perturbed_energy_derivatives.eds_vr +=
++           pi * conf.current().perturbed_energy_derivatives.eds_vi[state];
+ 
+         // ... to virial
+         for (int a = 0; a < 3; ++a) {

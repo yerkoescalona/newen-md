@@ -1,0 +1,24 @@
+# [provenance] native gromosXX 247c95c4 + D1 patch, binary .local/gromosXX-patched/md++/BUILD/program/md (branch divergences-fix), item 1.8
+[system]
+name = "aladip_vacuum_fep_pairpert_precalc_fixed"
+description = "pins the intended kernel: native gromosXX 247c95c4 + D1 patch (tests/gromosXX_references/patches/D1_pair_kernel_args.patch)"
+level = 4
+isolates = "PRECALCLAM ext energies for PERTATOMPAIR pairs with a perturbed atom"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_fep_pairpert_precalc_fixed.in"
+pttopo = "../shared/aladip_pairpert.pttopo"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

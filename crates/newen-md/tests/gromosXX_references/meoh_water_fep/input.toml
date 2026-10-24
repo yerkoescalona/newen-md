@@ -1,0 +1,32 @@
+# gromosXX v1.6.0 (native build, CODATA-patched), double precision, methanol in 953 SPC water
+# 54a7 united-atom CH3OH (3 atoms, charged: O -0.674, H +0.408, CH3 +0.266) -> dummies (IAC 22, q 0),
+# bonds unperturbed, masses unchanged. RLAM=0.5, NLAM=1, ALPHLJ=ALPHC=0.5, NTB=1, EPSRF=78.5,
+# SHAKE on all bonds. Built with gromos++ make_top (54a7.mtb CH3OH + H2O) and the project's
+# sim_box (1000-SPC reference box, minwall 1.45 nm), then gromosXX EM (500 steps) + 10 ps NVT.
+# Ten steps, NTWE=NTWX=NTWF=NTWG=1 so energies, positions, forces and dH/dlambda are compared per step.
+# Why it exists (1.7 note): ch4_water_fep has zero charge on the perturbed atom, so the
+# perturbed reaction-field (self / excluded-pair) terms were never validated; methanol is charged.
+
+[system]
+name = "meoh_water_fep"
+description = "Level 4: methanol in water FEP/TI — charged CH3OH -> dummy decoupling at lambda=0.5"
+level = 4
+natoms = 2862
+isolates = "perturbed nonbonded with charged perturbed atoms: soft-core LJ + soft-core CRF incl. RF self/excluded-pair terms; no bonded perturbations"
+
+[input]
+topology = "../shared/meoh_spc.top"
+configuration = "../shared/meoh_spc.cnf"
+parameters = "meoh_water_fep.in"
+pttopo = "../shared/meoh_spc_dummy.ptp"
+
+[expected]
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+forces = "expected/forces.trf"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[precision]
+internal = "f64"
+position_digits = 9

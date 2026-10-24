@@ -1,0 +1,23 @@
+# [provenance] native gromosXX 247c95c4 + D2 patch (tests/gromosXX_references/patches/D2_eds_weights.patch), binary .local/gromosXX-patched/md++/BUILD/program/md (branch divergences-fix), item 1.8
+[system]
+name = "aladip_vacuum_eds_pairs_fixed"
+description = "aladip vacuum, EDS FORM 3 (pairs (1,2) 0.3, (2,3) 0.1) over three end states; the documented force weights (D2 patch)"
+level = 4
+isolates = "EDS pair-s: V_R over the listed pairs and the weights dV_R/dV_i"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../aladip_vacuum/aladip_vacuum.conf"
+parameters = "aladip_vacuum_eds_pairs_fixed.in"
+pttopo = "../shared/aladip_eds3.mpt"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+
+[tolerances]
+force_abs = 1e-6
+energy_rel = 1e-8
+position_abs = 1e-9

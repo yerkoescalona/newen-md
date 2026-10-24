@@ -39,7 +39,7 @@ repos:
     hooks:
       - id: cargo-clippy
         name: cargo clippy
-        entry: bash -c 'cd gromos-rs && cargo clippy --workspace --all-features --all-targets -- -D warnings -A clippy::upper_case_acronyms -A clippy::non_snake_case'
+        entry: bash -c 'cd newen && cargo clippy --workspace --all-features --all-targets -- -D warnings -A clippy::upper_case_acronyms -A clippy::non_snake_case'
         language: system
         types: [rust]
         pass_filenames: false
@@ -49,10 +49,10 @@ repos:
     rev: v0.11.12
     hooks:
       - id: ruff-format
-        files: ^py-gromos/
+        files: ^py-newen/
         args: [--line-length=100]
       - id: ruff
-        files: ^py-gromos/
+        files: ^py-newen/
         args: [--fix, --exit-non-zero-on-fix]
 
   # Strip notebook outputs before commit
@@ -60,7 +60,7 @@ repos:
     rev: 0.9.1
     hooks:
       - id: nbstripout
-        files: ^py-gromos/notebooks/.*\.ipynb$
+        files: ^py-newen/notebooks/.*\.ipynb$
 
   # Conventional commits
   - repo: https://github.com/compilerla/conventional-pre-commit

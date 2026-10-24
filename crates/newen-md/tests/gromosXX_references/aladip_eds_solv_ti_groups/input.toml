@@ -1,0 +1,26 @@
+# gromosXX md++ 247c95c4 (native binary .local/gromosXX/md++/BUILD/program/md), item 1.8
+[system]
+name = "aladip_eds_solv_ti_groups"
+description = "aladip_eds_solv_ti with two energy groups (1-5: EDS N4, perturbed CB1; 6-72: EDS H11, perturbed C8, N10, CB12) and LAMBDAS on for vdw/crf and their softness"
+level = 4
+isolates = "TI-EDS: the lambda of each EDS-perturbed pair from its energy-group cell (cross-group pairlist, 1-4 and excluded pairs), group energies with EDS"
+
+[input]
+topology = "../shared/aladip.topo"
+configuration = "../shared/aladip.conf"
+parameters = "aladip_eds_solv_ti_groups.in"
+pttopo = "../aladip_eds_solv_ti/aladip_eds_solv_ti.ptp"
+
+[expected]
+forces = "expected/forces.trf"
+energies = "expected/energies.tre"
+trajectory = "expected/trajectory.trc"
+final_conf = "expected/final.conf"
+free_energy = "expected/free_energy.trg"
+
+[tolerances]
+# newen's EDS atom owns every EDS-perturbed pair, gromosXX's perturbed atom owns the 1-4 and
+# excluded ones: same terms, different summation order
+force_abs = 1e-8
+energy_rel = 1e-10
+position_abs = 1e-9

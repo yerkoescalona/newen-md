@@ -2,39 +2,41 @@
 resolver = "2"
 members = [
     "crates/*",
-    "py-gromos",
+    "py-newen",
 ]
-# Exclude py-gromos from default cargo build (Polars pattern)
+# Exclude py-newen from default cargo build (Polars pattern)
 # This allows pure-Rust development without maturin/Python dependencies
 default-members = [
     "crates/*",
 ]
 
 [workspace.package]
-version = "0.0.48"
+version = "0.0.76"
 edition = "2021"
 authors = ["Yerko Escalona"]
 license = "GPL-2.0-or-later"
-repository = "https://github.com/yerkoescalona/gromos-rs"
+repository = "https://github.com/yerkoescalona/newen-md"
 rust-version = "1.91"
 
 [workspace.dependencies]
 # ============================================================
 # Internal crates
 # ============================================================
-gromos-core = { path = "crates/gromos-core" }
-gromos-forces = { path = "crates/gromos-forces" }
-gromos-integrators = { path = "crates/gromos-integrators" }
-gromos-io = { path = "crates/gromos-io" }
-gromos-analysis = { path = "crates/gromos-analysis" }
-gromos-md = { path = "crates/gromos-md" }
-# Run assembly shared by the md binary and py-gromos (PLAN.md 3.9)
-gromos-run = { path = "crates/gromos-run" }
-gromos-tools = { path = "crates/gromos-tools" }
+newen-core = { path = "crates/newen-core" }
+newen-forces = { path = "crates/newen-forces" }
+newen-integrators = { path = "crates/newen-integrators" }
+newen-io = { path = "crates/newen-io" }
+newen-analysis = { path = "crates/newen-analysis" }
+newen-md = { path = "crates/newen-md" }
+# Run assembly shared by the md binary and py-newen (3.9)
+newen-run = { path = "crates/newen-run" }
+# Integer decision logic with a Lean specification (spec/)
+newen-logic = { path = "crates/newen-logic" }
+newen-tools = { path = "crates/newen-tools" }
 # Facade crate that re-exports everything
-gromos = { path = "crates/gromos" }
+newen = { path = "crates/newen" }
 # PyO3 bindings (low-level)
-pyo3-gromos = { path = "crates/pyo3-gromos" }
+pyo3-newen = { path = "crates/pyo3-newen" }
 
 # gzip: gromosXX/gromos++ read every input through igzstream/Ginstream
 flate2 = "1.0"
@@ -75,10 +77,15 @@ toml = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 
 # ============================================================
-# FFT for PME electrostatics
+# FFT
 # ============================================================
+# P3M (NLRELE 3) in newen-forces: PhastFT, pure safe Rust, MIT/Apache. Powers of two only (the
+# P3M grid is refused otherwise; gromosXX/FFTW accept any even size); split real/imaginary
+# arrays; its inverse divides by N, which P3M undoes (exact for a power of two). Default
+# features off: no rayon, the P3M lines are far below its parallel threshold.
+phastft = { version = "0.4.1", default-features = false }
+# rustfft: newen-analysis
 rustfft = "6.2"
-fftw = "0.8"
 num-complex = "0.4"
 
 # ============================================================
@@ -134,7 +141,7 @@ opt-level = 3                    # Optimize proc-macros (syn, quote)
 
 [profile.release]
 opt-level = 3
-lto = "fat"                      # Full cross-crate inlining (innerloop in gromos-forces → forcefield)
+lto = "fat"                      # Full cross-crate inlining (innerloop in newen-forces → forcefield)
 codegen-units = 1                # Best runtime performance
 strip = "symbols"
 panic = "abort"

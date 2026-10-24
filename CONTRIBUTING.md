@@ -1,6 +1,6 @@
-# Contributing to gromosXX
+# Contributing to newen
 
-Thank you for your interest in contributing to gromosXX! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to newen! This document provides guidelines and instructions for contributing.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Thank you for your interest in contributing to gromosXX! This document provides 
 ### Prerequisites
 
 - Rust 1.91+ via [rustup](https://rustup.rs/) — the pinned distro `rustc`/`cargo` is too old
-- Python 3.9+ and [uv](https://docs.astral.sh/uv/) (py-gromos is managed by `uv`, not raw pip)
+- Python 3.12+ and [uv](https://docs.astral.sh/uv/) (py-newen is managed by `uv`, not raw pip)
 - Git
 - (Optional) C/C++ toolchain + GSL/FFTW to build the gromosXX/gromos++ reference sources
 - (Optional) `xtb`/`mopac` for real QM/MM tests, libtorch 2.11.0 for the real ML potential
@@ -30,8 +30,8 @@ and version pins for every optional layer above.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yerkoescalona/gromos-rs.git
-cd gromos-rs
+git clone https://github.com/yerkoescalona/newen-md.git
+cd newen-md
 
 # Run the setup script
 ./scripts/setup-dev.sh
@@ -39,7 +39,7 @@ cd gromos-rs
 # Or manually:
 cargo build --workspace
 
-cd py-gromos
+cd py-newen
 uv sync --all-groups
 cd ..
 ```
@@ -109,14 +109,14 @@ Then create a Pull Request on GitHub.
 ## Code Standards
 
 **Read these first:**
-- [Coding Style Guide](gromos-rs/docs/development/coding-style.md) - Complete coding conventions
-- [Naming Conventions](gromos-rs/docs/development/naming-conventions.md) - Scientific naming rules
+- [Architecture](.claude/architecture.md) - how new and refactored code is shaped
+- [Porting](.claude/porting.md) - how gromosXX is translated without inheriting its defects
 
 ### Rust Code
 
 - **Format:** Use `rustfmt` (run `cargo fmt`)
 - **Lint:** Fix all `clippy` warnings (run `cargo clippy`)
-- **Style:** Follow conventions in [Coding Style Guide](gromos-rs/docs/development/coding-style.md)
+- **Style:**
   - `snake_case` for functions and regular variables
   - `PascalCase` for types and structs
   - `SCREAMING_SNAKE_CASE` for constants
@@ -148,8 +148,8 @@ impl SystemState {
 
 - **Format:** Use `black` with line length 100
 - **Lint:** Fix all `ruff` warnings
-- **Type hints:** Add type hints for public APIs (see examples in [Coding Style Guide](gromos-rs/docs/development/coding-style.md))
-- **Docstrings:** Use NumPy-style docstrings (see template in guide)
+- **Type hints:** Add type hints for public APIs
+- **Docstrings:** Use NumPy-style docstrings, with `.. math::` for formulas
 - **Naming:** Standard Python conventions with scientific exceptions
   - Regular variables: `snake_case`
   - Scientific variables: `kT`, `pH`, `deltaG` allowed
@@ -210,7 +210,7 @@ mod tests {
 **Python tests:**
 ```python
 def test_feature():
-    result = gromos.my_function(42)
+    result = newen.my_function(42)
     assert result == 84
 ```
 
@@ -230,8 +230,8 @@ make test-python
 make test-coverage
 
 # Specific test
-cd gromos-rs && cargo test test_name
-cd py-gromos && pytest tests/test_file.py::test_function
+cd newen && cargo test test_name
+cd py-newen && pytest tests/test_file.py::test_function
 ```
 
 ### Test Requirements
@@ -331,9 +331,9 @@ The hooks will:
 
 - Open an issue for bugs or feature requests
 - Join discussions on GitHub Discussions
-- Check the [CI/CD Guide](gromos-rs/docs/development/ci-cd.md) for CI/CD info
-- See [Developer Tools](gromos-rs/docs/development/developer-tools.md) for tooling setup
-- Read [Pre-commit Hooks](gromos-rs/docs/development/pre-commit.md) for hook configuration
+- Check the [CI/CD Guide](newen/docs/development/ci-cd.md) for CI/CD info
+- See [Developer Tools](newen/docs/development/developer-tools.md) for tooling setup
+- Read [Pre-commit Hooks](newen/docs/development/pre-commit.md) for hook configuration
 
 ## License
 

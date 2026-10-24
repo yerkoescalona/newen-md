@@ -1,4 +1,4 @@
-# BENCHMARKING.md — gromos-rs vs gromosXX, one core → threads → MPI
+# BENCHMARKING.md — newen vs gromosXX, one core → threads → MPI
 
 A checklist-driven plan and, below Phase 2, the measured results so far (2026-08-28/29).
 Every `- [ ]` is a step still to do, and every **Assumption** is something the numbers silently
@@ -23,7 +23,7 @@ not on the critical path.
 
 ## At a glance: what was changed, what is only suggested
 
-**Applied** (all in the tree, every one verified against the 37-system gromosXX reference
+**Applied** (all in the tree, every one verified against the 116-system gromosXX reference
 suite; details and measurements in "Optimisations applied so far" under Phase 2):
 
 | # | Change | Where | Effect |
@@ -76,15 +76,15 @@ vectorised minimum image (slower), CSR per-atom pairlist layout (no gain), an in
 | CPU governor | `powersave` | Timings will be noisy/low until set to `performance` |
 | gromosXX binary | `.local/gromosXX/md++/BUILD/program/md`, v1.6.0, built 2026-08-22 via `../configure` **with no options** | Serial only: no OpenMP, no MPI. `-O3 -DNDEBUG`, **no `-march=native`** |
 | gromosXX `md_mpi` | Exists in the same BUILD dir but links **no libmpi** and has **no `MPI_Init` symbol** | It is a stub build (`XXMPI` undefined). Cannot be used for MPI runs |
-| gromos-rs `md` | `cargo build --release --bin md` → `target/release/md`; `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, **`-C target-cpu=native`** (`.cargo/config.toml`) | Rust gets AVX2/Zen4 codegen that gromosXX currently does not — an unfair default |
-| gromos-rs threads | No `@nt`-style flag. Rayon global pool, never configured → defaults to **all 16 logical CPUs** | Control with `RAYON_NUM_THREADS`; an unset run is a 16-thread run |
-| gromos-rs `md_mpi` | `crates/gromos-md/src/bin/md_mpi.rs`, feature `use-mpi`. **Does not build**: (a) `mpi-sys` needs `libclang` (bindgen) — missing; (b) it uses `MpiControl`, which only exists in `gromos-integrators/src/mpi.rs` behind `#[cfg(feature = "use-mpi")]` — a feature that crate never declares, so the module is always empty; (c) the `gromos` facade has no `pub mod mpi` re-export | Rust MPI is blocked by build plumbing before any physics question |
-| gromos-rs MPI code | `broadcast_positions`/`reduce_forces` cast `&[Vec3]` (f64) to `&[f32]` | Data corruption the moment the gate is fixed. Must be fixed *before* any MPI run |
+| newen `md` | `cargo build --release --bin md` → `target/release/md`; `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, **`-C target-cpu=native`** (`.cargo/config.toml`) | Rust gets AVX2/Zen4 codegen that gromosXX currently does not — an unfair default |
+| newen threads | No `@nt`-style flag. Rayon global pool, never configured → defaults to **all 16 logical CPUs** | Control with `RAYON_NUM_THREADS`; an unset run is a 16-thread run |
+| newen `md_mpi` | `crates/newen-md/src/bin/md_mpi.rs`, feature `use-mpi`. **Does not build**: (a) `mpi-sys` needs `libclang` (bindgen) — missing; (b) it uses `MpiControl`, which only exists in `newen-integrators/src/mpi.rs` behind `#[cfg(feature = "use-mpi")]` — a feature that crate never declares, so the module is always empty; (c) the `newen` facade has no `pub mod mpi` re-export | Rust MPI is blocked by build plumbing before any physics question |
+| newen MPI code | `broadcast_positions`/`reduce_forces` cast `&[Vec3]` (f64) to `&[f32]` | Data corruption the moment the gate is fixed. Must be fixed *before* any MPI run |
 | MPI toolchain | Open MPI 5.0.7 (`mpirun`, `mpicc` present) | OK for both sides once binaries exist |
 | Profiling tools | `taskset` present; `hyperfine`, `perf`, `numactl` **absent** | Pinning works; use a shell loop for repeats, install `perf` only if a breakdown is wanted |
-| Reference systems | `crates/gromos-md/tests/gromosXX_references/` — 37 passing parity tests at NSTLIM=100 | Already-validated inputs; but 100 steps is too short to time |
-| Existing bench harness | `crates/gromos-md/benches/md_bench.rs` read `tests/GROMOS_references` (dir is `gromosXX_references`); `scripts/benchmark.sh` did `cd gromos-rs` from inside the repo; `scripts/regen_gromosXX_references.py` used `build/` (dir is `BUILD/`) — **all three fixed 2026-08-28**; `scripts/bench_engines.py` is the engine-vs-engine harness | Benchmarks are automated now |
-| Pairlists | gromos-rs has `StandardPairlistAlgorithm` (O(N²)), `CellListPairlistAlgorithm`, `ParallelPairlistAlgorithm`; gromosXX has `standard`, `grid_cell`, … | Both sides must be forced to the *same* `PAIRLIST ALGORITHM` per run |
+| Reference systems | `crates/newen-md/tests/gromosXX_references/` — 37 passing parity tests at NSTLIM=100 | Already-validated inputs; but 100 steps is too short to time |
+| Existing bench harness | `crates/newen-md/benches/md_bench.rs` read `tests/GROMOS_references` (dir is `gromosXX_references`); `scripts/benchmark.sh` did `cd newen` from inside the repo; `scripts/regen_gromosXX_references.py` used `build/` (dir is `BUILD/`) — **all three fixed 2026-08-28**; `scripts/bench_engines.py` is the engine-vs-engine harness | Benchmarks are automated now |
+| Pairlists | newen has `StandardPairlistAlgorithm` (O(N²)), `CellListPairlistAlgorithm`, `ParallelPairlistAlgorithm`; gromosXX has `standard`, `grid_cell`, … | Both sides must be forced to the *same* `PAIRLIST ALGORITHM` per run |
 
 ---
 
@@ -96,7 +96,7 @@ Each assumption says what it silently affects and how to verify it. Tick the box
 
 - [x] **A1 — Same compiler aggressiveness.** Rust builds with `target-cpu=native`; gromosXX is built with plain `-O3`. Either rebuild gromosXX with `-march=native` (preferred — see Phase 0) or build Rust once without `target-cpu=native` as a control. *Verify:* `grep MY_CXXFLAGS <build>/Makefile` shows `-march=native`; and/or a Rust control build with `RUSTFLAGS=""`.
 - [x] **A2 — Same precision.** Both are f64 (`overview.md`: "f64 everywhere"; gromosXX `input.toml`: "double precision"). *Verify:* `md @version` on gromosXX reports double; no f32 in Rust physics paths (audit 2026-08-28 confirmed f32 only in vector aliases, GPU, MPI, FFI).
-- [ ] **A3 — Same input file, same algorithm choices.** Both binaries read the same `.imd`. In particular `PAIRLIST ALGORITHM` (`standard` vs `grid_cell`), `NSNB` (pairlist update frequency), cutoffs, constraint algorithm, and `WRITETRAJ` frequencies must be identical *and* honoured by both. *Verify:* diff the two engines' echoed parameters in their log output; the 37-system parity suite proves parsing agreement at 100 steps.
+- [ ] **A3 — Same input file, same algorithm choices.** Both binaries read the same `.imd`. In particular `PAIRLIST ALGORITHM` (`standard` vs `grid_cell`), `NSNB` (pairlist update frequency), cutoffs, constraint algorithm, and `WRITETRAJ` frequencies must be identical *and* honoured by both. *Verify:* diff the two engines' echoed parameters in their log output; the 116-system parity suite proves parsing agreement at 100 steps.
 - [x] **A4 — Same amount of I/O.** Trajectory/energy writing is I/O-bound and would dominate short runs. Set `NTWX=0 NTWV=0 NTWF=0 NTWE=0 NTWB=0` (or identical non-zero values on both). *Verify:* output directories after the run contain only the final configuration.
 - [ ] **A5 — Same work per step.** Pairlist rebuild frequency (`NSNB`) is the biggest per-step cost lever; if one engine rebuilds every step and the other every 5, the comparison is void. Also SHAKE/SETTLE iteration counts, and whether virial/pressure is computed (`PRESSURESCALE`, `NTB`). *Verify:* same `.imd`, and compare the detailed timing breakdowns (gromosXX `DETAILED_TIMING` block in the `.omd`; Rust `@verb 2` `Timer` lines).
 - [ ] **A6 — Startup cost is excluded or amortised.** Both engines parse topology/configuration at startup (Rust logs "init" time separately at `@verb 1`). Either subtract it or run enough steps (≥ 2000) that it is < 2 % of wall time. *Verify:* run NSTLIM=100 and NSTLIM=2000; per-step cost should be constant.
@@ -106,13 +106,13 @@ Each assumption says what it silently affects and how to verify it. Tick the box
 - [ ] **A7 — Frequency is stable.** *(Partly mitigated: `bench_engines.py` now interleaves engines per repeat, A, B, A, B, so drift hits both equally; a block-ordered run on 2026-08-29 showed 9–11 % spread on whichever engine ran first after a compile.)* Governor is `powersave` today; Zen boost clocks vary with thermal state and with how many cores are active (a 1-thread run boosts higher than an 8-thread run, which *deflates* measured parallel speedup). *Verify:* set `performance`, run the same 1-core benchmark 5× and require < 3 % spread; optionally disable boost for scaling runs (`/sys/devices/system/cpu/cpufreq/boost`).
 - [ ] **A8 — Pinning is real.** Without `taskset` the scheduler may place two threads on SMT siblings (`n` and `n+8`) and halve their throughput. *Verify:* `taskset -cp <pid>` during the run; for k threads pin to `0-(k-1)` (physical cores) — never mix in 8–15 unless deliberately measuring SMT.
 - [ ] **A9 — The machine is otherwise idle.** IDE indexers, `cargo` daemons, browser — **and other Claude Code sessions**: a run on 2026-08-28 was invalidated by an unrelated session's Python job taking 648 % CPU, inflating both engines by ~45 % and blowing the spread out to 28–65 %. *Verify:* `uptime` load average < 0.5 **and** `ps -eo pcpu,args --sort=-pcpu | head` shows nothing large before each batch. `scripts/bench_engines.py` reports spread; treat > 5 % as "redo".
-- [x] **A10 — Threads ≠ cores.** *(Measured: 16 threads is no faster than 8 for gromos-rs and 60–70 % slower for gromosXX-OpenMP.)* `RAYON_NUM_THREADS=16` uses SMT siblings; the honest ceiling for a scaling curve is 8. Report 16 as a separate "SMT" point, not as part of the curve.
+- [x] **A10 — Threads ≠ cores.** *(Measured: 16 threads is no faster than 8 for newen and 60–70 % slower for gromosXX-OpenMP.)* `RAYON_NUM_THREADS=16` uses SMT siblings; the honest ceiling for a scaling curve is 8. Report 16 as a separate "SMT" point, not as part of the curve.
 
 ### C. What is actually parallel (so scaling numbers are interpreted correctly)
 
 - [ ] **A11 — Rust thread parallelism covers only part of the step.** Confirmed in code: the LJ/CRF innerloop (`innerloops.rs`) splits charge-group pair groups across Rayon (`par_chunks`) **only when there are ≥ 64 groups** — tiny systems (`aladip_solvated`, 72 atoms) run serially regardless of thread count. `ParallelPairlistAlgorithm` exists but whether `md` selects it is unverified. Bonded terms, constraints, integration, thermostats: serial. *Verify:* `grep -rn "par_iter\|par_chunks" crates/*/src` and check which are reachable from `md.rs`; expect Amdahl-limited scaling.
 - [ ] **A12 — gromosXX OpenMP parallelism is also nonbonded-centric.** `omp_nonbonded_interaction.cc` plus a few `#pragma omp` in constraints/integration (54 pragmas total). Comparable scope to A11 — good for a fair threads-vs-threads comparison, but only after an `--enable-openmp` rebuild.
-- [ ] **A13 — MPI in both codebases is a *nonbonded master/worker* design, not domain decomposition.** gromosXX `mpi_nonbonded_master.cc` broadcasts positions and reduces forces every step; the Rust port mirrors it. Expect communication to dominate on one node for small systems; MPI is only worth measuring on ≥ 3000-atom systems. `FUTURE.md` Dim 8 already ranks MPI "deliberately last".
+- [ ] **A13 — MPI in both codebases is a *nonbonded master/worker* design, not domain decomposition.** gromosXX `mpi_nonbonded_master.cc` broadcasts positions and reduces forces every step; the Rust port mirrors it. Expect communication to dominate on one node for small systems; MPI is only worth measuring on ≥ 3000-atom systems. MPI is deliberately ranked last (board card V8).
 
 ### D. The systems
 
@@ -126,8 +126,8 @@ Each assumption says what it silently affects and how to verify it. Tick the box
 
 ### 0.1 Repair the stale harness (all three are one-line path fixes)
 
-- [x] `crates/gromos-md/benches/md_bench.rs:16` — `tests/GROMOS_references` → `tests/gromosXX_references`; run `cargo bench -p gromos-md -- --test` to confirm it executes.
-- [x] `scripts/benchmark.sh` — remove `cd gromos-rs` / `cd ..` (script lives inside the repo); scope to `cargo bench -p gromos-md` rather than `--workspace`.
+- [x] `crates/newen-md/benches/md_bench.rs:16` — `tests/GROMOS_references` → `tests/gromosXX_references`; run `cargo bench -p newen-md -- --test` to confirm it executes.
+- [x] `scripts/benchmark.sh` — remove `cd newen` / `cd ..` (script lives inside the repo); scope to `cargo bench -p newen-md` rather than `--workspace`.
 - [x] `scripts/regen_gromosXX_references.py:23` — `build/program/md` → `BUILD/program/md`.
 - [x] Add a `bench` target to `Justfile` that runs the Phase 2 protocol below (`just bench`, extra args pass through).
 
@@ -158,7 +158,7 @@ Each assumption says what it silently affects and how to verify it. Tick the box
 ### 0.5 Benchmark inputs
 
 - [x] Create `bench/` (git-ignored outputs, committed inputs) with one directory per system. For each, copy the reference `.imd` and patch: `NSTLIM` → 2000 (small) / 500 (large), all `WRITETRAJ` frequencies → 0, `NTPR`-style printing → 0 or NSTLIM. The `patch_nstlim` helper in `md_bench.rs` already does part of this — reuse it.
-- [x] Generate larger water boxes — with the project's `sim_box` (gromos++ solvation tool): `scripts/make_solvated_box.py --replicate n` builds a CH4 solute file whose GENBOX is n× the *equilibrated* `water_1000_spc` box and runs `sim_box @boxsize @thresh 0.33` (n=2 → 7 975 waters / 23 926 atoms; n=3 → ~81 000 atoms), reusing `ch4_spc.top`. Run with `bench_engines.py --ref-dir bench/systems`. Requires `cargo build --release -p gromos-tools --bin sim_box`.
+- [x] Generate larger water boxes — with the project's `sim_box` (gromos++ solvation tool): `scripts/make_solvated_box.py --replicate n` builds a CH4 solute file whose GENBOX is n× the *equilibrated* `water_1000_spc` box and runs `sim_box @boxsize @thresh 0.33` (n=2 → 7 975 waters / 23 926 atoms; n=3 → ~81 000 atoms), reusing `ch4_spc.top`. Run with `bench_engines.py --ref-dir bench/systems`. Requires `cargo build --release -p newen-tools --bin sim_box`.
 - [ ] Write the final matrix of systems:
 
 | System | Atoms | Pairlist | Purpose |
@@ -175,9 +175,9 @@ Each assumption says what it silently affects and how to verify it. Tick the box
 
 Speed numbers are only comparable between runs that produce the same trajectory. This phase costs minutes and prevents the classic mistake of "faster because it's doing less".
 
-- [x] `cargo test -p gromos-md --test test_gromosXX_references` passes (37 tests, 2026-08-28 baseline).
+- [x] `cargo test -p newen-md --test test_gromosXX_references` passes (37 tests, 2026-08-28 baseline).
 - [ ] For each benchmark system and each benchmark `.imd` (the *patched* one, not the 100-step reference), run **both** engines once with energy output enabled (`NTWE=NSTLIM` — one frame at the end) and compare final-step energies within `energy_rel = 1e-8` and final positions within `position_abs = 1e-9` (the project tolerances). This extends parity from 100 steps to the benchmark length.
-- [x] Confirm both engines echo the same `PAIRLIST ALGORITHM` and `NSNB` in their logs (A3, A5) — `SIZE` and `TYPE` were parsed but ignored by gromos-rs until 2026-08-29; both now honoured.
+- [x] Confirm both engines echo the same `PAIRLIST ALGORITHM` and `NSNB` in their logs (A3, A5) — `SIZE` and `TYPE` were parsed but ignored by newen until 2026-08-29; both now honoured.
 - [ ] For the synthetic boxes: energies finite for the full run on both engines (A15).
 - [ ] **Gate:** any mismatch → stop. It is a correctness bug or a parameter ignored by one engine, and no timing below is valid until it is explained.
 
@@ -216,13 +216,13 @@ OMP_NUM_THREADS=1 taskset -c 2 .local/gromosXX/md++/BUILD_native/program/md \
 | 08-29 | + SIMD batch kernel, solvent batching | 1.30 s (0.92×) | 6.85 s (1.02×) | 61.3 s (0.82×) |
 | 08-29 | + `u32` pairlist, single-sided exclusions | **1.18 s (0.98×)** | **5.84 s (1.12×)** | **45.0 s (0.94×)** |
 
-Ratios are gromosXX / Rust (> 1 means gromos-rs is faster). Earlier rows were taken under
+Ratios are gromosXX / Rust (> 1 means newen is faster). Earlier rows were taken under
 varying machine load and block-ordered repeats; only the last row is the quiet, interleaved
 protocol, which is why it — and only it — is quoted in "Where it stands".
 
 A note on an early misreading: the first `water_1000` breakdown showed the LJ/CRF kernel at
 parity and the whole deficit in the pairlist, and this document briefly concluded that
-`FUTURE.md`'s SIMD priority was misplaced. That comparison was flattered by the charge-group-
+The early SIMD priority was misplaced (board card V3). That comparison was flattered by the charge-group-
 grouped kernel (one `nearest_image` per CG pair) that `water_1000`'s large box enables and
 `water_216`'s does not; on `water_216` the same kernel was 2× slower than gromosXX's. Both
 readings were "right" for their system, and both the pairlist and the kernel needed work.
@@ -240,18 +240,18 @@ values are in `bench/results/*.json`; the harness prints n, mean, std, median an
 | ch4_water_fep (2 998 atoms, 999 SPC, NSNB=1, twin-range 0.8/1.4, 2000 steps) | 3 | 47.37 ± 4.40 s | 42.46 ± 0.11 s | **0.90×** (median 0.94×) |
 | ch4_water_7975 (sim_box; 23 926 atoms, production: NSNB=5, twin-range 0.8/1.4, grid_cell, 500 steps) | 3 | 24.87 ± 0.09 s | 28.29 ± 0.61 s | **1.14×** |
 
-gromos-rs is 14 % faster than gromosXX on the production-regime box (the earlier script-built
+newen is 14 % faster than gromosXX on the production-regime box (the earlier script-built
 box gave 1.19×; the `sim_box` box is the one to quote) and 11 % faster on the 3 000-atom cell-list
 system; level (3 % behind) on the smallest box; and 10 % behind on the
 `NSNB=1` twin-range stress case, where the Rust standard deviation (± 4.4 s: one of three repeats
 ran ~8 s slow) is itself the open question — the other three systems have std ≤ 1.6 %.
 
-**With threads (Phase 3, after fixes 14–16):** at 8 cores gromos-rs is 1.38× faster than
+**With threads (Phase 3, after fixes 14–16):** at 8 cores newen is 1.38× faster than
 gromosXX-OpenMP on the production box and 1.06× on `water_1000`; before those fixes it was
 0.53× and 0.43×. Full tables under Phase 3.
 
 The production box is built by the project's own **`sim_box`** (the gromos++ solvation program,
-ported in gromos-tools): `scripts/make_solvated_box.py` only prepares its inputs (a CH4 at the
+ported in newen-tools): `scripts/make_solvated_box.py` only prepares its inputs (a CH4 at the
 origin with a target box of exactly 2× the equilibrated 1000-water box, so the tiling is
 seamless) and writes the MD input. An earlier version of the script replicated the box itself;
 that was replaced so the benchmark exercises the real tool. Both engines agree on E_pot at step 0
@@ -287,11 +287,11 @@ to the printed precision on the `sim_box` system.
 
 5. **Cell list rewritten to actually prune: pairlist 3.15 s → 2.15 s.** Two defects, both
    divergences from gromosXX rather than Rust problems:
-   - *Cell size was hardcoded.* gromos-rs sized cells at one full cutoff, giving a 3×3×3 grid
+   - *Cell size was hardcoded.* newen sized cells at one full cutoff, giving a 3×3×3 grid
      on this box — where the ±1 neighbourhood covers **every** cell, so the cell list pruned
      nothing and ran O(N_cg²) with grid overhead on top. gromosXX takes the spacing from the IMD
      `PAIRLIST` block's `SIZE` field (`grid_cell_pairlist.cc:136-141`), with `auto` resolving to
-     half the *short* cutoff (`in_parameter.cc:1426`). **gromos-rs parsed `SIZE` into
+     half the *short* cutoff (`in_parameter.cc:1426`). **newen parsed `SIZE` into
      `ImdParameters::size` and then never used it** — a dead input. It is now plumbed through
      `PairlistContainer::grid_size` and honoured, so `SIZE auto` gives 0.4 nm cells (7×7×7) here.
    - *Neighbour selection was a cubic shell.* Scanning ±r cells tests the enclosing cube of the
@@ -351,7 +351,7 @@ to the printed precision on the `sim_box` system.
     single-sided lookup now also stops on `last < j` before searching, as gromosXX's
     `Exclusions::is_excluded` does (`topology/exclusions.h:79`) — for a partner in another
     molecule that settles it without a search. The reader now stores 1-4 pairs symmetrically
-    too. Sortedness and symmetry are pinned by `crates/gromos-io/tests/exclusion_invariants.rs`,
+    too. Sortedness and symmetry are pinned by `crates/newen-io/tests/exclusion_invariants.rs`,
     which also checks the new lookup against the old two-sided one on every atom pair of
     `aladip` (has 1-4 pairs) and a solvated `ch4_spc`.
 
@@ -370,7 +370,7 @@ to the printed precision on the `sim_box` system.
     equality tests still hold) and records the representation on the container
     (`solvent_long_is_sentinel`); the forcefield dispatches on it. `ch4_water_fep`'s 3.1 nm box
     with a 1.4 nm cutoff fails the bound and keeps the expanded path — gromosXX's behaviour —
-    so it is unchanged. Verified by `gromos-forces/tests/solvent_longrange_sentinel.rs`: on the
+    so it is unchanged. Verified by `newen-forces/tests/solvent_longrange_sentinel.rs`: on the
     real 999-water box, sentinel vs expanded per-atom images agree on energies, forces and virial.
     Deliberate deviation from gromosXX (which always expands), documented per `porting.md`.
 
@@ -527,7 +527,7 @@ serial build's, the OpenMP overhead. Rust: `RAYON_NUM_THREADS=k`.
 | 8 | 3.29 ± 0.03 | 1.80 | 0.23 | 1.41 ± 0.02 | 4.73 | 0.59 | 0.43× |
 
 **The single-core lead does not survive threads.** gromosXX's OpenMP build scales to 4.7× on
-8 cores; gromos-rs reaches 1.8× and is 2.3× *slower* than gromosXX at 8 threads. Assumption A11
+8 cores; newen reaches 1.8× and is 2.3× *slower* than gromosXX at 8 threads. Assumption A11
 predicted an Amdahl cap from the serial pairlist (~27 % of a step → ≤ 3.7×), but 1.8× is well
 below even that, so the parallel part itself is scaling badly too. The per-phase breakdown at
 1 vs 8 threads (below) is what says where.
@@ -542,7 +542,7 @@ below even that, so the parallel part itself is scaling badly too. The per-phase
 | longrange | 0.33 | **0.35** | 0.45 | **0.085** |
 | total step | 6.12 | 3.48 | 7.32 | 1.65 |
 
-Two phases do not move at all with threads in gromos-rs: **the pairlist** (55 % of the 8-thread
+Two phases do not move at all with threads in newen: **the pairlist** (55 % of the 8-thread
 step) and **the long-range evaluation**. gromosXX parallelises both with OpenMP. The short-range
 kernel scales 4.4× (gromosXX 6.1×). Fixes 14–15 below address the two serial phases.
 
@@ -599,7 +599,7 @@ on the same binary)
 **SMT point (A10), 16 threads on the 8 physical cores + siblings, n = 3:** Rust
 7.31 ± 0.55 s (vs 6.15 s at 8), gromosXX-omp 13.51 ± 1.26 s (vs 8.52 s at 8); on `water_1000`
 Rust 1.46 ± 0.06 s (vs 1.44 s at 8), gromosXX-omp 2.62 ± 0.72 s (vs 1.53 s at 8). SMT
-buys gromos-rs nothing and costs gromosXX's OpenMP build 60–70 % with large variance — the
+buys newen nothing and costs gromosXX's OpenMP build 60–70 % with large variance — the
 honest ceiling is 8 threads, as A10 said; leave `RAYON_NUM_THREADS` at the physical core count.
 
 - [x] **Gate / decision (Phase 3 → 4):** `E(8)` is 0.52 on the 24k box and 0.55 on `water_1000`
@@ -608,16 +608,16 @@ honest ceiling is 8 threads, as A10 said; leave `RAYON_NUM_THREADS` at the physi
   scheduled; the next thread-scaling gain is SHAKE/SETTLE over molecules. **Phase 3 closed
   2026-08-29.**
 
-gromos-rs is ahead at every thread count on the production box and the lead grows with
+newen is ahead at every thread count on the production box and the lead grows with
 threads: 1.13× → 1.25× → 1.29× → 1.38×. 8-core speedup 4.1× (E = 0.52) for Rust against
 3.4× (E = 0.42) for gromosXX; the serial remainder in both is SHAKE, integration and the
 thermostat, plus per-step memory traffic on 24 000 atoms.
 
-### Kernel determinism (PLAN.md 3.9 step 0, 2026-08-29)
+### Kernel determinism (3.9 step 0, 2026-08-29)
 
 Measured with `scripts/kernel_determinism.py` (release `md`, `RAYON_NUM_THREADS` = 1 and 8,
 **n = 3 runs per thread count**, every ENERTRJ column over every step compared exactly). Question
-(PLAN.md 3.9 A2/A3): the parallel nonbonded kernels reduce through rayon `fold/reduce`
+(3.9 A2/A3): the parallel nonbonded kernels reduce through rayon `fold/reduce`
 (`innerloops.rs`) — is the result reproducible run-to-run, and is it thread-count independent?
 
 | system | comparison | n pairs | bit-identical | worst column | max abs Δ (kJ/mol) | max rel Δ |
@@ -633,10 +633,9 @@ Reading: at a fixed thread count the reduction tree is stable in practice (`par_
 `len / threads` chunks merged by `reduce`), so results are reproducible; across thread counts the
 chunking — hence the summation order — changes, and the difference sits in the last printed digit
 (~1e-13 relative, five orders below the 1e-8 reference tolerance). Consequence for the front-end
-parity tests (PLAN.md 3.9 G2): pinning the thread count is sufficient for exact (`==`) same-build
-comparisons; `execution.parallel = Serial` remains the documented, stronger setting. Since PLAN.md
-3.9 step 1 the Python path uses the binary's own policy (`execution.parallel = auto`: parallel
-above 100 atoms); `same_path_twice` in `py-gromos/tests/test_front_end_parity.py` is bit-identical
+parity tests (3.9 G2): pinning the thread count is sufficient for exact (`==`) same-build
+comparisons; `execution.parallel = Serial` remains the documented, stronger setting. Since 3.9 step 1 the Python path uses the binary's own policy (`execution.parallel = auto`: parallel
+above 100 atoms); `same_path_twice` in `py-newen/tests/test_front_end_parity.py` is bit-identical
 on all 40 reference systems, and the front-ends (`InputParameters` shim, `Recipe`, `Recipe` + `Plan`)
 agree exactly under that same policy.
 
@@ -650,10 +649,10 @@ agree exactly under that same policy.
 - [ ] `mpirun -np 2` and `-np 4` reproduce the same energies (forces are summed in a different order → expect agreement to ~1e-10 relative, not bit-exact; record the actual deviation).
 - [ ] Time `-np ∈ {1, 2, 4, 8}` on `water_8000` and `water_27000`, with `--bind-to core` and `OMP_NUM_THREADS=1`.
 
-### 6.2 gromos-rs side — done 2026-08-30 (0.0.38): `md` carries MPI
+### 6.2 newen side — done 2026-08-30 (0.0.38): `md` carries MPI
 
 What existed was not salvageable: `md_mpi.rs` spoke an API that no longer exists, the
-`gromos-integrators` MPI module reinterpreted `&[Vec3]` as `&[f32]`, and nothing ever distributed
+`newen-integrators` MPI module reinterpreted `&[Vec3]` as `&[f32]`, and nothing ever distributed
 work. All of it was removed (`md_mpi`, `md_mpi_cuda`, `repex_mpi`, `mpi_scaling`, `integrators::
 {mpi, remd_mpi}`) and MPI was put where it belongs — on the algorithm sequence every front-end
 already uses:
@@ -667,14 +666,14 @@ already uses:
   (forces, E_LJ, E_CRF, virial, dH/dλ). Under `mpirun` it reduces to rank 0 and broadcasts the
   sum, so every rank continues with bit-identical numbers and runs the whole integrator itself —
   the only traffic per step is that one reduce + broadcast of 3N + 13 doubles.
-- `RunOptions::pair_partition` carries the decomposition through `gromos-run`; `md` built with
+- `RunOptions::pair_partition` carries the decomposition through `newen-run`; `md` built with
   `--features use-mpi` (needs `LIBCLANG_PATH=/usr/lib/llvm-19/lib` for bindgen) initialises MPI,
   sets the partition, installs the reducer, and lets only rank 0 write files and stdout. The same
   `@topo @conf @input` command line, the same `bench.imd` (A3); no separate binary.
-- `crates/gromos-run/tests/pair_partition.rs` checks the decomposition without MPI: the shares of
+- `crates/newen-run/tests/pair_partition.rs` checks the decomposition without MPI: the shares of
   2, 3 and 5 ranks sum to the unpartitioned pair terms (forces, energies, virial) to 1e-9.
 
-### 6.3 gromos-rs correctness and timing — measured 2026-08-30
+### 6.3 newen correctness and timing — measured 2026-08-30
 
 - [x] `mpirun -np 1 md` == serial `md` **bit-for-bit** on `water_1000` (`.tre`, `.trf`, `final.cnf`
       byte-identical: with one rank the reducer is the identity).
@@ -718,7 +717,7 @@ bonded terms partitioned the same way). gromosXX's `md_mpi` columns stay empty u
 
 Each result must carry enough context to be reproduced. Keep a `bench/results/<date>/` directory with one `meta.txt` per session:
 
-- [ ] `git rev-parse HEAD` of gromos-rs; `rustc --version`; contents of `.cargo/config.toml` (or the `RUSTFLAGS` override used)
+- [ ] `git rev-parse HEAD` of newen; `rustc --version`; contents of `.cargo/config.toml` (or the `RUSTFLAGS` override used)
 - [ ] gromosXX: `md @version` (version + build date), the configure line, `MY_CXXFLAGS` from the Makefile
 - [ ] `lscpu | grep -E 'Model name|MHz'`, governor, SMT state, kernel (`uname -r`), Open MPI version
 - [ ] The exact `bench.imd` used (copy it in), the `taskset`/env line, the five raw wall times
@@ -727,7 +726,7 @@ Each result must carry enough context to be reproduced. Keep a `bench/results/<d
 
 ## 8. What "done" looks like
 
-- [~] Phase 1 parity: the 37-system reference suite passes after every change and both engines agree on E_pot at step 0 on the generated boxes; the explicit end-of-run energy comparison at benchmark length (Phase 1, second item) has not been done.
+- [~] Phase 1 parity: the 116-system reference suite passes after every change and both engines agree on E_pot at step 0 on the generated boxes; the explicit end-of-run energy comparison at benchmark length (Phase 1, second item) has not been done.
 - [x] A one-core table (Section 4) with n / mean ± std, breakdowns on all systems, and the ratio attributed per phase.
 - [x] A thread-scaling curve (Section 5) for both engines on 2 systems (3 000 and 24 000 atoms), with fitted serial fraction — **Phase 3 closed 2026-08-29**.
 - [ ] Either an MPI table (Section 6) or a precise statement of which 6.2 item is still blocking, with the error text.
@@ -755,7 +754,7 @@ machine (`bench/gpu_probe`, wgpu over Vulkan/RADV, nothing installed beyond the 
 | Device | AMD Radeon **760M** (Phoenix, RDNA3, 8 CUs, ≤ 2.7 GHz), shares the 32 GB system RAM |
 | Compute stacks | Vulkan (RADV, Mesa 25.0) only. No ROCm/HIP (gfx1103 is not officially supported anyway), no OpenCL |
 | 64-bit floats in shaders | **yes** — `SHADER_F64` and `SHADER_INT64` exposed to wgpu |
-| Existing `gromos-forces/src/gpu` | CUDA-only (`cudarc` + `.cu`), never compiled, f32-centric — not reusable on AMD |
+| Existing `newen-forces/src/gpu` | CUDA-only (`cudarc` + `.cu`), never compiled, f32-centric — not reusable on AMD |
 | Dispatch overhead | ~0.2 ms per submit+dispatch (matters at 0.7 ms/step on `water_1000`, not at 12 ms/step on the 24k box) |
 
 **Pair-arithmetic throughput** (the LJ + CRF expression: one divide, one sqrt, ~15 FMAs;
@@ -799,35 +798,102 @@ provider pattern was designed for exactly this) behind a `gpu` feature using `wg
 per step; f32 as a second flag later. Order of value on this machine: parallel SHAKE/SETTLE on the
 CPU first, then the GPU provider. Not started; the probe is kept in `bench/gpu_probe`.
 
-## 7. Thermodynamic integration, engine vs engine (2026-08-29)
+## 7. Free energy, engine vs engine: TI, BAR, MBAR (2026-10-16)
 
-`scripts/ti_ch4.py --steps 5000`: CH4 → dummy in 999 SPC (54a7, the vol. 7 tutorial system, the
-inputs proven bit-for-bit at λ = 0, 0.25, 0.5, 0.75, 1), eleven λ windows of 10 ps each, NVT 300 K,
-run by the native gromosXX and by `md` from the same `.imd` files, integrated with the project's
-`ext_ti_ana` (trapezoid over ⟨∂H/∂λ⟩, first 20 % of each window dropped). One run per window — the
-per-window means differ by up to 25 kJ/mol at λ = 0.9 (independent 10 ps trajectories in the
-soft-core end-point region, ee 16–20 kJ/mol), so the ΔG agreement is statistical, not bit-for-bit;
-the bit-for-bit statement is the reference suite. Binary: `md` 0.0.33 (the fixes of 0.0.33/0.0.34 do
-not touch a zero-charge, atom-1, equal-mass perturbation).
+`scripts/ti_ch4.py --steps 10000 --estimator ti|bar|mbar --engine both`: CH4 → dummy in 999 SPC
+(54a7, the vol. 7 tutorial system, the inputs proven bit-for-bit at λ = 0, 0.25, 0.5, 0.75, 1),
+eleven λ windows (0, 0.1, …, 1) of 10 000 steps × 2 fs = 20 ps each, NVT 300 K (τ 0.1 ps),
+velocities generated at 300 K, pairlist every 5 steps (NSNB 5), dH/dλ every 10 steps (NTWG 10,
+1000 frames per window). NTWG is a multiple of NSNB, so the `PRECALCLAM` rows hold the
+long-range terms on every frame (the D34 gap of gromosXX, reproduced by newen, does not
+arise). TI: trapezoid over ⟨∂H/∂λ⟩, the first 200 frames of each window dropped. BAR and MBAR:
+`PRECALCLAM 11 0 1`, NTWE = NTWG = 10, no frames dropped, the energies through `ext_ti_ana` →
+`bar` / `mbar`. newen runs the windows in process (`newen.free_energy.run_windows`),
+gromosXX runs the same recipes written as `.imd`; both are analysed by newen's estimators.
 
-| λ | ⟨∂H/∂λ⟩ gromosxx ± ee (n) | ⟨∂H/∂λ⟩ gromos-rs ± ee (n) | Δ (rs − XX) |
-|---|---|---|---|
-| 0.00 |    13.549 ± 0.609 (400) |    13.918 ± 0.328 (401) | +0.368 |
-| 0.10 |    11.941 ± 0.769 (400) |    13.336 ± 0.698 (401) | +1.395 |
-| 0.20 |     9.445 ± 0.795 (400) |    10.795 ± 0.924 (401) | +1.350 |
-| 0.30 |     9.233 ± 0.329 (400) |     9.384 ± 0.931 (401) | +0.151 |
-| 0.40 |     6.129 ± 1.633 (400) |     6.828 ± 0.995 (401) | +0.699 |
-| 0.50 |     3.704 ± 1.259 (400) |     1.895 ± 2.193 (401) | -1.808 |
-| 0.60 |    -0.771 ± 1.767 (400) |     1.967 ± 2.813 (401) | +2.738 |
-| 0.70 |    -2.957 ± 2.711 (400) |   -11.261 ± 3.833 (401) | -8.304 |
-| 0.80 |   -13.256 ± 6.245 (400) |   -35.797 ± 1.931 (401) | -22.541 |
-| 0.90 |  -107.265 ± 16.436 (400) |   -81.536 ± 20.108 (401) | +25.729 |
-| 1.00 |   -65.329 ± 5.188 (400) |   -62.112 ± 9.043 (401) | +3.217 |
+n = 3 replicas per window and engine: script seed 210185, 211185, 212185 (window i adds i), the
+same seeds for both engines. The same seed starts both engines identically (500-step windows
+agree to the printed digit), but over 10 000 steps the trajectories separate (per-replica ΔG
+differ by up to 6 kJ/mol), so the engines are compared as independent samples. Within a replica
+the TI and the `PRECALCLAM` windows are the same trajectory (every energy column identical), so
+the three estimators see the same frames. Binaries: newen 0.0.64 (working tree of the
+`free-energy` worktree; py-newen extension sha256 `b61cf53f…`), gromosXX md++ 1.6.0 (native
+serial build of 2026-08-22). Raw outputs, commands and the per-replica numbers:
+`~/.cache/gromos-rs-item-1.8/bench_fe/` (`README.md`, `summary.md`, `dg_replicas.csv`,
+`dhdl_windows.csv`).
 
-- **gromosxx**: ΔG = -10.97 kJ/mol; wall time 0 s for 11 windows (all cached)
-- **gromos-rs**: ΔG = -10.85 kJ/mol; wall time 167 s for 11 windows
-- ΔG(gromos-rs) − ΔG(gromosXX) = +0.120 kJ/mol
-- Reference: ΔG_hyd(CH4) experiment ≈ +8.4 kJ/mol, i.e. ΔG(CH4→dummy) ≈ −8 kJ/mol; the tutorial's 54a7 result is of that size. Windows are independent short runs, not a converged study.
+| estimator | engine | n | ΔG mean ± std (kJ/mol) | replicas | mean estimator error |
+|---|---|--:|--:|---|--:|
+| TI | newen | 3 | −8.35 ± 2.09 | −6.92, −7.39, −10.75 | 1.03 |
+| TI | gromosXX | 3 | −10.76 ± 2.63 | −13.14, −11.21, −7.93 | 1.43 |
+| BAR | newen | 3 | −8.37 ± 2.11 | −7.36, −6.95, −10.79 | 0.92 |
+| BAR | gromosXX | 3 | −10.56 ± 2.03 | −12.45, −10.83, −8.41 | 1.10 |
+| MBAR | newen | 3 | −8.43 ± 2.14 | −7.34, −7.06, −10.90 | 0.20 |
+| MBAR | gromosXX | 3 | −10.69 ± 2.02 | −12.49, −11.06, −8.51 | 0.22 |
 
-Wall time (this machine, 1 thread for gromosXX, `execution.parallel = auto` for `md`): gromosXX
-≈ 40 s per window (25.8 s / 1000 steps), `md` ≈ 12 s per window (5.8 s / 1000 steps).
+std is the sample std (n − 1) over replicas; "mean estimator error" is the mean over replicas
+of the error each estimator reports for one run.
+
+- **The three estimators agree** within every replica and engine: the largest
+  |ΔG_a − ΔG_b| / √(err_a² + err_b²) is 0.65 (TI vs MBAR, gromosXX rep0), the largest absolute
+  difference 0.69 kJ/mol. BAR and MBAR differ by at most 0.23 kJ/mol.
+- **The engines agree within the replica spread**: newen − gromosXX = +2.41 (TI), +2.20
+  (BAR), +2.25 (MBAR) kJ/mol, 1.2–1.3 standard errors of the difference (s.e. 1.7–1.9 kJ/mol);
+  the per-replica differences have std 4.0–4.7 kJ/mol and change sign.
+- **The reported errors are too small**: the replica std (≈ 2.1 kJ/mol) is about twice the TI and
+  BAR errors of a single run and ten times MBAR's, whose asymptotic error assumes uncorrelated
+  frames (10 steps apart here). The spread comes from the soft-core end (λ ≥ 0.8, below).
+- Reference: ΔG_hyd(CH4) experiment ≈ +8.4 kJ/mol, i.e. ΔG(CH4 → dummy) ≈ −8 kJ/mol; the
+  tutorial's 54a7 result is of that size. Twenty picoseconds per window is not a converged study.
+
+Wall time, not a speed comparison (both engines ran at once on the 8-core/16-thread desktop,
+load ≈ 16–20): gromosXX 1660–1667 s per eleven windows run one after the other (151 ± 28 s per
+window, n = 66, six serial processes at a time); newen 223–299 s per eleven windows with ten
+single-threaded worker processes (`run_windows(parallel=10)`, `RAYON_NUM_THREADS=1`).
+
+This replaces the 2026-08-29 table (`md` 0.0.33, TI only, 5 000 steps, one run per window:
+ΔG −10.85 newen, −10.97 gromosXX kJ/mol).
+
+#### Appendix: ⟨∂H/∂λ⟩ per window
+
+TI windows (first 200 frames dropped, 800 kept), mean ± std over n = 3 replicas, kJ/mol. Each
+replica's value and its block-averaging error, and the `PRECALCLAM` windows' means (nothing
+dropped), are in `dhdl_windows.csv`.
+
+| λ | newen | gromosXX |
+|---|--:|--:|
+| 0.0 | 13.51 ± 0.78 | 13.50 ± 0.61 |
+| 0.1 | 11.89 ± 0.21 | 12.24 ± 0.75 |
+| 0.2 | 10.20 ± 0.63 | 10.02 ± 0.20 |
+| 0.3 | 7.91 ± 0.24 | 9.72 ± 0.50 |
+| 0.4 | 6.71 ± 1.17 | 7.91 ± 1.26 |
+| 0.5 | 1.33 ± 1.79 | 4.08 ± 1.81 |
+| 0.6 | −2.66 ± 0.85 | 0.90 ± 3.06 |
+| 0.7 | −8.92 ± 2.11 | −6.86 ± 0.82 |
+| 0.8 | −12.71 ± 5.70 | −25.30 ± 3.69 |
+| 0.9 | −72.75 ± 13.85 | −93.73 ± 21.66 |
+| 1.0 | −62.57 ± 3.36 | −66.67 ± 1.84 |
+
+## 9. Free-energy features, cost (1.8)
+
+`scripts/bench_engines.py`, one thread (`taskset -c 0`), 500 steps, engines interleaved per
+repeat, n = 5, mean ± sample std (n−1), internal wall time (initialisation excluded). gromosXX
+is the plain serial build (`--engines rust,plain`). Machine: governor `powersave` (the script
+warns), load ≈ 1.
+
+**1.8 step 2 (0.0.54, PRECALCLAM), 2026-10-12.** Step-1 binary = 0.0.53 (`--rust-md`).
+
+| system | engine | n | mean ± std | gromosXX / newen |
+|---|---|--:|--:|--:|
+| `ch4_water_fep_l025`, outputs off | newen 0.0.53 | 5 | 11.332 ± 0.106 s | — |
+| `ch4_water_fep_l025`, outputs off | newen 0.0.54 | 5 | 11.302 ± 0.081 s | — |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | newen 0.0.54 | 5 | 11.308 ± 0.062 s | |
+| `ch4_water_fep_l025`, NTWE = NTWG = 1 | gromosXX | 5 | 11.929 ± 0.021 s | **1.055 ± 0.006** |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | newen 0.0.54 | 5 | 12.150 ± 0.054 s | |
+| `ch4_water_fep_precalc`, `PRECALCLAM 81 0 1`, NTWE = NTWG = 1 | gromosXX | 5 | 13.136 ± 0.024 s | **1.081 ± 0.005** |
+
+Without the block, 0.0.54 / 0.0.53 = 0.997 ± 0.012: no change beyond noise. The worst case
+(81 λ points, energies every step) costs newen 7.4 % ± 0.7 % and gromosXX 10.1 % ± 0.3 %
+over the same run without the block, so the ratio moves from 1.055 to 1.081. The precalc system
+is a scratch copy of the reference with NRLAM 11 → 81; both `.tre` files carry 500
+`# precalclam` frames.

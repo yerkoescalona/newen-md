@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - develop
       - ci
     paths:
       - 'crates/**'
@@ -114,7 +115,6 @@ jobs:
         features:
           - "--no-default-features"
           - "--features simd"
-          - "--features use-fftw"
           - "--all-features"
 
     steps:

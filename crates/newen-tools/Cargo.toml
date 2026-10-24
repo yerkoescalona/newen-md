@@ -1,0 +1,163 @@
+[package]
+name = "newen-tools"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "newen system construction and preparation tools"
+autobins = false
+
+[features]
+use-mpi = []
+
+[dependencies]
+newen = { workspace = true }
+newen-core = { workspace = true }
+newen-io = { workspace = true }
+
+# Logging
+log = { workspace = true }
+env_logger = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# ── Topology construction ──────────────────────────────────────────
+
+[[bin]]
+name = "make_top"
+path = "src/bin/topology/make_top.rs"
+
+[[bin]]
+name = "com_top"
+path = "src/bin/topology/com_top.rs"
+
+[[bin]]
+name = "con_top"
+path = "src/bin/topology/con_top.rs"
+
+[[bin]]
+name = "link_top"
+path = "src/bin/topology/link_top.rs"
+
+[[bin]]
+name = "red_top"
+path = "src/bin/topology/red_top.rs"
+
+[[bin]]
+name = "check_top"
+path = "src/bin/topology/check_top.rs"
+
+[[bin]]
+name = "addvirt_top"
+path = "src/bin/topology/addvirt_top.rs"
+
+[[bin]]
+name = "pert_top"
+path = "src/bin/topology/pert_top.rs"
+
+[[bin]]
+name = "make_pt_top"
+path = "src/bin/topology/make_pt_top.rs"
+
+[[bin]]
+name = "top2build"
+path = "src/bin/topology/top2build.rs"
+
+# ── Box / coordinate preparation ──────────────────────────────────
+
+[[bin]]
+name = "build_box"
+path = "src/bin/box/build_box.rs"
+
+[[bin]]
+name = "explode"
+path = "src/bin/box/explode.rs"
+
+[[bin]]
+name = "duplicate"
+path = "src/bin/box/duplicate.rs"
+
+[[bin]]
+name = "pt_top"
+path = "src/bin/topology/pt_top.rs"
+
+[[bin]]
+name = "sim_box"
+path = "src/bin/box/sim_box.rs"
+
+[[bin]]
+name = "ran_box"
+path = "src/bin/box/ran_box.rs"
+
+[[bin]]
+name = "ran_solvation"
+path = "src/bin/box/ran_solvation.rs"
+
+[[bin]]
+name = "ion"
+path = "src/bin/box/ion.rs"
+
+[[bin]]
+name = "copy_box"
+path = "src/bin/box/copy_box.rs"
+
+[[bin]]
+name = "bin_box"
+path = "src/bin/box/bin_box.rs"
+
+[[bin]]
+name = "inbox"
+path = "src/bin/box/inbox.rs"
+
+[[bin]]
+name = "unify_box"
+path = "src/bin/box/unify_box.rs"
+
+[[bin]]
+name = "check_box"
+path = "src/bin/box/check_box.rs"
+
+# ── Coordinate conversion ─────────────────────────────────────────
+
+[[bin]]
+name = "pdb2g96"
+path = "src/bin/conversion/pdb2g96.rs"
+
+[[bin]]
+name = "traj2pdb"
+path = "src/bin/conversion/traj2pdb.rs"
+
+[[bin]]
+name = "amber2gromos"
+path = "src/bin/conversion/amber2gromos.rs"
+
+# ── Utilities ─────────────────────────────────────────────────────
+
+[[bin]]
+name = "mk_script"
+path = "src/bin/utilities/mk_script.rs"
+
+[[bin]]
+name = "gch"
+path = "src/bin/utilities/gch.rs"
+
+[[bin]]
+name = "prep_eds"
+path = "src/bin/utilities/prep_eds.rs"
+
+[[bin]]
+name = "prep_noe"
+path = "src/bin/utilities/prep_noe.rs"
+
+[[bin]]
+name = "prep_posres"
+path = "src/bin/utilities/prep_posres.rs"
+
+[[bin]]
+name = "prep_xray"
+path = "src/bin/utilities/prep_xray.rs"
+
+[[bin]]
+name = "make_sasa_top"
+path = "src/bin/topology/make_sasa_top.rs"
